@@ -30,5 +30,7 @@ uv run stock-select run --method b1 --pick-date YYYY-MM-DD
 Current smoke-test note:
 
 - `screen` writes candidate JSON under `~/.agents/skills/stock-select/runtime/candidates/`.
-- `chart` currently validates candidate input and returns the candidate file path.
-- `review` expects chart inputs under the skill runtime directory.
+- `chart` reads the candidate file and writes HTML charts under `~/.agents/skills/stock-select/runtime/charts/<pick_date>/`.
+- `review` reads chart outputs and writes per-run summary JSON under `~/.agents/skills/stock-select/runtime/reviews/<pick_date>/summary.json`.
+- `run` now chains `screen`, `chart`, and `review` through the skill-local runtime directory.
+- The current `screen` implementation is still a deterministic placeholder and emits an empty candidate list until database-backed screening is wired in.
