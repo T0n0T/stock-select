@@ -5,9 +5,27 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 from plotly.subplots import make_subplots
 
 from stock_select.b1_logic import compute_zx_lines
+
+
+def _calc_rangebreaks_daily(trade_dates: pd.DatetimeIndex) -> list[dict]:
+    if len(trade_dates) == 0:
+        return [dict(bounds=["sat", "mon"])]
+
+    normalized = trade_dates.normalize()
+    min_date = normalized.min()
+    max_date = normalized.max()
+    business_days = pd.bdate_range(min_date, max_date)
+    trade_set = set(normalized)
+    missing = [day.strftime("%Y-%m-%d") for day in business_days if day not in trade_set]
+
+    breaks: list[dict] = [dict(bounds=["sat", "mon"])]
+    if missing:
+        breaks.append(dict(values=missing))
+    return breaks
 
 
 def build_daily_chart(df: pd.DataFrame, code: str, bars: int = 120) -> go.Figure:
@@ -82,11 +100,21 @@ def build_daily_chart(df: pd.DataFrame, code: str, bars: int = 120) -> go.Figure
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
     )
+    fig.update_xaxes(rangebreaks=_calc_rangebreaks_daily(pd.DatetimeIndex(x)))
     return fig
 
 
 def export_daily_chart(df: pd.DataFrame, code: str, out_path: Path, bars: int = 120) -> Path:
     fig = build_daily_chart(df, code, bars=bars)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.write_html(str(out_path), include_plotlyjs="cdn")
+    try:
+        pio.write_image(fig, str(out_path), format="png")
+    except ValueError as exc:
+        message = str(exc)
+        if "kaleido" not in message.lower():
+            raise
+        raise RuntimeError(
+            "PNG chart export requires the optional 'kaleido' package. "
+            "Install project dependencies again so Kaleido is available."
+        ) from exc
     return out_path

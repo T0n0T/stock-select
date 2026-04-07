@@ -1,36 +1,171 @@
 # stock-select
 
-Standalone repository bootstrap for the `stock-select` skill and CLI.
+用于承载 `stock-select` 技能与 CLI 的独立仓库。
 
-Current bootstrap scope:
+当前仓库的目标是提供一个可单独运行的 B1 选股流程，包括：
 
-- `pyproject.toml` defines the standalone `uv` package metadata and core runtime dependencies.
-- `src/stock_select/__init__.py` exposes the placeholder CLI entrypoint used during early setup.
-- `docs/superpowers/specs` and `docs/superpowers/plans` contain the migrated design and implementation plan for follow-up tasks.
+- 从 PostgreSQL 读取 `daily_market` 数据
+- 运行确定性的 B1 初筛
+- 为候选股票生成日线 PNG 图
+- 对候选股票执行本地 review 流程
 
-This repository is intentionally separate from `/home/pi/Documents/agents/StockTradebyZ`, which remains a read-only reference during migration.
+该仓库与 `/home/pi/Documents/agents/StockTradebyZ` 分离，后者当前仅作为迁移期间的只读参考。
 
-## Usage
+## 安装
 
-Install dependencies:
+开发环境安装：
 
 ```bash
 uv sync
 ```
 
-Smoke-test commands:
+`chart`/`run` 需要通过 `kaleido` 导出 PNG；仓库依赖里已包含它，重新执行 `uv sync` 即可安装。
+
+在项目目录中直接运行 CLI：
 
 ```bash
-uv run stock-select screen --method b1 --pick-date YYYY-MM-DD
-uv run stock-select chart --method b1 --pick-date YYYY-MM-DD
-uv run stock-select review --method b1 --pick-date YYYY-MM-DD
-uv run stock-select run --method b1 --pick-date YYYY-MM-DD
+uv run stock-select --help
 ```
 
-Current smoke-test note:
+安装为当前机器可直接调用的 CLI：
 
-- `screen` writes candidate JSON under `~/.agents/skills/stock-select/runtime/candidates/`.
-- `chart` reads the candidate file and writes HTML charts under `~/.agents/skills/stock-select/runtime/charts/<pick_date>/`.
-- `review` reads chart outputs and writes per-run summary JSON under `~/.agents/skills/stock-select/runtime/reviews/<pick_date>/summary.json`.
-- `run` now chains `screen`, `chart`, and `review` through the skill-local runtime directory.
-- The current `screen` implementation is still a deterministic placeholder and emits an empty candidate list until database-backed screening is wired in.
+```bash
+uv tool install .
+```
+
+如果已经安装过，并且需要用本地最新代码覆盖安装：
+
+```bash
+uv tool install --reinstall .
+```
+
+安装仓库内置的 `stock-select` skill 到 `~/.agents/skills/`：
+
+```bash
+mkdir -p ~/.agents/skills/stock-select && cp -R /home/pi/Documents/agents/stock-select/.agents/skills/stock-select/. ~/.agents/skills/stock-select/
+```
+
+## 基本用法
+
+常用命令：
+
+```bash
+uv run stock-select screen --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select chart --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select review --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+```
+
+## DSN 读取顺序
+
+数据库 DSN 支持以下来源：
+
+- 命令行参数 `--dsn postgresql://...`
+- 进程环境变量 `POSTGRES_DSN`
+- 当前工作目录下 `.env` 文件中的 `POSTGRES_DSN`
+
+优先级如下：
+
+```text
+--dsn > POSTGRES_DSN 环境变量 > 当前目录 .env
+```
+
+## 进度输出
+
+- 默认会把进度信息输出到 `stderr`
+- 最终产物路径仍输出到 `stdout`
+- 如果你只想要最终路径，可以使用 `--no-progress`
+
+典型进度输出类似：
+
+```text
+[screen] connect db
+[screen] fetch market window
+[screen] prepare 500/5497 symbol=000001.SZ elapsed=12.4s
+```
+
+## 运行行为
+
+当前 CLI 的行为如下：
+
+- `screen`
+  - 从 PostgreSQL 的 `daily_market` 读取目标日前约 366 天窗口
+  - 在本地计算 B1 所需指标
+  - 将候选结果写入 `~/.agents/skills/stock-select/runtime/candidates/`
+- `chart`
+  - 读取 candidate 文件
+  - 为每个候选股票重新抓取日线历史
+  - 将 PNG 图表写入 `~/.agents/skills/stock-select/runtime/charts/<pick_date>/`
+- `review`
+  - 读取候选与图表产物
+  - 当前写出以本地 baseline 为主的 review 结果结构
+  - 同时写出 `llm_review_tasks.json`，供 CLI 返回后由 skill 继续派发子代理图评
+  - 该结果结构已经预留 `llm_review` 字段，供后续基于 PNG + `.agents/skills/stock-select/references/prompt.md` 的子代理图评回填
+  - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>/summary.json`
+- `review-merge`
+  - 读取 `reviews/<pick_date>/llm_review_results/*.json`
+  - 校验并归一化子代理图评 JSON
+  - 将 `llm_review` 回填到单股 review 文件
+  - 以 baseline 40% + llm 60% 重算最终分数并重写 `summary.json`
+- `run`
+  - 顺序执行 `screen`、`chart`、`review`
+
+## B1 筛选说明
+
+当前 B1 初筛按以下顺序逐条过滤：
+
+0. 先按目标日 `turnover_n` 构建流动性池，只保留成交额排名前 `5000` 的股票
+1. `J < 15` 或 `J <= 截至当日历史 J 的 10% expanding 分位`
+2. `zxdkx` 历史是否足够，目标日是否可计算
+3. `close > zxdkx`
+4. `zxdq > zxdkx`
+5. `weekly_ma_bull`
+   - 使用周线 `10/20/30` 均线多头排列
+   - 周线收盘价按 ISO 周内最后一个实际交易日计算
+6. `max_vol_not_bearish`
+
+其中：
+
+- `turnover_n` 使用 `43` 日滚动成交额，公式为 `((open + close) / 2) * volume` 的滚动求和
+- `zxdq/zxdkx` 参数与参考仓库当前 B1 运行口径一致，分别基于 `14/28/57/114`
+
+### 关于 `fail_insufficient_history`
+
+`zxdkx` 由 14、28、57、114 日均线的平均值构成，因此目标日通常需要至少 114 个有效交易日历史才能算出该值。
+
+这会带来两个实际影响：
+
+- 即使 `screen` 默认会读取目标日前约 366 天窗口，如果缓存里的实际连续交易历史不足，`zxdkx` 仍然可能为空
+- 当目标日 `zxdkx` 为空时，该股票会计入 `fail_insufficient_history`
+
+这类股票不会再被误记为 `fail_close_zxdkx`。因此：
+
+- `fail_insufficient_history` 表示“历史长度不足，无法判断是否站上 `zxdkx`”
+- `fail_close_zxdkx` 只表示“`zxdkx` 已算出，但收盘价没有站上去”
+
+## 输出目录
+
+运行时产物默认写入：
+
+```text
+~/.agents/skills/stock-select/runtime/
+```
+
+其中常见目录包括：
+
+```text
+candidates/<pick_date>.json
+charts/<pick_date>/<code>_day.png
+reviews/<pick_date>/llm_review_tasks.json
+reviews/<pick_date>/llm_review_results/<code>.json
+reviews/<pick_date>/summary.json
+```
+
+## 当前限制
+
+- 当前只支持 `--method b1`
+- `screen`、`chart`、`run` 都依赖可访问的 PostgreSQL
+- 当前 Python CLI 里的 `review` 仍以本地 baseline 打分为主
+- Python CLI 不直接调用子代理；多模态子代理图评在 CLI 返回后通过 skill workflow 驱动
+- 子代理图评的提示词来源为 `.agents/skills/stock-select/references/prompt.md`
+- 当前建议链路为：`review` 生成 baseline 和任务清单，子代理写入 `llm_review_results/`，再执行 `review-merge`

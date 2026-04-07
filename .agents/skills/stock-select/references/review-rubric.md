@@ -1,6 +1,10 @@
 # Chart Review Rubric
 
-Review charts as a visual trading assessment only. Use only information that is visible on the daily chart.
+Current implementation note:
+
+- The repository currently uses a local structured review pass over daily OHLCV history.
+- This rubric remains the target shape for future multimodal chart-review subagents.
+- Until that upgrade lands, keep the output fields and decision thresholds aligned with this rubric.
 
 ## Dimensions
 
@@ -44,7 +48,8 @@ Return structured JSON with:
 - `volume_behavior`
 - `previous_abnormal_move`
 - `signal_type`
-- `decision`
+- `verdict`
+- `total_score`
 - `comment`
 
 The final `comment` should be one concise Chinese trader-style sentence covering trend, volume-price structure, prior abnormal move, and present risk or upside room.
