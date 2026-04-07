@@ -19,7 +19,7 @@
 uv sync
 ```
 
-`chart`/`run` 需要通过 `kaleido` 导出 PNG；仓库依赖里已包含它，重新执行 `uv sync` 即可安装。
+`chart`/`run` 通过 `mplfinance` 直接导出 PNG，不再依赖 Kaleido 或 Chrome；变更依赖后重新执行 `uv sync` 即可安装。
 
 在项目目录中直接运行 CLI：
 

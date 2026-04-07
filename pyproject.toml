@@ -5,10 +5,9 @@ description = "Standalone B1 stock screening and chart-review orchestration skil
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "kaleido>=1.2.0",
+    "mplfinance>=0.12.10b0",
     "numpy>=2.4.0",
     "pandas>=3.0.0",
-    "plotly>=6.5.0",
     "psycopg[binary]>=3.2.0",
     "PyYAML>=6.0.0",
     "typer>=0.16.0",
