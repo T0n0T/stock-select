@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
+from choreographer.browsers.chromium import ChromeNotFoundError
 from plotly.subplots import make_subplots
 
 from stock_select.b1_logic import compute_zx_lines
@@ -109,6 +110,19 @@ def export_daily_chart(df: pd.DataFrame, code: str, out_path: Path, bars: int = 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         pio.write_image(fig, str(out_path), format="png")
+    except ChromeNotFoundError as exc:
+        raise RuntimeError(
+            "PNG chart export requires Google Chrome to be installed for Kaleido. "
+            "Install Chrome manually or run `kaleido_get_chrome` in the active environment."
+        ) from exc
+    except RuntimeError as exc:
+        message = str(exc)
+        if "google chrome" not in message.lower():
+            raise
+        raise RuntimeError(
+            "PNG chart export requires Google Chrome to be installed for Kaleido. "
+            "Install Chrome manually or run `kaleido_get_chrome` in the active environment."
+        ) from exc
     except ValueError as exc:
         message = str(exc)
         if "kaleido" not in message.lower():

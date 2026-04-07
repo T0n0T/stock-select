@@ -70,3 +70,35 @@ def test_export_daily_chart_raises_actionable_error_when_kaleido_missing(
 
     with pytest.raises(RuntimeError, match="kaleido"):
         export_daily_chart(_sample_daily_frame(), "000001.SZ", out_path)
+
+
+def test_export_daily_chart_raises_actionable_error_when_chrome_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "000001_day.png"
+
+    class FakeChromeNotFoundError(RuntimeError):
+        pass
+
+    def fake_write_image(fig: go.Figure, path: str, format: str) -> None:
+        raise FakeChromeNotFoundError("Kaleido requires Google Chrome to be installed.")
+
+    monkeypatch.setattr(charting.pio, "write_image", fake_write_image)
+    monkeypatch.setattr(charting, "ChromeNotFoundError", FakeChromeNotFoundError)
+
+    with pytest.raises(RuntimeError, match="Google Chrome"):
+        export_daily_chart(_sample_daily_frame(), "000001.SZ", out_path)
+
+
+def test_export_daily_chart_raises_actionable_error_when_plotly_wraps_chrome_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "000001_day.png"
+
+    def fake_write_image(fig: go.Figure, path: str, format: str) -> None:
+        raise RuntimeError("Kaleido requires Google Chrome to be installed.")
+
+    monkeypatch.setattr(charting.pio, "write_image", fake_write_image)
+
+    with pytest.raises(RuntimeError, match="kaleido_get_chrome"):
+        export_daily_chart(_sample_daily_frame(), "000001.SZ", out_path)
