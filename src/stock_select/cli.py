@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 import time
 from pathlib import Path
 
@@ -86,6 +87,59 @@ def _load_candidate_payload(candidate_path: Path) -> dict:
     return json.loads(candidate_path.read_text(encoding="utf-8"))
 
 
+def _prepared_cache_path(runtime_root: Path, pick_date: str) -> Path:
+    return runtime_root / "prepared" / f"{pick_date}.pkl"
+
+
+def _write_prepared_cache(
+    cache_path: Path,
+    *,
+    pick_date: str,
+    start_date: str,
+    end_date: str,
+    prepared_by_symbol: dict[str, pd.DataFrame],
+) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pick_date": pick_date,
+        "start_date": start_date,
+        "end_date": end_date,
+        "prepared_by_symbol": prepared_by_symbol,
+        "metadata": {
+            "b1_config": DEFAULT_B1_CONFIG,
+            "turnover_window": DEFAULT_TURNOVER_WINDOW,
+            "weekly_ma_periods": DEFAULT_WEEKLY_MA_PERIODS,
+            "max_vol_lookback": DEFAULT_MAX_VOL_LOOKBACK,
+        },
+    }
+    cache_path.write_bytes(pickle.dumps(payload))
+
+
+def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
+    payload = pickle.loads(cache_path.read_bytes())
+    if not isinstance(payload, dict):
+        raise ValueError("Prepared cache payload must be a dict.")
+
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("Prepared cache metadata missing.")
+
+    if metadata.get("b1_config") != DEFAULT_B1_CONFIG:
+        raise ValueError("Prepared cache b1_config mismatch.")
+    if metadata.get("turnover_window") != DEFAULT_TURNOVER_WINDOW:
+        raise ValueError("Prepared cache turnover_window mismatch.")
+    if tuple(metadata.get("weekly_ma_periods", ())) != DEFAULT_WEEKLY_MA_PERIODS:
+        raise ValueError("Prepared cache weekly_ma_periods mismatch.")
+    if metadata.get("max_vol_lookback") != DEFAULT_MAX_VOL_LOOKBACK:
+        raise ValueError("Prepared cache max_vol_lookback mismatch.")
+
+    prepared_by_symbol = payload.get("prepared_by_symbol")
+    if not isinstance(prepared_by_symbol, dict):
+        raise ValueError("Prepared cache prepared_by_symbol missing.")
+    payload["prepared_by_symbol"] = prepared_by_symbol
+    return payload
+
+
 def _prepare_screen_data(
     market: pd.DataFrame,
     *,
@@ -161,30 +215,71 @@ def _screen_impl(
     pick_date: str,
     dsn: str | None,
     runtime_root: Path,
+    recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = candidate_dir / f"{pick_date}.json"
+    if not recompute and out_path.exists():
+        try:
+            existing_payload = _load_candidate_payload(out_path)
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            if reporter:
+                reporter.emit("screen", f"candidate reuse skipped path={out_path} reason={type(exc).__name__}")
+        else:
+            existing_candidates = existing_payload.get("candidates", [])
+            if isinstance(existing_candidates, list) and existing_candidates:
+                if reporter:
+                    reporter.emit("screen", f"reuse candidates path={out_path}")
+                return out_path
 
-    resolved_dsn = _resolve_cli_dsn(dsn)
-    if reporter:
-        reporter.emit("screen", "connect db")
-    connection = _connect(resolved_dsn)
-    if reporter:
-        reporter.emit("screen", "fetch market window")
-    market = fetch_daily_window(
-        connection,
-        start_date=(pd.Timestamp(pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d"),
-        end_date=pick_date,
-        symbols=None,
-    )
-    if reporter:
-        reporter.emit(
-            "screen",
-            f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
+    start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
+    prepared_cache_path = _prepared_cache_path(runtime_root, pick_date)
+    prepared: dict[str, pd.DataFrame] | None = None
+    if not recompute and prepared_cache_path.exists():
+        try:
+            cache_payload = _load_prepared_cache(prepared_cache_path)
+        except (OSError, ValueError, pickle.PickleError) as exc:
+            if reporter:
+                reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={type(exc).__name__}")
+        else:
+            cached_pick_date = cache_payload.get("pick_date")
+            cached_start_date = cache_payload.get("start_date")
+            cached_end_date = cache_payload.get("end_date")
+            if cached_pick_date == pick_date and cached_start_date == start_date and cached_end_date == pick_date:
+                prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
+                if reporter:
+                    reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+
+    if prepared is None:
+        resolved_dsn = _resolve_cli_dsn(dsn)
+        if reporter:
+            reporter.emit("screen", "connect db")
+        connection = _connect(resolved_dsn)
+        if reporter:
+            reporter.emit("screen", "fetch market window")
+        market = fetch_daily_window(
+            connection,
+            start_date=start_date,
+            end_date=pick_date,
+            symbols=None,
         )
-    prepared = _call_prepare_screen_data(market, reporter=reporter)
+        if reporter:
+            reporter.emit(
+                "screen",
+                f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
+            )
+        prepared = _call_prepare_screen_data(market, reporter=reporter)
+        _write_prepared_cache(
+            prepared_cache_path,
+            pick_date=pick_date,
+            start_date=start_date,
+            end_date=pick_date,
+            prepared_by_symbol=prepared,
+        )
+        if reporter:
+            reporter.emit("screen", f"write prepared path={prepared_cache_path}")
     top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
     pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
     prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
@@ -404,11 +499,18 @@ def screen(
     pick_date: str = typer.Option(..., "--pick-date"),
     dsn: str | None = typer.Option(None, "--dsn"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     _ensure_b1(method)
     reporter = ProgressReporter(enabled=progress)
-    out_path = _screen_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+    out_path = _screen_impl(
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        recompute=recompute,
+        reporter=reporter,
+    )
     typer.echo(str(out_path))
 
 
@@ -459,13 +561,20 @@ def run_all(
     pick_date: str = typer.Option(..., "--pick-date"),
     dsn: str | None = typer.Option(None, "--dsn"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     _ensure_b1(method)
     reporter = ProgressReporter(enabled=progress)
     reporter.emit("run", "step=screen start")
     screen_started_at = reporter.checkpoint()
-    screen_path = _screen_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+    screen_path = _screen_impl(
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        recompute=recompute,
+        reporter=reporter,
+    )
     reporter.emit("run", f"step=screen done path={screen_path} elapsed={reporter.since(screen_started_at):.1f}s")
     typer.echo(str(screen_path))
     reporter.emit("run", "step=chart start")

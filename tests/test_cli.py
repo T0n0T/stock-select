@@ -1042,6 +1042,34 @@ def test_prepare_screen_data_uses_reference_b1_windows() -> None:
     assert weekly_periods == [(10, 20, 30)]
 
 
+def test_prepared_cache_round_trip(tmp_path: Path) -> None:
+    cache_path = tmp_path / "prepared" / "2026-04-01.pkl"
+    prepared_by_symbol = {
+        "AAA.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [100.0],
+                "J": [10.0],
+            }
+        )
+    }
+
+    cli._write_prepared_cache(
+        cache_path,
+        pick_date="2026-04-01",
+        start_date="2025-03-31",
+        end_date="2026-04-01",
+        prepared_by_symbol=prepared_by_symbol,
+    )
+
+    payload = cli._load_prepared_cache(cache_path)
+
+    assert payload["pick_date"] == "2026-04-01"
+    assert payload["start_date"] == "2025-03-31"
+    assert payload["end_date"] == "2026-04-01"
+    pd.testing.assert_frame_equal(payload["prepared_by_symbol"]["AAA.SZ"], prepared_by_symbol["AAA.SZ"])
+
+
 def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -1161,3 +1189,382 @@ def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) ->
     assert result.exit_code == 0
     payload = json.loads((runtime_root / "candidates" / "2026-04-01.json").read_text(encoding="utf-8"))
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+
+
+def test_screen_reuses_existing_non_empty_candidate_file_without_recomputing(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    candidate_path = candidate_dir / "2026-04-01.json"
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "candidates": [{"code": "AAA.SZ", "pick_date": "2026-04-01", "close": 10.5, "turnover_n": 100.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+
+    def fail_connect(_: str) -> object:
+        raise AssertionError("screen should not connect when candidate output is reusable")
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("screen should not fetch market window when candidate output is reusable")
+
+    def fail_prepare(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        raise AssertionError("screen should not prepare data when candidate output is reusable")
+
+    cli._connect = fail_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
+    cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b1",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(candidate_path)
+    assert "[screen] reuse candidates path=" in result.stderr
+
+
+def test_screen_ignores_existing_empty_candidate_file_and_recomputes(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / "2026-04-01.json").write_text(
+        json.dumps({"pick_date": "2026-04-01", "method": "b1", "candidates": []}),
+        encoding="utf-8",
+    )
+
+    calls = {"connect": 0, "prepare": 0}
+
+    def fake_connect(_: str) -> object:
+        calls["connect"] += 1
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.9],
+                "close": [10.4],
+                "vol": [100.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        calls["prepare"] += 1
+        return {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-01"]),
+                    "turnover_n": [100.0],
+                    "J": [10.0],
+                    "zxdq": [10.5],
+                    "zxdkx": [10.2],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "close": [10.6],
+                }
+            )
+        }
+
+    def fake_run_b1_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        return (
+            [{"code": "AAA.SZ", "pick_date": "2026-04-01", "close": 10.6, "turnover_n": 100.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": 1,
+            },
+        )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_run = cli.run_b1_screen_with_stats
+
+    cli._connect = fake_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
+    cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
+    cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b1",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert calls == {"connect": 1, "prepare": 1}
+
+
+def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    prepared_by_symbol = {
+        "BBB.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [200.0],
+                "J": [10.0],
+                "zxdq": [11.5],
+                "zxdkx": [11.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "close": [11.6],
+            }
+        )
+    }
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-01.pkl",
+        pick_date="2026-04-01",
+        start_date="2025-03-31",
+        end_date="2026-04-01",
+        prepared_by_symbol=prepared_by_symbol,
+    )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_run = cli.run_b1_screen_with_stats
+
+    def fail_connect(_: str) -> object:
+        raise AssertionError("screen should not connect when prepared cache is reusable")
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("screen should not fetch market window when prepared cache is reusable")
+
+    def fail_prepare(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        raise AssertionError("screen should not prepare data when prepared cache is reusable")
+
+    def fake_run_b1_screen_with_stats(
+        prepared_subset: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert list(prepared_subset) == ["BBB.SZ"]
+        return (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": 1,
+            },
+        )
+
+    cli._connect = fail_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
+    cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
+    cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b1",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert "[screen] reuse prepared path=" in result.stderr
+
+
+def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / "2026-04-01.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "candidates": [{"code": "OLD.SZ", "pick_date": "2026-04-01", "close": 9.9, "turnover_n": 50.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-01.pkl",
+        pick_date="2026-04-01",
+        start_date="2025-03-31",
+        end_date="2026-04-01",
+        prepared_by_symbol={"OLD.SZ": pd.DataFrame({"trade_date": pd.to_datetime(["2026-04-01"]), "turnover_n": [50.0]})},
+    )
+
+    calls = {"connect": 0, "prepare": 0}
+
+    def fake_connect(_: str) -> object:
+        calls["connect"] += 1
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "open": [11.0],
+                "high": [11.5],
+                "low": [10.9],
+                "close": [11.4],
+                "vol": [120.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        calls["prepare"] += 1
+        return {
+            "NEW.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-01"]),
+                    "turnover_n": [200.0],
+                    "J": [10.0],
+                    "zxdq": [11.5],
+                    "zxdkx": [11.2],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "close": [11.6],
+                }
+            )
+        }
+
+    def fake_run_b1_screen_with_stats(
+        prepared_subset: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        return (
+            [{"code": "NEW.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": 1,
+            },
+        )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_run = cli.run_b1_screen_with_stats
+
+    cli._connect = fake_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
+    cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
+    cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b1",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+                "--recompute",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert calls == {"connect": 1, "prepare": 1}
+    payload = json.loads((candidate_dir / "2026-04-01.json").read_text(encoding="utf-8"))
+    assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
