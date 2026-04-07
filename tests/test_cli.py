@@ -311,6 +311,9 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert tasks["pick_date"] == "2026-04-01"
     assert tasks["prompt_path"].endswith(".agents/skills/stock-select/references/prompt.md")
     assert tasks["tasks"][0]["code"] == "000001.SZ"
+    assert tasks["tasks"][0]["rank"] == 1
+    assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
+    assert tasks["tasks"][0]["baseline_verdict"] == review["verdict"]
     assert "total_score" in review
     assert "[review] candidate 1/1 code=000001.SZ" in result.stderr
     assert "[review] done reviewed=1 failures=0" in result.stderr
@@ -506,6 +509,161 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
     assert merged["verdict"] == "PASS"
     assert summary["recommendations"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr
+
+
+def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-01"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    for code in ("000001.SZ", "000002.SZ"):
+        (review_dir / f"{code}.json").write_text(
+            json.dumps(
+                {
+                    "code": code,
+                    "pick_date": "2026-04-01",
+                    "chart_path": str(runtime_root / "charts" / "2026-04-01" / f"{code}_day.png"),
+                    "review_mode": "baseline_local",
+                    "llm_review": None,
+                    "baseline_review": {
+                        "review_type": "baseline",
+                        "total_score": 3.4,
+                        "signal_type": "rebound",
+                        "verdict": "WATCH",
+                        "comment": "baseline",
+                    },
+                    "total_score": 3.4,
+                    "signal_type": "rebound",
+                    "verdict": "WATCH",
+                    "comment": "baseline",
+                }
+            ),
+            encoding="utf-8",
+        )
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "reviewed_count": 2,
+                "recommendations": [],
+                "excluded": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (review_dir / "llm_review_results").mkdir(parents=True, exist_ok=True)
+    (review_dir / "llm_review_results" / "000001.SZ.json").write_text(
+        json.dumps(
+            {
+                "trend_reasoning": "趋势向上",
+                "position_reasoning": "位置中位",
+                "volume_reasoning": "量价配合良好",
+                "abnormal_move_reasoning": "前期有异动",
+                "signal_reasoning": "更像主升启动",
+                "scores": {
+                    "trend_structure": 5,
+                    "price_position": 4,
+                    "volume_behavior": 5,
+                    "previous_abnormal_move": 4,
+                },
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "llm",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review-merge",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--codes",
+            "000001.SZ",
+        ],
+    )
+
+    assert result.exit_code == 0
+    merged = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    untouched = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    assert merged["review_mode"] == "merged"
+    assert untouched["review_mode"] == "baseline_local"
+    assert summary["failures"] == []
+    assert "[review-merge] merged reviews=2 failures=0" in result.stderr
+
+
+def test_review_merge_selected_codes_does_not_fail_missing_unselected_results(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-01"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    for code in ("000001.SZ", "000002.SZ"):
+        (review_dir / f"{code}.json").write_text(
+            json.dumps(
+                {
+                    "code": code,
+                    "pick_date": "2026-04-01",
+                    "chart_path": str(runtime_root / "charts" / "2026-04-01" / f"{code}_day.png"),
+                    "review_mode": "baseline_local",
+                    "llm_review": None,
+                    "baseline_review": {
+                        "review_type": "baseline",
+                        "total_score": 3.4,
+                        "signal_type": "rebound",
+                        "verdict": "WATCH",
+                        "comment": "baseline",
+                    },
+                    "total_score": 3.4,
+                    "signal_type": "rebound",
+                    "verdict": "WATCH",
+                    "comment": "baseline",
+                }
+            ),
+            encoding="utf-8",
+        )
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "reviewed_count": 2,
+                "recommendations": [],
+                "excluded": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (review_dir / "llm_review_results").mkdir(parents=True, exist_ok=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "review-merge",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--codes",
+            "000001.SZ",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["failures"] == [{"code": "000001.SZ", "reason": f"LLM review result not found: {review_dir / 'llm_review_results' / '000001.SZ.json'}"}]
 
 
 def test_screen_requires_dsn_when_real_data_fetch_is_needed(tmp_path: Path) -> None:

@@ -259,6 +259,38 @@ signal_reasoning
 
 ---
 
+# 九、输出格式（必须严格遵守）
+
+你最终 **只能输出一个 JSON 对象**，不能输出 markdown 代码块，不能输出任何额外解释。
+
+字段必须完整，格式示例如下：
+
+```json
+{
+  "trend_reasoning": "趋势结构分析",
+  "position_reasoning": "位置结构分析",
+  "volume_reasoning": "量价行为分析",
+  "abnormal_move_reasoning": "前期异动分析",
+  "signal_reasoning": "信号类型判断依据",
+  "scores": {
+    "trend_structure": 4.0,
+    "price_position": 3.0,
+    "volume_behavior": 4.0,
+    "previous_abnormal_move": 3.0
+  },
+  "total_score": 3.5,
+  "signal_type": "rebound",
+  "verdict": "WATCH",
+  "comment": "周线趋势修复中，量价尚可，前期异动存在但当前仍需等待进一步放量确认。"
+}
+```
+
+额外要求：
+
+* `signal_type` 只能是 `trend_start`、`rebound`、`distribution_risk`
+* `verdict` 只能是 `PASS`、`WATCH`、`FAIL`
+* 所有 reasoning 和 `comment` 必须是非空字符串
+
 # 九、输出格式（必须严格 JSON）
 
 {

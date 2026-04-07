@@ -376,7 +376,7 @@ def _review_impl(
 
     reviews: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
-    llm_review_tasks: list[dict[str, str]] = []
+    llm_review_tasks: list[dict[str, object]] = []
     for idx, candidate in enumerate(candidates, start=1):
         code = candidate["code"]
         if reporter:
@@ -407,13 +407,19 @@ def _review_impl(
         )
         (review_dir / f"{code}.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
         reviews.append(review)
+        task = build_review_payload(
+            code=code,
+            pick_date=pick_date,
+            chart_path=str(chart_path),
+            rubric_path="references/review-rubric.md",
+        )
         llm_review_tasks.append(
-            build_review_payload(
-                code=code,
-                pick_date=pick_date,
-                chart_path=str(chart_path),
-                rubric_path="references/review-rubric.md",
-            )
+            {
+                **task,
+                "rank": idx,
+                "baseline_score": review["total_score"],
+                "baseline_verdict": review["verdict"],
+            }
         )
 
     summary = summarize_reviews(
@@ -443,6 +449,7 @@ def _review_merge_impl(
     method: str,
     pick_date: str,
     runtime_root: Path,
+    codes: list[str] | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     review_dir = runtime_root / "reviews" / pick_date
@@ -453,6 +460,8 @@ def _review_merge_impl(
     if not llm_results_dir.exists():
         raise typer.BadParameter(f"LLM review result directory not found: {llm_results_dir}")
 
+    selected_codes = set(codes or [])
+    restrict_codes = bool(selected_codes)
     merged_reviews: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
 
@@ -461,6 +470,9 @@ def _review_merge_impl(
             continue
         existing_review = json.loads(review_path.read_text(encoding="utf-8"))
         code = existing_review["code"]
+        if restrict_codes and code not in selected_codes:
+            merged_reviews.append(existing_review)
+            continue
         llm_path = llm_results_dir / f"{code}.json"
         if not llm_path.exists():
             failures.append({"code": code, "reason": f"LLM review result not found: {llm_path}"})
@@ -547,11 +559,19 @@ def review_merge(
     method: str = typer.Option(..., "--method"),
     pick_date: str = typer.Option(..., "--pick-date"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    codes: str | None = typer.Option(None, "--codes"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     _ensure_b1(method)
     reporter = ProgressReporter(enabled=progress)
-    summary_path = _review_merge_impl(method=method, pick_date=pick_date, runtime_root=runtime_root, reporter=reporter)
+    selected_codes = [code.strip() for code in codes.split(",") if code.strip()] if codes else None
+    summary_path = _review_merge_impl(
+        method=method,
+        pick_date=pick_date,
+        runtime_root=runtime_root,
+        codes=selected_codes,
+        reporter=reporter,
+    )
     typer.echo(str(summary_path))
 
 
