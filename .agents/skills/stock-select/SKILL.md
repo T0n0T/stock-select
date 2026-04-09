@@ -5,7 +5,7 @@ description: Use when screening A-share stocks from the stock-cache PostgreSQL d
 
 # Stock Select
 
-Use this skill when the task is to run the standalone `stock-select` workflow against the `stock-cache` PostgreSQL data source.
+Use this skill when the task is to run the standalone `stock-select` workflow against the `stock-cache` PostgreSQL data source for either end-of-day `--pick-date` runs or intraday `--intraday` runs.
 
 ## Required Workflow
 
@@ -14,6 +14,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Do not use `stock-cache read` CLI as the primary data source.
 - Read PostgreSQL tables directly.
 - Resolve DSN from `--dsn` or `POSTGRES_DSN` before any database-backed step.
+- `screen`, `chart`, and `review` all support `--intraday` within this same skill.
 - Run deterministic screening in Python first.
 - Generate daily charts before review.
 - Expect progress output on `stderr` by default; use `--no-progress` only when the caller needs quiet stdout-only path output.
@@ -25,28 +26,53 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Require each subagent to return strict JSON aligned with the prompt contract.
 - If a subagent cannot return valid JSON, record that symbol in failures instead of fabricating a result.
 - Write outputs under `~/.agents/skills/stock-select/runtime/`.
+- Preserve existing end-of-day instructions for `--pick-date` runs.
+- `screen --intraday` uses PostgreSQL confirmed history up to the previous trade date plus Tushare `rt_k` for the active trade date snapshot.
+- `chart --intraday` and `review --intraday` must reuse the latest intraday candidate plus the matching prepared cache instead of fetching fresh realtime data.
 - When the caller needs a shareable offline report, run CLI `render-html` after `review-merge`.
 - `render-html` must look up stock names from PostgreSQL and render `code + name` in the HTML, not only the code.
 - The packaged export should be a zip containing `summary.html`, `summary.json`, and the referenced chart PNG files under `charts/`.
 
+## Runtime Paths By Mode
+
+End-of-day `--pick-date` runs keep using the existing pick-date keyed layout:
+
+- `runtime/candidates/<pick_date>.json`
+- `runtime/prepared/<pick_date>.pkl`
+- `runtime/charts/<pick_date>/`
+- `runtime/reviews/<pick_date>/`
+
+Intraday `--intraday` runs use an intraday `run_id` keyed layout:
+
+- `runtime/candidates/<run_id>.json`
+- `runtime/prepared/<run_id>.pkl`
+- `runtime/charts/<run_id>/`
+- `runtime/reviews/<run_id>/`
+
+Review and merge instructions must follow the active mode's runtime key:
+
+- end-of-day mode: use `<pick_date>`
+- intraday mode: use the latest intraday `<run_id>` selected by the candidate artifact
+
 ## Execution Order
 
-1. Resolve the pick date and CLI arguments.
-2. Query PostgreSQL market data needed for B1 screening.
-3. Run deterministic B1 screening and write candidate outputs.
-4. Render daily chart PNG files for each candidate.
-5. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
-6. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and `references/prompt.md`.
-7. Write raw subagent JSON results under `runtime/reviews/<pick_date>/llm_review_results/`.
-8. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary.
-9. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
+1. Resolve the active mode and CLI arguments.
+2. For end-of-day runs, resolve `pick_date` and query PostgreSQL market data needed for B1 screening.
+3. For intraday runs, resolve the active trade date, fetch PostgreSQL confirmed history through the previous trade date, then overlay Tushare `rt_k`.
+4. Run deterministic B1 screening and write candidate outputs.
+5. Render daily chart PNG files for each candidate.
+6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
+7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and `references/prompt.md`.
+8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>` for end-of-day and `<run_id>` for intraday.
+9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
+10. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
 
 ## Subagent Review Protocol
 
 When running chart review for quality-first selection:
 
 1. Run the Python CLI `review` command first.
-2. Load `runtime/reviews/<pick_date>/llm_review_tasks.json`.
+2. Load `runtime/reviews/<mode_key>/llm_review_tasks.json`.
 3. Load `references/prompt.md` and pass it as the subagent's core chart-review prompt.
 4. Send each subagent exactly one candidate at a time.
 5. Provide these inputs to the subagent:
@@ -68,16 +94,21 @@ When running chart review for quality-first selection:
    - `signal_type`
    - `verdict`
    - `comment`
-7. Write each raw subagent result to `runtime/reviews/<pick_date>/llm_review_results/<code>.json`.
+7. Write each raw subagent result to `runtime/reviews/<mode_key>/llm_review_results/<code>.json`.
 8. Run CLI `review-merge` so the repository code validates the returned JSON before treating it as usable output.
 9. If validation fails, let `review-merge` record the symbol in failures and continue.
 10. Keep the local baseline review result alongside the validated subagent result.
+
+Use `<mode_key>` as follows:
+
+- end-of-day mode: `<pick_date>`
+- intraday mode: latest intraday `<run_id>`
 
 ## Main-Agent Validation Gate
 
 Before the main agent treats any subagent output as mergeable, it should verify all of the following:
 
-1. The subagent wrote one raw JSON file per stock under `runtime/reviews/<pick_date>/llm_review_results/<code>.json`.
+1. The subagent wrote one raw JSON file per stock under `runtime/reviews/<mode_key>/llm_review_results/<code>.json`.
 2. The JSON includes all required reasoning fields:
    - `trend_reasoning`
    - `position_reasoning`
@@ -114,11 +145,15 @@ If any of the checks above fail:
 
 ## Current Implementation
 
-- `screen` reads one year of `daily_market` OHLCV data, computes the B1-derived fields locally, and writes candidate JSON.
-- `chart` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
-- `review` currently writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
+- `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the B1-derived fields locally, and writes candidate JSON.
+- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.json`, and stores the matching prepared cache at `runtime/prepared/<run_id>.pkl`.
+- `chart --pick-date` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
+- `chart --intraday` reuses the latest intraday candidate plus matching prepared cache and writes charts under `runtime/charts/<run_id>/` without fetching fresh realtime data.
+- `review --pick-date` writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
+- `review --intraday` reuses the latest intraday candidate plus matching prepared cache, writes baseline reviews under `runtime/reviews/<run_id>/`, and does not fetch fresh realtime data.
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
-- `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`.
+- `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id`.
+- `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>/` for end-of-day or `runtime/reviews/<run_id>/` for intraday.
 - `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file.
 
 ## Future Upgrade Path
