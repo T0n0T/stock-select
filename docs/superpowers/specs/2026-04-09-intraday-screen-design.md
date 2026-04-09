@@ -19,6 +19,7 @@ In scope:
 - reuse the existing B1 preparation and screening pipeline
 - reuse the existing `candidates`, `charts`, `reviews`, and `prepared` runtime roots
 - make `chart --intraday` and `review --intraday` automatically consume the latest intraday `screen` output
+- update the repository skill file so the documented `stock-select` workflow explicitly covers real-time B1 analysis
 
 Out of scope:
 
@@ -27,6 +28,7 @@ Out of scope:
 - automatic polling or continuous refresh
 - introducing separate `intraday-chart` or `intraday-review` commands
 - changing the baseline B1 logic itself
+- redesigning the chart-review rubric beyond the runtime-path and intraday workflow updates needed for skill parity
 
 ## Current Problem
 
@@ -227,6 +229,29 @@ This design preserves the existing end-of-day workflow:
 
 Intraday mode is additive and should not alter any existing end-of-day output path or runtime naming.
 
+### 13. Skill File Update
+
+The implementation scope must include updating the repository skill file:
+
+`.agents/skills/stock-select/SKILL.md`
+
+The skill update should document both end-of-day and intraday B1 workflows without splitting them into separate skills.
+
+Minimum required skill changes:
+
+- mention that `screen`, `chart`, and `review` support `--intraday`
+- state that `screen --intraday` uses PostgreSQL confirmed history plus `Tushare rt_k`
+- state that `chart --intraday` and `review --intraday` reuse the latest intraday candidate rather than fetching a fresh real-time snapshot
+- describe the intraday runtime path convention:
+  - `runtime/candidates/<run_id>.json`
+  - `runtime/prepared/<run_id>.pkl`
+  - `runtime/charts/<run_id>/`
+  - `runtime/reviews/<run_id>/`
+- preserve the existing end-of-day instructions for `pick_date` runs
+- keep the skill's review and merge instructions aligned with the runtime path chosen by the active mode
+
+The skill file should remain the operational guide for future agent runs, so it must be updated in the same task as the CLI behavior instead of being deferred.
+
 ## Testing
 
 Required automated coverage:
@@ -241,6 +266,7 @@ Required automated coverage:
 - `chart --intraday` fails if no intraday candidate exists
 - `review --intraday` fails if no intraday candidate exists
 - end-of-day commands continue to pass existing tests unchanged
+- the repository skill file is updated to describe the intraday workflow and runtime paths consistently with the CLI behavior
 
 ## Success Criteria
 
