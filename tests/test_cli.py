@@ -20,9 +20,16 @@ def test_screen_rejects_unknown_method() -> None:
     result = runner.invoke(app, ["screen", "--method", "brick", "--pick-date", "2026-04-01"])
 
     assert result.exit_code != 0
-    assert "supported methods" in result.stderr.lower()
-    assert "b1" in result.stderr.lower()
-    assert "hcr" in result.stderr.lower()
+    assert "only method 'b1' is supported." in result.stderr.lower()
+
+
+def test_screen_rejects_whitespace_padded_b1_method() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["screen", "--method", " b1 ", "--pick-date", "2026-04-01"])
+
+    assert result.exit_code != 0
+    assert "only method 'b1' is supported." in result.stderr.lower()
 
 
 def test_chart_requires_candidate_file(tmp_path: Path) -> None:

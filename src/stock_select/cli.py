@@ -24,7 +24,6 @@ from stock_select.strategies import (
     max_vol_not_bearish,
     run_b1_screen,
     run_b1_screen_with_stats,
-    validate_method,
 )
 from stock_select.charting import export_daily_chart
 from stock_select.db_access import (
@@ -84,13 +83,9 @@ def main() -> None:
 
 
 def _ensure_b1(method: str) -> str:
-    try:
-        normalized = validate_method(method)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    if normalized != "b1":
+    if method.lower() != "b1":
         raise typer.BadParameter("Only method 'b1' is supported.")
-    return normalized
+    return method.lower()
 
 
 def _default_runtime_root() -> Path:
