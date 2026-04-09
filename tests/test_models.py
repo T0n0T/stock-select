@@ -54,6 +54,29 @@ def test_candidate_run_serializes_candidates_and_metadata() -> None:
     }
 
 
+def test_candidate_run_serializes_hcr_method() -> None:
+    run = CandidateRun(
+        pick_date="2026-04-01",
+        method="hcr",
+        candidates=[
+            CandidateRecord(
+                code="000001.SZ",
+                pick_date="2026-04-01",
+                method="hcr",
+                close=10.0,
+                turnover_n=20.0,
+            )
+        ],
+        config={"resonance_tolerance_pct": 0.015},
+        query={"start_date": "2025-01-01"},
+    )
+
+    payload = run.to_dict()
+
+    assert payload["method"] == "hcr"
+    assert payload["candidates"][0]["method"] == "hcr"
+
+
 def test_review_record_serializes_without_none_fields() -> None:
     review = ReviewRecord(
         code="000001.SZ",
