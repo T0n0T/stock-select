@@ -2,6 +2,7 @@ from pathlib import Path
 
 import importlib
 import json
+import zipfile
 from types import SimpleNamespace
 
 import pandas as pd
@@ -664,6 +665,100 @@ def test_review_merge_selected_codes_does_not_fail_missing_unselected_results(tm
     assert result.exit_code == 0
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["failures"] == [{"code": "000001.SZ", "reason": f"LLM review result not found: {review_dir / 'llm_review_results' / '000001.SZ.json'}"}]
+
+
+def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-01"
+    chart_dir = runtime_root / "charts" / "2026-04-01"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "reviewed_count": 1,
+                "recommendations": [
+                    {
+                        "code": "000001.SZ",
+                        "pick_date": "2026-04-01",
+                        "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                        "review_mode": "merged",
+                        "llm_review": {
+                            "trend_reasoning": "趋势向上",
+                            "position_reasoning": "位置适中",
+                            "volume_reasoning": "量价正常",
+                            "abnormal_move_reasoning": "前期异动",
+                            "signal_reasoning": "主升启动",
+                            "trend_structure": 4,
+                            "price_position": 3,
+                            "volume_behavior": 4,
+                            "previous_abnormal_move": 4,
+                            "total_score": 3.8,
+                            "signal_type": "trend_start",
+                            "verdict": "WATCH",
+                            "comment": "llm",
+                        },
+                        "baseline_review": {
+                            "trend_structure": 5,
+                            "price_position": 4,
+                            "volume_behavior": 5,
+                            "previous_abnormal_move": 5,
+                            "total_score": 4.8,
+                            "signal_type": "trend_start",
+                            "verdict": "PASS",
+                            "comment": "baseline",
+                        },
+                        "total_score": 4.2,
+                        "final_score": 4.2,
+                        "signal_type": "trend_start",
+                        "verdict": "PASS",
+                        "comment": "merged comment",
+                    }
+                ],
+                "excluded": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda dsn: object())
+    monkeypatch.setattr(cli, "fetch_instrument_names", lambda connection, symbols: {"000001.SZ": "平安银行"})
+
+    result = runner.invoke(
+        app,
+        [
+            "render-html",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    zip_path = Path(result.stdout.strip())
+    assert zip_path.name == "summary-package.zip"
+    assert zip_path.exists()
+
+    with zipfile.ZipFile(zip_path) as archive:
+        names = set(archive.namelist())
+        assert "summary.html" in names
+        assert "summary.json" in names
+        assert "charts/000001.SZ_day.png" in names
+        html_text = archive.read("summary.html").decode("utf-8")
+        assert "000001.SZ" in html_text
+        assert "平安银行" in html_text
+        assert "merged comment" in html_text
 
 
 def test_screen_requires_dsn_when_real_data_fetch_is_needed(tmp_path: Path) -> None:

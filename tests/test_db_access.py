@@ -5,6 +5,7 @@ from pathlib import Path
 from stock_select.db_access import (
     fetch_available_trade_dates,
     fetch_daily_window,
+    fetch_instrument_names,
     load_dotenv_value,
     fetch_symbol_history,
     resolve_dsn,
@@ -172,3 +173,21 @@ def test_fetch_available_trade_dates_returns_normalized_frame() -> None:
         {"trade_date": "2026-04-03"},
         {"trade_date": "2026-04-02"},
     ]
+
+
+def test_fetch_instrument_names_returns_code_name_mapping() -> None:
+    connection = FakeConnection(
+        rows=[("000001.SZ", "平安银行"), ("000002.SZ", "万科A")],
+        columns=["TS_CODE", "NAME"],
+    )
+
+    result = fetch_instrument_names(connection, symbols=["000001.SZ", "000002.SZ"])
+
+    assert result == {
+        "000001.SZ": "平安银行",
+        "000002.SZ": "万科A",
+    }
+    query, params = connection.cursor_obj.executed[0]
+    assert "FROM instruments" in query
+    assert "ts_code = ANY(%(symbols)s)" in query
+    assert params == {"symbols": ["000001.SZ", "000002.SZ"]}

@@ -26,7 +26,14 @@ from stock_select.b1_logic import (
     run_b1_screen_with_stats,
 )
 from stock_select.charting import export_daily_chart
-from stock_select.db_access import fetch_daily_window, fetch_symbol_history, load_dotenv_value, resolve_dsn
+from stock_select.db_access import (
+    fetch_daily_window,
+    fetch_instrument_names,
+    fetch_symbol_history,
+    load_dotenv_value,
+    resolve_dsn,
+)
+from stock_select.html_export import write_summary_package
 from stock_select.review_orchestrator import (
     REFERENCE_PROMPT_PATH,
     build_review_payload,
@@ -505,6 +512,53 @@ def _review_merge_impl(
     return summary_path
 
 
+def _render_html_impl(
+    *,
+    method: str,
+    pick_date: str,
+    dsn: str | None,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    _ensure_b1(method)
+    review_dir = runtime_root / "reviews" / pick_date
+    summary_path = review_dir / "summary.json"
+    if not summary_path.exists():
+        raise typer.BadParameter(f"Summary file not found: {summary_path}")
+
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    if reporter:
+        reporter.emit("render-html", "connect db")
+    connection = _connect(resolved_dsn)
+
+    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    codes: list[str] = []
+    for key in ("recommendations", "excluded"):
+        values = summary_payload.get(key, [])
+        if isinstance(values, list):
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                code = str(item.get("code") or "").strip()
+                if code:
+                    codes.append(code)
+    unique_codes = sorted(set(codes))
+
+    if reporter:
+        reporter.emit("render-html", f"lookup names count={len(unique_codes)}")
+    names_by_code = fetch_instrument_names(connection, symbols=unique_codes)
+
+    package_dir = review_dir / "summary-package"
+    zip_path = write_summary_package(
+        summary_path=summary_path,
+        output_dir=package_dir,
+        names_by_code=names_by_code,
+    )
+    if reporter:
+        reporter.emit("render-html", f"write package={zip_path}")
+    return zip_path
+
+
 @app.command()
 def screen(
     method: str = typer.Option(..., "--method"),
@@ -573,6 +627,25 @@ def review_merge(
         reporter=reporter,
     )
     typer.echo(str(summary_path))
+
+
+@app.command(name="render-html")
+def render_html(
+    method: str = typer.Option(..., "--method"),
+    pick_date: str = typer.Option(..., "--pick-date"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    reporter = ProgressReporter(enabled=progress)
+    zip_path = _render_html_impl(
+        method=method,
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        reporter=reporter,
+    )
+    typer.echo(str(zip_path))
 
 
 @app.command(name="run")

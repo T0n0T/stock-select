@@ -111,6 +111,33 @@ def fetch_available_trade_dates(connection: ConnectionLike) -> pd.DataFrame:
     return _fetch_dataframe(connection, query, None)
 
 
+def fetch_instrument_names(
+    connection: ConnectionLike,
+    *,
+    symbols: Sequence[str],
+) -> dict[str, str]:
+    if not symbols:
+        return {}
+
+    query = """
+        SELECT ts_code, name
+        FROM instruments
+        WHERE ts_code = ANY(%(symbols)s)
+        ORDER BY ts_code ASC
+    """
+    frame = _fetch_dataframe(connection, query, {"symbols": list(symbols)})
+    if frame.empty:
+        return {}
+
+    result: dict[str, str] = {}
+    for row in frame.to_dict(orient="records"):
+        code = str(row.get("ts_code") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if code and name:
+            result[code] = name
+    return result
+
+
 def _fetch_dataframe(
     connection: ConnectionLike,
     query: str,

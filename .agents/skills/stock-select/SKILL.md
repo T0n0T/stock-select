@@ -25,6 +25,9 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Require each subagent to return strict JSON aligned with the prompt contract.
 - If a subagent cannot return valid JSON, record that symbol in failures instead of fabricating a result.
 - Write outputs under `~/.agents/skills/stock-select/runtime/`.
+- When the caller needs a shareable offline report, run CLI `render-html` after `review-merge`.
+- `render-html` must look up stock names from PostgreSQL and render `code + name` in the HTML, not only the code.
+- The packaged export should be a zip containing `summary.html`, `summary.json`, and the referenced chart PNG files under `charts/`.
 
 ## Execution Order
 
@@ -36,6 +39,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 6. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and `references/prompt.md`.
 7. Write raw subagent JSON results under `runtime/reviews/<pick_date>/llm_review_results/`.
 8. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary.
+9. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
 
 ## Subagent Review Protocol
 
@@ -115,6 +119,7 @@ If any of the checks above fail:
 - `review` currently writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`.
+- `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file.
 
 ## Future Upgrade Path
 
