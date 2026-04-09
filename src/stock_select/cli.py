@@ -29,11 +29,13 @@ from stock_select.charting import export_daily_chart
 from stock_select.db_access import (
     fetch_daily_window,
     fetch_instrument_names,
+    fetch_previous_trade_date,
     fetch_symbol_history,
     load_dotenv_value,
     resolve_dsn,
 )
 from stock_select.html_export import write_summary_package
+from stock_select.intraday import build_intraday_market_frame, normalize_rt_k_snapshot
 from stock_select.review_orchestrator import (
     REFERENCE_PROMPT_PATH,
     build_review_payload,
@@ -46,6 +48,10 @@ from stock_select.review_orchestrator import (
 
 
 app = typer.Typer(help="stock-select standalone CLI")
+
+
+class IntradayUserError(ValueError):
+    pass
 
 
 class ProgressReporter:
@@ -98,6 +104,10 @@ def _prepared_cache_path(runtime_root: Path, pick_date: str) -> Path:
     return runtime_root / "prepared" / f"{pick_date}.pkl"
 
 
+def _intraday_candidate_path(runtime_root: Path, run_id: str) -> Path:
+    return runtime_root / "candidates" / f"{run_id}.json"
+
+
 def _write_prepared_cache(
     cache_path: Path,
     *,
@@ -105,19 +115,23 @@ def _write_prepared_cache(
     start_date: str,
     end_date: str,
     prepared_by_symbol: dict[str, pd.DataFrame],
+    metadata_overrides: dict[str, object] | None = None,
 ) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "b1_config": DEFAULT_B1_CONFIG,
+        "turnover_window": DEFAULT_TURNOVER_WINDOW,
+        "weekly_ma_periods": DEFAULT_WEEKLY_MA_PERIODS,
+        "max_vol_lookback": DEFAULT_MAX_VOL_LOOKBACK,
+    }
+    if metadata_overrides:
+        metadata.update(metadata_overrides)
     payload = {
         "pick_date": pick_date,
         "start_date": start_date,
         "end_date": end_date,
         "prepared_by_symbol": prepared_by_symbol,
-        "metadata": {
-            "b1_config": DEFAULT_B1_CONFIG,
-            "turnover_window": DEFAULT_TURNOVER_WINDOW,
-            "weekly_ma_periods": DEFAULT_WEEKLY_MA_PERIODS,
-            "max_vol_lookback": DEFAULT_MAX_VOL_LOOKBACK,
-        },
+        "metadata": metadata,
     }
     cache_path.write_bytes(pickle.dumps(payload))
 
@@ -145,6 +159,65 @@ def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
         raise ValueError("Prepared cache prepared_by_symbol missing.")
     payload["prepared_by_symbol"] = prepared_by_symbol
     return payload
+
+
+def _resolve_tushare_token(cli_token: str | None) -> str:
+    dotenv_token = load_dotenv_value(Path.cwd() / ".env", "TUSHARE_TOKEN")
+    token = cli_token or os.getenv("TUSHARE_TOKEN") or dotenv_token
+    if token:
+        return token
+    msg = "A Tushare token is required for intraday mode."
+    raise IntradayUserError(msg)
+
+
+def _current_shanghai_timestamp() -> pd.Timestamp:
+    return pd.Timestamp.now(tz="Asia/Shanghai")
+
+
+def _format_intraday_run_id(timestamp: pd.Timestamp) -> str:
+    return timestamp.isoformat(timespec="microseconds").replace(":", "-").replace(".", "-")
+
+
+def _resolve_intraday_trade_date() -> str:
+    current = _current_shanghai_timestamp()
+    if current.day_of_week >= 5:
+        msg = f"Intraday mode is unavailable on weekends ({current.strftime('%Y-%m-%d')})."
+        raise IntradayUserError(msg)
+    return current.strftime("%Y-%m-%d")
+
+
+def _resolve_previous_trade_date(connection, trade_date: str) -> str:
+    return fetch_previous_trade_date(connection, before_date=trade_date)
+
+
+def _import_tushare_module():
+    try:
+        import tushare as ts
+    except ImportError as exc:  # pragma: no cover - wrapper behavior is tested via monkeypatch
+        msg = "Tushare package is required for intraday mode."
+        raise IntradayUserError(msg) from exc
+    return ts
+
+
+def _fetch_rt_k_snapshot(tushare_token: str, trade_date: str) -> pd.DataFrame:
+    try:
+        ts = _import_tushare_module()
+    except ImportError as exc:
+        msg = "Tushare package is required for intraday mode."
+        raise IntradayUserError(msg) from exc
+
+    ts.set_token(tushare_token)
+    pro = ts.pro_api()
+    try:
+        raw_snapshot = pro.rt_k()
+    except Exception as exc:
+        msg = f"Failed to fetch Tushare rt_k snapshot: {exc}"
+        raise IntradayUserError(msg) from exc
+    if raw_snapshot is None or raw_snapshot.empty:
+        msg = "Tushare rt_k returned no usable rows."
+        raise IntradayUserError(msg)
+
+    return normalize_rt_k_snapshot(raw_snapshot, trade_date=trade_date)
 
 
 def _prepare_screen_data(
@@ -298,6 +371,92 @@ def _screen_impl(
         DEFAULT_B1_CONFIG,
     )
     payload = {"pick_date": pick_date, "method": "b1", "candidates": candidates}
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if reporter:
+        reporter.emit(
+            "screen",
+            "breakdown "
+            f"total_symbols={stats['total_symbols']} "
+            f"eligible={stats['eligible']} "
+            f"fail_j={stats['fail_j']} "
+            f"fail_insufficient_history={stats['fail_insufficient_history']} "
+            f"fail_close_zxdkx={stats['fail_close_zxdkx']} "
+            f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
+            f"fail_weekly_ma={stats['fail_weekly_ma']} "
+            f"fail_max_vol={stats['fail_max_vol']} "
+            f"selected={stats['selected']}",
+        )
+        reporter.emit("screen", f"selected candidates={len(candidates)} write={out_path}")
+    return out_path
+
+
+def _screen_intraday_impl(
+    *,
+    dsn: str | None,
+    tushare_token: str | None,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    trade_date = _resolve_intraday_trade_date()
+    resolved_token = _resolve_tushare_token(tushare_token)
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    if reporter:
+        reporter.emit("screen", "connect db")
+    connection = _connect(resolved_dsn)
+    previous_trade_date = _resolve_previous_trade_date(connection, trade_date)
+    if reporter:
+        reporter.emit("screen", f"fetch snapshot trade_date={trade_date}")
+    snapshot = _fetch_rt_k_snapshot(resolved_token, trade_date)
+    run_id = _format_intraday_run_id(_current_shanghai_timestamp())
+    start_date = (pd.Timestamp(previous_trade_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
+    if reporter:
+        reporter.emit("screen", f"fetch market window end_date={previous_trade_date}")
+    market = fetch_daily_window(
+        connection,
+        start_date=start_date,
+        end_date=previous_trade_date,
+        symbols=None,
+    )
+    overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
+    prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
+    prepared_cache_path = runtime_root / "prepared" / f"{run_id}.pkl"
+    _write_prepared_cache(
+        prepared_cache_path,
+        pick_date=trade_date,
+        start_date=start_date,
+        end_date=trade_date,
+        prepared_by_symbol=prepared,
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "source": "tushare_rt_k",
+            "run_id": run_id,
+            "previous_trade_date": previous_trade_date,
+        },
+    )
+    if reporter:
+        reporter.emit("screen", f"write prepared path={prepared_cache_path}")
+
+    top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
+    pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
+    prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
+    if reporter:
+        reporter.emit("screen", "run b1 screen")
+    candidates, stats = run_b1_screen_with_stats(
+        prepared_for_pick,
+        pd.Timestamp(trade_date),
+        DEFAULT_B1_CONFIG,
+    )
+    out_path = _intraday_candidate_path(runtime_root, run_id)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "mode": "intraday_snapshot",
+        "method": "b1",
+        "trade_date": trade_date,
+        "fetched_at": run_id,
+        "run_id": run_id,
+        "source": "tushare_rt_k",
+        "candidates": candidates,
+    }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     if reporter:
         reporter.emit(
@@ -562,21 +721,38 @@ def _render_html_impl(
 @app.command()
 def screen(
     method: str = typer.Option(..., "--method"),
-    pick_date: str = typer.Option(..., "--pick-date"),
+    pick_date: str | None = typer.Option(None, "--pick-date"),
     dsn: str | None = typer.Option(None, "--dsn"),
+    tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     _ensure_b1(method)
     reporter = ProgressReporter(enabled=progress)
-    out_path = _screen_impl(
-        pick_date=pick_date,
-        dsn=dsn,
-        runtime_root=runtime_root,
-        recompute=recompute,
-        reporter=reporter,
-    )
+    try:
+        if intraday:
+            if pick_date is not None:
+                raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+            out_path = _screen_intraday_impl(
+                dsn=dsn,
+                tushare_token=tushare_token,
+                runtime_root=runtime_root,
+                reporter=reporter,
+            )
+        else:
+            if pick_date is None:
+                raise typer.BadParameter("--pick-date is required unless --intraday is set.")
+            out_path = _screen_impl(
+                pick_date=pick_date,
+                dsn=dsn,
+                runtime_root=runtime_root,
+                recompute=recompute,
+                reporter=reporter,
+            )
+    except IntradayUserError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(str(out_path))
 
 

@@ -111,6 +111,22 @@ def fetch_available_trade_dates(connection: ConnectionLike) -> pd.DataFrame:
     return _fetch_dataframe(connection, query, None)
 
 
+def fetch_previous_trade_date(connection: ConnectionLike, *, before_date: str) -> str:
+    query = """
+        SELECT trade_date
+        FROM daily_market
+        WHERE trade_date < %(before_date)s
+        GROUP BY trade_date
+        ORDER BY trade_date DESC
+        LIMIT 1
+    """
+    frame = _fetch_dataframe(connection, query, {"before_date": before_date})
+    if frame.empty:
+        msg = f"No previous trade date found before {before_date}."
+        raise ValueError(msg)
+    return str(frame.iloc[0]["trade_date"])
+
+
 def fetch_instrument_names(
     connection: ConnectionLike,
     *,

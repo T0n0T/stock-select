@@ -2,10 +2,12 @@ from pathlib import Path
 
 import importlib
 import json
+import pickle
 import zipfile
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from typer.testing import CliRunner
 
 from stock_select import cli
@@ -1821,3 +1823,249 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
     assert calls == {"connect": 1, "prepare": 1}
     payload = json.loads((candidate_dir / "2026-04-01.json").read_text(encoding="utf-8"))
     assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
+
+
+def test_screen_intraday_rejects_pick_date(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-09",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.stderr
+
+
+def test_screen_intraday_rejects_weekend_execution(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-11 10:00:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "weekend" in result.stderr.lower()
+    assert "traceback" not in result.stderr.lower()
+
+
+def test_screen_intraday_requires_tushare_token(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 10:00:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "tushare token" in result.stderr.lower()
+    assert "traceback" not in result.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Tushare package is required for intraday mode.",
+        "Failed to fetch Tushare rt_k snapshot: boom",
+        "Tushare rt_k returned no usable rows.",
+    ],
+)
+def test_screen_intraday_surfaces_snapshot_errors_as_cli_messages(
+    monkeypatch,
+    tmp_path: Path,
+    message: str,
+) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 10:00:00.123456", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_resolve_tushare_token", lambda token: "token")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "_resolve_previous_trade_date", lambda _connection, trade_date: "2026-04-08")
+    monkeypatch.setattr(
+        cli,
+        "_fetch_rt_k_snapshot",
+        lambda token, trade_date: (_ for _ in ()).throw(cli.IntradayUserError(message)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert message in result.stderr
+    assert "traceback" not in result.stderr.lower()
+
+
+def test_format_intraday_run_id_is_filename_safe_and_microsecond_precise() -> None:
+    run_id = cli._format_intraday_run_id(pd.Timestamp("2026-04-09 11:31:08.123456", tz="Asia/Shanghai"))
+
+    assert run_id == "2026-04-09T11-31-08-123456+08-00"
+    assert ":" not in run_id
+
+
+@pytest.mark.parametrize(
+    ("module_factory", "expected_message"),
+    [
+        (lambda: (_ for _ in ()).throw(ImportError("missing")), "Tushare package is required for intraday mode."),
+        (
+            lambda: SimpleNamespace(
+                set_token=lambda _token: None,
+                pro_api=lambda: SimpleNamespace(rt_k=lambda: (_ for _ in ()).throw(RuntimeError("boom"))),
+            ),
+            "Failed to fetch Tushare rt_k snapshot: boom",
+        ),
+        (
+            lambda: SimpleNamespace(
+                set_token=lambda _token: None,
+                pro_api=lambda: SimpleNamespace(rt_k=lambda: pd.DataFrame()),
+            ),
+            "Tushare rt_k returned no usable rows.",
+        ),
+    ],
+)
+def test_fetch_rt_k_snapshot_wraps_tushare_failures(monkeypatch, module_factory, expected_message: str) -> None:
+    monkeypatch.setattr(cli, "_import_tushare_module", module_factory, raising=False)
+
+    with pytest.raises(cli.IntradayUserError, match=expected_message):
+        cli._fetch_rt_k_snapshot("token", "2026-04-09")
+
+
+def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    expected_run_id = "2026-04-09T11-31-08-123456+08-00"
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 11:31:08.123456", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_resolve_tushare_token", lambda token: "token", raising=False)
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_previous_trade_date",
+        lambda _connection, trade_date: "2026-04-08",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_fetch_rt_k_snapshot",
+        lambda token, trade_date: pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "name": "平安银行",
+                    "trade_date": "2026-04-09",
+                    "trade_time": "11:31:07",
+                    "open": 12.1,
+                    "high": 12.5,
+                    "low": 12.0,
+                    "close": 12.34,
+                    "vol": 150.0,
+                    "amount": 999.0,
+                }
+            ]
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "2026-04-08",
+                    "open": 11.9,
+                    "high": 12.1,
+                    "low": 11.8,
+                    "close": 12.0,
+                    "vol": 120.0,
+                }
+            ]
+        ),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    candidate_path = runtime_root / "candidates" / f"{expected_run_id}.json"
+    prepared_path = runtime_root / "prepared" / f"{expected_run_id}.pkl"
+    assert candidate_path.exists()
+    assert prepared_path.exists()
+
+    candidate_payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+    assert candidate_payload["run_id"] == expected_run_id
+    assert candidate_payload["fetched_at"] == expected_run_id
+
+    prepared_payload = pickle.loads(prepared_path.read_bytes())
+    assert prepared_payload["metadata"]["mode"] == "intraday_snapshot"
+    assert prepared_payload["metadata"]["source"] == "tushare_rt_k"
+    assert prepared_payload["metadata"]["run_id"] == expected_run_id
+    assert prepared_payload["metadata"]["previous_trade_date"] == "2026-04-08"
