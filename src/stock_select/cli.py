@@ -1061,32 +1061,57 @@ def render_html(
 @app.command(name="run")
 def run_all(
     method: str = typer.Option(..., "--method"),
-    pick_date: str = typer.Option(..., "--pick-date"),
+    pick_date: str | None = typer.Option(None, "--pick-date"),
     dsn: str | None = typer.Option(None, "--dsn"),
+    tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     _ensure_b1(method)
     reporter = ProgressReporter(enabled=progress)
+    if intraday and pick_date is not None:
+        raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+    if not intraday and pick_date is None:
+        raise typer.BadParameter("--pick-date is required unless --intraday is set.")
+
     reporter.emit("run", "step=screen start")
     screen_started_at = reporter.checkpoint()
-    screen_path = _screen_impl(
-        pick_date=pick_date,
-        dsn=dsn,
-        runtime_root=runtime_root,
-        recompute=recompute,
-        reporter=reporter,
-    )
+    if intraday:
+        screen_path = _screen_intraday_impl(
+            dsn=dsn,
+            tushare_token=tushare_token,
+            runtime_root=runtime_root,
+            reporter=reporter,
+        )
+    else:
+        screen_path = _screen_impl(
+            pick_date=pick_date,
+            dsn=dsn,
+            runtime_root=runtime_root,
+            recompute=recompute,
+            reporter=reporter,
+        )
     reporter.emit("run", f"step=screen done path={screen_path} elapsed={reporter.since(screen_started_at):.1f}s")
     typer.echo(str(screen_path))
     reporter.emit("run", "step=chart start")
     chart_started_at = reporter.checkpoint()
-    chart_path = _chart_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+    if intraday:
+        chart_path = _chart_intraday_impl(runtime_root=runtime_root, reporter=reporter)
+    else:
+        chart_path = _chart_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
     reporter.emit("run", f"step=chart done path={chart_path} elapsed={reporter.since(chart_started_at):.1f}s")
     typer.echo(str(chart_path))
     reporter.emit("run", "step=review start")
     review_started_at = reporter.checkpoint()
-    review_path = _review_impl(method=method, pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+    if intraday:
+        review_path = _review_intraday_impl(
+            method=method,
+            runtime_root=runtime_root,
+            reporter=reporter,
+        )
+    else:
+        review_path = _review_impl(method=method, pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
     reporter.emit("run", f"step=review done path={review_path} elapsed={reporter.since(review_started_at):.1f}s")
     typer.echo(str(review_path))

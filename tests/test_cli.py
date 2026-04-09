@@ -773,6 +773,101 @@ def test_run_writes_final_summary(tmp_path: Path) -> None:
     assert "elapsed=" in result.stderr
 
 
+def test_run_intraday_rejects_pick_date(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-09",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.stderr
+
+
+def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    calls: list[tuple[str, object | None]] = []
+
+    def fake_screen_intraday_impl(
+        *,
+        dsn: str | None,
+        tushare_token: str | None,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        calls.append(("screen", tushare_token))
+        assert dsn == "postgresql://example"
+        assert tushare_token == "token"
+        assert runtime_root == tmp_path / "runtime"
+        return runtime_root / "candidates" / "2026-04-09T11-31-08-123456+08-00.json"
+
+    def fake_chart_intraday_impl(
+        *,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        calls.append(("chart", None))
+        assert runtime_root == tmp_path / "runtime"
+        return runtime_root / "charts" / "2026-04-09T11-31-08-123456+08-00"
+
+    def fake_review_intraday_impl(
+        *,
+        method: str,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        calls.append(("review", method))
+        assert runtime_root == tmp_path / "runtime"
+        return runtime_root / "reviews" / "2026-04-09T11-31-08-123456+08-00" / "summary.json"
+
+    monkeypatch.setattr(cli, "_screen_intraday_impl", fake_screen_intraday_impl)
+    monkeypatch.setattr(cli, "_chart_intraday_impl", fake_chart_intraday_impl)
+    monkeypatch.setattr(cli, "_review_intraday_impl", fake_review_intraday_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--intraday",
+            "--dsn",
+            "postgresql://example",
+            "--tushare-token",
+            "token",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("screen", "token"),
+        ("chart", None),
+        ("review", "b1"),
+    ]
+    stdout_lines = result.stdout.strip().splitlines()
+    assert stdout_lines == [
+        str(runtime_root / "candidates" / "2026-04-09T11-31-08-123456+08-00.json"),
+        str(runtime_root / "charts" / "2026-04-09T11-31-08-123456+08-00"),
+        str(runtime_root / "reviews" / "2026-04-09T11-31-08-123456+08-00" / "summary.json"),
+    ]
+    assert "[run] step=screen start" in result.stderr
+    assert "[run] step=chart start" in result.stderr
+    assert "[run] step=review done" in result.stderr
+
+
 def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
