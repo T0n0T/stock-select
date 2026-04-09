@@ -261,7 +261,7 @@ def test_chart_accepts_hcr_candidate_file_shape(tmp_path: Path) -> None:
     monkeypatch.setattr(
         cli,
         "fetch_symbol_history",
-        lambda **kwargs: pd.DataFrame(
+        lambda connection, **kwargs: pd.DataFrame(
             {
                 "ts_code": ["000001.SZ"],
                 "trade_date": pd.to_datetime(["2026-04-01"]),
