@@ -10,7 +10,7 @@ import pandas as pd
 import psycopg
 import typer
 
-from stock_select.b1_logic import (
+from stock_select.strategies import (
     DEFAULT_B1_CONFIG,
     DEFAULT_MAX_VOL_LOOKBACK,
     DEFAULT_TOP_M,
@@ -24,6 +24,7 @@ from stock_select.b1_logic import (
     max_vol_not_bearish,
     run_b1_screen,
     run_b1_screen_with_stats,
+    validate_method,
 )
 from stock_select.charting import export_daily_chart
 from stock_select.db_access import (
@@ -82,9 +83,14 @@ def main() -> None:
     app()
 
 
-def _ensure_b1(method: str) -> None:
-    if method.lower() != "b1":
+def _ensure_b1(method: str) -> str:
+    try:
+        normalized = validate_method(method)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if normalized != "b1":
         raise typer.BadParameter("Only method 'b1' is supported.")
+    return normalized
 
 
 def _default_runtime_root() -> Path:

@@ -11,6 +11,12 @@ from stock_select.b1_logic import (
     run_b1_screen,
     run_b1_screen_with_stats,
 )
+from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, run_b1_screen_with_stats as strategy_run_b1_screen_with_stats
+
+
+def test_b1_strategy_module_exports_current_defaults() -> None:
+    assert DEFAULT_B1_CONFIG == {"j_threshold": 15.0, "j_q_threshold": 0.10}
+    assert callable(strategy_run_b1_screen_with_stats)
 
 
 def test_compute_turnover_n_uses_midprice_times_volume() -> None:
