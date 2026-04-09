@@ -1,6 +1,11 @@
 import pandas as pd
 
+import stock_select.strategies.b1 as strategy_b1
 from stock_select.b1_logic import (
+    DEFAULT_MAX_VOL_LOOKBACK,
+    DEFAULT_TOP_M,
+    DEFAULT_TURNOVER_WINDOW,
+    DEFAULT_WEEKLY_MA_PERIODS,
     build_top_turnover_pool,
     compute_expanding_j_quantile,
     compute_turnover_n,
@@ -11,12 +16,44 @@ from stock_select.b1_logic import (
     run_b1_screen,
     run_b1_screen_with_stats,
 )
-from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, run_b1_screen_with_stats as strategy_run_b1_screen_with_stats
+from stock_select.strategies.b1 import (
+    DEFAULT_B1_CONFIG,
+    DEFAULT_MAX_VOL_LOOKBACK as STRATEGY_DEFAULT_MAX_VOL_LOOKBACK,
+    DEFAULT_TOP_M as STRATEGY_DEFAULT_TOP_M,
+    DEFAULT_TURNOVER_WINDOW as STRATEGY_DEFAULT_TURNOVER_WINDOW,
+    DEFAULT_WEEKLY_MA_PERIODS as STRATEGY_DEFAULT_WEEKLY_MA_PERIODS,
+    build_top_turnover_pool as strategy_build_top_turnover_pool,
+    compute_zx_lines as strategy_compute_zx_lines,
+    run_b1_screen_with_stats as strategy_run_b1_screen_with_stats,
+)
 
 
-def test_b1_strategy_module_exports_current_defaults() -> None:
+def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
     assert DEFAULT_B1_CONFIG == {"j_threshold": 15.0, "j_q_threshold": 0.10}
-    assert callable(strategy_run_b1_screen_with_stats)
+    assert STRATEGY_DEFAULT_TURNOVER_WINDOW == DEFAULT_TURNOVER_WINDOW
+    assert STRATEGY_DEFAULT_WEEKLY_MA_PERIODS == DEFAULT_WEEKLY_MA_PERIODS
+    assert STRATEGY_DEFAULT_MAX_VOL_LOOKBACK == DEFAULT_MAX_VOL_LOOKBACK
+    assert STRATEGY_DEFAULT_TOP_M == DEFAULT_TOP_M
+    assert set(strategy_b1.__all__) == {
+        "DEFAULT_B1_CONFIG",
+        "DEFAULT_MAX_VOL_LOOKBACK",
+        "DEFAULT_TOP_M",
+        "DEFAULT_TURNOVER_WINDOW",
+        "DEFAULT_WEEKLY_MA_PERIODS",
+        "build_top_turnover_pool",
+        "compute_expanding_j_quantile",
+        "compute_kdj",
+        "compute_turnover_n",
+        "compute_weekly_close",
+        "compute_weekly_ma_bull",
+        "compute_zx_lines",
+        "max_vol_not_bearish",
+        "run_b1_screen",
+        "run_b1_screen_with_stats",
+    }
+    assert strategy_run_b1_screen_with_stats is run_b1_screen_with_stats
+    assert strategy_build_top_turnover_pool is build_top_turnover_pool
+    assert strategy_compute_zx_lines is compute_zx_lines
 
 
 def test_compute_turnover_n_uses_midprice_times_volume() -> None:
