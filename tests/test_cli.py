@@ -258,25 +258,63 @@ def test_chart_accepts_hcr_candidate_file_shape(tmp_path: Path) -> None:
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+
+    def fake_fetch_symbol_history(
+        connection: object,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        assert symbol == "000001.SZ"
+        assert start_date == "2025-03-31"
+        assert end_date == "2026-04-01"
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-03-31", "2026-04-01"]),
+                "open": [10.0, 10.2],
+                "high": [10.5, 10.8],
+                "low": [9.9, 10.1],
+                "close": [10.4, 10.7],
+                "vol": [100.0, 120.0],
+            }
+        )
+
     monkeypatch.setattr(
         cli,
         "fetch_symbol_history",
-        lambda connection, **kwargs: pd.DataFrame(
-            {
-                "ts_code": ["000001.SZ"],
-                "trade_date": pd.to_datetime(["2026-04-01"]),
-                "open": [10.0],
-                "high": [10.8],
-                "low": [9.8],
-                "close": [10.6],
-                "vol": [100.0],
-            }
-        ),
+        fake_fetch_symbol_history,
     )
+
+    def fake_export_daily_chart(df: pd.DataFrame, code: str, out_path: Path, bars: int = 120) -> Path:
+        assert code == "000001.SZ"
+        assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+        assert df.to_dict(orient="records") == [
+            {
+                "date": pd.Timestamp("2026-03-31"),
+                "open": 10.0,
+                "high": 10.5,
+                "low": 9.9,
+                "close": 10.4,
+                "volume": 100.0,
+            },
+            {
+                "date": pd.Timestamp("2026-04-01"),
+                "open": 10.2,
+                "high": 10.8,
+                "low": 10.1,
+                "close": 10.7,
+                "volume": 120.0,
+            },
+        ]
+        out_path.write_bytes(b"png")
+        return out_path
+
     monkeypatch.setattr(
         cli,
         "export_daily_chart",
-        lambda df, code, out_path, bars=120: out_path.write_bytes(b"png") or out_path,
+        fake_export_daily_chart,
     )
 
     result = runner.invoke(
