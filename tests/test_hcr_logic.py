@@ -29,8 +29,10 @@ def test_compute_hcr_reference_price_uses_const_ref_hhv_300_shift_60_semantics()
 
     reference = compute_hcr_reference_price(frame)
 
-    assert reference.isna().iloc[358]
+    assert reference.notna().all()
+    assert float(reference.iloc[0]) == 10.0
     assert float(reference.iloc[-1]) == 10.0
+    assert reference.nunique(dropna=True) == 1
 
 
 def test_run_hcr_screen_with_stats_selects_symbol_when_resonance_and_breakout_pass() -> None:
@@ -59,7 +61,7 @@ def test_run_hcr_screen_with_stats_selects_symbol_when_resonance_and_breakout_pa
 
 
 def test_run_hcr_screen_with_stats_counts_insufficient_history_separately() -> None:
-    pick_date = pd.Timestamp("2026-04-01")
+    pick_date = pd.Timestamp("2026-03-11")
     frame = pd.DataFrame(
         {
             "trade_date": pd.bdate_range("2026-01-01", periods=50),
@@ -75,5 +77,28 @@ def test_run_hcr_screen_with_stats_counts_insufficient_history_separately() -> N
 
     _candidates, stats = run_hcr_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
 
+    assert stats["eligible"] == 1
     assert stats["fail_insufficient_history"] == 1
     assert stats["fail_resonance"] == 0
+
+
+def test_run_hcr_screen_with_stats_requires_exact_pick_date_match() -> None:
+    pick_date = pd.Timestamp("2026-04-01")
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range("2026-01-01", periods=50),
+            "open": [9.8] * 50,
+            "high": [10.2] * 50,
+            "low": [9.6] * 50,
+            "close": [10.1] * 50,
+            "volume": [100.0] * 50,
+            "turnover_n": [1000.0] * 50,
+        }
+    )
+    frame = prepare_hcr_frame(frame)
+
+    candidates, stats = run_hcr_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+
+    assert candidates == []
+    assert stats["eligible"] == 0
+    assert stats["fail_insufficient_history"] == 0

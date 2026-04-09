@@ -14,7 +14,13 @@ def compute_hcr_yx(frame: pd.DataFrame) -> pd.Series:
 
 def compute_hcr_reference_price(frame: pd.DataFrame) -> pd.Series:
     rolling_high = frame["high"].astype(float).rolling(window=300, min_periods=300).max()
-    return rolling_high.shift(60)
+    shifted = rolling_high.shift(60)
+    if shifted.empty:
+        return shifted
+    last_value = shifted.iloc[-1]
+    if pd.isna(last_value):
+        return pd.Series(pd.NA, index=frame.index, dtype="Float64")
+    return pd.Series(float(last_value), index=frame.index, dtype=float)
 
 
 def prepare_hcr_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -44,7 +50,7 @@ def run_hcr_screen_with_stats(
 
     for code, frame in prepared_by_symbol.items():
         trade_dates = pd.to_datetime(frame["trade_date"])
-        daily = frame.loc[trade_dates <= target_date]
+        daily = frame.loc[trade_dates == target_date]
         if daily.empty:
             continue
         stats["eligible"] += 1
