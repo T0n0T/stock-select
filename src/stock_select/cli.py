@@ -54,6 +54,10 @@ class IntradayUserError(ValueError):
     pass
 
 
+class IntradayArtifactError(ValueError):
+    pass
+
+
 class ProgressReporter:
     def __init__(self, *, enabled: bool) -> None:
         self.enabled = enabled
@@ -108,6 +112,48 @@ def _intraday_candidate_path(runtime_root: Path, run_id: str) -> Path:
     return runtime_root / "candidates" / f"{run_id}.json"
 
 
+def _validate_intraday_candidate_payload(candidate_path: Path, payload: dict[str, object]) -> dict[str, object]:
+    run_id = payload.get("run_id")
+    trade_date = payload.get("trade_date")
+    candidates = payload.get("candidates")
+
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise IntradayArtifactError(f"Malformed intraday candidate file: {candidate_path}")
+    if not isinstance(trade_date, str) or not trade_date.strip():
+        raise IntradayArtifactError(f"Malformed intraday candidate file: {candidate_path}")
+    if not isinstance(candidates, list):
+        raise IntradayArtifactError(f"Malformed intraday candidate file: {candidate_path}")
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("code"), str) or not candidate["code"].strip():
+            raise IntradayArtifactError(f"Malformed intraday candidate file: {candidate_path}")
+    return payload
+
+
+def _resolve_latest_intraday_candidate(runtime_root: Path) -> tuple[Path, dict[str, object]]:
+    candidate_dir = runtime_root / "candidates"
+    latest_path: Path | None = None
+    latest_payload: dict[str, object] | None = None
+    latest_run_id: str | None = None
+
+    for candidate_path in sorted(candidate_dir.glob("*.json")):
+        try:
+            payload = _load_candidate_payload(candidate_path)
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+        if payload.get("mode") != "intraday_snapshot":
+            continue
+        payload_run_id = payload.get("run_id")
+        run_id = payload_run_id.strip() if isinstance(payload_run_id, str) and payload_run_id.strip() else candidate_path.stem
+        if latest_run_id is None or run_id > latest_run_id:
+            latest_path = candidate_path
+            latest_payload = payload
+            latest_run_id = run_id
+
+    if latest_path is None or latest_payload is None:
+        raise typer.BadParameter("No intraday candidate file found.")
+    return latest_path, _validate_intraday_candidate_payload(latest_path, latest_payload)
+
+
 def _write_prepared_cache(
     cache_path: Path,
     *,
@@ -159,6 +205,29 @@ def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
         raise ValueError("Prepared cache prepared_by_symbol missing.")
     payload["prepared_by_symbol"] = prepared_by_symbol
     return payload
+
+
+def _load_intraday_prepared_cache(
+    runtime_root: Path,
+    *,
+    run_id: str,
+    trade_date: str,
+) -> dict[str, pd.DataFrame]:
+    payload = _load_prepared_cache(runtime_root / "prepared" / f"{run_id}.pkl")
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
+    if metadata.get("mode") != "intraday_snapshot":
+        raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
+    if metadata.get("run_id") != run_id:
+        raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
+    if payload.get("pick_date") != trade_date:
+        raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
+
+    prepared = payload["prepared_by_symbol"]
+    if not isinstance(prepared, dict):
+        raise IntradayArtifactError("Prepared intraday payload missing prepared_by_symbol.")
+    return prepared  # type: ignore[return-value]
 
 
 def _resolve_tushare_token(cli_token: str | None) -> str:
@@ -264,15 +333,17 @@ def _prepare_chart_data(history: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
 
-    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    date_column = "trade_date" if "trade_date" in frame.columns else "date"
+    volume_column = "vol" if "vol" in frame.columns else "volume"
+    frame[date_column] = pd.to_datetime(frame[date_column])
     return pd.DataFrame(
         {
-            "date": frame["trade_date"],
+            "date": frame[date_column],
             "open": frame["open"].astype(float),
             "high": frame["high"].astype(float),
             "low": frame["low"].astype(float),
             "close": frame["close"].astype(float),
-            "volume": frame["vol"].astype(float),
+            "volume": frame[volume_column].astype(float),
         }
     )
 
@@ -516,6 +587,45 @@ def _chart_impl(
     return chart_dir
 
 
+def _chart_intraday_impl(
+    *,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    try:
+        _, payload = _resolve_latest_intraday_candidate(runtime_root)
+    except IntradayArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    run_id = str(payload["run_id"])
+    trade_date = str(payload["trade_date"])
+
+    chart_dir = runtime_root / "charts" / run_id
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        prepared_by_symbol = _load_intraday_prepared_cache(runtime_root, run_id=run_id, trade_date=trade_date)
+    except IntradayArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    candidates = payload.get("candidates", [])
+    if reporter:
+        reporter.emit("chart", f"candidates={len(candidates)} intraday_run_id={run_id}")
+
+    for idx, candidate in enumerate(candidates, start=1):
+        code = candidate["code"]
+        if reporter:
+            reporter.emit("chart", f"candidate {idx}/{len(candidates)} code={code}")
+        history = prepared_by_symbol.get(code)
+        if history is None:
+            raise typer.BadParameter(f"Prepared intraday history not found for candidate: {code}")
+        chart_data = _prepare_chart_data(history)
+        if chart_data.empty:
+            raise typer.BadParameter(f"No prepared intraday history found for candidate: {code}")
+        export_daily_chart(chart_data, code, chart_dir / f"{code}_day.png")
+
+    if reporter:
+        reporter.emit("chart", f"done write={chart_dir}")
+    return chart_dir
+
+
 def _review_impl(
     *,
     method: str,
@@ -559,6 +669,104 @@ def _review_impl(
             start_date=start_date,
             end_date=pick_date,
         )
+        baseline_review = review_symbol_history(
+            code=code,
+            pick_date=pick_date,
+            history=history,
+            chart_path=str(chart_path),
+        )
+        review = build_review_result(
+            code=code,
+            pick_date=pick_date,
+            chart_path=str(chart_path),
+            baseline_review=baseline_review,
+        )
+        (review_dir / f"{code}.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
+        reviews.append(review)
+        task = build_review_payload(
+            code=code,
+            pick_date=pick_date,
+            chart_path=str(chart_path),
+            rubric_path="references/review-rubric.md",
+        )
+        llm_review_tasks.append(
+            {
+                **task,
+                "rank": idx,
+                "baseline_score": review["total_score"],
+                "baseline_verdict": review["verdict"],
+            }
+        )
+
+    summary = summarize_reviews(
+        pick_date,
+        method.lower(),
+        reviews,
+        min_score=4.0,
+        failures=failures,
+    )
+    summary_path = review_dir / "summary.json"
+    tasks_path = review_dir / "llm_review_tasks.json"
+    tasks_payload = {
+        "pick_date": pick_date,
+        "method": method.lower(),
+        "prompt_path": REFERENCE_PROMPT_PATH,
+        "tasks": llm_review_tasks,
+    }
+    tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if reporter:
+        reporter.emit("review", f"done reviewed={len(reviews)} failures={len(failures)} write={summary_path}")
+    return summary_path
+
+
+def _review_intraday_impl(
+    *,
+    method: str,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    try:
+        _, payload = _resolve_latest_intraday_candidate(runtime_root)
+    except IntradayArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    run_id = str(payload["run_id"])
+    pick_date = str(payload["trade_date"])
+
+    chart_dir = runtime_root / "charts" / run_id
+    if not chart_dir.exists():
+        raise typer.BadParameter(f"Chart input directory not found: {chart_dir}")
+    review_dir = runtime_root / "reviews" / run_id
+    review_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        prepared_by_symbol = _load_intraday_prepared_cache(runtime_root, run_id=run_id, trade_date=pick_date)
+    except IntradayArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    candidates = payload.get("candidates", [])
+    if reporter:
+        reporter.emit("review", f"candidates={len(candidates)} intraday_run_id={run_id}")
+
+    reviews: list[dict[str, object]] = []
+    failures: list[dict[str, object]] = []
+    llm_review_tasks: list[dict[str, object]] = []
+    for idx, candidate in enumerate(candidates, start=1):
+        code = candidate["code"]
+        if reporter:
+            reporter.emit("review", f"candidate {idx}/{len(candidates)} code={code}")
+        chart_path = chart_dir / f"{code}_day.png"
+        if not chart_path.exists():
+            failures.append({"code": code, "reason": f"Chart file not found: {chart_path}"})
+            if reporter:
+                reporter.emit("review", f"skip code={code} reason=missing_chart")
+            continue
+
+        history = prepared_by_symbol.get(code)
+        if history is None or history.empty:
+            failures.append({"code": code, "reason": f"Prepared intraday history not found: {code}"})
+            if reporter:
+                reporter.emit("review", f"skip code={code} reason=missing_prepared_history")
+            continue
+
         baseline_review = review_symbol_history(
             code=code,
             pick_date=pick_date,
@@ -759,28 +967,54 @@ def screen(
 @app.command()
 def chart(
     method: str = typer.Option(..., "--method"),
-    pick_date: str = typer.Option(..., "--pick-date"),
+    pick_date: str | None = typer.Option(None, "--pick-date"),
     dsn: str | None = typer.Option(None, "--dsn"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     _ensure_b1(method)
     reporter = ProgressReporter(enabled=progress)
-    chart_dir = _chart_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+    if intraday:
+        if pick_date is not None:
+            raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+        chart_dir = _chart_intraday_impl(runtime_root=runtime_root, reporter=reporter)
+    else:
+        if pick_date is None:
+            raise typer.BadParameter("--pick-date is required unless --intraday is set.")
+        chart_dir = _chart_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
     typer.echo(str(chart_dir))
 
 
 @app.command()
 def review(
     method: str = typer.Option(..., "--method"),
-    pick_date: str = typer.Option(..., "--pick-date"),
+    pick_date: str | None = typer.Option(None, "--pick-date"),
     dsn: str | None = typer.Option(None, "--dsn"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     _ensure_b1(method)
     reporter = ProgressReporter(enabled=progress)
-    summary_path = _review_impl(method=method, pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+    if intraday:
+        if pick_date is not None:
+            raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+        summary_path = _review_intraday_impl(
+            method=method,
+            runtime_root=runtime_root,
+            reporter=reporter,
+        )
+    else:
+        if pick_date is None:
+            raise typer.BadParameter("--pick-date is required unless --intraday is set.")
+        summary_path = _review_impl(
+            method=method,
+            pick_date=pick_date,
+            dsn=dsn,
+            runtime_root=runtime_root,
+            reporter=reporter,
+        )
     typer.echo(str(summary_path))
 
 

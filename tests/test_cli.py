@@ -238,6 +238,175 @@ def test_chart_exports_png_for_candidates(tmp_path: Path) -> None:
     assert "[chart] candidate 1/1 code=000001.SZ" in result.stderr
 
 
+def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / "2026-04-09T10-00-00+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T10-00-00+08-00",
+                "candidates": [{"code": "000002.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "trade_date": "2026-04-09",
+                "fetched_at": "2026-04-09T11-31-08+08-00",
+                "run_id": "2026-04-09T11-31-08+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_load_intraday_prepared_cache",
+        lambda current_runtime_root, *, run_id, trade_date: (
+            {
+                "000001.SZ": pd.DataFrame(
+                    [
+                        {"date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "volume": 120.0},
+                        {"date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "volume": 150.0},
+                    ]
+                )
+            }
+            if current_runtime_root == runtime_root
+            and run_id == "2026-04-09T11-31-08+08-00"
+            and trade_date == "2026-04-09"
+            else pytest.fail("chart did not request the latest intraday prepared cache")
+        ),
+    )
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("chart --intraday should not connect to the database"))
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda *args, **kwargs: pytest.fail("chart --intraday should not fetch symbol history"),
+    )
+
+    def fake_export_daily_chart(df: pd.DataFrame, code: str, out_path: Path, bars: int = 120) -> Path:
+        assert code == "000001.SZ"
+        assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+        assert df.to_dict(orient="records") == [
+            {
+                "date": pd.Timestamp("2026-04-08"),
+                "open": 11.9,
+                "high": 12.1,
+                "low": 11.8,
+                "close": 12.0,
+                "volume": 120.0,
+            },
+            {
+                "date": pd.Timestamp("2026-04-09"),
+                "open": 12.1,
+                "high": 12.5,
+                "low": 12.0,
+                "close": 12.34,
+                "volume": 150.0,
+            },
+        ]
+        out_path.write_bytes(b"png")
+        return out_path
+
+    monkeypatch.setattr(cli, "export_daily_chart", fake_export_daily_chart)
+
+    result = runner.invoke(app, ["chart", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code == 0
+    assert (runtime_root / "charts" / "2026-04-09T11-31-08+08-00" / "000001.SZ_day.png").exists()
+
+
+def test_chart_intraday_rejects_malformed_latest_candidate_payload(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / "2026-04-09T10-00-00+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T10-00-00+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T11-31-08+08-00",
+                "candidates": [{}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["chart", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code != 0
+    assert "malformed intraday candidate file" in result.stderr.lower()
+
+
+def test_chart_intraday_rejects_prepared_cache_metadata_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T11-31-08+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_load_prepared_cache",
+        lambda _path: {
+            "pick_date": "2026-04-08",
+            "prepared_by_symbol": {
+                "000001.SZ": pd.DataFrame(
+                    [
+                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    ]
+                )
+            },
+            "metadata": {
+                "b1_config": cli.DEFAULT_B1_CONFIG,
+                "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
+                "weekly_ma_periods": cli.DEFAULT_WEEKLY_MA_PERIODS,
+                "max_vol_lookback": cli.DEFAULT_MAX_VOL_LOOKBACK,
+                "mode": "intraday_snapshot",
+                "run_id": "2026-04-09T11-31-08+08-00",
+            },
+        },
+    )
+
+    result = runner.invoke(app, ["chart", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code != 0
+    assert "prepared intraday cache metadata mismatch" in result.stderr.lower()
+
+
 def test_review_writes_summary_json(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -320,6 +489,186 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert "total_score" in review
     assert "[review] candidate 1/1 code=000001.SZ" in result.stderr
     assert "[review] done reviewed=1 failures=0" in result.stderr
+
+
+def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    chart_dir = runtime_root / "charts" / "2026-04-09T11-31-08+08-00"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (candidate_dir / "2026-04-09T10-00-00+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T10-00-00+08-00",
+                "candidates": [{"code": "000002.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "trade_date": "2026-04-09",
+                "fetched_at": "2026-04-09T11-31-08+08-00",
+                "run_id": "2026-04-09T11-31-08+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_load_intraday_prepared_cache",
+        lambda current_runtime_root, *, run_id, trade_date: (
+            {
+                "000001.SZ": pd.DataFrame(
+                    [
+                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                        {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                    ]
+                )
+            }
+            if current_runtime_root == runtime_root
+            and run_id == "2026-04-09T11-31-08+08-00"
+            and trade_date == "2026-04-09"
+            else pytest.fail("review did not request the latest intraday prepared cache")
+        ),
+    )
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("review --intraday should not connect to the database"))
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda *args, **kwargs: pytest.fail("review --intraday should not fetch symbol history"),
+    )
+
+    def fake_review_symbol_history(
+        *,
+        code: str,
+        pick_date: str,
+        history: pd.DataFrame,
+        chart_path: str,
+    ) -> dict[str, object]:
+        assert code == "000001.SZ"
+        assert pick_date == "2026-04-09"
+        assert Path(chart_path) == chart_dir / "000001.SZ_day.png"
+        assert history.to_dict(orient="records") == [
+            {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+            {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+        ]
+        return {
+            "review_type": "baseline",
+            "total_score": 4.2,
+            "signal_type": "trend_start",
+            "verdict": "PASS",
+            "comment": "intraday baseline",
+        }
+
+    monkeypatch.setattr(cli, "review_symbol_history", fake_review_symbol_history)
+    monkeypatch.setattr(
+        cli,
+        "build_review_result",
+        lambda **kwargs: {
+            "code": kwargs["code"],
+            "pick_date": kwargs["pick_date"],
+            "chart_path": kwargs["chart_path"],
+            "review_mode": "baseline_local",
+            "baseline_review": kwargs["baseline_review"],
+            "llm_review": None,
+            "total_score": kwargs["baseline_review"]["total_score"],
+            "signal_type": kwargs["baseline_review"]["signal_type"],
+            "verdict": kwargs["baseline_review"]["verdict"],
+            "comment": kwargs["baseline_review"]["comment"],
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_review_payload",
+        lambda **kwargs: {
+            "code": kwargs["code"],
+            "pick_date": kwargs["pick_date"],
+            "chart_path": kwargs["chart_path"],
+            "rubric_path": kwargs["rubric_path"],
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "summarize_reviews",
+        lambda pick_date, method, reviews, min_score, failures: {
+            "pick_date": pick_date,
+            "method": method,
+            "reviewed_count": len(reviews),
+            "recommendations": [{"code": reviews[0]["code"]}] if reviews else [],
+            "excluded": [],
+            "failures": failures,
+        },
+    )
+
+    result = runner.invoke(app, ["review", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code == 0
+    assert (runtime_root / "reviews" / "2026-04-09T11-31-08+08-00" / "summary.json").exists()
+
+
+def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    chart_dir = runtime_root / "charts" / "2026-04-09T11-31-08+08-00"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T11-31-08+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_load_prepared_cache",
+        lambda _path: {
+            "pick_date": "2026-04-09",
+            "prepared_by_symbol": {
+                "000001.SZ": pd.DataFrame(
+                    [
+                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    ]
+                )
+            },
+            "metadata": {
+                "b1_config": cli.DEFAULT_B1_CONFIG,
+                "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
+                "weekly_ma_periods": cli.DEFAULT_WEEKLY_MA_PERIODS,
+                "max_vol_lookback": cli.DEFAULT_MAX_VOL_LOOKBACK,
+                "mode": "intraday_snapshot",
+                "run_id": "2026-04-09T10-00-00+08-00",
+            },
+        },
+    )
+
+    result = runner.invoke(app, ["review", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code != 0
+    assert "prepared intraday cache metadata mismatch" in result.stderr.lower()
 
 
 def test_run_writes_final_summary(tmp_path: Path) -> None:
