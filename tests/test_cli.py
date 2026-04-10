@@ -28,7 +28,37 @@ def test_screen_rejects_unknown_method() -> None:
     result = runner.invoke(app, ["screen", "--method", "brick", "--pick-date", "2026-04-01"])
 
     assert result.exit_code != 0
-    assert "supported methods: b1, hcr" in result.stderr.lower()
+    assert "supported methods: b1, b2, hcr" in result.stderr.lower()
+
+
+def test_screen_accepts_whitespace_padded_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'b2')}.json"
+
+    monkeypatch.setattr(
+        cli,
+        "_screen_impl",
+        lambda **kwargs: expected_path if kwargs["method"] == "b2" else None,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            " b2 ",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(expected_path)
 
 
 def test_screen_accepts_whitespace_padded_b1_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

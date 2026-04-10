@@ -24,6 +24,7 @@ from stock_select.strategies import (
     max_vol_not_bearish,
     run_b1_screen,
     run_b1_screen_with_stats,
+    run_b2_screen_with_stats,
     validate_method,
 )
 from stock_select.strategies.hcr import (
@@ -344,6 +345,20 @@ def _fetch_rt_k_snapshot(tushare_token: str, trade_date: str) -> pd.DataFrame:
     return normalize_rt_k_snapshot(raw_snapshot, trade_date=trade_date)
 
 
+def compute_macd(
+    frame: pd.DataFrame,
+    *,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> pd.DataFrame:
+    close = frame["close"].astype(float)
+    dif = close.ewm(span=fast, adjust=False).mean() - close.ewm(span=slow, adjust=False).mean()
+    dea = dif.ewm(span=signal, adjust=False).mean()
+    macd_hist = dif - dea
+    return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": macd_hist}, index=frame.index)
+
+
 def _prepare_screen_data(
     market: pd.DataFrame,
     *,
@@ -372,6 +387,10 @@ def _prepare_screen_data(
         zxdq, zxdkx = compute_zx_lines(group)
         group["zxdq"] = zxdq
         group["zxdkx"] = zxdkx
+        macd = compute_macd(group)
+        group["dif"] = macd["dif"]
+        group["dea"] = macd["dea"]
+        group["macd_hist"] = macd["macd_hist"]
         group["weekly_ma_bull"] = compute_weekly_ma_bull(group, ma_periods=DEFAULT_WEEKLY_MA_PERIODS)
         group["max_vol_not_bearish"] = max_vol_not_bearish(group, lookback=DEFAULT_MAX_VOL_LOOKBACK)
         prepared[code] = group
@@ -479,6 +498,20 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"selected={stats['selected']}",
         )
         return
+    if method == "b2":
+        reporter.emit(
+            "screen",
+            "breakdown "
+            f"total_symbols={stats['total_symbols']} "
+            f"eligible={stats['eligible']} "
+            f"fail_recent_j={stats['fail_recent_j']} "
+            f"fail_insufficient_history={stats['fail_insufficient_history']} "
+            f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
+            f"fail_weekly_ma={stats['fail_weekly_ma']} "
+            f"fail_macd_trend={stats['fail_macd_trend']} "
+            f"selected={stats['selected']}",
+        )
+        return
     reporter.emit(
         "screen",
         "breakdown "
@@ -521,7 +554,7 @@ def _screen_impl(
     prepared: dict[str, pd.DataFrame] | None = None
     start_date = (
         (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-        if method == "b1"
+        if method in {"b1", "b2"}
         else None
     )
     if not recompute and prepared_cache_path.exists():
@@ -565,7 +598,7 @@ def _screen_impl(
                 "screen",
                 f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
             )
-        if method == "b1":
+        if method in {"b1", "b2"}:
             prepared = _call_prepare_screen_data(market, reporter=reporter)
         else:
             prepared = _call_prepare_hcr_screen_data(market, reporter=reporter)
@@ -579,19 +612,26 @@ def _screen_impl(
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
-    if method == "b1":
+    if method in {"b1", "b2"}:
         if prepared is None:
             prepared = {}
         top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
         pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
-            reporter.emit("screen", "run b1 screen")
-        candidates, stats = run_b1_screen_with_stats(
-            prepared_for_pick,
-            pd.Timestamp(pick_date),
-            DEFAULT_B1_CONFIG,
-        )
+            reporter.emit("screen", f"run {method} screen")
+        if method == "b1":
+            candidates, stats = run_b1_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(pick_date),
+                DEFAULT_B1_CONFIG,
+            )
+        else:
+            candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(pick_date),
+                DEFAULT_B1_CONFIG,
+            )
     else:
         if reporter:
             reporter.emit("screen", "run hcr screen")
@@ -642,7 +682,7 @@ def _screen_intraday_impl(
         symbols=None,
     )
     overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
-    if method == "b1":
+    if method in {"b1", "b2"}:
         prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
     else:
         prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
@@ -665,17 +705,24 @@ def _screen_intraday_impl(
     if reporter:
         reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
-    if method == "b1":
+    if method in {"b1", "b2"}:
         top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
         pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
-            reporter.emit("screen", "run b1 screen")
-        candidates, stats = run_b1_screen_with_stats(
-            prepared_for_pick,
-            pd.Timestamp(trade_date),
-            DEFAULT_B1_CONFIG,
-        )
+            reporter.emit("screen", f"run {method} screen")
+        if method == "b1":
+            candidates, stats = run_b1_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(trade_date),
+                DEFAULT_B1_CONFIG,
+            )
+        else:
+            candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(trade_date),
+                DEFAULT_B1_CONFIG,
+            )
     else:
         if reporter:
             reporter.emit("screen", "run hcr screen")

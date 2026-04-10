@@ -3,6 +3,14 @@ import importlib
 import pandas as pd
 import pytest
 
+import stock_select.strategies as strategies
+
+
+def test_strategies_exports_b2_support() -> None:
+    assert "b2" in strategies.SUPPORTED_METHODS
+    assert strategies.validate_method(" b2 ") == "b2"
+    assert hasattr(strategies, "run_b2_screen_with_stats")
+
 
 def _load_run_b2_screen_with_stats():
     try:
@@ -46,7 +54,7 @@ def test_run_b2_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
     frame = pd.DataFrame(
         {
             "trade_date": pd.date_range("2026-03-20", periods=16, freq="B"),
-            "J": [40.0] * 16,
+            "J": [40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0],
             "zxdq": [10.5] * 16,
             "zxdkx": [10.0] * 16,
             "weekly_ma_bull": [True] * 16,
