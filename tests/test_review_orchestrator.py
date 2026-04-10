@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from stock_select.review_orchestrator import (
     build_review_payload,
@@ -111,6 +112,30 @@ def test_normalize_llm_review_rejects_missing_reasoning() -> None:
         assert "trend_reasoning" in str(exc)
     else:
         raise AssertionError("normalize_llm_review should reject missing reasoning fields")
+
+
+def test_normalize_llm_review_requires_macd_reasoning() -> None:
+    with pytest.raises(ValueError, match="macd_reasoning"):
+        normalize_llm_review(
+            {
+                "trend_reasoning": "趋势向上",
+                "position_reasoning": "位置适中",
+                "volume_reasoning": "量价健康",
+                "abnormal_move_reasoning": "前期有异动",
+                "signal_reasoning": "主升启动",
+                "scores": {
+                    "trend_structure": 5,
+                    "price_position": 4,
+                    "volume_behavior": 5,
+                    "previous_abnormal_move": 4,
+                    "macd_phase": 5,
+                },
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "缺少 macd reasoning",
+            }
+        )
 
 
 def test_summarize_reviews_sorts_recommendations() -> None:
