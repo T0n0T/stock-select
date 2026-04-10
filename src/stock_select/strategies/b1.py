@@ -16,6 +16,20 @@ DEFAULT_MAX_VOL_LOOKBACK = 20
 DEFAULT_TOP_M = 5000
 
 
+def compute_macd(
+    df: pd.DataFrame,
+    *,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> pd.DataFrame:
+    close = df["close"].astype(float)
+    dif = close.ewm(span=fast, adjust=False).mean() - close.ewm(span=slow, adjust=False).mean()
+    dea = dif.ewm(span=signal, adjust=False).mean()
+    macd_hist = dif - dea
+    return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": macd_hist}, index=df.index)
+
+
 def compute_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
     volume = _resolve_volume_series(df)
     turnover = ((df["open"] + df["close"]) / 2.0) * volume
@@ -251,12 +265,13 @@ __all__ = [
     "DEFAULT_TOP_M",
     "DEFAULT_TURNOVER_WINDOW",
     "DEFAULT_WEEKLY_MA_PERIODS",
-    "build_top_turnover_pool",
-    "compute_expanding_j_quantile",
-    "compute_kdj",
-    "compute_turnover_n",
-    "compute_weekly_close",
-    "compute_weekly_ma_bull",
+        "build_top_turnover_pool",
+        "compute_expanding_j_quantile",
+        "compute_kdj",
+        "compute_macd",
+        "compute_turnover_n",
+        "compute_weekly_close",
+        "compute_weekly_ma_bull",
     "compute_zx_lines",
     "max_vol_not_bearish",
     "run_b1_screen",

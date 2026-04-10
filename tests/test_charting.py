@@ -50,6 +50,24 @@ def test_export_daily_chart_respects_bars_limit() -> None:
 def test_prepare_daily_chart_frame_includes_macd_columns() -> None:
     frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=0)
 
+    assert list(frame.columns) == [
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+        "zxdq",
+        "zxdkx",
+        "dif",
+        "dea",
+        "macd_hist",
+    ]
     for column in ("dif", "dea", "macd_hist"):
-        assert column in frame.columns
         assert frame[column].index.equals(frame.index)
+
+
+def test_prepare_daily_chart_frame_keeps_macd_series_aligned_after_bars_trim() -> None:
+    frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=2)
+
+    assert list(frame.index) == [pd.Timestamp("2026-04-03"), pd.Timestamp("2026-04-06")]
+    assert list(frame[["dif", "dea", "macd_hist"]].columns) == ["dif", "dea", "macd_hist"]

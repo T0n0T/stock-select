@@ -18,6 +18,7 @@ from stock_select.strategies import (
     DEFAULT_WEEKLY_MA_PERIODS,
     build_top_turnover_pool,
     compute_kdj,
+    compute_macd,
     compute_turnover_n,
     compute_weekly_ma_bull,
     compute_zx_lines,
@@ -343,21 +344,6 @@ def _fetch_rt_k_snapshot(tushare_token: str, trade_date: str) -> pd.DataFrame:
         raise IntradayUserError(msg)
 
     return normalize_rt_k_snapshot(raw_snapshot, trade_date=trade_date)
-
-
-def compute_macd(
-    frame: pd.DataFrame,
-    *,
-    fast: int = 12,
-    slow: int = 26,
-    signal: int = 9,
-) -> pd.DataFrame:
-    close = frame["close"].astype(float)
-    dif = close.ewm(span=fast, adjust=False).mean() - close.ewm(span=slow, adjust=False).mean()
-    dea = dif.ewm(span=signal, adjust=False).mean()
-    macd_hist = dif - dea
-    return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": macd_hist}, index=frame.index)
-
 
 def _prepare_screen_data(
     market: pd.DataFrame,
