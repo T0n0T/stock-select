@@ -197,6 +197,11 @@ def test_build_top_turnover_pool_skips_malformed_rows() -> None:
                     "turnover_n": [100.0, "boom"],
                 }
             ),
+            "AAB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-02"]),
+                }
+            ),
             "BBB.SZ": pd.DataFrame(
                 {
                     "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),

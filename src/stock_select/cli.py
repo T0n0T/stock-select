@@ -22,6 +22,7 @@ from stock_select.strategies import (
     compute_weekly_ma_bull,
     compute_zx_lines,
     max_vol_not_bearish,
+    b2_frame_has_invalid_required_inputs,
     run_b1_screen,
     run_b1_screen_with_stats,
     run_b2_screen_with_stats,
@@ -525,6 +526,24 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
     )
 
 
+def _prepare_b2_screen_inputs(
+    prepared_by_symbol: dict[str, pd.DataFrame],
+    *,
+    pick_date: pd.Timestamp,
+    top_m: int,
+) -> dict[str, pd.DataFrame]:
+    top_turnover_pool = build_top_turnover_pool(prepared_by_symbol, top_m=top_m)
+    pool_codes = list(top_turnover_pool.get(pick_date, []))
+    selected_codes = set(pool_codes)
+    for code, frame in prepared_by_symbol.items():
+        if code in selected_codes:
+            continue
+        if b2_frame_has_invalid_required_inputs(frame):
+            pool_codes.append(code)
+            selected_codes.add(code)
+    return {code: prepared_by_symbol[code] for code in pool_codes if code in prepared_by_symbol}
+
+
 def _screen_impl(
     *,
     method: str,
@@ -615,9 +634,16 @@ def _screen_impl(
     if method in {"b1", "b2"}:
         if prepared is None:
             prepared = {}
-        top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
-        pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
-        prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
+        if method == "b2":
+            prepared_for_pick = _prepare_b2_screen_inputs(
+                prepared,
+                pick_date=pd.Timestamp(pick_date),
+                top_m=DEFAULT_TOP_M,
+            )
+        else:
+            top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
+            pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
+            prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
             reporter.emit("screen", f"run {method} screen")
         if method == "b1":
@@ -706,9 +732,16 @@ def _screen_intraday_impl(
         reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
     if method in {"b1", "b2"}:
-        top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
-        pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
-        prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
+        if method == "b2":
+            prepared_for_pick = _prepare_b2_screen_inputs(
+                prepared,
+                pick_date=pd.Timestamp(trade_date),
+                top_m=DEFAULT_TOP_M,
+            )
+        else:
+            top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
+            pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
+            prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
             reporter.emit("screen", f"run {method} screen")
         if method == "b1":

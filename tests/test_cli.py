@@ -2744,6 +2744,7 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
     payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
     assert payload["method"] == "b2"
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+    assert "fail_insufficient_history=1" in result.stderr
 
 
 def test_screen_reuses_existing_non_empty_candidate_file_without_recomputing(tmp_path: Path) -> None:

@@ -136,8 +136,15 @@ def build_top_turnover_pool(
         if frame.empty:
             continue
         working = frame.copy()
-        date_col = "trade_date" if "trade_date" in working.columns else "date"
-        working[date_col] = pd.to_datetime(working[date_col], errors="coerce")
+        if "trade_date" in working.columns:
+            date_col = "trade_date"
+        elif "date" in working.columns:
+            date_col = "date"
+        else:
+            continue
+        if "turnover_n" not in working.columns:
+            continue
+        working[date_col] = pd.to_datetime(working[date_col], errors="coerce", format="mixed")
         working["turnover_n"] = pd.to_numeric(working["turnover_n"], errors="coerce")
         for _, row in working.iterrows():
             if pd.isna(row[date_col]) or pd.isna(row["turnover_n"]):

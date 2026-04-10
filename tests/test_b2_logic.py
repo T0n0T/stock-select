@@ -223,7 +223,7 @@ def test_run_b2_screen_with_stats_treats_malformed_trade_dates_as_insufficient_h
     }
 
 
-@pytest.mark.parametrize("column_name", ["J", "zxdq", "zxdkx", "close", "turnover_n"])
+@pytest.mark.parametrize("column_name", ["J", "zxdq", "zxdkx", "macd_hist", "close", "turnover_n"])
 def test_run_b2_screen_with_stats_treats_any_malformed_required_numeric_value_as_insufficient_history(
     column_name: str,
 ) -> None:

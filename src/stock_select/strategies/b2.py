@@ -68,10 +68,7 @@ def run_b2_screen_with_stats(
             continue
 
         frame = _normalize_b2_frame(prepared)
-        invalid_trade_dates = frame["trade_date"].isna().any()
-        invalid_numeric_columns = _coerced_numeric_columns(prepared, frame)
-        invalid_weekly_ma = _coerced_weekly_ma_mask(prepared).any()
-        if invalid_trade_dates:
+        if _has_invalid_required_inputs(prepared, frame):
             stats["eligible"] += 1
             stats["fail_insufficient_history"] += 1
             continue
@@ -87,9 +84,6 @@ def run_b2_screen_with_stats(
 
         if (
             len(history) < B2_RECENT_J_LOOKBACK
-            or "J" in invalid_numeric_columns
-            or any(column in invalid_numeric_columns for column in _B2_CURRENT_DAY_NUMERIC_COLUMNS)
-            or invalid_weekly_ma
             or recent_j.isna().any()
             or pd.isna(row["zxdq"])
             or pd.isna(row["zxdkx"])
@@ -152,7 +146,7 @@ def _missing_required_columns(frame: pd.DataFrame) -> set[str]:
 
 def _normalize_b2_frame(frame: pd.DataFrame) -> pd.DataFrame:
     normalized = frame.copy()
-    normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], errors="coerce")
+    normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], errors="coerce", format="mixed")
     for column in _B2_NUMERIC_COLUMNS:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
     normalized["weekly_ma_bull"] = pd.Series(
@@ -199,9 +193,24 @@ def _coerced_weekly_ma_mask(original: pd.DataFrame) -> pd.Series:
     return original_series.notna() & normalized.isna()
 
 
+def _has_invalid_required_inputs(original: pd.DataFrame, normalized: pd.DataFrame) -> bool:
+    return bool(
+        normalized["trade_date"].isna().any()
+        or _coerced_numeric_columns(original, normalized)
+        or _coerced_weekly_ma_mask(original).any()
+    )
+
+
+def b2_frame_has_invalid_required_inputs(frame: pd.DataFrame) -> bool:
+    if frame.empty or _missing_required_columns(frame):
+        return True
+    return _has_invalid_required_inputs(frame, _normalize_b2_frame(frame))
+
+
 __all__ = [
     "B2_MACD_TREND_DAYS",
     "B2_RECENT_J_LOOKBACK",
+    "b2_frame_has_invalid_required_inputs",
     "run_b2_screen",
     "run_b2_screen_with_stats",
 ]
