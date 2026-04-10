@@ -127,6 +127,33 @@ def fetch_previous_trade_date(connection: ConnectionLike, *, before_date: str) -
     return str(frame.iloc[0]["trade_date"])
 
 
+def fetch_nth_latest_trade_date(connection: ConnectionLike, *, end_date: str, n: int) -> str:
+    if n <= 0:
+        raise ValueError("n must be positive.")
+
+    query = """
+        SELECT trade_date
+        FROM daily_market
+        WHERE trade_date <= %(end_date)s
+        GROUP BY trade_date
+        ORDER BY trade_date DESC
+        LIMIT 1
+        OFFSET %(offset)s
+    """
+    frame = _fetch_dataframe(
+        connection,
+        query,
+        {
+            "end_date": end_date,
+            "offset": n - 1,
+        },
+    )
+    if frame.empty:
+        msg = f"No {n}th latest trade date found on or before {end_date}."
+        raise ValueError(msg)
+    return str(frame.iloc[0]["trade_date"])
+
+
 def fetch_instrument_names(
     connection: ConnectionLike,
     *,

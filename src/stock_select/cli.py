@@ -24,11 +24,18 @@ from stock_select.strategies import (
     max_vol_not_bearish,
     run_b1_screen,
     run_b1_screen_with_stats,
+    validate_method,
+)
+from stock_select.strategies.hcr import (
+    HCR_REQUIRED_TRADING_DAYS,
+    prepare_hcr_frame,
+    run_hcr_screen_with_stats,
 )
 from stock_select.charting import export_daily_chart
 from stock_select.db_access import (
     fetch_daily_window,
     fetch_instrument_names,
+    fetch_nth_latest_trade_date,
     fetch_previous_trade_date,
     fetch_symbol_history,
     load_dotenv_value,
@@ -48,6 +55,9 @@ from stock_select.review_orchestrator import (
 
 
 app = typer.Typer(help="stock-select standalone CLI")
+
+DEFAULT_SCREEN_LOOKBACK_DAYS = 366
+HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 
 
 class IntradayUserError(ValueError):
@@ -82,10 +92,11 @@ def main() -> None:
     app()
 
 
-def _ensure_b1(method: str) -> str:
-    if method.lower() != "b1":
-        raise typer.BadParameter("Only method 'b1' is supported.")
-    return method.lower()
+def _validate_cli_method(method: str) -> str:
+    try:
+        return validate_method(method)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _default_runtime_root() -> Path:
@@ -105,12 +116,43 @@ def _load_candidate_payload(candidate_path: Path) -> dict:
     return json.loads(candidate_path.read_text(encoding="utf-8"))
 
 
-def _prepared_cache_path(runtime_root: Path, pick_date: str) -> Path:
-    return runtime_root / "prepared" / f"{pick_date}.pkl"
+def _artifact_key(base_key: str, method: str) -> str:
+    return f"{base_key}.{method}"
 
 
-def _intraday_candidate_path(runtime_root: Path, run_id: str) -> Path:
-    return runtime_root / "candidates" / f"{run_id}.json"
+def _candidate_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    return runtime_root / "candidates" / f"{_artifact_key(base_key, method)}.json"
+
+
+def _prepared_cache_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    return runtime_root / "prepared" / f"{_artifact_key(base_key, method)}.pkl"
+
+
+def _chart_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    return runtime_root / "charts" / _artifact_key(base_key, method)
+
+
+def _review_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    return runtime_root / "reviews" / _artifact_key(base_key, method)
+
+
+def _intraday_candidate_path(runtime_root: Path, run_id: str, method: str) -> Path:
+    return _candidate_path(runtime_root, run_id, method)
+
+
+def _candidate_payload_method(candidate_path: Path, payload: dict[str, object]) -> str | None:
+    payload_method = payload.get("method")
+    if isinstance(payload_method, str) and payload_method.strip():
+        return payload_method.strip().lower()
+    if "." in candidate_path.stem:
+        return candidate_path.stem.rsplit(".", 1)[1].lower()
+    return None
+
+
+def _fallback_run_id(candidate_path: Path) -> str:
+    if "." in candidate_path.stem:
+        return candidate_path.stem.rsplit(".", 1)[0]
+    return candidate_path.stem
 
 
 def _validate_intraday_candidate_payload(candidate_path: Path, payload: dict[str, object]) -> dict[str, object]:
@@ -130,7 +172,7 @@ def _validate_intraday_candidate_payload(candidate_path: Path, payload: dict[str
     return payload
 
 
-def _resolve_latest_intraday_candidate(runtime_root: Path) -> tuple[Path, dict[str, object]]:
+def _resolve_latest_intraday_candidate(runtime_root: Path, method: str) -> tuple[Path, dict[str, object]]:
     candidate_dir = runtime_root / "candidates"
     latest_path: Path | None = None
     latest_payload: dict[str, object] | None = None
@@ -143,8 +185,10 @@ def _resolve_latest_intraday_candidate(runtime_root: Path) -> tuple[Path, dict[s
             continue
         if payload.get("mode") != "intraday_snapshot":
             continue
+        if _candidate_payload_method(candidate_path, payload) != method:
+            continue
         payload_run_id = payload.get("run_id")
-        run_id = payload_run_id.strip() if isinstance(payload_run_id, str) and payload_run_id.strip() else candidate_path.stem
+        run_id = payload_run_id.strip() if isinstance(payload_run_id, str) and payload_run_id.strip() else _fallback_run_id(candidate_path)
         if latest_run_id is None or run_id > latest_run_id:
             latest_path = candidate_path
             latest_payload = payload
@@ -158,6 +202,7 @@ def _resolve_latest_intraday_candidate(runtime_root: Path) -> tuple[Path, dict[s
 def _write_prepared_cache(
     cache_path: Path,
     *,
+    method: str | None = None,
     pick_date: str,
     start_date: str,
     end_date: str,
@@ -171,6 +216,8 @@ def _write_prepared_cache(
         "weekly_ma_periods": DEFAULT_WEEKLY_MA_PERIODS,
         "max_vol_lookback": DEFAULT_MAX_VOL_LOOKBACK,
     }
+    if method:
+        metadata["method"] = method
     if metadata_overrides:
         metadata.update(metadata_overrides)
     payload = {
@@ -211,16 +258,19 @@ def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
 def _load_intraday_prepared_cache(
     runtime_root: Path,
     *,
+    method: str,
     run_id: str,
     trade_date: str,
 ) -> dict[str, pd.DataFrame]:
-    payload = _load_prepared_cache(runtime_root / "prepared" / f"{run_id}.pkl")
+    payload = _load_prepared_cache(_prepared_cache_path(runtime_root, run_id, method))
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     if metadata.get("mode") != "intraday_snapshot":
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     if metadata.get("run_id") != run_id:
+        raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
+    if metadata.get("method", method) != method:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     if payload.get("pick_date") != trade_date:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
@@ -258,6 +308,10 @@ def _resolve_intraday_trade_date() -> str:
 
 def _resolve_previous_trade_date(connection, trade_date: str) -> str:
     return fetch_previous_trade_date(connection, before_date=trade_date)
+
+
+def _resolve_hcr_start_date(connection, *, end_date: str, trading_days: int) -> str:
+    return fetch_nth_latest_trade_date(connection, end_date=end_date, n=trading_days)
 
 
 def _import_tushare_module():
@@ -362,8 +416,85 @@ def _call_prepare_screen_data(
         return _prepare_screen_data(market)
 
 
+def _prepare_hcr_screen_data(
+    market: pd.DataFrame,
+    *,
+    reporter: ProgressReporter | None = None,
+    progress_every: int = 500,
+) -> dict[str, pd.DataFrame]:
+    if market.empty:
+        return {}
+
+    prepared: dict[str, pd.DataFrame] = {}
+    frame = market.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    if "volume" not in frame.columns and "vol" in frame.columns:
+        frame["volume"] = frame["vol"]
+
+    groups = list(frame.groupby("ts_code"))
+    total = len(groups)
+    if reporter:
+        reporter.emit("screen", f"preparing symbols={total}")
+
+    for idx, (code, group) in enumerate(groups, start=1):
+        group = group.sort_values("trade_date").reset_index(drop=True)
+        group["turnover_n"] = compute_turnover_n(group, window=DEFAULT_TURNOVER_WINDOW)
+        prepared[code] = prepare_hcr_frame(group)
+        if reporter and (idx == 1 or idx == total or idx % progress_every == 0):
+            reporter.emit(
+                "screen",
+                f"prepare {idx}/{total} symbol={code} elapsed={reporter.elapsed_seconds():.1f}s",
+            )
+    return prepared
+
+
+def _call_prepare_hcr_screen_data(
+    market: pd.DataFrame,
+    *,
+    reporter: ProgressReporter | None = None,
+) -> dict[str, pd.DataFrame]:
+    try:
+        return _prepare_hcr_screen_data(market, reporter=reporter)
+    except TypeError as exc:
+        if "unexpected keyword argument 'reporter'" not in str(exc):
+            raise
+        return _prepare_hcr_screen_data(market)
+
+
+def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: ProgressReporter | None) -> None:
+    if not reporter:
+        return
+    if method == "b1":
+        reporter.emit(
+            "screen",
+            "breakdown "
+            f"total_symbols={stats['total_symbols']} "
+            f"eligible={stats['eligible']} "
+            f"fail_j={stats['fail_j']} "
+            f"fail_insufficient_history={stats['fail_insufficient_history']} "
+            f"fail_close_zxdkx={stats['fail_close_zxdkx']} "
+            f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
+            f"fail_weekly_ma={stats['fail_weekly_ma']} "
+            f"fail_max_vol={stats['fail_max_vol']} "
+            f"selected={stats['selected']}",
+        )
+        return
+    reporter.emit(
+        "screen",
+        "breakdown "
+        f"total_symbols={stats['total_symbols']} "
+        f"eligible={stats['eligible']} "
+        f"fail_insufficient_history={stats['fail_insufficient_history']} "
+        f"fail_resonance={stats['fail_resonance']} "
+        f"fail_close_floor={stats['fail_close_floor']} "
+        f"fail_breakout={stats['fail_breakout']} "
+        f"selected={stats['selected']}",
+    )
+
+
 def _screen_impl(
     *,
+    method: str,
     pick_date: str,
     dsn: str | None,
     runtime_root: Path,
@@ -372,7 +503,7 @@ def _screen_impl(
 ) -> Path:
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    out_path = candidate_dir / f"{pick_date}.json"
+    out_path = _candidate_path(runtime_root, pick_date, method)
     if not recompute and out_path.exists():
         try:
             existing_payload = _load_candidate_payload(out_path)
@@ -386,9 +517,13 @@ def _screen_impl(
                     reporter.emit("screen", f"reuse candidates path={out_path}")
                 return out_path
 
-    start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
-    prepared_cache_path = _prepared_cache_path(runtime_root, pick_date)
+    prepared_cache_path = _prepared_cache_path(runtime_root, pick_date, method)
     prepared: dict[str, pd.DataFrame] | None = None
+    start_date = (
+        (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        if method == "b1"
+        else None
+    )
     if not recompute and prepared_cache_path.exists():
         try:
             cache_payload = _load_prepared_cache(prepared_cache_path)
@@ -409,6 +544,14 @@ def _screen_impl(
         if reporter:
             reporter.emit("screen", "connect db")
         connection = _connect(resolved_dsn)
+        if method == "hcr":
+            start_date = _resolve_hcr_start_date(
+                connection,
+                end_date=pick_date,
+                trading_days=HCR_SCREEN_TRADING_DAYS,
+            )
+        elif start_date is None:
+            start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
         if reporter:
             reporter.emit("screen", "fetch market window")
         market = fetch_daily_window(
@@ -422,9 +565,13 @@ def _screen_impl(
                 "screen",
                 f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
             )
-        prepared = _call_prepare_screen_data(market, reporter=reporter)
+        if method == "b1":
+            prepared = _call_prepare_screen_data(market, reporter=reporter)
+        else:
+            prepared = _call_prepare_hcr_screen_data(market, reporter=reporter)
         _write_prepared_cache(
             prepared_cache_path,
+            method=method,
             pick_date=pick_date,
             start_date=start_date,
             end_date=pick_date,
@@ -432,38 +579,34 @@ def _screen_impl(
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
-    top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
-    pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
-    prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
-    if reporter:
-        reporter.emit("screen", "run b1 screen")
-    candidates, stats = run_b1_screen_with_stats(
-        prepared_for_pick,
-        pd.Timestamp(pick_date),
-        DEFAULT_B1_CONFIG,
-    )
-    payload = {"pick_date": pick_date, "method": "b1", "candidates": candidates}
-    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    if reporter:
-        reporter.emit(
-            "screen",
-            "breakdown "
-            f"total_symbols={stats['total_symbols']} "
-            f"eligible={stats['eligible']} "
-            f"fail_j={stats['fail_j']} "
-            f"fail_insufficient_history={stats['fail_insufficient_history']} "
-            f"fail_close_zxdkx={stats['fail_close_zxdkx']} "
-            f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
-            f"fail_weekly_ma={stats['fail_weekly_ma']} "
-            f"fail_max_vol={stats['fail_max_vol']} "
-            f"selected={stats['selected']}",
+    if method == "b1":
+        if prepared is None:
+            prepared = {}
+        top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
+        pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
+        prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
+        if reporter:
+            reporter.emit("screen", "run b1 screen")
+        candidates, stats = run_b1_screen_with_stats(
+            prepared_for_pick,
+            pd.Timestamp(pick_date),
+            DEFAULT_B1_CONFIG,
         )
+    else:
+        if reporter:
+            reporter.emit("screen", "run hcr screen")
+        candidates, stats = run_hcr_screen_with_stats(prepared, pd.Timestamp(pick_date))
+    payload = {"pick_date": pick_date, "method": method, "candidates": candidates}
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _emit_screen_breakdown(method, stats, reporter)
+    if reporter:
         reporter.emit("screen", f"selected candidates={len(candidates)} write={out_path}")
     return out_path
 
 
 def _screen_intraday_impl(
     *,
+    method: str,
     dsn: str | None,
     tushare_token: str | None,
     runtime_root: Path,
@@ -480,7 +623,16 @@ def _screen_intraday_impl(
         reporter.emit("screen", f"fetch snapshot trade_date={trade_date}")
     snapshot = _fetch_rt_k_snapshot(resolved_token, trade_date)
     run_id = _format_intraday_run_id(_current_shanghai_timestamp())
-    start_date = (pd.Timestamp(previous_trade_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
+    if method == "hcr":
+        start_date = _resolve_hcr_start_date(
+            connection,
+            end_date=previous_trade_date,
+            trading_days=HCR_SCREEN_TRADING_DAYS - 1,
+        )
+    else:
+        start_date = (pd.Timestamp(previous_trade_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
+            "%Y-%m-%d"
+        )
     if reporter:
         reporter.emit("screen", f"fetch market window end_date={previous_trade_date}")
     market = fetch_daily_window(
@@ -490,15 +642,20 @@ def _screen_intraday_impl(
         symbols=None,
     )
     overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
-    prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
-    prepared_cache_path = runtime_root / "prepared" / f"{run_id}.pkl"
+    if method == "b1":
+        prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
+    else:
+        prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
+    prepared_cache_path = _prepared_cache_path(runtime_root, run_id, method)
     _write_prepared_cache(
         prepared_cache_path,
+        method=method,
         pick_date=trade_date,
         start_date=start_date,
         end_date=trade_date,
         prepared_by_symbol=prepared,
         metadata_overrides={
+            "method": method,
             "mode": "intraday_snapshot",
             "source": "tushare_rt_k",
             "run_id": run_id,
@@ -508,21 +665,26 @@ def _screen_intraday_impl(
     if reporter:
         reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
-    top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
-    pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
-    prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
-    if reporter:
-        reporter.emit("screen", "run b1 screen")
-    candidates, stats = run_b1_screen_with_stats(
-        prepared_for_pick,
-        pd.Timestamp(trade_date),
-        DEFAULT_B1_CONFIG,
-    )
-    out_path = _intraday_candidate_path(runtime_root, run_id)
+    if method == "b1":
+        top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
+        pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
+        prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
+        if reporter:
+            reporter.emit("screen", "run b1 screen")
+        candidates, stats = run_b1_screen_with_stats(
+            prepared_for_pick,
+            pd.Timestamp(trade_date),
+            DEFAULT_B1_CONFIG,
+        )
+    else:
+        if reporter:
+            reporter.emit("screen", "run hcr screen")
+        candidates, stats = run_hcr_screen_with_stats(prepared, pd.Timestamp(trade_date))
+    out_path = _intraday_candidate_path(runtime_root, run_id, method)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "mode": "intraday_snapshot",
-        "method": "b1",
+        "method": method,
         "trade_date": trade_date,
         "fetched_at": run_id,
         "run_id": run_id,
@@ -530,36 +692,25 @@ def _screen_intraday_impl(
         "candidates": candidates,
     }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _emit_screen_breakdown(method, stats, reporter)
     if reporter:
-        reporter.emit(
-            "screen",
-            "breakdown "
-            f"total_symbols={stats['total_symbols']} "
-            f"eligible={stats['eligible']} "
-            f"fail_j={stats['fail_j']} "
-            f"fail_insufficient_history={stats['fail_insufficient_history']} "
-            f"fail_close_zxdkx={stats['fail_close_zxdkx']} "
-            f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
-            f"fail_weekly_ma={stats['fail_weekly_ma']} "
-            f"fail_max_vol={stats['fail_max_vol']} "
-            f"selected={stats['selected']}",
-        )
         reporter.emit("screen", f"selected candidates={len(candidates)} write={out_path}")
     return out_path
 
 
 def _chart_impl(
     *,
+    method: str,
     pick_date: str,
     dsn: str | None,
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    candidate_path = runtime_root / "candidates" / f"{pick_date}.json"
+    candidate_path = _candidate_path(runtime_root, pick_date, method)
     if not candidate_path.exists():
         raise typer.BadParameter(f"Candidate file not found: {candidate_path}")
     payload = _load_candidate_payload(candidate_path)
-    chart_dir = runtime_root / "charts" / pick_date
+    chart_dir = _chart_dir_path(runtime_root, pick_date, method)
     chart_dir.mkdir(parents=True, exist_ok=True)
     resolved_dsn = _resolve_cli_dsn(dsn)
     connection = _connect(resolved_dsn)
@@ -590,20 +741,26 @@ def _chart_impl(
 
 def _chart_intraday_impl(
     *,
+    method: str,
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     try:
-        _, payload = _resolve_latest_intraday_candidate(runtime_root)
+        _, payload = _resolve_latest_intraday_candidate(runtime_root, method)
     except IntradayArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
     run_id = str(payload["run_id"])
     trade_date = str(payload["trade_date"])
 
-    chart_dir = runtime_root / "charts" / run_id
+    chart_dir = _chart_dir_path(runtime_root, run_id, method)
     chart_dir.mkdir(parents=True, exist_ok=True)
     try:
-        prepared_by_symbol = _load_intraday_prepared_cache(runtime_root, run_id=run_id, trade_date=trade_date)
+        prepared_by_symbol = _load_intraday_prepared_cache(
+            runtime_root,
+            method=method,
+            run_id=run_id,
+            trade_date=trade_date,
+        )
     except IntradayArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
     candidates = payload.get("candidates", [])
@@ -635,13 +792,13 @@ def _review_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    chart_dir = runtime_root / "charts" / pick_date
+    chart_dir = _chart_dir_path(runtime_root, pick_date, method)
     if not chart_dir.exists():
         raise typer.BadParameter(f"Chart input directory not found: {chart_dir}")
-    candidate_path = runtime_root / "candidates" / f"{pick_date}.json"
+    candidate_path = _candidate_path(runtime_root, pick_date, method)
     if not candidate_path.exists():
         raise typer.BadParameter(f"Candidate file not found: {candidate_path}")
-    review_dir = runtime_root / "reviews" / pick_date
+    review_dir = _review_dir_path(runtime_root, pick_date, method)
     review_dir.mkdir(parents=True, exist_ok=True)
     payload = _load_candidate_payload(candidate_path)
     resolved_dsn = _resolve_cli_dsn(dsn)
@@ -728,19 +885,24 @@ def _review_intraday_impl(
     reporter: ProgressReporter | None = None,
 ) -> Path:
     try:
-        _, payload = _resolve_latest_intraday_candidate(runtime_root)
+        _, payload = _resolve_latest_intraday_candidate(runtime_root, method)
     except IntradayArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
     run_id = str(payload["run_id"])
     pick_date = str(payload["trade_date"])
 
-    chart_dir = runtime_root / "charts" / run_id
+    chart_dir = _chart_dir_path(runtime_root, run_id, method)
     if not chart_dir.exists():
         raise typer.BadParameter(f"Chart input directory not found: {chart_dir}")
-    review_dir = runtime_root / "reviews" / run_id
+    review_dir = _review_dir_path(runtime_root, run_id, method)
     review_dir.mkdir(parents=True, exist_ok=True)
     try:
-        prepared_by_symbol = _load_intraday_prepared_cache(runtime_root, run_id=run_id, trade_date=pick_date)
+        prepared_by_symbol = _load_intraday_prepared_cache(
+            runtime_root,
+            method=method,
+            run_id=run_id,
+            trade_date=pick_date,
+        )
     except IntradayArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
     candidates = payload.get("candidates", [])
@@ -827,7 +989,7 @@ def _review_merge_impl(
     codes: list[str] | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    review_dir = runtime_root / "reviews" / pick_date
+    review_dir = _review_dir_path(runtime_root, pick_date, method)
     if not review_dir.exists():
         raise typer.BadParameter(f"Review directory not found: {review_dir}")
 
@@ -888,8 +1050,7 @@ def _render_html_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    _ensure_b1(method)
-    review_dir = runtime_root / "reviews" / pick_date
+    review_dir = _review_dir_path(runtime_root, pick_date, method)
     summary_path = review_dir / "summary.json"
     if not summary_path.exists():
         raise typer.BadParameter(f"Summary file not found: {summary_path}")
@@ -938,13 +1099,14 @@ def screen(
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    _ensure_b1(method)
+    normalized_method = _validate_cli_method(method)
     reporter = ProgressReporter(enabled=progress)
     try:
         if intraday:
             if pick_date is not None:
                 raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
             out_path = _screen_intraday_impl(
+                method=normalized_method,
                 dsn=dsn,
                 tushare_token=tushare_token,
                 runtime_root=runtime_root,
@@ -954,6 +1116,7 @@ def screen(
             if pick_date is None:
                 raise typer.BadParameter("--pick-date is required unless --intraday is set.")
             out_path = _screen_impl(
+                method=normalized_method,
                 pick_date=pick_date,
                 dsn=dsn,
                 runtime_root=runtime_root,
@@ -974,16 +1137,22 @@ def chart(
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    _ensure_b1(method)
+    normalized_method = _validate_cli_method(method)
     reporter = ProgressReporter(enabled=progress)
     if intraday:
         if pick_date is not None:
             raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
-        chart_dir = _chart_intraday_impl(runtime_root=runtime_root, reporter=reporter)
+        chart_dir = _chart_intraday_impl(method=normalized_method, runtime_root=runtime_root, reporter=reporter)
     else:
         if pick_date is None:
             raise typer.BadParameter("--pick-date is required unless --intraday is set.")
-        chart_dir = _chart_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+        chart_dir = _chart_impl(
+            method=normalized_method,
+            pick_date=pick_date,
+            dsn=dsn,
+            runtime_root=runtime_root,
+            reporter=reporter,
+        )
     typer.echo(str(chart_dir))
 
 
@@ -996,13 +1165,13 @@ def review(
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    _ensure_b1(method)
+    normalized_method = _validate_cli_method(method)
     reporter = ProgressReporter(enabled=progress)
     if intraday:
         if pick_date is not None:
             raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
         summary_path = _review_intraday_impl(
-            method=method,
+            method=normalized_method,
             runtime_root=runtime_root,
             reporter=reporter,
         )
@@ -1010,7 +1179,7 @@ def review(
         if pick_date is None:
             raise typer.BadParameter("--pick-date is required unless --intraday is set.")
         summary_path = _review_impl(
-            method=method,
+            method=normalized_method,
             pick_date=pick_date,
             dsn=dsn,
             runtime_root=runtime_root,
@@ -1027,11 +1196,11 @@ def review_merge(
     codes: str | None = typer.Option(None, "--codes"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    _ensure_b1(method)
+    normalized_method = _validate_cli_method(method)
     reporter = ProgressReporter(enabled=progress)
     selected_codes = [code.strip() for code in codes.split(",") if code.strip()] if codes else None
     summary_path = _review_merge_impl(
-        method=method,
+        method=normalized_method,
         pick_date=pick_date,
         runtime_root=runtime_root,
         codes=selected_codes,
@@ -1048,9 +1217,10 @@ def render_html(
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
+    normalized_method = _validate_cli_method(method)
     reporter = ProgressReporter(enabled=progress)
     zip_path = _render_html_impl(
-        method=method,
+        method=normalized_method,
         pick_date=pick_date,
         dsn=dsn,
         runtime_root=runtime_root,
@@ -1070,7 +1240,7 @@ def run_all(
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    _ensure_b1(method)
+    normalized_method = _validate_cli_method(method)
     reporter = ProgressReporter(enabled=progress)
     if intraday and pick_date is not None:
         raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
@@ -1081,6 +1251,7 @@ def run_all(
     screen_started_at = reporter.checkpoint()
     if intraday:
         screen_path = _screen_intraday_impl(
+            method=normalized_method,
             dsn=dsn,
             tushare_token=tushare_token,
             runtime_root=runtime_root,
@@ -1088,6 +1259,7 @@ def run_all(
         )
     else:
         screen_path = _screen_impl(
+            method=normalized_method,
             pick_date=pick_date,
             dsn=dsn,
             runtime_root=runtime_root,
@@ -1099,20 +1271,32 @@ def run_all(
     reporter.emit("run", "step=chart start")
     chart_started_at = reporter.checkpoint()
     if intraday:
-        chart_path = _chart_intraday_impl(runtime_root=runtime_root, reporter=reporter)
+        chart_path = _chart_intraday_impl(method=normalized_method, runtime_root=runtime_root, reporter=reporter)
     else:
-        chart_path = _chart_impl(pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+        chart_path = _chart_impl(
+            method=normalized_method,
+            pick_date=pick_date,
+            dsn=dsn,
+            runtime_root=runtime_root,
+            reporter=reporter,
+        )
     reporter.emit("run", f"step=chart done path={chart_path} elapsed={reporter.since(chart_started_at):.1f}s")
     typer.echo(str(chart_path))
     reporter.emit("run", "step=review start")
     review_started_at = reporter.checkpoint()
     if intraday:
         review_path = _review_intraday_impl(
-            method=method,
+            method=normalized_method,
             runtime_root=runtime_root,
             reporter=reporter,
         )
     else:
-        review_path = _review_impl(method=method, pick_date=pick_date, dsn=dsn, runtime_root=runtime_root, reporter=reporter)
+        review_path = _review_impl(
+            method=normalized_method,
+            pick_date=pick_date,
+            dsn=dsn,
+            runtime_root=runtime_root,
+            reporter=reporter,
+        )
     reporter.emit("run", f"step=review done path={review_path} elapsed={reporter.since(review_started_at):.1f}s")
     typer.echo(str(review_path))

@@ -2,10 +2,10 @@
 
 用于承载 `stock-select` 技能与 CLI 的独立仓库。
 
-当前仓库的目标是提供一个可单独运行的 B1 选股流程，包括：
+当前仓库的目标是提供一个可单独运行的 A 股初筛流程，包括：
 
 - 从 PostgreSQL 读取 `daily_market` 数据
-- 运行确定性的 B1 初筛
+- 运行确定性的 `b1` / `hcr` 初筛
 - 为候选股票生成日线 PNG 图
 - 对候选股票执行本地 review 流程
 
@@ -51,9 +51,13 @@ mkdir -p ~/.agents/skills/stock-select && cp -R /home/pi/Documents/agents/stock-
 
 ```bash
 uv run stock-select screen --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select screen --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select chart --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select chart --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select review --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 ```
 
 ## DSN 读取顺序
@@ -90,20 +94,20 @@ uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://..
 
 - `screen`
   - 从 PostgreSQL 的 `daily_market` 读取目标日前约 366 天窗口
-  - 在本地计算 B1 所需指标
+  - 在本地计算 `b1` 或 `hcr` 所需指标
   - 将候选结果写入 `~/.agents/skills/stock-select/runtime/candidates/`
 - `chart`
   - 读取 candidate 文件
   - 为每个候选股票重新抓取日线历史
-  - 将 PNG 图表写入 `~/.agents/skills/stock-select/runtime/charts/<pick_date>/`
+  - 将 PNG 图表写入 `~/.agents/skills/stock-select/runtime/charts/<pick_date>.<method>/`
 - `review`
   - 读取候选与图表产物
   - 当前写出以本地 baseline 为主的 review 结果结构
   - 同时写出 `llm_review_tasks.json`，供 CLI 返回后由 skill 继续派发子代理图评
   - 该结果结构已经预留 `llm_review` 字段，供后续基于 PNG + `.agents/skills/stock-select/references/prompt.md` 的子代理图评回填
-  - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>/summary.json`
+  - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>.<method>/summary.json`
 - `review-merge`
-  - 读取 `reviews/<pick_date>/llm_review_results/*.json`
+  - 读取 `reviews/<pick_date>.<method>/llm_review_results/*.json`
   - 校验并归一化子代理图评 JSON
   - 将 `llm_review` 回填到单股 review 文件
   - 以 baseline 40% + llm 60% 重算最终分数并重写 `summary.json`
@@ -143,6 +147,19 @@ uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://..
 - `fail_insufficient_history` 表示“历史长度不足，无法判断是否站上 `zxdkx`”
 - `fail_close_zxdkx` 只表示“`zxdkx` 已算出，但收盘价没有站上去”
 
+## HCR 筛选说明
+
+`hcr` 是 `Historical High & Center Resonance Breakout` 的缩写，对应“历史高点与中心共振突破”初筛。当前实现口径为：
+
+- `YX = (HHV(high, 30) + LLV(low, 30)) / 2`
+- `P = CONST(REF(HHV(high, 180), 60))` 的符号级常量参考价
+- `abs(YX - P) / abs(P) <= 0.015`
+- `close > 1.0`
+- `close > YX`
+- 只在目标 `pick_date` 精确匹配当日数据，不向前回退
+
+`hcr` 不使用 `b1` 的成交额前 `5000` 流动性池预过滤。
+
 ## 输出目录
 
 运行时产物默认写入：
@@ -154,16 +171,26 @@ uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://..
 其中常见目录包括：
 
 ```text
-candidates/<pick_date>.json
-charts/<pick_date>/<code>_day.png
-reviews/<pick_date>/llm_review_tasks.json
-reviews/<pick_date>/llm_review_results/<code>.json
-reviews/<pick_date>/summary.json
+candidates/<pick_date>.<method>.json
+prepared/<pick_date>.<method>.pkl
+charts/<pick_date>.<method>/<code>_day.png
+reviews/<pick_date>.<method>/llm_review_tasks.json
+reviews/<pick_date>.<method>/llm_review_results/<code>.json
+reviews/<pick_date>.<method>/summary.json
+```
+
+盘中 `--intraday` 运行使用同样的后缀模式，只是把 `<pick_date>` 换成 `<run_id>`：
+
+```text
+candidates/<run_id>.<method>.json
+prepared/<run_id>.<method>.pkl
+charts/<run_id>.<method>/
+reviews/<run_id>.<method>/
 ```
 
 ## 当前限制
 
-- 当前只支持 `--method b1`
+- 当前内置方法为 `b1` 和 `hcr`
 - `screen`、`chart`、`run` 都依赖可访问的 PostgreSQL
 - 当前 Python CLI 里的 `review` 仍以本地 baseline 打分为主
 - Python CLI 不直接调用子代理；多模态子代理图评在 CLI 返回后通过 skill workflow 驱动

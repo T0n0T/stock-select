@@ -14,22 +14,51 @@ from stock_select import cli
 from stock_select.cli import app
 
 
+def _eod_key(pick_date: str, method: str = "b1") -> str:
+    return f"{pick_date}.{method}"
+
+
+def _intraday_key(run_id: str, method: str = "b1") -> str:
+    return f"{run_id}.{method}"
+
+
 def test_screen_rejects_unknown_method() -> None:
     runner = CliRunner()
 
     result = runner.invoke(app, ["screen", "--method", "brick", "--pick-date", "2026-04-01"])
 
     assert result.exit_code != 0
-    assert "only method 'b1' is supported." in result.stderr.lower()
+    assert "supported methods: b1, hcr" in result.stderr.lower()
 
 
-def test_screen_rejects_whitespace_padded_b1_method() -> None:
+def test_screen_accepts_whitespace_padded_b1_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json"
 
-    result = runner.invoke(app, ["screen", "--method", " b1 ", "--pick-date", "2026-04-01"])
+    monkeypatch.setattr(
+        cli,
+        "_screen_impl",
+        lambda **kwargs: expected_path,
+    )
 
-    assert result.exit_code != 0
-    assert "only method 'b1' is supported." in result.stderr.lower()
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            " b1 ",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(expected_path)
 
 
 def test_chart_requires_candidate_file(tmp_path: Path) -> None:
@@ -53,12 +82,12 @@ def test_chart_requires_candidate_file(tmp_path: Path) -> None:
     assert "candidate" in result.stderr.lower()
 
 
-def test_chart_requires_dsn_when_real_history_fetch_is_needed(tmp_path: Path) -> None:
+def test_chart_requires_dsn_when_real_history_fetch_is_needed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-01.json").write_text(
+    (candidate_dir / f"{_eod_key('2026-04-01')}.json").write_text(
         json.dumps(
             {
                 "pick_date": "2026-04-01",
@@ -68,6 +97,8 @@ def test_chart_requires_dsn_when_real_history_fetch_is_needed(tmp_path: Path) ->
         ),
         encoding="utf-8",
     )
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
         app,
@@ -151,9 +182,195 @@ def test_screen_writes_candidate_file(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert (runtime_root / "candidates" / "2026-04-01.json").exists()
+    assert (runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json").exists()
     assert "[screen] connect db" in result.stderr
     assert "[screen] selected candidates=" in result.stderr
+
+
+def test_screen_writes_hcr_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_hcr_start_date",
+        lambda connection, *, end_date, trading_days: "2024-10-16",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "open": [10.0],
+                "high": [10.8],
+                "low": [9.8],
+                "close": [10.6],
+                "vol": [100.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_hcr_screen_data",
+        lambda market, reporter=None: {
+            "000001.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-01"]),
+                    "close": [10.6],
+                    "yx": [10.4],
+                    "p": [10.5],
+                    "resonance_gap_pct": [0.0095],
+                    "turnover_n": [1030.0],
+                }
+            )
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_hcr_screen_with_stats",
+        lambda prepared_by_symbol, pick_date: (
+            [
+                {
+                    "code": "000001.SZ",
+                    "pick_date": "2026-04-01",
+                    "close": 10.6,
+                    "turnover_n": 1030.0,
+                    "yx": 10.4,
+                    "p": 10.5,
+                    "resonance_gap_pct": 0.0095,
+                }
+            ],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 0,
+                "selected": 1,
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "hcr",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'hcr')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "hcr"
+    assert payload["candidates"][0]["code"] == "000001.SZ"
+
+
+def test_screen_hcr_uses_trade_date_lookback_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    fetch_args: dict[str, str] = {}
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_hcr_start_date",
+        lambda connection, *, end_date, trading_days: (
+            "2025-04-29" if end_date == "2026-04-09" and trading_days == 240 else ""
+        ),
+        raising=False,
+    )
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        fetch_args["start_date"] = start_date
+        fetch_args["end_date"] = end_date
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "open": [10.0],
+                "high": [10.8],
+                "low": [9.8],
+                "close": [10.6],
+                "vol": [100.0],
+            }
+        )
+
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_hcr_screen_data",
+        lambda market, reporter=None: {
+            "000001.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-01"]),
+                    "close": [10.6],
+                    "yx": [10.4],
+                    "p": [10.5],
+                    "resonance_gap_pct": [0.0095],
+                    "turnover_n": [1030.0],
+                }
+            )
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_hcr_screen_with_stats",
+        lambda prepared_by_symbol, pick_date: (
+            [],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 1,
+                "selected": 0,
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "hcr",
+            "--pick-date",
+            "2026-04-09",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fetch_args == {
+        "start_date": "2025-04-29",
+        "end_date": "2026-04-09",
+    }
 
 
 def test_chart_exports_png_for_candidates(tmp_path: Path) -> None:
@@ -161,7 +378,7 @@ def test_chart_exports_png_for_candidates(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-01.json").write_text(
+    (candidate_dir / f"{_eod_key('2026-04-01')}.json").write_text(
         json.dumps(
             {
                 "pick_date": "2026-04-01",
@@ -243,7 +460,7 @@ def test_chart_exports_png_for_candidates(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert (runtime_root / "charts" / "2026-04-01" / "000001.SZ_day.png").exists()
+    assert (runtime_root / "charts" / _eod_key("2026-04-01") / "000001.SZ_day.png").exists()
     assert "[chart] candidate 1/1 code=000001.SZ" in result.stderr
 
 
@@ -252,7 +469,7 @@ def test_chart_accepts_hcr_candidate_file_shape(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-01.json").write_text(
+    (candidate_dir / f"{_eod_key('2026-04-01', 'hcr')}.json").write_text(
         json.dumps(
             {
                 "pick_date": "2026-04-01",
@@ -342,7 +559,7 @@ def test_chart_accepts_hcr_candidate_file_shape(tmp_path: Path) -> None:
     monkeypatch.undo()
 
     assert result.exit_code == 0
-    assert (runtime_root / "charts" / "2026-04-01" / "000001.SZ_day.png").exists()
+    assert (runtime_root / "charts" / _eod_key("2026-04-01", "hcr") / "000001.SZ_day.png").exists()
 
 
 def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -350,10 +567,11 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-09T10-00-00+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T10-00-00+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
+                "method": "b1",
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T10-00-00+08-00",
                 "candidates": [{"code": "000002.SZ"}],
@@ -361,10 +579,11 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
         ),
         encoding="utf-8",
     )
-    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T11-31-08+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
+                "method": "b1",
                 "trade_date": "2026-04-09",
                 "fetched_at": "2026-04-09T11-31-08+08-00",
                 "run_id": "2026-04-09T11-31-08+08-00",
@@ -373,11 +592,23 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
         ),
         encoding="utf-8",
     )
+    (candidate_dir / f"{_intraday_key('2026-04-09T12-00-00+08-00', 'hcr')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "hcr",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T12-00-00+08-00",
+                "candidates": [{"code": "000003.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(
         cli,
         "_load_intraday_prepared_cache",
-        lambda current_runtime_root, *, run_id, trade_date: (
+        lambda current_runtime_root, *, method, run_id, trade_date: (
             {
                 "000001.SZ": pd.DataFrame(
                     [
@@ -387,6 +618,7 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
                 )
             }
             if current_runtime_root == runtime_root
+            and method == "b1"
             and run_id == "2026-04-09T11-31-08+08-00"
             and trade_date == "2026-04-09"
             else pytest.fail("chart did not request the latest intraday prepared cache")
@@ -428,7 +660,7 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
     result = runner.invoke(app, ["chart", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
 
     assert result.exit_code == 0
-    assert (runtime_root / "charts" / "2026-04-09T11-31-08+08-00" / "000001.SZ_day.png").exists()
+    assert (runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08+08-00") / "000001.SZ_day.png").exists()
 
 
 def test_chart_intraday_rejects_malformed_latest_candidate_payload(tmp_path: Path) -> None:
@@ -436,10 +668,11 @@ def test_chart_intraday_rejects_malformed_latest_candidate_payload(tmp_path: Pat
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-09T10-00-00+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T10-00-00+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
+                "method": "b1",
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T10-00-00+08-00",
                 "candidates": [{"code": "000001.SZ"}],
@@ -447,10 +680,11 @@ def test_chart_intraday_rejects_malformed_latest_candidate_payload(tmp_path: Pat
         ),
         encoding="utf-8",
     )
-    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T11-31-08+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
+                "method": "b1",
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T11-31-08+08-00",
                 "candidates": [{}],
@@ -473,11 +707,12 @@ def test_chart_intraday_rejects_prepared_cache_metadata_mismatch(
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T11-31-08+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
                 "trade_date": "2026-04-09",
+                "method": "b1",
                 "run_id": "2026-04-09T11-31-08+08-00",
                 "candidates": [{"code": "000001.SZ"}],
             }
@@ -519,7 +754,9 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-01.json").write_text(
+    method_key = _eod_key("2026-04-01")
+    review_dir = runtime_root / "reviews" / method_key
+    (candidate_dir / f"{method_key}.json").write_text(
         json.dumps(
             {
                 "pick_date": "2026-04-01",
@@ -529,7 +766,7 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    chart_dir = runtime_root / "charts" / "2026-04-01"
+    chart_dir = runtime_root / "charts" / method_key
     chart_dir.mkdir(parents=True, exist_ok=True)
     (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
 
@@ -579,10 +816,10 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert (runtime_root / "reviews" / "2026-04-01" / "summary.json").exists()
-    assert (runtime_root / "reviews" / "2026-04-01" / "llm_review_tasks.json").exists()
-    review = json.loads((runtime_root / "reviews" / "2026-04-01" / "000001.SZ.json").read_text(encoding="utf-8"))
-    tasks = json.loads((runtime_root / "reviews" / "2026-04-01" / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    assert (review_dir / "summary.json").exists()
+    assert (review_dir / "llm_review_tasks.json").exists()
+    review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
     assert review["code"] == "000001.SZ"
     assert review["review_mode"] == "baseline_local"
     assert review["baseline_review"]["review_type"] == "baseline"
@@ -602,11 +839,11 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
-    chart_dir = runtime_root / "charts" / "2026-04-09T11-31-08+08-00"
+    chart_dir = runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08+08-00")
     candidate_dir.mkdir(parents=True, exist_ok=True)
     chart_dir.mkdir(parents=True, exist_ok=True)
     (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
-    (candidate_dir / "2026-04-09T10-00-00+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T10-00-00+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
@@ -618,7 +855,7 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
         ),
         encoding="utf-8",
     )
-    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T11-31-08+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
@@ -631,11 +868,23 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
         ),
         encoding="utf-8",
     )
+    (candidate_dir / f"{_intraday_key('2026-04-09T12-00-00+08-00', 'hcr')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "hcr",
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T12-00-00+08-00",
+                "candidates": [{"code": "000003.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(
         cli,
         "_load_intraday_prepared_cache",
-        lambda current_runtime_root, *, run_id, trade_date: (
+        lambda current_runtime_root, *, method, run_id, trade_date: (
             {
                 "000001.SZ": pd.DataFrame(
                     [
@@ -645,6 +894,7 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
                 )
             }
             if current_runtime_root == runtime_root
+            and method == "b1"
             and run_id == "2026-04-09T11-31-08+08-00"
             and trade_date == "2026-04-09"
             else pytest.fail("review did not request the latest intraday prepared cache")
@@ -722,7 +972,7 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
     result = runner.invoke(app, ["review", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
 
     assert result.exit_code == 0
-    assert (runtime_root / "reviews" / "2026-04-09T11-31-08+08-00" / "summary.json").exists()
+    assert (runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08+08-00") / "summary.json").exists()
 
 
 def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
@@ -732,11 +982,11 @@ def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
-    chart_dir = runtime_root / "charts" / "2026-04-09T11-31-08+08-00"
+    chart_dir = runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08+08-00")
     candidate_dir.mkdir(parents=True, exist_ok=True)
     chart_dir.mkdir(parents=True, exist_ok=True)
     (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
-    (candidate_dir / "2026-04-09T11-31-08+08-00.json").write_text(
+    (candidate_dir / f"{_intraday_key('2026-04-09T11-31-08+08-00')}.json").write_text(
         json.dumps(
             {
                 "mode": "intraday_snapshot",
@@ -872,7 +1122,7 @@ def test_run_writes_final_summary(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert (runtime_root / "reviews" / "2026-04-01" / "summary.json").exists()
+    assert (runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json").exists()
     assert "[run] step=screen start" in result.stderr
     assert "[run] step=screen done" in result.stderr
     assert "[run] step=chart start" in result.stderr
@@ -908,25 +1158,29 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
 
     def fake_screen_intraday_impl(
         *,
+        method: str,
         dsn: str | None,
         tushare_token: str | None,
         runtime_root: Path,
         reporter: object | None = None,
     ) -> Path:
         calls.append(("screen", tushare_token))
+        assert method == "b1"
         assert dsn == "postgresql://example"
         assert tushare_token == "token"
         assert runtime_root == tmp_path / "runtime"
-        return runtime_root / "candidates" / "2026-04-09T11-31-08-123456+08-00.json"
+        return runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json"
 
     def fake_chart_intraday_impl(
         *,
+        method: str,
         runtime_root: Path,
         reporter: object | None = None,
     ) -> Path:
         calls.append(("chart", None))
+        assert method == "b1"
         assert runtime_root == tmp_path / "runtime"
-        return runtime_root / "charts" / "2026-04-09T11-31-08-123456+08-00"
+        return runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08-123456+08-00")
 
     def fake_review_intraday_impl(
         *,
@@ -936,7 +1190,7 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
     ) -> Path:
         calls.append(("review", method))
         assert runtime_root == tmp_path / "runtime"
-        return runtime_root / "reviews" / "2026-04-09T11-31-08-123456+08-00" / "summary.json"
+        return runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"
 
     monkeypatch.setattr(cli, "_screen_intraday_impl", fake_screen_intraday_impl)
     monkeypatch.setattr(cli, "_chart_intraday_impl", fake_chart_intraday_impl)
@@ -966,9 +1220,9 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
     ]
     stdout_lines = result.stdout.strip().splitlines()
     assert stdout_lines == [
-        str(runtime_root / "candidates" / "2026-04-09T11-31-08-123456+08-00.json"),
-        str(runtime_root / "charts" / "2026-04-09T11-31-08-123456+08-00"),
-        str(runtime_root / "reviews" / "2026-04-09T11-31-08-123456+08-00" / "summary.json"),
+        str(runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json"),
+        str(runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08-123456+08-00")),
+        str(runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"),
     ]
     assert "[run] step=screen start" in result.stderr
     assert "[run] step=chart start" in result.stderr
@@ -978,14 +1232,14 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
 def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    review_dir = runtime_root / "reviews" / "2026-04-01"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01")
     review_dir.mkdir(parents=True, exist_ok=True)
     (review_dir / "000001.SZ.json").write_text(
         json.dumps(
             {
                 "code": "000001.SZ",
                 "pick_date": "2026-04-01",
-                "chart_path": str(runtime_root / "charts" / "2026-04-01" / "000001.SZ_day.png"),
+                "chart_path": str(runtime_root / "charts" / _eod_key("2026-04-01") / "000001.SZ_day.png"),
                 "review_mode": "baseline_local",
                 "llm_review": None,
                 "baseline_review": {
@@ -1068,7 +1322,7 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
 def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    review_dir = runtime_root / "reviews" / "2026-04-01"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01")
     review_dir.mkdir(parents=True, exist_ok=True)
     for code in ("000001.SZ", "000002.SZ"):
         (review_dir / f"{code}.json").write_text(
@@ -1076,7 +1330,7 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
                 {
                     "code": code,
                     "pick_date": "2026-04-01",
-                    "chart_path": str(runtime_root / "charts" / "2026-04-01" / f"{code}_day.png"),
+                    "chart_path": str(runtime_root / "charts" / _eod_key("2026-04-01") / f"{code}_day.png"),
                     "review_mode": "baseline_local",
                     "llm_review": None,
                     "baseline_review": {
@@ -1159,7 +1413,7 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
 def test_review_merge_selected_codes_does_not_fail_missing_unselected_results(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    review_dir = runtime_root / "reviews" / "2026-04-01"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01")
     review_dir.mkdir(parents=True, exist_ok=True)
     for code in ("000001.SZ", "000002.SZ"):
         (review_dir / f"{code}.json").write_text(
@@ -1167,7 +1421,7 @@ def test_review_merge_selected_codes_does_not_fail_missing_unselected_results(tm
                 {
                     "code": code,
                     "pick_date": "2026-04-01",
-                    "chart_path": str(runtime_root / "charts" / "2026-04-01" / f"{code}_day.png"),
+                    "chart_path": str(runtime_root / "charts" / _eod_key("2026-04-01") / f"{code}_day.png"),
                     "review_mode": "baseline_local",
                     "llm_review": None,
                     "baseline_review": {
@@ -1223,8 +1477,8 @@ def test_review_merge_selected_codes_does_not_fail_missing_unselected_results(tm
 def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    review_dir = runtime_root / "reviews" / "2026-04-01"
-    chart_dir = runtime_root / "charts" / "2026-04-01"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01")
+    chart_dir = runtime_root / "charts" / _eod_key("2026-04-01")
     review_dir.mkdir(parents=True, exist_ok=True)
     chart_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1309,13 +1563,84 @@ def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: 
         assert "summary.json" in names
         assert "charts/000001.SZ_day.png" in names
         html_text = archive.read("summary.html").decode("utf-8")
+        assert "B1 Summary" in html_text
         assert "000001.SZ" in html_text
         assert "平安银行" in html_text
         assert "merged comment" in html_text
 
 
-def test_screen_requires_dsn_when_real_data_fetch_is_needed(tmp_path: Path) -> None:
+def test_render_html_uses_hcr_method_label(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01", "hcr")
+    chart_dir = runtime_root / "charts" / _eod_key("2026-04-01", "hcr")
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "hcr",
+                "reviewed_count": 1,
+                "recommendations": [
+                    {
+                        "code": "000001.SZ",
+                        "pick_date": "2026-04-01",
+                        "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                        "review_mode": "baseline_local",
+                        "baseline_review": {
+                            "trend_structure": 4,
+                            "price_position": 4,
+                            "volume_behavior": 4,
+                            "previous_abnormal_move": 4,
+                            "total_score": 4.0,
+                            "signal_type": "trend_start",
+                            "verdict": "PASS",
+                            "comment": "baseline",
+                        },
+                        "llm_review": None,
+                        "total_score": 4.0,
+                        "signal_type": "trend_start",
+                        "verdict": "PASS",
+                        "comment": "hcr comment",
+                    }
+                ],
+                "excluded": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda dsn: object())
+    monkeypatch.setattr(cli, "fetch_instrument_names", lambda connection, symbols: {"000001.SZ": "平安银行"})
+
+    result = runner.invoke(
+        app,
+        [
+            "render-html",
+            "--method",
+            "hcr",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+        html_text = archive.read("summary.html").decode("utf-8")
+        assert "HCR Summary" in html_text
+
+
+def test_screen_requires_dsn_when_real_data_fetch_is_needed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
         app,
@@ -1413,7 +1738,7 @@ def test_screen_writes_candidate_records_from_market_data(monkeypatch, tmp_path:
     )
 
     assert result.exit_code == 0
-    payload = json.loads((runtime_root / "candidates" / "2026-04-01.json").read_text(encoding="utf-8"))
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json").read_text(encoding="utf-8"))
     assert payload["pick_date"] == "2026-04-01"
     assert payload["method"] == "b1"
     assert payload["candidates"] == [
@@ -1849,7 +2174,7 @@ def test_prepare_screen_data_uses_reference_b1_windows() -> None:
 
 
 def test_prepared_cache_round_trip(tmp_path: Path) -> None:
-    cache_path = tmp_path / "prepared" / "2026-04-01.pkl"
+    cache_path = tmp_path / "prepared" / f"{_eod_key('2026-04-01')}.pkl"
     prepared_by_symbol = {
         "AAA.SZ": pd.DataFrame(
             {
@@ -1993,7 +2318,7 @@ def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) ->
         cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
 
     assert result.exit_code == 0
-    payload = json.loads((runtime_root / "candidates" / "2026-04-01.json").read_text(encoding="utf-8"))
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json").read_text(encoding="utf-8"))
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
@@ -2002,7 +2327,7 @@ def test_screen_reuses_existing_non_empty_candidate_file_without_recomputing(tmp
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    candidate_path = candidate_dir / "2026-04-01.json"
+    candidate_path = candidate_dir / f"{_eod_key('2026-04-01')}.json"
     candidate_path.write_text(
         json.dumps(
             {
@@ -2061,7 +2386,7 @@ def test_screen_ignores_existing_empty_candidate_file_and_recomputes(tmp_path: P
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-01.json").write_text(
+    (candidate_dir / f"{_eod_key('2026-04-01')}.json").write_text(
         json.dumps({"pick_date": "2026-04-01", "method": "b1", "candidates": []}),
         encoding="utf-8",
     )
@@ -2181,7 +2506,7 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
         )
     }
     cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-01.pkl",
+        runtime_root / "prepared" / f"{_eod_key('2026-04-01')}.pkl",
         pick_date="2026-04-01",
         start_date="2025-03-31",
         end_date="2026-04-01",
@@ -2258,7 +2583,7 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    (candidate_dir / "2026-04-01.json").write_text(
+    (candidate_dir / f"{_eod_key('2026-04-01')}.json").write_text(
         json.dumps(
             {
                 "pick_date": "2026-04-01",
@@ -2269,7 +2594,7 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
         encoding="utf-8",
     )
     cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-01.pkl",
+        runtime_root / "prepared" / f"{_eod_key('2026-04-01')}.pkl",
         pick_date="2026-04-01",
         start_date="2025-03-31",
         end_date="2026-04-01",
@@ -2372,7 +2697,7 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
 
     assert result.exit_code == 0
     assert calls == {"connect": 1, "prepare": 1}
-    payload = json.loads((candidate_dir / "2026-04-01.json").read_text(encoding="utf-8"))
+    payload = json.loads((candidate_dir / f"{_eod_key('2026-04-01')}.json").read_text(encoding="utf-8"))
     assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
 
 
@@ -2606,8 +2931,8 @@ def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, 
     )
 
     assert result.exit_code == 0
-    candidate_path = runtime_root / "candidates" / f"{expected_run_id}.json"
-    prepared_path = runtime_root / "prepared" / f"{expected_run_id}.pkl"
+    candidate_path = runtime_root / "candidates" / f"{_intraday_key(expected_run_id)}.json"
+    prepared_path = runtime_root / "prepared" / f"{_intraday_key(expected_run_id)}.pkl"
     assert candidate_path.exists()
     assert prepared_path.exists()
 
@@ -2620,3 +2945,131 @@ def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, 
     assert prepared_payload["metadata"]["source"] == "tushare_rt_k"
     assert prepared_payload["metadata"]["run_id"] == expected_run_id
     assert prepared_payload["metadata"]["previous_trade_date"] == "2026-04-08"
+
+
+def test_screen_intraday_hcr_uses_trade_date_lookback_window(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    fetch_args: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 11:31:08.123456", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_resolve_tushare_token", lambda token: "token", raising=False)
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_previous_trade_date",
+        lambda _connection, trade_date: "2026-04-08",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_resolve_hcr_start_date",
+        lambda connection, *, end_date, trading_days: (
+            "2025-04-29" if end_date == "2026-04-08" and trading_days == 239 else ""
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_fetch_rt_k_snapshot",
+        lambda token, trade_date: pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "name": "平安银行",
+                    "trade_date": "2026-04-09",
+                    "trade_time": "11:31:07",
+                    "open": 12.1,
+                    "high": 12.5,
+                    "low": 12.0,
+                    "close": 12.34,
+                    "vol": 150.0,
+                    "amount": 999.0,
+                }
+            ]
+        ),
+        raising=False,
+    )
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        fetch_args["start_date"] = start_date
+        fetch_args["end_date"] = end_date
+        return pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "2026-04-08",
+                    "open": 11.9,
+                    "high": 12.1,
+                    "low": 11.8,
+                    "close": 12.0,
+                    "vol": 120.0,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_hcr_screen_data",
+        lambda market, reporter=None: {
+            "000001.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09"]),
+                    "close": [12.0, 12.34],
+                    "yx": [11.9, 12.2],
+                    "p": [12.0, 12.25],
+                    "resonance_gap_pct": [0.0083, 0.0041],
+                    "turnover_n": [900.0, 1000.0],
+                }
+            )
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_hcr_screen_with_stats",
+        lambda prepared_by_symbol, pick_date: (
+            [],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 1,
+                "selected": 0,
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "hcr",
+            "--intraday",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fetch_args == {
+        "start_date": "2025-04-29",
+        "end_date": "2026-04-08",
+    }

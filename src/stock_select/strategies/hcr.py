@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-HCR_RESONANCE_TOLERANCE_PCT = 0.015
+HCR_RESONANCE_TOLERANCE_PCT = 0.005
 HCR_MIN_CLOSE = 1.0
+HCR_REFERENCE_LOOKBACK_DAYS = 180
+HCR_REFERENCE_SHIFT_DAYS = 60
+HCR_REQUIRED_TRADING_DAYS = HCR_REFERENCE_LOOKBACK_DAYS + HCR_REFERENCE_SHIFT_DAYS
 
 
 def compute_hcr_yx(frame: pd.DataFrame) -> pd.Series:
@@ -13,8 +16,11 @@ def compute_hcr_yx(frame: pd.DataFrame) -> pd.Series:
 
 
 def compute_hcr_reference_price(frame: pd.DataFrame) -> pd.Series:
-    rolling_high = frame["high"].astype(float).rolling(window=300, min_periods=300).max()
-    shifted = rolling_high.shift(60)
+    rolling_high = frame["high"].astype(float).rolling(
+        window=HCR_REFERENCE_LOOKBACK_DAYS,
+        min_periods=HCR_REFERENCE_LOOKBACK_DAYS,
+    ).max()
+    shifted = rolling_high.shift(HCR_REFERENCE_SHIFT_DAYS)
     if shifted.empty:
         return shifted
     last_value = shifted.iloc[-1]

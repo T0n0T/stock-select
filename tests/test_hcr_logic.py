@@ -23,8 +23,8 @@ def test_compute_hcr_yx_uses_30_bar_high_low_midpoint() -> None:
     assert round(float(yx.iloc[-1]), 4) == 10.95
 
 
-def test_compute_hcr_reference_price_uses_const_ref_hhv_300_shift_60_semantics() -> None:
-    highs = [10.0] * 359 + [12.0]
+def test_compute_hcr_reference_price_uses_const_ref_hhv_180_shift_60_semantics() -> None:
+    highs = [10.0] * 239 + [12.0]
     frame = pd.DataFrame({"high": highs})
 
     reference = compute_hcr_reference_price(frame)
@@ -49,7 +49,7 @@ def test_run_hcr_screen_with_stats_selects_symbol_when_resonance_and_breakout_pa
         }
     )
     frame = prepare_hcr_frame(frame)
-    frame.loc[frame.index[-1], "p"] = frame.loc[frame.index[-1], "yx"] * 1.01
+    frame.loc[frame.index[-1], "p"] = frame.loc[frame.index[-1], "yx"] * 1.004
     frame.loc[frame.index[-1], "resonance_gap_pct"] = abs(
         frame.loc[frame.index[-1], "yx"] - frame.loc[frame.index[-1], "p"]
     ) / frame.loc[frame.index[-1], "p"]
@@ -80,6 +80,31 @@ def test_run_hcr_screen_with_stats_counts_insufficient_history_separately() -> N
     assert stats["eligible"] == 1
     assert stats["fail_insufficient_history"] == 1
     assert stats["fail_resonance"] == 0
+
+
+def test_run_hcr_screen_with_stats_rejects_gap_above_half_percent() -> None:
+    pick_date = pd.Timestamp("2026-04-01")
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range("2024-10-17", periods=380),
+            "open": [9.8] * 380,
+            "high": [10.2] * 350 + [10.4] * 30,
+            "low": [9.6] * 350 + [9.8] * 30,
+            "close": [9.9] * 379 + [10.25],
+            "volume": [100.0] * 380,
+            "turnover_n": [1000.0] * 380,
+        }
+    )
+    frame = prepare_hcr_frame(frame)
+    frame.loc[frame.index[-1], "p"] = 10.0
+    frame.loc[frame.index[-1], "yx"] = 10.06
+    frame.loc[frame.index[-1], "resonance_gap_pct"] = 0.006
+
+    candidates, stats = run_hcr_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+
+    assert candidates == []
+    assert stats["fail_resonance"] == 1
+    assert stats["selected"] == 0
 
 
 def test_run_hcr_screen_with_stats_requires_exact_pick_date_match() -> None:

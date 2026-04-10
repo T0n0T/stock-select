@@ -1,7 +1,7 @@
 import pandas as pd
 
 import stock_select.strategies.b1 as strategy_b1
-from stock_select.b1_logic import (
+from stock_select.strategies.b1 import (
     DEFAULT_MAX_VOL_LOOKBACK,
     DEFAULT_TOP_M,
     DEFAULT_TURNOVER_WINDOW,
@@ -54,6 +54,11 @@ def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
     assert strategy_run_b1_screen_with_stats is run_b1_screen_with_stats
     assert strategy_build_top_turnover_pool is build_top_turnover_pool
     assert strategy_compute_zx_lines is compute_zx_lines
+
+
+def test_b1_strategy_module_is_primary_implementation_owner() -> None:
+    assert strategy_b1.compute_turnover_n.__module__ == "stock_select.strategies.b1"
+    assert strategy_b1.run_b1_screen_with_stats.__module__ == "stock_select.strategies.b1"
 
 
 def test_compute_turnover_n_uses_midprice_times_volume() -> None:
