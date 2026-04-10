@@ -8,6 +8,8 @@ def _load_run_b2_screen_with_stats():
     try:
         module = importlib.import_module("stock_select.strategies.b2")
     except ModuleNotFoundError as exc:
+        if exc.name != "stock_select.strategies.b2":
+            raise
         pytest.fail(f"Missing b2 strategy module: {exc}")
     return module.run_b2_screen_with_stats
 

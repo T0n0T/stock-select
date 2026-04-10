@@ -46,12 +46,14 @@ def test_build_review_result_prefers_llm_review_when_present() -> None:
             "position_reasoning": "mid",
             "volume_reasoning": "good",
             "abnormal_move_reasoning": "present",
+            "macd_reasoning": "histogram improving",
             "signal_reasoning": "trend start",
             "scores": {
                 "trend_structure": 5,
                 "price_position": 4,
                 "volume_behavior": 5,
                 "previous_abnormal_move": 4,
+                "macd_phase": 5,
             },
         },
     )
@@ -60,6 +62,8 @@ def test_build_review_result_prefers_llm_review_when_present() -> None:
     assert result["total_score"] == 4.6
     assert result["verdict"] == "PASS"
     assert result["llm_review"]["comment"] == "llm"
+    assert result["llm_review"]["macd_reasoning"] == "histogram improving"
+    assert result["llm_review"]["scores"]["macd_phase"] == 5
     assert result["baseline_review"]["comment"] == "baseline"
 
 
@@ -70,12 +74,14 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
             "position_reasoning": "位置中位",
             "volume_reasoning": "量价配合良好",
             "abnormal_move_reasoning": "前期有异动",
+            "macd_reasoning": "MACD柱体持续修复",
             "signal_reasoning": "更像主升启动",
             "scores": {
                 "trend_structure": 5,
                 "price_position": 4,
                 "volume_behavior": 5,
                 "previous_abnormal_move": 4,
+                "macd_phase": 5,
             },
             "total_score": 4.6,
             "signal_type": "trend_start",
@@ -88,6 +94,7 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
     assert normalized["price_position"] == 4.0
     assert normalized["volume_behavior"] == 5.0
     assert normalized["previous_abnormal_move"] == 4.0
+    assert normalized["macd_phase"] == 5.0
     assert normalized["verdict"] == "PASS"
     assert normalized["signal_type"] == "trend_start"
 

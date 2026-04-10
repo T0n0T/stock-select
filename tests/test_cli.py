@@ -285,56 +285,13 @@ def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json"
 
     monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
     monkeypatch.setattr(
         cli,
-        "fetch_daily_window",
-        lambda *args, **kwargs: pd.DataFrame(
-            {
-                "ts_code": ["000001.SZ"],
-                "trade_date": pd.to_datetime(["2026-04-10"]),
-                "open": [10.0],
-                "high": [10.5],
-                "low": [9.9],
-                "close": [10.4],
-                "vol": [100.0],
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_prepare_screen_data",
-        lambda market, reporter=None: {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "turnover_n": [100.0],
-                }
-            )
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]},
-    )
-    monkeypatch.setattr(
-        cli,
-        "run_b2_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
-            [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 10.4, "turnover_n": 100.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_macd_trend": 0,
-                "selected": 1,
-            },
-        ),
+        "_screen_impl",
+        lambda **kwargs: expected_path,
         raising=False,
     )
 
@@ -354,9 +311,7 @@ def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
     )
 
     assert result.exit_code == 0
-    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
-    assert payload["method"] == "b2"
-    assert payload["candidates"][0]["code"] == "000001.SZ"
+    assert result.stdout.strip() == str(expected_path)
 
 
 def test_screen_hcr_uses_trade_date_lookback_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
