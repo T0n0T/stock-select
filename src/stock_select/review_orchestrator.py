@@ -27,6 +27,13 @@ REQUIRED_SCORE_FIELDS = (
 )
 ALLOWED_SIGNAL_TYPES = {"trend_start", "rebound", "distribution_risk"}
 ALLOWED_VERDICTS = {"PASS", "WATCH", "FAIL"}
+BASELINE_SCORE_WEIGHTS = {
+    "trend_structure": 0.18,
+    "price_position": 0.18,
+    "volume_behavior": 0.24,
+    "previous_abnormal_move": 0.20,
+    "macd_phase": 0.20,
+}
 
 
 def build_review_payload(
@@ -123,11 +130,13 @@ def normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(comment, str) or not comment.strip():
         raise ValueError("Missing or empty required field: comment")
 
+    total_score = _compute_weighted_total(normalized_scores)
+
     return {
         **{field: str(payload[field]).strip() for field in REQUIRED_REASONING_FIELDS},
         "scores": normalized_scores,
         **normalized_scores,
-        "total_score": float(payload.get("total_score", 0.0)),
+        "total_score": total_score,
         "signal_type": signal_type,
         "verdict": verdict,
         "comment": comment.strip(),
@@ -156,7 +165,6 @@ def review_symbol_history(
     ma60 = close.rolling(window=60, min_periods=60).mean()
     latest_close = float(close.iloc[-1])
     latest_open = float(open_.iloc[-1])
-    latest_volume = float(volume.iloc[-1])
     recent_window = frame.tail(20)
     recent_close = recent_window["close"].astype(float)
     recent_open = recent_window["open"].astype(float)
@@ -172,13 +180,14 @@ def review_symbol_history(
     previous_abnormal_move = _score_previous_abnormal_move(close, volume)
     macd_phase = _score_macd_phase(close)
 
-    total_score = round(
-        trend_structure * 0.20
-        + price_position * 0.20
-        + volume_behavior * 0.20
-        + previous_abnormal_move * 0.20
-        + macd_phase * 0.20,
-        2,
+    total_score = _compute_weighted_total(
+        {
+            "trend_structure": trend_structure,
+            "price_position": price_position,
+            "volume_behavior": volume_behavior,
+            "previous_abnormal_move": previous_abnormal_move,
+            "macd_phase": macd_phase,
+        }
     )
     signal_type = _infer_signal_type(
         latest_close=latest_close,
@@ -349,6 +358,10 @@ def _score_macd_phase(close: pd.Series) -> float:
     if hist_decreasing and close.iloc[-1] >= close.tail(5).max():
         return 3.0
     return 3.0
+
+
+def _compute_weighted_total(scores: dict[str, float]) -> float:
+    return round(sum(float(scores[field]) * weight for field, weight in BASELINE_SCORE_WEIGHTS.items()), 2)
 
 
 def _infer_signal_type(

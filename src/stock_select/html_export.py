@@ -425,6 +425,7 @@ def _score_grid(review: dict[str, Any] | None, title: str) -> str:
         ("price_position", review.get("price_position")),
         ("volume_behavior", review.get("volume_behavior")),
         ("previous_abnormal_move", review.get("previous_abnormal_move")),
+        ("macd_phase", review.get("macd_phase")),
         ("total_score", review.get("total_score")),
     ]
     body = "".join(
@@ -471,6 +472,7 @@ def _detail_card(item: dict[str, Any], names_by_code: dict[str, str]) -> str:
                     _reasoning_block("Position", llm_review.get("position_reasoning")),
                     _reasoning_block("Volume", llm_review.get("volume_reasoning")),
                     _reasoning_block("Abnormal Move", llm_review.get("abnormal_move_reasoning")),
+                    _reasoning_block("MACD", llm_review.get("macd_reasoning")),
                     _reasoning_block("Signal", llm_review.get("signal_reasoning")),
                 ]
             )

@@ -316,6 +316,47 @@ def _resolve_hcr_start_date(connection, *, end_date: str, trading_days: int) -> 
     return fetch_nth_latest_trade_date(connection, end_date=end_date, n=trading_days)
 
 
+def _validate_eod_pick_date_has_market_data(connection, *, market: pd.DataFrame, pick_date: str) -> None:
+    if not market.empty:
+        trade_dates = pd.to_datetime(market["trade_date"], errors="coerce")
+        if bool((trade_dates == pd.Timestamp(pick_date)).any()):
+            return
+    latest_trade_date = fetch_nth_latest_trade_date(connection, end_date=pick_date, n=1)
+    raise typer.BadParameter(
+        f"No end-of-day data found for pick_date {pick_date}. Latest available trade date is {latest_trade_date}."
+    )
+
+
+def _validate_eod_pick_date_has_prepared_data(
+    connection,
+    *,
+    prepared_by_symbol: dict[str, pd.DataFrame],
+    pick_date: str,
+) -> None:
+    target_date = pd.Timestamp(pick_date)
+    for frame in prepared_by_symbol.values():
+        if frame.empty or "trade_date" not in frame.columns:
+            continue
+        trade_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
+        if bool((trade_dates == target_date).any()):
+            return
+    latest_trade_date = fetch_nth_latest_trade_date(connection, end_date=pick_date, n=1)
+    raise typer.BadParameter(
+        f"No end-of-day data found for pick_date {pick_date}. Latest available trade date is {latest_trade_date}."
+    )
+
+
+def _prepared_cache_covers_pick_date(prepared_by_symbol: dict[str, pd.DataFrame], *, pick_date: str) -> bool:
+    target_date = pd.Timestamp(pick_date)
+    for frame in prepared_by_symbol.values():
+        if frame.empty or "trade_date" not in frame.columns:
+            continue
+        trade_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
+        if bool((trade_dates == target_date).any()):
+            return True
+    return False
+
+
 def _import_tushare_module():
     try:
         import tushare as ts
@@ -553,9 +594,13 @@ def _screen_impl(
             cached_start_date = cache_payload.get("start_date")
             cached_end_date = cache_payload.get("end_date")
             if cached_pick_date == pick_date and cached_start_date == start_date and cached_end_date == pick_date:
-                prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
-                if reporter:
-                    reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+                cached_prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
+                if _prepared_cache_covers_pick_date(cached_prepared, pick_date=pick_date):
+                    prepared = cached_prepared
+                    if reporter:
+                        reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+                elif reporter:
+                    reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=stale_pick_date")
 
     if prepared is None:
         resolved_dsn = _resolve_cli_dsn(dsn)
@@ -583,6 +628,7 @@ def _screen_impl(
                 "screen",
                 f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
             )
+        _validate_eod_pick_date_has_market_data(connection, market=market, pick_date=pick_date)
         if method in {"b1", "b2"}:
             prepared = _call_prepare_screen_data(market, reporter=reporter)
         else:

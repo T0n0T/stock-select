@@ -90,11 +90,19 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
         }
     )
 
+    assert normalized["scores"] == {
+        "trend_structure": 5.0,
+        "price_position": 4.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 5.0,
+    }
     assert normalized["trend_structure"] == 5.0
     assert normalized["price_position"] == 4.0
     assert normalized["volume_behavior"] == 5.0
     assert normalized["previous_abnormal_move"] == 4.0
     assert normalized["macd_phase"] == 5.0
+    assert normalized["total_score"] == pytest.approx(4.62)
     assert normalized["verdict"] == "PASS"
     assert normalized["signal_type"] == "trend_start"
 
@@ -182,7 +190,7 @@ def test_summarize_reviews_keeps_method_value_for_hcr() -> None:
     assert summary["method"] == "hcr"
 
 
-def test_review_symbol_history_returns_pass_for_constructive_trend() -> None:
+def test_review_symbol_history_returns_watch_for_constructive_trend() -> None:
     history = pd.DataFrame(
         {
             "trade_date": pd.date_range("2026-01-01", periods=160, freq="B"),
@@ -201,13 +209,21 @@ def test_review_symbol_history_returns_pass_for_constructive_trend() -> None:
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert review["code"] == "000001.SZ"
-    assert review["chart_path"] == "/tmp/000001.SZ_day.png"
-    assert review["signal_type"] == "trend_start"
-    assert review["verdict"] in {"PASS", "WATCH"}
-    assert review["total_score"] >= 3.6
-    assert review["review_type"] == "baseline"
-    assert "macd_phase" in review
+    assert review == {
+        "code": "000001.SZ",
+        "pick_date": "2026-04-01",
+        "chart_path": "/tmp/000001.SZ_day.png",
+        "review_type": "baseline",
+        "trend_structure": 5.0,
+        "price_position": 3.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 3.0,
+        "macd_phase": 3.0,
+        "total_score": 3.84,
+        "signal_type": "trend_start",
+        "verdict": "WATCH",
+        "comment": "结构有修复迹象，但量价与位置优势一般，暂时更适合继续观察。",
+    }
 
 
 def test_review_symbol_history_flags_distribution_risk() -> None:

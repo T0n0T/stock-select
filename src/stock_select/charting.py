@@ -52,7 +52,7 @@ def export_daily_chart(df: pd.DataFrame, code: str, out_path: Path, bars: int = 
     if frame["zxdkx"].notna().any():
         addplots.append(mpf.make_addplot(frame["zxdkx"], color="#2980b9", width=1.0))
     if frame["dif"].notna().any():
-        addplots.append(mpf.make_addplot(frame["dif"], panel=2, color="#f8f8f8", width=1.0, ylabel="MACD"))
+        addplots.append(mpf.make_addplot(frame["dif"], panel=2, color="#1f4e79", width=1.0, ylabel="MACD"))
     if frame["dea"].notna().any():
         addplots.append(mpf.make_addplot(frame["dea"], panel=2, color="#f1c40f", width=1.0))
     if frame["macd_hist"].notna().any():

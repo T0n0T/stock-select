@@ -249,7 +249,7 @@ def test_screen_writes_hcr_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_p
         lambda market, reporter=None: {
             "000001.SZ": pd.DataFrame(
                 {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
+                    "trade_date": pd.to_datetime(["2026-04-09"]),
                     "close": [10.6],
                     "yx": [10.4],
                     "p": [10.5],
@@ -307,6 +307,49 @@ def test_screen_writes_hcr_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_p
     payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'hcr')}.json").read_text(encoding="utf-8"))
     assert payload["method"] == "hcr"
     assert payload["candidates"][0]["code"] == "000001.SZ"
+
+
+def test_screen_rejects_pick_date_without_end_of_day_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "fetch_nth_latest_trade_date", lambda connection, *, end_date, n: "2026-04-09")
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-09"]),
+                "open": [10.0],
+                "high": [10.8],
+                "low": [9.8],
+                "close": [10.6],
+                "vol": [100.0],
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "2026-04-10" in result.stderr
+    assert "2026-04-09" in result.stderr
+    assert "end-of-day" in result.stderr.lower()
 
 
 def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
@@ -391,7 +434,7 @@ def test_screen_hcr_uses_trade_date_lookback_window(monkeypatch: pytest.MonkeyPa
         return pd.DataFrame(
             {
                 "ts_code": ["000001.SZ"],
-                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "trade_date": pd.to_datetime(["2026-04-09"]),
                 "open": [10.0],
                 "high": [10.8],
                 "low": [9.8],
@@ -407,7 +450,7 @@ def test_screen_hcr_uses_trade_date_lookback_window(monkeypatch: pytest.MonkeyPa
         lambda market, reporter=None: {
             "000001.SZ": pd.DataFrame(
                 {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
+                    "trade_date": pd.to_datetime(["2026-04-09"]),
                     "close": [10.6],
                     "yx": [10.4],
                     "p": [10.5],
@@ -1329,6 +1372,11 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
                 "llm_review": None,
                 "baseline_review": {
                     "review_type": "baseline",
+                    "trend_structure": 3.0,
+                    "price_position": 3.0,
+                    "volume_behavior": 3.0,
+                    "previous_abnormal_move": 4.0,
+                    "macd_phase": 4.0,
                     "total_score": 3.4,
                     "signal_type": "rebound",
                     "verdict": "WATCH",
@@ -1398,9 +1446,29 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
     merged = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
     assert merged["review_mode"] == "merged"
+    assert merged["baseline_review"] == {
+        "review_type": "baseline",
+        "trend_structure": 3.0,
+        "price_position": 3.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 4.0,
+        "total_score": 3.4,
+        "signal_type": "rebound",
+        "verdict": "WATCH",
+        "comment": "baseline",
+    }
     assert merged["llm_review"]["verdict"] == "PASS"
-    assert merged["final_score"] == 4.12
-    assert merged["total_score"] == 4.12
+    assert merged["llm_review"]["total_score"] == 4.62
+    assert merged["llm_review"]["scores"] == {
+        "trend_structure": 5.0,
+        "price_position": 4.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 5.0,
+    }
+    assert merged["final_score"] == 4.13
+    assert merged["total_score"] == 4.13
     assert merged["verdict"] == "PASS"
     assert summary["recommendations"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr
@@ -1422,6 +1490,11 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
                     "llm_review": None,
                     "baseline_review": {
                         "review_type": "baseline",
+                        "trend_structure": 3.0,
+                        "price_position": 3.0,
+                        "volume_behavior": 3.0,
+                        "previous_abnormal_move": 4.0,
+                        "macd_phase": 4.0,
                         "total_score": 3.4,
                         "signal_type": "rebound",
                         "verdict": "WATCH",
@@ -1494,7 +1567,20 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
     untouched = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
     assert merged["review_mode"] == "merged"
+    assert merged["llm_review"]["total_score"] == 4.62
     assert untouched["review_mode"] == "baseline_local"
+    assert untouched["baseline_review"] == {
+        "review_type": "baseline",
+        "trend_structure": 3.0,
+        "price_position": 3.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 4.0,
+        "total_score": 3.4,
+        "signal_type": "rebound",
+        "verdict": "WATCH",
+        "comment": "baseline",
+    }
     assert summary["failures"] == []
     assert "[review-merge] merged reviews=2 failures=0" in result.stderr
 
@@ -1515,6 +1601,11 @@ def test_review_merge_selected_codes_does_not_fail_missing_unselected_results(tm
                     "llm_review": None,
                     "baseline_review": {
                         "review_type": "baseline",
+                        "trend_structure": 3.0,
+                        "price_position": 3.0,
+                        "volume_behavior": 3.0,
+                        "previous_abnormal_move": 4.0,
+                        "macd_phase": 4.0,
                         "total_score": 3.4,
                         "signal_type": "rebound",
                         "verdict": "WATCH",
@@ -1589,11 +1680,13 @@ def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: 
                             "position_reasoning": "位置适中",
                             "volume_reasoning": "量价正常",
                             "abnormal_move_reasoning": "前期异动",
+                            "macd_reasoning": "MACD 处于加强阶段",
                             "signal_reasoning": "主升启动",
                             "trend_structure": 4,
                             "price_position": 3,
                             "volume_behavior": 4,
                             "previous_abnormal_move": 4,
+                            "macd_phase": 4,
                             "total_score": 3.8,
                             "signal_type": "trend_start",
                             "verdict": "WATCH",
@@ -1604,6 +1697,7 @@ def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: 
                             "price_position": 4,
                             "volume_behavior": 5,
                             "previous_abnormal_move": 5,
+                            "macd_phase": 5,
                             "total_score": 4.8,
                             "signal_type": "trend_start",
                             "verdict": "PASS",
@@ -1656,6 +1750,9 @@ def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: 
         assert "000001.SZ" in html_text
         assert "平安银行" in html_text
         assert "merged comment" in html_text
+        assert "macd_phase" in html_text
+        assert "MACD" in html_text
+        assert "MACD 处于加强阶段" in html_text
 
 
 def test_render_html_uses_hcr_method_label(monkeypatch, tmp_path: Path) -> None:
@@ -1683,6 +1780,7 @@ def test_render_html_uses_hcr_method_label(monkeypatch, tmp_path: Path) -> None:
                             "price_position": 4,
                             "volume_behavior": 4,
                             "previous_abnormal_move": 4,
+                            "macd_phase": 3,
                             "total_score": 4.0,
                             "signal_type": "trend_start",
                             "verdict": "PASS",
@@ -3120,6 +3218,106 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
     assert calls == {"connect": 1, "prepare": 1}
     payload = json.loads((candidate_dir / f"{_eod_key('2026-04-01')}.json").read_text(encoding="utf-8"))
     assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
+
+
+def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    prepared_path = runtime_root / "prepared" / f"{_eod_key('2026-04-10', 'b2')}.pkl"
+    prepared_path.parent.mkdir(parents=True, exist_ok=True)
+    cli._write_prepared_cache(
+        prepared_path,
+        method="b2",
+        pick_date="2026-04-10",
+        start_date="2025-04-09",
+        end_date="2026-04-10",
+        prepared_by_symbol={
+            "000001.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-09"]),
+                    "turnover_n": [1030.0],
+                    "J": [10.0],
+                    "zxdq": [10.5],
+                    "zxdkx": [10.2],
+                    "weekly_ma_bull": [True],
+                    "macd_hist": [0.1],
+                    "close": [10.6],
+                }
+            )
+        },
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10"]),
+                "open": [10.0],
+                "high": [10.8],
+                "low": [9.8],
+                "close": [10.6],
+                "vol": [100.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_screen_data",
+        lambda market, reporter=None: {
+            "000001.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "turnover_n": [1030.0],
+                    "J": [10.0],
+                    "zxdq": [10.5],
+                    "zxdkx": [10.2],
+                    "weekly_ma_bull": [True],
+                    "macd_hist": [0.1],
+                    "close": [10.6],
+                }
+            )
+        },
+    )
+    monkeypatch.setattr(cli, "build_top_turnover_pool", lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]})
+    monkeypatch.setattr(
+        cli,
+        "run_b2_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 10.6, "turnover_n": 1030.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_macd_trend": 0,
+                "selected": 1,
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "reason=stale_pick_date" in result.stderr
+    assert "[screen] fetch market window" in result.stderr
 
 
 def test_screen_intraday_rejects_pick_date(tmp_path: Path) -> None:

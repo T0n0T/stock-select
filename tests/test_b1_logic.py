@@ -43,6 +43,7 @@ def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
         "build_top_turnover_pool",
         "compute_expanding_j_quantile",
         "compute_kdj",
+        "compute_macd",
         "compute_turnover_n",
         "compute_weekly_close",
         "compute_weekly_ma_bull",

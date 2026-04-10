@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from stock_select.charting import _prepare_daily_chart_frame, export_daily_chart
+from stock_select.strategies import compute_macd
 
 
 def _sample_daily_frame() -> pd.DataFrame:
@@ -67,7 +68,15 @@ def test_prepare_daily_chart_frame_includes_macd_columns() -> None:
 
 
 def test_prepare_daily_chart_frame_keeps_macd_series_aligned_after_bars_trim() -> None:
+    sample = _sample_daily_frame()
+    expected_tail = (
+        compute_macd(sample.sort_values("date").reset_index(drop=True))
+        .tail(2)
+        .reset_index(drop=True)
+    )
     frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=2)
 
     assert list(frame.index) == [pd.Timestamp("2026-04-03"), pd.Timestamp("2026-04-06")]
     assert list(frame[["dif", "dea", "macd_hist"]].columns) == ["dif", "dea", "macd_hist"]
+    for column in ("dif", "dea", "macd_hist"):
+        assert list(frame[column].round(10)) == list(expected_tail[column].round(10))
