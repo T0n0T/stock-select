@@ -15,6 +15,8 @@ RT_K_COLUMN_MAP = {
     "更新时间": "trade_time",
 }
 
+RT_K_REQUIRED_COLUMNS = ["code", "name", "open", "high", "low", "close", "vol", "amount"]
+
 
 def _normalize_ts_code(code: str) -> str:
     stripped = code.strip()
@@ -30,13 +32,26 @@ def _normalize_ts_code(code: str) -> str:
     raise ValueError(msg)
 
 
-def normalize_rt_k_snapshot(raw: pd.DataFrame, *, trade_date: str) -> pd.DataFrame:
+def _rename_rt_k_columns(raw: pd.DataFrame) -> pd.DataFrame:
     renamed = raw.rename(columns=RT_K_COLUMN_MAP).copy()
-    required = ["code", "name", "open", "high", "low", "close", "vol", "amount", "trade_time"]
-    missing = [column for column in required if column not in renamed.columns]
+    if "code" not in renamed.columns and "ts_code" in renamed.columns:
+        renamed["code"] = renamed["ts_code"]
+    return renamed
+
+
+def normalize_rt_k_snapshot(
+    raw: pd.DataFrame,
+    *,
+    trade_date: str,
+    fallback_trade_time: str = "00:00:00",
+) -> pd.DataFrame:
+    renamed = _rename_rt_k_columns(raw)
+    missing = [column for column in RT_K_REQUIRED_COLUMNS if column not in renamed.columns]
     if missing:
         msg = f"rt_k snapshot missing columns: {missing}"
         raise ValueError(msg)
+    if "trade_time" not in renamed.columns:
+        renamed["trade_time"] = fallback_trade_time
 
     normalized = pd.DataFrame(
         {

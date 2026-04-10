@@ -58,6 +58,7 @@ app = typer.Typer(help="stock-select standalone CLI")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
+RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
 
 
 class IntradayUserError(ValueError):
@@ -333,15 +334,24 @@ def _fetch_rt_k_snapshot(tushare_token: str, trade_date: str) -> pd.DataFrame:
     ts.set_token(tushare_token)
     pro = ts.pro_api()
     try:
-        raw_snapshot = pro.rt_k()
+        snapshots: list[pd.DataFrame] = []
+        for ts_code in RT_K_MARKET_WILDCARDS:
+            market_snapshot = pro.rt_k(ts_code=ts_code)
+            if market_snapshot is not None and not market_snapshot.empty:
+                snapshots.append(market_snapshot)
     except Exception as exc:
         msg = f"Failed to fetch Tushare rt_k snapshot: {exc}"
         raise IntradayUserError(msg) from exc
-    if raw_snapshot is None or raw_snapshot.empty:
+    if not snapshots:
         msg = "Tushare rt_k returned no usable rows."
         raise IntradayUserError(msg)
-
-    return normalize_rt_k_snapshot(raw_snapshot, trade_date=trade_date)
+    raw_snapshot = pd.concat(snapshots, ignore_index=True)
+    fallback_trade_time = _current_shanghai_timestamp().strftime("%H:%M:%S")
+    return normalize_rt_k_snapshot(
+        raw_snapshot,
+        trade_date=trade_date,
+        fallback_trade_time=fallback_trade_time,
+    )
 
 
 def _prepare_screen_data(

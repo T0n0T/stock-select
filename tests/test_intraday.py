@@ -41,6 +41,59 @@ def test_normalize_rt_k_snapshot_maps_required_columns() -> None:
     assert normalized.iloc[0]["close"] == 12.34
 
 
+def test_normalize_rt_k_snapshot_accepts_english_columns() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "ts_code": "600000.SH",
+                "name": "浦发银行",
+                "open": 10.1,
+                "high": 10.5,
+                "low": 10.0,
+                "close": 10.34,
+                "vol": 2234567,
+                "amount": 252300000.0,
+                "trade_time": "11:31:07",
+            }
+        ]
+    )
+
+    normalized = normalize_rt_k_snapshot(raw, trade_date="2026-04-09")
+
+    assert normalized.iloc[0]["ts_code"] == "600000.SH"
+    assert normalized.iloc[0]["name"] == "浦发银行"
+    assert normalized.iloc[0]["close"] == 10.34
+
+
+def test_normalize_rt_k_snapshot_falls_back_when_trade_time_missing() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "ts_code": "600000.SH",
+                "name": "浦发银行",
+                "pre_close": 10.0,
+                "open": 10.1,
+                "high": 10.5,
+                "low": 10.0,
+                "close": 10.34,
+                "vol": 2234567,
+                "amount": 252300000.0,
+                "num": 8133,
+            }
+        ]
+    )
+
+    normalized = normalize_rt_k_snapshot(
+        raw,
+        trade_date="2026-04-09",
+        fallback_trade_time="10:15:30",
+    )
+
+    assert normalized.iloc[0]["ts_code"] == "600000.SH"
+    assert normalized.iloc[0]["trade_time"] == "10:15:30"
+    assert normalized.iloc[0]["close"] == 10.34
+
+
 def test_build_intraday_market_frame_appends_current_day_bar() -> None:
     history = pd.DataFrame(
         [

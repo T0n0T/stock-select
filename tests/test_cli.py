@@ -2840,14 +2840,16 @@ def test_format_intraday_run_id_is_filename_safe_and_microsecond_precise() -> No
         (
             lambda: SimpleNamespace(
                 set_token=lambda _token: None,
-                pro_api=lambda: SimpleNamespace(rt_k=lambda: (_ for _ in ()).throw(RuntimeError("boom"))),
+                pro_api=lambda: SimpleNamespace(
+                    rt_k=lambda *, ts_code: (_ for _ in ()).throw(RuntimeError("boom"))
+                ),
             ),
             "Failed to fetch Tushare rt_k snapshot: boom",
         ),
         (
             lambda: SimpleNamespace(
                 set_token=lambda _token: None,
-                pro_api=lambda: SimpleNamespace(rt_k=lambda: pd.DataFrame()),
+                pro_api=lambda: SimpleNamespace(rt_k=lambda *, ts_code: pd.DataFrame()),
             ),
             "Tushare rt_k returned no usable rows.",
         ),
@@ -2858,6 +2860,134 @@ def test_fetch_rt_k_snapshot_wraps_tushare_failures(monkeypatch, module_factory,
 
     with pytest.raises(cli.IntradayUserError, match=expected_message):
         cli._fetch_rt_k_snapshot("token", "2026-04-09")
+
+
+def test_fetch_rt_k_snapshot_batches_market_wildcards_and_normalizes_rows(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_rt_k(*, ts_code: str) -> pd.DataFrame:
+        calls.append(ts_code)
+        if ts_code == "*.SH":
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "600000.SH",
+                        "name": "浦发银行",
+                        "open": 10.1,
+                        "high": 10.5,
+                        "low": 10.0,
+                        "close": 10.34,
+                        "vol": 2234567,
+                        "amount": 252300000.0,
+                        "trade_time": "11:31:07",
+                    }
+                ]
+            )
+        if ts_code == "*.SZ":
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "name": "平安银行",
+                        "open": 12.1,
+                        "high": 12.5,
+                        "low": 12.0,
+                        "close": 12.34,
+                        "vol": 1234567,
+                        "amount": 152300000.0,
+                        "trade_time": "11:31:08",
+                    }
+                ]
+            )
+        if ts_code == "*.BJ":
+            return pd.DataFrame()
+        raise AssertionError(f"unexpected ts_code={ts_code}")
+
+    module = SimpleNamespace(
+        set_token=lambda _token: None,
+        pro_api=lambda: SimpleNamespace(rt_k=fake_rt_k),
+    )
+    monkeypatch.setattr(cli, "_import_tushare_module", lambda: module, raising=False)
+
+    snapshot = cli._fetch_rt_k_snapshot("token", "2026-04-09")
+
+    assert calls == ["*.SH", "*.SZ", "*.BJ"]
+    assert snapshot.to_dict(orient="records") == [
+        {
+            "ts_code": "000001.SZ",
+            "name": "平安银行",
+            "trade_date": "2026-04-09",
+            "trade_time": "11:31:08",
+            "open": 12.1,
+            "high": 12.5,
+            "low": 12.0,
+            "close": 12.34,
+            "vol": 1234567.0,
+            "amount": 152300000.0,
+        },
+        {
+            "ts_code": "600000.SH",
+            "name": "浦发银行",
+            "trade_date": "2026-04-09",
+            "trade_time": "11:31:07",
+            "open": 10.1,
+            "high": 10.5,
+            "low": 10.0,
+            "close": 10.34,
+            "vol": 2234567.0,
+            "amount": 252300000.0,
+        },
+    ]
+
+
+def test_fetch_rt_k_snapshot_uses_fetch_timestamp_when_trade_time_missing(monkeypatch) -> None:
+    module = SimpleNamespace(
+        set_token=lambda _token: None,
+        pro_api=lambda: SimpleNamespace(
+            rt_k=lambda *, ts_code: pd.DataFrame(
+                [
+                    {
+                        "ts_code": "600000.SH",
+                        "name": "浦发银行",
+                        "pre_close": 10.0,
+                        "open": 10.1,
+                        "high": 10.5,
+                        "low": 10.0,
+                        "close": 10.34,
+                        "vol": 2234567,
+                        "amount": 252300000.0,
+                        "num": 8133,
+                    }
+                ]
+            )
+            if ts_code == "*.SH"
+            else pd.DataFrame()
+        ),
+    )
+    monkeypatch.setattr(cli, "_import_tushare_module", lambda: module, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 10:15:30.123456", tz="Asia/Shanghai"),
+        raising=False,
+    )
+
+    snapshot = cli._fetch_rt_k_snapshot("token", "2026-04-09")
+
+    assert snapshot.to_dict(orient="records") == [
+        {
+            "ts_code": "600000.SH",
+            "name": "浦发银行",
+            "trade_date": "2026-04-09",
+            "trade_time": "10:15:30",
+            "open": 10.1,
+            "high": 10.5,
+            "low": 10.0,
+            "close": 10.34,
+            "vol": 2234567.0,
+            "amount": 252300000.0,
+        }
+    ]
 
 
 def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, tmp_path: Path) -> None:
