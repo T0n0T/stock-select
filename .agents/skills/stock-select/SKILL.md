@@ -1,6 +1,6 @@
 ---
 name: stock-select
-description: Use when screening A-share stocks from the stock-cache PostgreSQL database with the B1 method, generating daily charts, and coordinating multimodal subagents for chart review and final conclusions.
+description: Use when screening A-share stocks from the stock-cache PostgreSQL database with the stock-select CLI, generating daily charts, and coordinating multimodal subagents for chart review and final conclusions.
 ---
 
 # Stock Select
@@ -9,8 +9,8 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 
 ## Required Workflow
 
-- Always require `--method b1`.
-- Reject any method other than `b1`.
+- Always require an explicit built-in method.
+- Built-in methods are `b1` and `hcr`.
 - Do not use `stock-cache read` CLI as the primary data source.
 - Read PostgreSQL tables directly.
 - Resolve DSN from `--dsn` or `POSTGRES_DSN` before any database-backed step.
@@ -35,35 +35,40 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 
 ## Runtime Paths By Mode
 
-End-of-day `--pick-date` runs keep using the existing pick-date keyed layout:
+All runtime artifacts are keyed by `<base_key>.<method>`, where `<base_key>` is:
 
-- `runtime/candidates/<pick_date>.json`
-- `runtime/prepared/<pick_date>.pkl`
-- `runtime/charts/<pick_date>/`
-- `runtime/reviews/<pick_date>/`
+- end-of-day mode: `<pick_date>`
+- intraday mode: `<run_id>`
+
+End-of-day `--pick-date` runs use:
+
+- `runtime/candidates/<pick_date>.<method>.json`
+- `runtime/prepared/<pick_date>.<method>.pkl`
+- `runtime/charts/<pick_date>.<method>/`
+- `runtime/reviews/<pick_date>.<method>/`
 
 Intraday `--intraday` runs use an intraday `run_id` keyed layout:
 
-- `runtime/candidates/<run_id>.json`
-- `runtime/prepared/<run_id>.pkl`
-- `runtime/charts/<run_id>/`
-- `runtime/reviews/<run_id>/`
+- `runtime/candidates/<run_id>.<method>.json`
+- `runtime/prepared/<run_id>.<method>.pkl`
+- `runtime/charts/<run_id>.<method>/`
+- `runtime/reviews/<run_id>.<method>/`
 
 Review and merge instructions must follow the active mode's runtime key:
 
-- end-of-day mode: use `<pick_date>`
-- intraday mode: use the latest intraday `<run_id>` selected by the candidate artifact
+- end-of-day mode: use `<pick_date>.<method>`
+- intraday mode: use the latest intraday `<run_id>.<method>` selected by the candidate artifact
 
 ## Execution Order
 
 1. Resolve the active mode and CLI arguments.
-2. For end-of-day runs, resolve `pick_date` and query PostgreSQL market data needed for B1 screening.
+2. For end-of-day runs, resolve `pick_date` and query PostgreSQL market data needed for the requested screening method.
 3. For intraday runs, resolve the active trade date, fetch PostgreSQL confirmed history through the previous trade date, then overlay Tushare `rt_k`.
-4. Run deterministic B1 screening and write candidate outputs.
+4. Run deterministic `b1` or `hcr` screening and write candidate outputs.
 5. Render daily chart PNG files for each candidate.
 6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
 7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and `references/prompt.md`.
-8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>` for end-of-day and `<run_id>` for intraday.
+8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>.<method>` for end-of-day and `<run_id>.<method>` for intraday.
 9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
 10. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
 
@@ -101,8 +106,8 @@ When running chart review for quality-first selection:
 
 Use `<mode_key>` as follows:
 
-- end-of-day mode: `<pick_date>`
-- intraday mode: latest intraday `<run_id>`
+- end-of-day mode: `<pick_date>.<method>`
+- intraday mode: latest intraday `<run_id>.<method>`
 
 ## Main-Agent Validation Gate
 
@@ -145,15 +150,15 @@ If any of the checks above fail:
 
 ## Current Implementation
 
-- `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the B1-derived fields locally, and writes candidate JSON.
-- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.json`, and stores the matching prepared cache at `runtime/prepared/<run_id>.pkl`.
+- `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the requested method's derived fields locally, and writes `runtime/candidates/<pick_date>.<method>.json`.
+- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, and stores the matching prepared cache at `runtime/prepared/<run_id>.<method>.pkl`.
 - `chart --pick-date` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
-- `chart --intraday` reuses the latest intraday candidate plus matching prepared cache and writes charts under `runtime/charts/<run_id>/` without fetching fresh realtime data.
+- `chart --intraday` reuses the latest intraday candidate for the requested method plus matching prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.
 - `review --pick-date` writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
-- `review --intraday` reuses the latest intraday candidate plus matching prepared cache, writes baseline reviews under `runtime/reviews/<run_id>/`, and does not fetch fresh realtime data.
+- `review --intraday` reuses the latest intraday candidate for the requested method plus matching prepared cache, writes baseline reviews under `runtime/reviews/<run_id>.<method>/`, and does not fetch fresh realtime data.
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
-- `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id`.
-- `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>/` for end-of-day or `runtime/reviews/<run_id>/` for intraday.
+- `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
+- `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>.<method>/` for end-of-day or `runtime/reviews/<run_id>.<method>/` for intraday.
 - `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file.
 
 ## Future Upgrade Path

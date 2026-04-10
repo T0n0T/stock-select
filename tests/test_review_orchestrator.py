@@ -138,6 +138,18 @@ def test_summarize_reviews_sorts_recommendations() -> None:
     assert summary["excluded"][0]["code"] == "A"
 
 
+def test_summarize_reviews_keeps_method_value_for_hcr() -> None:
+    summary = summarize_reviews(
+        "2026-04-01",
+        "hcr",
+        [{"code": "A", "review_mode": "baseline_local", "total_score": 4.6, "verdict": "PASS"}],
+        min_score=4.0,
+        failures=[],
+    )
+
+    assert summary["method"] == "hcr"
+
+
 def test_review_symbol_history_returns_pass_for_constructive_trend() -> None:
     history = pd.DataFrame(
         {

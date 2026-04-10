@@ -5,7 +5,7 @@ from pathlib import Path
 import mplfinance as mpf
 import pandas as pd
 
-from stock_select.b1_logic import compute_zx_lines
+from stock_select.strategies import compute_zx_lines
 
 
 def _prepare_daily_chart_frame(df: pd.DataFrame, bars: int = 120) -> pd.DataFrame:

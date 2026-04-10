@@ -25,6 +25,7 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
     failures = summary.get("failures", [])
     if not isinstance(recommendations, list) or not isinstance(excluded, list) or not isinstance(failures, list):
         raise ValueError("Summary json shape is invalid.")
+    method_label = str(summary.get("method") or "-").upper()
 
     metrics = "".join(
         [
@@ -41,7 +42,7 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>B1 Summary {_escape(summary.get("pick_date", ""))}</title>
+  <title>{_escape(method_label)} Summary {_escape(summary.get("pick_date", ""))}</title>
   <style>
     :root {{
       --bg: #f4f1ea;
@@ -297,7 +298,7 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
 <body>
   <main class="page">
     <section class="hero">
-      <h1>B1 Summary Dashboard</h1>
+      <h1>{_escape(method_label)} Summary Dashboard</h1>
       <p>Single-file review artifact generated from the merged stock-select summary. This package includes the standalone HTML, summary JSON, and referenced charts for offline inspection.</p>
       <div class="metrics">{metrics}</div>
     </section>

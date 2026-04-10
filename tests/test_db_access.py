@@ -6,6 +6,7 @@ from stock_select.db_access import (
     fetch_available_trade_dates,
     fetch_daily_window,
     fetch_instrument_names,
+    fetch_nth_latest_trade_date,
     load_dotenv_value,
     fetch_symbol_history,
     resolve_dsn,
@@ -173,6 +174,31 @@ def test_fetch_available_trade_dates_returns_normalized_frame() -> None:
         {"trade_date": "2026-04-03"},
         {"trade_date": "2026-04-02"},
     ]
+
+
+def test_fetch_nth_latest_trade_date_returns_exact_trade_date() -> None:
+    connection = FakeConnection(
+        rows=[("2024-10-16",)],
+        columns=["TRADE_DATE"],
+    )
+
+    result = fetch_nth_latest_trade_date(connection, end_date="2026-04-09", n=360)
+
+    assert result == "2024-10-16"
+    query, params = connection.cursor_obj.executed[0]
+    assert "LIMIT 1" in query
+    assert "OFFSET %(offset)s" in query
+    assert params == {
+        "end_date": "2026-04-09",
+        "offset": 359,
+    }
+
+
+def test_fetch_nth_latest_trade_date_raises_when_history_is_insufficient() -> None:
+    connection = FakeConnection(rows=[], columns=["TRADE_DATE"])
+
+    with pytest.raises(ValueError, match="No 360th latest trade date found on or before 2026-04-09."):
+        fetch_nth_latest_trade_date(connection, end_date="2026-04-09", n=360)
 
 
 def test_fetch_instrument_names_returns_code_name_mapping() -> None:
