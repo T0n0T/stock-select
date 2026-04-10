@@ -18,6 +18,14 @@ _B2_REQUIRED_COLUMNS = (
     "close",
     "turnover_n",
 )
+_B2_NUMERIC_COLUMNS = (
+    "J",
+    "zxdq",
+    "zxdkx",
+    "macd_hist",
+    "close",
+    "turnover_n",
+)
 
 
 def run_b2_screen(
@@ -57,20 +65,28 @@ def run_b2_screen_with_stats(
             stats["fail_insufficient_history"] += 1
             continue
 
-        frame = prepared.copy()
-        frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+        frame = _normalize_b2_frame(prepared)
+        invalid_trade_dates = frame["trade_date"].isna().any()
         history = frame.loc[frame["trade_date"] <= target_date].reset_index(drop=True)
         daily = history.loc[history["trade_date"] == target_date]
         if daily.empty:
+            if invalid_trade_dates:
+                stats["eligible"] += 1
+                stats["fail_insufficient_history"] += 1
             continue
 
         stats["eligible"] += 1
         row = daily.iloc[-1]
+        recent_j = history["J"].tail(B2_RECENT_J_LOOKBACK)
+        recent_macd = history["macd_hist"].tail(B2_MACD_TREND_DAYS)
 
         if (
             len(history) < B2_RECENT_J_LOOKBACK
+            or recent_j.isna().any()
             or pd.isna(row["zxdq"])
             or pd.isna(row["zxdkx"])
+            or pd.isna(row["close"])
+            or pd.isna(row["turnover_n"])
         ):
             stats["fail_insufficient_history"] += 1
             continue
@@ -87,11 +103,10 @@ def run_b2_screen_with_stats(
             stats["fail_weekly_ma"] += 1
             continue
 
-        macd_hist = history["macd_hist"].dropna().astype(float)
-        if len(macd_hist) < B2_MACD_TREND_DAYS:
+        if len(recent_macd) < B2_MACD_TREND_DAYS or recent_macd.isna().any():
             stats["fail_insufficient_history"] += 1
             continue
-        if not _is_strictly_increasing(macd_hist.tail(B2_MACD_TREND_DAYS)):
+        if not _is_strictly_increasing(recent_macd):
             stats["fail_macd_trend"] += 1
             continue
 
@@ -124,6 +139,14 @@ def _is_strictly_increasing(values: pd.Series) -> bool:
 
 def _missing_required_columns(frame: pd.DataFrame) -> set[str]:
     return set(_B2_REQUIRED_COLUMNS) - set(frame.columns)
+
+
+def _normalize_b2_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], errors="coerce")
+    for column in _B2_NUMERIC_COLUMNS:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    return normalized
 
 
 __all__ = [
