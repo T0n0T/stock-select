@@ -16,6 +16,20 @@ DEFAULT_MAX_VOL_LOOKBACK = 20
 DEFAULT_TOP_M = 5000
 
 
+def compute_macd(
+    df: pd.DataFrame,
+    *,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> pd.DataFrame:
+    close = df["close"].astype(float)
+    dif = close.ewm(span=fast, adjust=False).mean() - close.ewm(span=slow, adjust=False).mean()
+    dea = dif.ewm(span=signal, adjust=False).mean()
+    macd_hist = dif - dea
+    return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": macd_hist}, index=df.index)
+
+
 def compute_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
     volume = _resolve_volume_series(df)
     turnover = ((df["open"] + df["close"]) / 2.0) * volume
@@ -136,9 +150,19 @@ def build_top_turnover_pool(
         if frame.empty:
             continue
         working = frame.copy()
-        date_col = "trade_date" if "trade_date" in working.columns else "date"
-        working[date_col] = pd.to_datetime(working[date_col])
+        if "trade_date" in working.columns:
+            date_col = "trade_date"
+        elif "date" in working.columns:
+            date_col = "date"
+        else:
+            continue
+        if "turnover_n" not in working.columns:
+            continue
+        working[date_col] = pd.to_datetime(working[date_col], errors="coerce", format="mixed")
+        working["turnover_n"] = pd.to_numeric(working["turnover_n"], errors="coerce")
         for _, row in working.iterrows():
+            if pd.isna(row[date_col]) or pd.isna(row["turnover_n"]):
+                continue
             trade_date = pd.Timestamp(row[date_col])
             pool.setdefault(trade_date, []).append((float(row["turnover_n"]), symbol))
 
@@ -241,12 +265,13 @@ __all__ = [
     "DEFAULT_TOP_M",
     "DEFAULT_TURNOVER_WINDOW",
     "DEFAULT_WEEKLY_MA_PERIODS",
-    "build_top_turnover_pool",
-    "compute_expanding_j_quantile",
-    "compute_kdj",
-    "compute_turnover_n",
-    "compute_weekly_close",
-    "compute_weekly_ma_bull",
+        "build_top_turnover_pool",
+        "compute_expanding_j_quantile",
+        "compute_kdj",
+        "compute_macd",
+        "compute_turnover_n",
+        "compute_weekly_close",
+        "compute_weekly_ma_bull",
     "compute_zx_lines",
     "max_vol_not_bearish",
     "run_b1_screen",

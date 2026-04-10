@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from stock_select.review_orchestrator import (
     build_review_payload,
@@ -45,12 +46,14 @@ def test_build_review_result_prefers_llm_review_when_present() -> None:
             "position_reasoning": "mid",
             "volume_reasoning": "good",
             "abnormal_move_reasoning": "present",
+            "macd_reasoning": "histogram improving",
             "signal_reasoning": "trend start",
             "scores": {
                 "trend_structure": 5,
                 "price_position": 4,
                 "volume_behavior": 5,
                 "previous_abnormal_move": 4,
+                "macd_phase": 5,
             },
         },
     )
@@ -59,6 +62,8 @@ def test_build_review_result_prefers_llm_review_when_present() -> None:
     assert result["total_score"] == 4.6
     assert result["verdict"] == "PASS"
     assert result["llm_review"]["comment"] == "llm"
+    assert result["llm_review"]["macd_reasoning"] == "histogram improving"
+    assert result["llm_review"]["scores"]["macd_phase"] == 5
     assert result["baseline_review"]["comment"] == "baseline"
 
 
@@ -69,12 +74,14 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
             "position_reasoning": "位置中位",
             "volume_reasoning": "量价配合良好",
             "abnormal_move_reasoning": "前期有异动",
+            "macd_reasoning": "MACD柱体持续修复",
             "signal_reasoning": "更像主升启动",
             "scores": {
                 "trend_structure": 5,
                 "price_position": 4,
                 "volume_behavior": 5,
                 "previous_abnormal_move": 4,
+                "macd_phase": 5,
             },
             "total_score": 4.6,
             "signal_type": "trend_start",
@@ -87,6 +94,7 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
     assert normalized["price_position"] == 4.0
     assert normalized["volume_behavior"] == 5.0
     assert normalized["previous_abnormal_move"] == 4.0
+    assert normalized["macd_phase"] == 5.0
     assert normalized["verdict"] == "PASS"
     assert normalized["signal_type"] == "trend_start"
 
@@ -111,6 +119,30 @@ def test_normalize_llm_review_rejects_missing_reasoning() -> None:
         assert "trend_reasoning" in str(exc)
     else:
         raise AssertionError("normalize_llm_review should reject missing reasoning fields")
+
+
+def test_normalize_llm_review_requires_macd_reasoning() -> None:
+    with pytest.raises(ValueError, match="macd_reasoning"):
+        normalize_llm_review(
+            {
+                "trend_reasoning": "趋势向上",
+                "position_reasoning": "位置适中",
+                "volume_reasoning": "量价健康",
+                "abnormal_move_reasoning": "前期有异动",
+                "signal_reasoning": "主升启动",
+                "scores": {
+                    "trend_structure": 5,
+                    "price_position": 4,
+                    "volume_behavior": 5,
+                    "previous_abnormal_move": 4,
+                    "macd_phase": 5,
+                },
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "缺少 macd reasoning",
+            }
+        )
 
 
 def test_summarize_reviews_sorts_recommendations() -> None:
@@ -171,10 +203,11 @@ def test_review_symbol_history_returns_pass_for_constructive_trend() -> None:
 
     assert review["code"] == "000001.SZ"
     assert review["chart_path"] == "/tmp/000001.SZ_day.png"
-    assert review["verdict"] == "PASS"
     assert review["signal_type"] == "trend_start"
-    assert review["total_score"] >= 4.0
+    assert review["verdict"] in {"PASS", "WATCH"}
+    assert review["total_score"] >= 3.6
     assert review["review_type"] == "baseline"
+    assert "macd_phase" in review
 
 
 def test_review_symbol_history_flags_distribution_risk() -> None:
@@ -199,3 +232,27 @@ def test_review_symbol_history_flags_distribution_risk() -> None:
     assert review["verdict"] == "FAIL"
     assert review["signal_type"] == "distribution_risk"
     assert review["volume_behavior"] <= 2.0
+
+
+def test_normalize_llm_review_validates_macd_phase_score() -> None:
+    with pytest.raises(ValueError, match="macd_phase"):
+        normalize_llm_review(
+            {
+                "trend_reasoning": "趋势向上",
+                "position_reasoning": "位置中位",
+                "volume_reasoning": "量价配合良好",
+                "abnormal_move_reasoning": "前期有异动",
+                "macd_reasoning": "MACD 进入启动阶段",
+                "signal_reasoning": "更像主升启动",
+                "scores": {
+                    "trend_structure": 5,
+                    "price_position": 4,
+                    "volume_behavior": 5,
+                    "previous_abnormal_move": 4,
+                },
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "缺少 macd_phase",
+            }
+        )

@@ -28,7 +28,37 @@ def test_screen_rejects_unknown_method() -> None:
     result = runner.invoke(app, ["screen", "--method", "brick", "--pick-date", "2026-04-01"])
 
     assert result.exit_code != 0
-    assert "supported methods: b1, hcr" in result.stderr.lower()
+    assert "supported methods: b1, b2, hcr" in result.stderr.lower()
+
+
+def test_screen_accepts_whitespace_padded_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'b2')}.json"
+
+    monkeypatch.setattr(
+        cli,
+        "_screen_impl",
+        lambda **kwargs: expected_path if kwargs["method"] == "b2" else None,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            " b2 ",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(expected_path)
 
 
 def test_screen_accepts_whitespace_padded_b1_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -276,6 +306,61 @@ def test_screen_writes_hcr_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert result.exit_code == 0
     payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'hcr')}.json").read_text(encoding="utf-8"))
     assert payload["method"] == "hcr"
+    assert payload["candidates"][0]["code"] == "000001.SZ"
+
+
+def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json"
+
+    def fake_screen_impl(**kwargs: object) -> Path:
+        assert kwargs["method"] == "b2"
+        payload = {
+            "pick_date": "2026-04-10",
+            "method": "b2",
+            "candidates": [
+                {
+                    "code": "000001.SZ",
+                    "pick_date": "2026-04-10",
+                    "close": 10.4,
+                    "turnover_n": 100.0,
+                }
+            ],
+        }
+        expected_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_path.write_text(json.dumps(payload), encoding="utf-8")
+        return expected_path
+
+    monkeypatch.setattr(
+        cli,
+        "_screen_impl",
+        fake_screen_impl,
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(expected_path)
+    payload = json.loads(expected_path.read_text(encoding="utf-8"))
+    assert payload["method"] == "b2"
     assert payload["candidates"][0]["code"] == "000001.SZ"
 
 
@@ -1278,12 +1363,14 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
                 "position_reasoning": "位置中位",
                 "volume_reasoning": "量价配合良好",
                 "abnormal_move_reasoning": "前期有异动",
+                "macd_reasoning": "MACD 进入启动阶段",
                 "signal_reasoning": "更像主升启动",
                 "scores": {
                     "trend_structure": 5,
                     "price_position": 4,
                     "volume_behavior": 5,
                     "previous_abnormal_move": 4,
+                    "macd_phase": 5,
                 },
                 "total_score": 4.6,
                 "signal_type": "trend_start",
@@ -1369,12 +1456,14 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
                 "position_reasoning": "位置中位",
                 "volume_reasoning": "量价配合良好",
                 "abnormal_move_reasoning": "前期有异动",
+                "macd_reasoning": "MACD 进入启动阶段",
                 "signal_reasoning": "更像主升启动",
                 "scores": {
                     "trend_structure": 5,
                     "price_position": 4,
                     "volume_behavior": 5,
                     "previous_abnormal_move": 4,
+                    "macd_phase": 5,
                 },
                 "total_score": 4.6,
                 "signal_type": "trend_start",
@@ -2171,6 +2260,10 @@ def test_prepare_screen_data_uses_reference_b1_windows() -> None:
     assert list(prepared) == ["000001.SZ"]
     assert turnover_windows == [43]
     assert weekly_periods == [(10, 20, 30)]
+    assert {"dif", "dea", "macd_hist"}.issubset(prepared["000001.SZ"].columns)
+    assert prepared["000001.SZ"]["dif"].notna().all()
+    assert prepared["000001.SZ"]["dea"].notna().all()
+    assert prepared["000001.SZ"]["macd_hist"].notna().all()
 
 
 def test_prepared_cache_round_trip(tmp_path: Path) -> None:
@@ -2319,6 +2412,334 @@ def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) ->
 
     assert result.exit_code == 0
     payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json").read_text(encoding="utf-8"))
+    assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+
+
+def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ", "BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10", "2026-04-10"]),
+                "open": [10.0, 11.0],
+                "high": [10.5, 11.5],
+                "low": [9.9, 10.9],
+                "close": [10.4, 11.4],
+                "vol": [100.0, 120.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        return {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "turnover_n": [100.0],
+                    "J": [10.0],
+                    "zxdq": [10.5],
+                    "zxdkx": [10.2],
+                    "weekly_ma_bull": [True],
+                    "macd_hist": [0.10],
+                    "close": [10.6],
+                }
+            ),
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "turnover_n": [200.0],
+                    "J": [10.0],
+                    "zxdq": [11.5],
+                    "zxdkx": [11.2],
+                    "weekly_ma_bull": [True],
+                    "macd_hist": [0.20],
+                    "close": [11.6],
+                }
+            ),
+        }
+
+    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], top_m: int):
+        assert top_m == 5000
+        assert sorted(prepared_by_symbol) == ["AAA.SZ", "BBB.SZ"]
+        return {pd.Timestamp("2026-04-10"): ["BBB.SZ"]}
+
+    def fake_run_b2_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        assert pick_date == pd.Timestamp("2026-04-10")
+        assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
+        return (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 11.6, "turnover_n": 200.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_macd_trend": 0,
+                "selected": 1,
+            },
+        )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_pool = cli.build_top_turnover_pool
+    original_run = cli.run_b2_screen_with_stats
+
+    cli._connect = fake_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
+    cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
+    cli.build_top_turnover_pool = fake_pool  # type: ignore[assignment]
+    cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b2",
+                "--pick-date",
+                "2026-04-10",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.build_top_turnover_pool = original_pool  # type: ignore[assignment]
+        cli.run_b2_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "b2"
+    assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+
+
+def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    trade_dates = pd.date_range("2026-03-20", periods=16, freq="B")
+    closes_by_code = {
+        "AAA.SZ": [10 + 0.03 * (idx**2) for idx in range(len(trade_dates))],
+        "BBB.SZ": [12 + 0.03 * (idx**2) for idx in range(len(trade_dates))],
+    }
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        market_rows: list[dict[str, object]] = []
+        for code in ("AAA.SZ", "BBB.SZ"):
+            for idx, trade_date in enumerate(trade_dates):
+                close = closes_by_code[code][idx]
+                market_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": trade_date,
+                        "open": close - 0.1,
+                        "high": close + 0.2,
+                        "low": close - 0.2,
+                        "close": close,
+                        "vol": 100.0 + idx,
+                    }
+                )
+        return pd.DataFrame(market_rows)
+
+    def fake_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
+        assert window == 43
+        base = 100.0 if df["ts_code"].iat[0] == "AAA.SZ" else 200.0
+        return pd.Series([base + idx for idx in range(len(df))], index=df.index)
+
+    def fake_kdj(df: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "J": [40.0, 12.0, 25.0, 30.0, 28.0, 27.0, 26.0, 24.0, 23.0, 22.0, 21.0, 20.0, 19.0, 18.0, 17.0, 16.0]
+            },
+            index=df.index,
+        )
+
+    def fake_zx_lines(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        close = df["close"].astype(float)
+        return pd.Series(close - 0.1, index=df.index), pd.Series(close - 0.4, index=df.index)
+
+    def fake_weekly_ma_bull(
+        df: pd.DataFrame,
+        ma_periods: tuple[int, int, int] = (20, 60, 120),
+    ) -> pd.Series:
+        assert ma_periods == (10, 20, 30)
+        return pd.Series([True] * len(df), index=df.index)
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "DEFAULT_TOP_M", 1)
+    monkeypatch.setattr(cli, "compute_turnover_n", fake_turnover_n)
+    monkeypatch.setattr(cli, "compute_kdj", fake_kdj)
+    monkeypatch.setattr(cli, "compute_zx_lines", fake_zx_lines)
+    monkeypatch.setattr(cli, "compute_weekly_ma_bull", fake_weekly_ma_bull)
+    monkeypatch.setattr(
+        cli,
+        "max_vol_not_bearish",
+        lambda df, lookback: pd.Series([True] * len(df), index=df.index),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "b2"
+    assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+
+
+def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    trade_dates = pd.date_range("2026-03-20", periods=16, freq="B")
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        market_rows: list[dict[str, object]] = []
+        for code, base_close in (("AAA.SZ", 10.0), ("BBB.SZ", 12.0)):
+            for idx, trade_date in enumerate(trade_dates):
+                close = base_close + idx * 0.1
+                market_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": trade_date,
+                        "open": close - 0.1,
+                        "high": close + 0.2,
+                        "low": close - 0.2,
+                        "close": close,
+                        "vol": 100.0 + idx,
+                    }
+                )
+        return pd.DataFrame(market_rows)
+
+    def fake_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
+        assert window == 43
+        values = [100.0 + idx for idx in range(len(df))]
+        if df["ts_code"].iat[0] == "AAA.SZ":
+            values[3] = "boom"
+        else:
+            values = [200.0 + idx for idx in range(len(df))]
+        return pd.Series(values, index=df.index)
+
+    def fake_kdj(df: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "J": [40.0, 12.0, 25.0, 30.0, 28.0, 27.0, 26.0, 24.0, 23.0, 22.0, 21.0, 20.0, 19.0, 18.0, 17.0, 16.0]
+            },
+            index=df.index,
+        )
+
+    def fake_zx_lines(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        close = df["close"].astype(float)
+        return pd.Series(close - 0.1, index=df.index), pd.Series(close - 0.4, index=df.index)
+
+    def fake_weekly_ma_bull(
+        df: pd.DataFrame,
+        ma_periods: tuple[int, int, int] = (20, 60, 120),
+    ) -> pd.Series:
+        return pd.Series([True] * len(df), index=df.index)
+
+    def fake_macd(
+        frame: pd.DataFrame,
+        *,
+        fast: int = 12,
+        slow: int = 26,
+        signal: int = 9,
+    ) -> pd.DataFrame:
+        base = 0.01 if frame["ts_code"].iat[0] == "AAA.SZ" else 0.02
+        hist = pd.Series([base + idx * 0.01 for idx in range(len(frame))], index=frame.index)
+        dif = hist + 0.05
+        dea = dif - hist
+        return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": hist}, index=frame.index)
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "DEFAULT_TOP_M", 1)
+    monkeypatch.setattr(cli, "compute_turnover_n", fake_turnover_n)
+    monkeypatch.setattr(cli, "compute_kdj", fake_kdj)
+    monkeypatch.setattr(cli, "compute_zx_lines", fake_zx_lines)
+    monkeypatch.setattr(cli, "compute_weekly_ma_bull", fake_weekly_ma_bull)
+    monkeypatch.setattr(
+        cli,
+        "max_vol_not_bearish",
+        lambda df, lookback: pd.Series([True] * len(df), index=df.index),
+    )
+    monkeypatch.setattr(cli, "compute_macd", fake_macd)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "b2"
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
