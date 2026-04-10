@@ -1,9 +1,19 @@
-import pandas as pd
+import importlib
 
-from stock_select.strategies.b2 import run_b2_screen_with_stats
+import pandas as pd
+import pytest
+
+
+def _load_run_b2_screen_with_stats():
+    try:
+        module = importlib.import_module("stock_select.strategies.b2")
+    except ModuleNotFoundError as exc:
+        pytest.fail(f"Missing b2 strategy module: {exc}")
+    return module.run_b2_screen_with_stats
 
 
 def test_run_b2_screen_with_stats_passes_when_recent_j_hit_and_macd_hist_is_rising() -> None:
+    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
     frame = pd.DataFrame(
         {
@@ -29,6 +39,7 @@ def test_run_b2_screen_with_stats_passes_when_recent_j_hit_and_macd_hist_is_risi
 
 
 def test_run_b2_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
+    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
     frame = pd.DataFrame(
         {

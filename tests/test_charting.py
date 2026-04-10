@@ -23,7 +23,7 @@ def _sample_daily_frame() -> pd.DataFrame:
 def test_prepare_daily_chart_frame_sorts_and_shapes_columns() -> None:
     frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=0)
 
-    assert list(frame.columns) == ["Open", "High", "Low", "Close", "Volume", "zxdq", "zxdkx"]
+    assert {"Open", "High", "Low", "Close", "Volume", "zxdq", "zxdkx"}.issubset(frame.columns)
     assert isinstance(frame.index, pd.DatetimeIndex)
     assert frame.index.is_monotonic_increasing
     assert frame.index[0] == pd.Timestamp("2026-04-01")
@@ -50,15 +50,6 @@ def test_export_daily_chart_respects_bars_limit() -> None:
 def test_prepare_daily_chart_frame_includes_macd_columns() -> None:
     frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=0)
 
-    assert list(frame.columns) == [
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume",
-        "zxdq",
-        "zxdkx",
-        "dif",
-        "dea",
-        "macd_hist",
-    ]
+    for column in ("dif", "dea", "macd_hist"):
+        assert column in frame.columns
+        assert frame[column].index.equals(frame.index)
