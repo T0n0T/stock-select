@@ -18,7 +18,6 @@ from stock_select.strategies.b1 import (
 from stock_select.strategies.b2 import (
     B2_MACD_TREND_DAYS,
     B2_RECENT_J_LOOKBACK,
-    b2_frame_has_invalid_required_inputs,
     run_b2_screen,
     run_b2_screen_with_stats,
 )
@@ -41,7 +40,6 @@ def validate_method(method: str) -> str:
 __all__ = [
     "B2_MACD_TREND_DAYS",
     "B2_RECENT_J_LOOKBACK",
-    "b2_frame_has_invalid_required_inputs",
     "DEFAULT_B1_CONFIG",
     "DEFAULT_MAX_VOL_LOOKBACK",
     "DEFAULT_TOP_M",

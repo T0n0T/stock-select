@@ -200,16 +200,9 @@ def _has_invalid_required_inputs(original: pd.DataFrame, normalized: pd.DataFram
     )
 
 
-def b2_frame_has_invalid_required_inputs(frame: pd.DataFrame) -> bool:
-    if frame.empty or _missing_required_columns(frame):
-        return True
-    return _has_invalid_required_inputs(frame, _normalize_b2_frame(frame))
-
-
 __all__ = [
     "B2_MACD_TREND_DAYS",
     "B2_RECENT_J_LOOKBACK",
-    "b2_frame_has_invalid_required_inputs",
     "run_b2_screen",
     "run_b2_screen_with_stats",
 ]
