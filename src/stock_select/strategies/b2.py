@@ -27,7 +27,6 @@ _B2_NUMERIC_COLUMNS = (
     "close",
     "turnover_n",
 )
-_B2_CURRENT_DAY_NUMERIC_COLUMNS = ("zxdq", "zxdkx", "close", "turnover_n")
 
 
 def run_b2_screen(

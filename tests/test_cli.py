@@ -2256,6 +2256,10 @@ def test_prepare_screen_data_uses_reference_b1_windows() -> None:
     assert list(prepared) == ["000001.SZ"]
     assert turnover_windows == [43]
     assert weekly_periods == [(10, 20, 30)]
+    assert {"dif", "dea", "macd_hist"}.issubset(prepared["000001.SZ"].columns)
+    assert prepared["000001.SZ"]["dif"].notna().all()
+    assert prepared["000001.SZ"]["dea"].notna().all()
+    assert prepared["000001.SZ"]["macd_hist"].notna().all()
 
 
 def test_prepared_cache_round_trip(tmp_path: Path) -> None:
@@ -2535,6 +2539,10 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.date_range("2026-03-20", periods=16, freq="B")
+    closes_by_code = {
+        "AAA.SZ": [10 + 0.03 * (idx**2) for idx in range(len(trade_dates))],
+        "BBB.SZ": [12 + 0.03 * (idx**2) for idx in range(len(trade_dates))],
+    }
 
     def fake_connect(_: str) -> object:
         return object()
@@ -2547,9 +2555,9 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
         symbols: list[str] | None = None,
     ) -> pd.DataFrame:
         market_rows: list[dict[str, object]] = []
-        for code, base_close in (("AAA.SZ", 10.0), ("BBB.SZ", 12.0)):
+        for code in ("AAA.SZ", "BBB.SZ"):
             for idx, trade_date in enumerate(trade_dates):
-                close = base_close + idx * 0.1
+                close = closes_by_code[code][idx]
                 market_rows.append(
                     {
                         "ts_code": code,
@@ -2587,20 +2595,6 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
         assert ma_periods == (10, 20, 30)
         return pd.Series([True] * len(df), index=df.index)
 
-    def fake_macd(
-        frame: pd.DataFrame,
-        *,
-        fast: int = 12,
-        slow: int = 26,
-        signal: int = 9,
-    ) -> pd.DataFrame:
-        assert (fast, slow, signal) == (12, 26, 9)
-        base = 0.01 if frame["ts_code"].iat[0] == "AAA.SZ" else 0.02
-        hist = pd.Series([base + idx * 0.01 for idx in range(len(frame))], index=frame.index)
-        dif = hist + 0.05
-        dea = dif - hist
-        return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": hist}, index=frame.index)
-
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "DEFAULT_TOP_M", 1)
@@ -2613,7 +2607,6 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
         "max_vol_not_bearish",
         lambda df, lookback: pd.Series([True] * len(df), index=df.index),
     )
-    monkeypatch.setattr(cli, "compute_macd", fake_macd)
 
     result = runner.invoke(
         app,
