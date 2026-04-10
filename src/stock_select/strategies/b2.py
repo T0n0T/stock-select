@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -87,6 +88,7 @@ def run_b2_screen_with_stats(
             or pd.isna(row["zxdkx"])
             or pd.isna(row["close"])
             or pd.isna(row["turnover_n"])
+            or pd.isna(row["weekly_ma_bull"])
         ):
             stats["fail_insufficient_history"] += 1
             continue
@@ -99,7 +101,7 @@ def run_b2_screen_with_stats(
             stats["fail_zxdq_zxdkx"] += 1
             continue
 
-        if pd.isna(row["weekly_ma_bull"]) or not bool(row["weekly_ma_bull"]):
+        if not bool(row["weekly_ma_bull"]):
             stats["fail_weekly_ma"] += 1
             continue
 
@@ -146,7 +148,27 @@ def _normalize_b2_frame(frame: pd.DataFrame) -> pd.DataFrame:
     normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], errors="coerce")
     for column in _B2_NUMERIC_COLUMNS:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    normalized["weekly_ma_bull"] = pd.Series(
+        [_normalize_weekly_ma_value(value) for value in normalized["weekly_ma_bull"]],
+        index=normalized.index,
+        dtype="boolean",
+    )
     return normalized
+
+
+def _normalize_weekly_ma_value(value: Any) -> bool | pd.NA:
+    if isinstance(value, (bool,)):
+        return value
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            scalar = item()
+        except Exception:
+            scalar = value
+        else:
+            if isinstance(scalar, bool):
+                return scalar
+    return pd.NA
 
 
 __all__ = [
