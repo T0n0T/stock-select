@@ -18,12 +18,14 @@ from stock_select.strategies import (
     DEFAULT_WEEKLY_MA_PERIODS,
     build_top_turnover_pool,
     compute_kdj,
+    compute_macd,
     compute_turnover_n,
     compute_weekly_ma_bull,
     compute_zx_lines,
     max_vol_not_bearish,
     run_b1_screen,
     run_b1_screen_with_stats,
+    run_b2_screen_with_stats,
     validate_method,
 )
 from stock_select.strategies.hcr import (
@@ -315,6 +317,47 @@ def _resolve_hcr_start_date(connection, *, end_date: str, trading_days: int) -> 
     return fetch_nth_latest_trade_date(connection, end_date=end_date, n=trading_days)
 
 
+def _validate_eod_pick_date_has_market_data(connection, *, market: pd.DataFrame, pick_date: str) -> None:
+    if not market.empty:
+        trade_dates = pd.to_datetime(market["trade_date"], errors="coerce")
+        if bool((trade_dates == pd.Timestamp(pick_date)).any()):
+            return
+    latest_trade_date = fetch_nth_latest_trade_date(connection, end_date=pick_date, n=1)
+    raise typer.BadParameter(
+        f"No end-of-day data found for pick_date {pick_date}. Latest available trade date is {latest_trade_date}."
+    )
+
+
+def _validate_eod_pick_date_has_prepared_data(
+    connection,
+    *,
+    prepared_by_symbol: dict[str, pd.DataFrame],
+    pick_date: str,
+) -> None:
+    target_date = pd.Timestamp(pick_date)
+    for frame in prepared_by_symbol.values():
+        if frame.empty or "trade_date" not in frame.columns:
+            continue
+        trade_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
+        if bool((trade_dates == target_date).any()):
+            return
+    latest_trade_date = fetch_nth_latest_trade_date(connection, end_date=pick_date, n=1)
+    raise typer.BadParameter(
+        f"No end-of-day data found for pick_date {pick_date}. Latest available trade date is {latest_trade_date}."
+    )
+
+
+def _prepared_cache_covers_pick_date(prepared_by_symbol: dict[str, pd.DataFrame], *, pick_date: str) -> bool:
+    target_date = pd.Timestamp(pick_date)
+    for frame in prepared_by_symbol.values():
+        if frame.empty or "trade_date" not in frame.columns:
+            continue
+        trade_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
+        if bool((trade_dates == target_date).any()):
+            return True
+    return False
+
+
 def _import_tushare_module():
     try:
         import tushare as ts
@@ -353,7 +396,6 @@ def _fetch_rt_k_snapshot(tushare_token: str, trade_date: str) -> pd.DataFrame:
         fallback_trade_time=fallback_trade_time,
     )
 
-
 def _prepare_screen_data(
     market: pd.DataFrame,
     *,
@@ -382,6 +424,10 @@ def _prepare_screen_data(
         zxdq, zxdkx = compute_zx_lines(group)
         group["zxdq"] = zxdq
         group["zxdkx"] = zxdkx
+        macd = compute_macd(group)
+        group["dif"] = macd["dif"]
+        group["dea"] = macd["dea"]
+        group["macd_hist"] = macd["macd_hist"]
         group["weekly_ma_bull"] = compute_weekly_ma_bull(group, ma_periods=DEFAULT_WEEKLY_MA_PERIODS)
         group["max_vol_not_bearish"] = max_vol_not_bearish(group, lookback=DEFAULT_MAX_VOL_LOOKBACK)
         prepared[code] = group
@@ -489,6 +535,20 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"selected={stats['selected']}",
         )
         return
+    if method == "b2":
+        reporter.emit(
+            "screen",
+            "breakdown "
+            f"total_symbols={stats['total_symbols']} "
+            f"eligible={stats['eligible']} "
+            f"fail_recent_j={stats['fail_recent_j']} "
+            f"fail_insufficient_history={stats['fail_insufficient_history']} "
+            f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
+            f"fail_weekly_ma={stats['fail_weekly_ma']} "
+            f"fail_macd_trend={stats['fail_macd_trend']} "
+            f"selected={stats['selected']}",
+        )
+        return
     reporter.emit(
         "screen",
         "breakdown "
@@ -500,7 +560,6 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
         f"fail_breakout={stats['fail_breakout']} "
         f"selected={stats['selected']}",
     )
-
 
 def _screen_impl(
     *,
@@ -531,7 +590,7 @@ def _screen_impl(
     prepared: dict[str, pd.DataFrame] | None = None
     start_date = (
         (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-        if method == "b1"
+        if method in {"b1", "b2"}
         else None
     )
     if not recompute and prepared_cache_path.exists():
@@ -545,9 +604,13 @@ def _screen_impl(
             cached_start_date = cache_payload.get("start_date")
             cached_end_date = cache_payload.get("end_date")
             if cached_pick_date == pick_date and cached_start_date == start_date and cached_end_date == pick_date:
-                prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
-                if reporter:
-                    reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+                cached_prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
+                if _prepared_cache_covers_pick_date(cached_prepared, pick_date=pick_date):
+                    prepared = cached_prepared
+                    if reporter:
+                        reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+                elif reporter:
+                    reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=stale_pick_date")
 
     if prepared is None:
         resolved_dsn = _resolve_cli_dsn(dsn)
@@ -575,7 +638,8 @@ def _screen_impl(
                 "screen",
                 f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
             )
-        if method == "b1":
+        _validate_eod_pick_date_has_market_data(connection, market=market, pick_date=pick_date)
+        if method in {"b1", "b2"}:
             prepared = _call_prepare_screen_data(market, reporter=reporter)
         else:
             prepared = _call_prepare_hcr_screen_data(market, reporter=reporter)
@@ -589,19 +653,26 @@ def _screen_impl(
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
-    if method == "b1":
+    if method in {"b1", "b2"}:
         if prepared is None:
             prepared = {}
         top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
         pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
-            reporter.emit("screen", "run b1 screen")
-        candidates, stats = run_b1_screen_with_stats(
-            prepared_for_pick,
-            pd.Timestamp(pick_date),
-            DEFAULT_B1_CONFIG,
-        )
+            reporter.emit("screen", f"run {method} screen")
+        if method == "b1":
+            candidates, stats = run_b1_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(pick_date),
+                DEFAULT_B1_CONFIG,
+            )
+        else:
+            candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(pick_date),
+                DEFAULT_B1_CONFIG,
+            )
     else:
         if reporter:
             reporter.emit("screen", "run hcr screen")
@@ -652,7 +723,7 @@ def _screen_intraday_impl(
         symbols=None,
     )
     overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
-    if method == "b1":
+    if method in {"b1", "b2"}:
         prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
     else:
         prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
@@ -675,17 +746,24 @@ def _screen_intraday_impl(
     if reporter:
         reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
-    if method == "b1":
+    if method in {"b1", "b2"}:
         top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
         pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
-            reporter.emit("screen", "run b1 screen")
-        candidates, stats = run_b1_screen_with_stats(
-            prepared_for_pick,
-            pd.Timestamp(trade_date),
-            DEFAULT_B1_CONFIG,
-        )
+            reporter.emit("screen", f"run {method} screen")
+        if method == "b1":
+            candidates, stats = run_b1_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(trade_date),
+                DEFAULT_B1_CONFIG,
+            )
+        else:
+            candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(trade_date),
+                DEFAULT_B1_CONFIG,
+            )
     else:
         if reporter:
             reporter.emit("screen", "run hcr screen")

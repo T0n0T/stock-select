@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from stock_select.charting import _prepare_daily_chart_frame, export_daily_chart
+from stock_select.strategies import compute_macd
 
 
 def _sample_daily_frame() -> pd.DataFrame:
@@ -23,7 +24,7 @@ def _sample_daily_frame() -> pd.DataFrame:
 def test_prepare_daily_chart_frame_sorts_and_shapes_columns() -> None:
     frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=0)
 
-    assert list(frame.columns) == ["Open", "High", "Low", "Close", "Volume", "zxdq", "zxdkx"]
+    assert {"Open", "High", "Low", "Close", "Volume", "zxdq", "zxdkx"}.issubset(frame.columns)
     assert isinstance(frame.index, pd.DatetimeIndex)
     assert frame.index.is_monotonic_increasing
     assert frame.index[0] == pd.Timestamp("2026-04-01")
@@ -45,3 +46,37 @@ def test_export_daily_chart_respects_bars_limit() -> None:
 
     assert len(frame) == 2
     assert list(frame.index) == [pd.Timestamp("2026-04-03"), pd.Timestamp("2026-04-06")]
+
+
+def test_prepare_daily_chart_frame_includes_macd_columns() -> None:
+    frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=0)
+
+    assert list(frame.columns) == [
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+        "zxdq",
+        "zxdkx",
+        "dif",
+        "dea",
+        "macd_hist",
+    ]
+    for column in ("dif", "dea", "macd_hist"):
+        assert frame[column].index.equals(frame.index)
+
+
+def test_prepare_daily_chart_frame_keeps_macd_series_aligned_after_bars_trim() -> None:
+    sample = _sample_daily_frame()
+    expected_tail = (
+        compute_macd(sample.sort_values("date").reset_index(drop=True))
+        .tail(2)
+        .reset_index(drop=True)
+    )
+    frame = _prepare_daily_chart_frame(_sample_daily_frame(), bars=2)
+
+    assert list(frame.index) == [pd.Timestamp("2026-04-03"), pd.Timestamp("2026-04-06")]
+    assert list(frame[["dif", "dea", "macd_hist"]].columns) == ["dif", "dea", "macd_hist"]
+    for column in ("dif", "dea", "macd_hist"):
+        assert list(frame[column].round(10)) == list(expected_tail[column].round(10))

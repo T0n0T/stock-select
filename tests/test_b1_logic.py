@@ -43,6 +43,7 @@ def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
         "build_top_turnover_pool",
         "compute_expanding_j_quantile",
         "compute_kdj",
+        "compute_macd",
         "compute_turnover_n",
         "compute_weekly_close",
         "compute_weekly_ma_bull",
@@ -186,6 +187,36 @@ def test_build_top_turnover_pool_keeps_only_top_codes_per_pick_date() -> None:
 
     assert pool[pd.Timestamp("2026-04-02")] == ["BBB.SZ", "CCC.SZ"]
     assert pool[pd.Timestamp("2026-04-03")] == ["AAA.SZ", "CCC.SZ"]
+
+
+def test_build_top_turnover_pool_skips_malformed_rows() -> None:
+    pool = build_top_turnover_pool(
+        {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": ["not-a-date", "2026-04-03"],
+                    "turnover_n": [100.0, "boom"],
+                }
+            ),
+            "AAB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-02"]),
+                }
+            ),
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
+                    "turnover_n": [300.0, 200.0],
+                }
+            ),
+        },
+        top_m=2,
+    )
+
+    assert pool == {
+        pd.Timestamp("2026-04-02"): ["BBB.SZ"],
+        pd.Timestamp("2026-04-03"): ["BBB.SZ"],
+    }
 
 
 def test_run_b1_screen_filters_symbols_on_pick_date() -> None:

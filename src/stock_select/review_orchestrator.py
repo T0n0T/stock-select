@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from stock_select.strategies import compute_macd
+
 REFERENCE_PROMPT_PATH = str(
     (Path(__file__).resolve().parents[2] / ".agents" / "skills" / "stock-select" / "references" / "prompt.md")
 )
@@ -13,6 +15,7 @@ REQUIRED_REASONING_FIELDS = (
     "position_reasoning",
     "volume_reasoning",
     "abnormal_move_reasoning",
+    "macd_reasoning",
     "signal_reasoning",
 )
 REQUIRED_SCORE_FIELDS = (
@@ -20,9 +23,17 @@ REQUIRED_SCORE_FIELDS = (
     "price_position",
     "volume_behavior",
     "previous_abnormal_move",
+    "macd_phase",
 )
 ALLOWED_SIGNAL_TYPES = {"trend_start", "rebound", "distribution_risk"}
 ALLOWED_VERDICTS = {"PASS", "WATCH", "FAIL"}
+BASELINE_SCORE_WEIGHTS = {
+    "trend_structure": 0.18,
+    "price_position": 0.18,
+    "volume_behavior": 0.24,
+    "previous_abnormal_move": 0.20,
+    "macd_phase": 0.20,
+}
 
 
 def build_review_payload(
@@ -119,11 +130,13 @@ def normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(comment, str) or not comment.strip():
         raise ValueError("Missing or empty required field: comment")
 
+    total_score = _compute_weighted_total(normalized_scores)
+
     return {
         **{field: str(payload[field]).strip() for field in REQUIRED_REASONING_FIELDS},
         "scores": normalized_scores,
         **normalized_scores,
-        "total_score": float(payload.get("total_score", 0.0)),
+        "total_score": total_score,
         "signal_type": signal_type,
         "verdict": verdict,
         "comment": comment.strip(),
@@ -152,7 +165,6 @@ def review_symbol_history(
     ma60 = close.rolling(window=60, min_periods=60).mean()
     latest_close = float(close.iloc[-1])
     latest_open = float(open_.iloc[-1])
-    latest_volume = float(volume.iloc[-1])
     recent_window = frame.tail(20)
     recent_close = recent_window["close"].astype(float)
     recent_open = recent_window["open"].astype(float)
@@ -166,13 +178,16 @@ def review_symbol_history(
     price_position = _score_price_position(close)
     volume_behavior = _score_volume_behavior(recent_open, recent_close, recent_volume)
     previous_abnormal_move = _score_previous_abnormal_move(close, volume)
+    macd_phase = _score_macd_phase(close)
 
-    total_score = round(
-        trend_structure * 0.20
-        + price_position * 0.20
-        + volume_behavior * 0.30
-        + previous_abnormal_move * 0.30,
-        2,
+    total_score = _compute_weighted_total(
+        {
+            "trend_structure": trend_structure,
+            "price_position": price_position,
+            "volume_behavior": volume_behavior,
+            "previous_abnormal_move": previous_abnormal_move,
+            "macd_phase": macd_phase,
+        }
     )
     signal_type = _infer_signal_type(
         latest_close=latest_close,
@@ -192,6 +207,7 @@ def review_symbol_history(
         "price_position": price_position,
         "volume_behavior": volume_behavior,
         "previous_abnormal_move": previous_abnormal_move,
+        "macd_phase": macd_phase,
         "total_score": total_score,
         "signal_type": signal_type,
         "verdict": verdict,
@@ -310,6 +326,42 @@ def _score_previous_abnormal_move(close: pd.Series, volume: pd.Series) -> float:
     if gain < 1.0:
         return 2.0
     return 1.0
+
+
+def _score_macd_phase(close: pd.Series) -> float:
+    if len(close) < 35:
+        return 3.0
+
+    macd = compute_macd(pd.DataFrame({"close": close}))
+    dif = macd["dif"].astype(float)
+    dea = macd["dea"].astype(float)
+    hist = macd["macd_hist"].astype(float)
+    recent_hist = hist.tail(5)
+
+    if len(recent_hist) < 5:
+        return 3.0
+
+    if hist.iloc[-1] < 0.0 and hist.iloc[-2] >= 0.0:
+        return 1.0
+    if dif.iloc[-1] < dea.iloc[-1]:
+        return 2.0
+
+    recent_cross = ((dif.shift(1) <= dea.shift(1)) & (dif > dea)).tail(5).any()
+    hist_increasing = bool((recent_hist.diff().iloc[1:] > 0.0).all())
+    hist_decreasing = bool((recent_hist.diff().iloc[1:] < 0.0).all())
+    lines_stretched = abs(float(dif.iloc[-1] - dea.iloc[-1])) > abs(float(hist.iloc[-1])) * 1.5
+
+    if recent_cross and hist_increasing and hist.iloc[-1] > 0.0:
+        return 5.0
+    if hist_increasing and lines_stretched and hist.iloc[-1] > 0.0:
+        return 4.0
+    if hist_decreasing and close.iloc[-1] >= close.tail(5).max():
+        return 3.0
+    return 3.0
+
+
+def _compute_weighted_total(scores: dict[str, float]) -> float:
+    return round(sum(float(scores[field]) * weight for field, weight in BASELINE_SCORE_WEIGHTS.items()), 2)
 
 
 def _infer_signal_type(

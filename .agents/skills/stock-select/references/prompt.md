@@ -2,7 +2,7 @@
 
 你的任务是：
 
-> 根据图表中的 **趋势、位置、量价、历史异动、追高风险**，判断该股票当前是否具备 **波段爆发潜力**。
+> 根据图表中的 **趋势、位置、量价、历史异动、MACD 阶段**，判断该股票当前是否具备 **波段爆发潜力**。
 
 这是一个 **纯视觉图形分析任务**。
 你必须像经验丰富的人类交易员一样，只依据图中真实可见的信息进行判断。
@@ -190,12 +190,54 @@
 
 ---
 
+## 5️⃣ MACD 阶段（MACD Phase）
+
+只根据图中可见的日线 MACD DIF/DEA 双线与量堆形态打分：
+
+### 5 分
+
+启动阶段：
+DIF 上穿 DEA，且量堆处于增加趋势
+量堆处于增加趋势
+更像刚启动而不是末端拉升
+
+### 4 分
+
+加强阶段：
+DIF/DEA 双线明显拉开
+量堆继续增加
+趋势强化特征清晰
+
+### 3 分
+
+背离阶段：
+DIF/DEA 双线钝化
+MACD 量堆开始减少
+出现 MACD 背离或强度衰减迹象
+
+### 2 分
+
+MACD 死叉：
+DIF 已下穿 DEA
+量堆走弱
+趋势延续性存疑
+
+### 1 分
+
+MACD 刚由正转负：
+量堆刚跌破零轴
+短线转弱信号明确
+优先视为风险而非机会
+
+---
+
 # 三、权重
 
-trend_structure：0.20
-price_position：0.20
-volume_behavior：0.30
-previous_abnormal_move：0.30
+trend_structure：0.18
+price_position：0.18
+volume_behavior：0.24
+previous_abnormal_move：0.20
+macd_phase：0.20
 
 ---
 
@@ -235,6 +277,7 @@ trend_reasoning
 position_reasoning
 volume_reasoning
 abnormal_move_reasoning
+macd_reasoning
 signal_reasoning
 
 ---
@@ -248,6 +291,7 @@ signal_reasoning
 * 周线趋势
 * 量价结构
 * 历史异动
+* MACD 阶段
 * 当前风险或空间
 
 禁止出现：
@@ -271,17 +315,19 @@ signal_reasoning
   "position_reasoning": "位置结构分析",
   "volume_reasoning": "量价行为分析",
   "abnormal_move_reasoning": "前期异动分析",
+  "macd_reasoning": "MACD阶段分析",
   "signal_reasoning": "信号类型判断依据",
   "scores": {
     "trend_structure": 4.0,
     "price_position": 3.0,
     "volume_behavior": 4.0,
-    "previous_abnormal_move": 3.0
+    "previous_abnormal_move": 3.0,
+    "macd_phase": 4.0
   },
-  "total_score": 3.5,
+  "total_score": 3.62,
   "signal_type": "rebound",
   "verdict": "WATCH",
-  "comment": "周线趋势修复中，量价尚可，前期异动存在但当前仍需等待进一步放量确认。"
+  "comment": "周线趋势修复中，量价尚可，前期异动存在，MACD 仍在修复但尚未进入强加速阶段，当前更适合观察确认。"
 }
 ```
 
@@ -291,19 +337,21 @@ signal_reasoning
 * `verdict` 只能是 `PASS`、`WATCH`、`FAIL`
 * 所有 reasoning 和 `comment` 必须是非空字符串
 
-# 九、输出格式（必须严格 JSON）
+# 十、输出格式（必须严格 JSON）
 
 {
 "trend_reasoning": "string",
 "position_reasoning": "string",
 "volume_reasoning": "string",
 "abnormal_move_reasoning": "string",
+"macd_reasoning": "string",
 "signal_reasoning": "string",
 "scores": {
 "trend_structure": 1,
 "price_position": 1,
 "volume_behavior": 1,
-"previous_abnormal_move": 1
+"previous_abnormal_move": 1,
+"macd_phase": 1
 },
 "total_score": 1.0,
 "signal_type": "trend_start",
@@ -313,7 +361,7 @@ signal_reasoning
 
 ---
 
-# 十、正确流程
+# 十一、正确流程
 
 Charts
 ↓
