@@ -8,6 +8,16 @@ from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, compute_expanding_j_qu
 
 B2_RECENT_J_LOOKBACK = 15
 B2_MACD_TREND_DAYS = 5
+_B2_REQUIRED_COLUMNS = (
+    "trade_date",
+    "J",
+    "zxdq",
+    "zxdkx",
+    "weekly_ma_bull",
+    "macd_hist",
+    "close",
+    "turnover_n",
+)
 
 
 def run_b2_screen(
@@ -40,6 +50,11 @@ def run_b2_screen_with_stats(
 
     for code, prepared in prepared_by_symbol.items():
         if prepared.empty:
+            continue
+
+        if _missing_required_columns(prepared):
+            stats["eligible"] += 1
+            stats["fail_insufficient_history"] += 1
             continue
 
         frame = prepared.copy()
@@ -105,6 +120,10 @@ def _recent_j_rule_hit(history: pd.DataFrame, config: dict[str, float]) -> bool:
 def _is_strictly_increasing(values: pd.Series) -> bool:
     diffs = values.astype(float).diff().iloc[1:]
     return bool((diffs > 0.0).all())
+
+
+def _missing_required_columns(frame: pd.DataFrame) -> set[str]:
+    return set(_B2_REQUIRED_COLUMNS) - set(frame.columns)
 
 
 __all__ = [

@@ -2407,6 +2407,127 @@ def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) ->
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
+def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ", "BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10", "2026-04-10"]),
+                "open": [10.0, 11.0],
+                "high": [10.5, 11.5],
+                "low": [9.9, 10.9],
+                "close": [10.4, 11.4],
+                "vol": [100.0, 120.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        return {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "turnover_n": [100.0],
+                    "J": [10.0],
+                    "zxdq": [10.5],
+                    "zxdkx": [10.2],
+                    "weekly_ma_bull": [True],
+                    "macd_hist": [0.10],
+                    "close": [10.6],
+                }
+            ),
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "turnover_n": [200.0],
+                    "J": [10.0],
+                    "zxdq": [11.5],
+                    "zxdkx": [11.2],
+                    "weekly_ma_bull": [True],
+                    "macd_hist": [0.20],
+                    "close": [11.6],
+                }
+            ),
+        }
+
+    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], top_m: int):
+        assert top_m == 5000
+        assert sorted(prepared_by_symbol) == ["AAA.SZ", "BBB.SZ"]
+        return {pd.Timestamp("2026-04-10"): ["BBB.SZ"]}
+
+    def fake_run_b2_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        assert pick_date == pd.Timestamp("2026-04-10")
+        assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
+        return (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 11.6, "turnover_n": 200.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_macd_trend": 0,
+                "selected": 1,
+            },
+        )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_pool = cli.build_top_turnover_pool
+    original_run = cli.run_b2_screen_with_stats
+
+    cli._connect = fake_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
+    cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
+    cli.build_top_turnover_pool = fake_pool  # type: ignore[assignment]
+    cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b2",
+                "--pick-date",
+                "2026-04-10",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.build_top_turnover_pool = original_pool  # type: ignore[assignment]
+        cli.run_b2_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "b2"
+    assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+
+
 def test_screen_reuses_existing_non_empty_candidate_file_without_recomputing(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"

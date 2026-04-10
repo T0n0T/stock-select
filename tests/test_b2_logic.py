@@ -72,3 +72,38 @@ def test_run_b2_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
 
     assert candidates == []
     assert stats["fail_recent_j"] == 1
+
+
+def test_run_b2_screen_with_stats_treats_missing_required_columns_as_insufficient_history() -> None:
+    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+    pick_date = pd.Timestamp("2026-04-10")
+
+    candidates, stats = run_b2_screen_with_stats(
+        {
+            "000001.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.date_range("2026-03-20", periods=16, freq="B"),
+                    "J": [40.0, 38.0, 36.0, 12.0, 25.0, 30.0, 28.0, 27.0, 26.0, 24.0, 23.0, 22.0, 21.0, 20.0, 19.0, 18.0],
+                    "zxdq": [10.5] * 16,
+                    "zxdkx": [10.0] * 16,
+                    "weekly_ma_bull": [True] * 16,
+                    "close": [10.8] * 16,
+                    # macd_hist and turnover_n intentionally missing
+                }
+            )
+        },
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert candidates == []
+    assert stats == {
+        "total_symbols": 1,
+        "eligible": 1,
+        "fail_recent_j": 0,
+        "fail_insufficient_history": 1,
+        "fail_zxdq_zxdkx": 0,
+        "fail_weekly_ma": 0,
+        "fail_macd_trend": 0,
+        "selected": 0,
+    }
