@@ -2636,6 +2636,116 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
+def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    trade_dates = pd.date_range("2026-03-20", periods=16, freq="B")
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        market_rows: list[dict[str, object]] = []
+        for code, base_close in (("AAA.SZ", 10.0), ("BBB.SZ", 12.0)):
+            for idx, trade_date in enumerate(trade_dates):
+                close = base_close + idx * 0.1
+                market_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": trade_date,
+                        "open": close - 0.1,
+                        "high": close + 0.2,
+                        "low": close - 0.2,
+                        "close": close,
+                        "vol": 100.0 + idx,
+                    }
+                )
+        return pd.DataFrame(market_rows)
+
+    def fake_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
+        assert window == 43
+        values = [100.0 + idx for idx in range(len(df))]
+        if df["ts_code"].iat[0] == "AAA.SZ":
+            values[3] = "boom"
+        else:
+            values = [200.0 + idx for idx in range(len(df))]
+        return pd.Series(values, index=df.index)
+
+    def fake_kdj(df: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "J": [40.0, 12.0, 25.0, 30.0, 28.0, 27.0, 26.0, 24.0, 23.0, 22.0, 21.0, 20.0, 19.0, 18.0, 17.0, 16.0]
+            },
+            index=df.index,
+        )
+
+    def fake_zx_lines(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+        close = df["close"].astype(float)
+        return pd.Series(close - 0.1, index=df.index), pd.Series(close - 0.4, index=df.index)
+
+    def fake_weekly_ma_bull(
+        df: pd.DataFrame,
+        ma_periods: tuple[int, int, int] = (20, 60, 120),
+    ) -> pd.Series:
+        return pd.Series([True] * len(df), index=df.index)
+
+    def fake_macd(
+        frame: pd.DataFrame,
+        *,
+        fast: int = 12,
+        slow: int = 26,
+        signal: int = 9,
+    ) -> pd.DataFrame:
+        base = 0.01 if frame["ts_code"].iat[0] == "AAA.SZ" else 0.02
+        hist = pd.Series([base + idx * 0.01 for idx in range(len(frame))], index=frame.index)
+        dif = hist + 0.05
+        dea = dif - hist
+        return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": hist}, index=frame.index)
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "DEFAULT_TOP_M", 1)
+    monkeypatch.setattr(cli, "compute_turnover_n", fake_turnover_n)
+    monkeypatch.setattr(cli, "compute_kdj", fake_kdj)
+    monkeypatch.setattr(cli, "compute_zx_lines", fake_zx_lines)
+    monkeypatch.setattr(cli, "compute_weekly_ma_bull", fake_weekly_ma_bull)
+    monkeypatch.setattr(
+        cli,
+        "max_vol_not_bearish",
+        lambda df, lookback: pd.Series([True] * len(df), index=df.index),
+    )
+    monkeypatch.setattr(cli, "compute_macd", fake_macd)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "b2"
+    assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+
+
 def test_screen_reuses_existing_non_empty_candidate_file_without_recomputing(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"

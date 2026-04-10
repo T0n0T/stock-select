@@ -27,6 +27,7 @@ _B2_NUMERIC_COLUMNS = (
     "close",
     "turnover_n",
 )
+_B2_CURRENT_DAY_NUMERIC_COLUMNS = ("zxdq", "zxdkx", "close", "turnover_n")
 
 
 def run_b2_screen(
@@ -68,6 +69,8 @@ def run_b2_screen_with_stats(
 
         frame = _normalize_b2_frame(prepared)
         invalid_trade_dates = frame["trade_date"].isna().any()
+        invalid_numeric_columns = _coerced_numeric_columns(prepared, frame)
+        invalid_weekly_ma = _coerced_weekly_ma_mask(prepared).any()
         if invalid_trade_dates:
             stats["eligible"] += 1
             stats["fail_insufficient_history"] += 1
@@ -84,6 +87,9 @@ def run_b2_screen_with_stats(
 
         if (
             len(history) < B2_RECENT_J_LOOKBACK
+            or "J" in invalid_numeric_columns
+            or any(column in invalid_numeric_columns for column in _B2_CURRENT_DAY_NUMERIC_COLUMNS)
+            or invalid_weekly_ma
             or recent_j.isna().any()
             or pd.isna(row["zxdq"])
             or pd.isna(row["zxdkx"])
@@ -170,6 +176,27 @@ def _normalize_weekly_ma_value(value: Any) -> bool | pd.NA:
             if isinstance(scalar, bool):
                 return scalar
     return pd.NA
+
+
+def _coerced_numeric_columns(original: pd.DataFrame, normalized: pd.DataFrame) -> set[str]:
+    invalid_columns: set[str] = set()
+    for column in _B2_NUMERIC_COLUMNS:
+        original_series = original[column]
+        normalized_series = normalized[column]
+        invalid_mask = original_series.notna() & normalized_series.isna()
+        if bool(invalid_mask.any()):
+            invalid_columns.add(column)
+    return invalid_columns
+
+
+def _coerced_weekly_ma_mask(original: pd.DataFrame) -> pd.Series:
+    original_series = original["weekly_ma_bull"]
+    normalized = pd.Series(
+        [_normalize_weekly_ma_value(value) for value in original_series],
+        index=original_series.index,
+        dtype="boolean",
+    )
+    return original_series.notna() & normalized.isna()
 
 
 __all__ = [
