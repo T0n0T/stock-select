@@ -287,11 +287,28 @@ def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
     runtime_root = tmp_path / "runtime"
     expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json"
 
-    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    def fake_screen_impl(**kwargs: object) -> Path:
+        assert kwargs["method"] == "b2"
+        payload = {
+            "pick_date": "2026-04-10",
+            "method": "b2",
+            "candidates": [
+                {
+                    "code": "000001.SZ",
+                    "pick_date": "2026-04-10",
+                    "close": 10.4,
+                    "turnover_n": 100.0,
+                }
+            ],
+        }
+        expected_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_path.write_text(json.dumps(payload), encoding="utf-8")
+        return expected_path
+
     monkeypatch.setattr(
         cli,
         "_screen_impl",
-        lambda **kwargs: expected_path,
+        fake_screen_impl,
         raising=False,
     )
 
@@ -312,6 +329,9 @@ def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
 
     assert result.exit_code == 0
     assert result.stdout.strip() == str(expected_path)
+    payload = json.loads(expected_path.read_text(encoding="utf-8"))
+    assert payload["method"] == "b2"
+    assert payload["candidates"][0]["code"] == "000001.SZ"
 
 
 def test_screen_hcr_uses_trade_date_lookback_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
