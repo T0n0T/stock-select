@@ -68,12 +68,13 @@ def run_b2_screen_with_stats(
 
         frame = _normalize_b2_frame(prepared)
         invalid_trade_dates = frame["trade_date"].isna().any()
+        if invalid_trade_dates:
+            stats["eligible"] += 1
+            stats["fail_insufficient_history"] += 1
+            continue
         history = frame.loc[frame["trade_date"] <= target_date].reset_index(drop=True)
         daily = history.loc[history["trade_date"] == target_date]
         if daily.empty:
-            if invalid_trade_dates:
-                stats["eligible"] += 1
-                stats["fail_insufficient_history"] += 1
             continue
 
         stats["eligible"] += 1
