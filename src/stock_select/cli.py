@@ -23,6 +23,7 @@ from stock_select.strategies import (
     compute_weekly_ma_bull,
     compute_zx_lines,
     max_vol_not_bearish,
+    prefilter_b2_non_macd,
     run_b1_screen,
     run_b1_screen_with_stats,
     run_b2_screen_with_stats,
@@ -59,6 +60,7 @@ from stock_select.review_orchestrator import (
 app = typer.Typer(help="stock-select standalone CLI")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
+B2_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
 
@@ -452,7 +454,8 @@ def _compute_period_macd_alignment(group: pd.DataFrame, *, period: str) -> pd.Da
     daily = group.copy()
     daily["trade_date"] = pd.to_datetime(daily["trade_date"])
     close = daily.set_index("trade_date")["close"].astype(float)
-    sampled_close = close.resample(period).last().dropna()
+    sampled_close = _sample_close_by_period(close, period=period)
+    sampled_close = sampled_close.dropna()
     sampled_frame = pd.DataFrame({"close": sampled_close.to_numpy()}, index=sampled_close.index)
     period_macd = compute_macd(sampled_frame)
     aligned = period_macd.reindex(close.index, method="ffill")
@@ -463,6 +466,46 @@ def _compute_period_macd_alignment(group: pd.DataFrame, *, period: str) -> pd.Da
         },
         index=group.index,
     )
+
+
+def _sample_close_by_period(close: pd.Series, *, period: str) -> pd.Series:
+    idx = close.index
+    if period == "W":
+        period_key = idx.isocalendar().year.astype(str) + "-" + idx.isocalendar().week.astype(str).str.zfill(2)
+    elif period == "ME":
+        period_key = idx.year.astype(str) + "-" + idx.month.astype(str).str.zfill(2)
+    else:
+        msg = f"Unsupported period alignment: {period}"
+        raise ValueError(msg)
+
+    grouped = pd.DataFrame({"trade_date": idx, "close": close.to_numpy(), "period_key": period_key}).groupby(
+        "period_key",
+        sort=False,
+        observed=True,
+    )
+    sampled = grouped.agg(trade_date=("trade_date", "last"), close=("close", "last"))
+    return pd.Series(sampled["close"].to_numpy(), index=pd.DatetimeIndex(sampled["trade_date"].to_numpy()))
+
+
+def _prepared_cache_mismatch_reason(
+    *,
+    cached_pick_date: object,
+    expected_pick_date: str,
+    cached_start_date: object,
+    expected_start_date: str | None,
+    cached_end_date: object,
+    expected_end_date: str,
+) -> str | None:
+    reasons: list[str] = []
+    if cached_pick_date != expected_pick_date:
+        reasons.append("stale_pick_date")
+    if cached_start_date != expected_start_date:
+        reasons.append("stale_start_date")
+    if cached_end_date != expected_end_date:
+        reasons.append("stale_end_date")
+    if not reasons:
+        return None
+    return ",".join(reasons)
 
 
 def _prepare_chart_data(history: pd.DataFrame) -> pd.DataFrame:
@@ -496,6 +539,58 @@ def _call_prepare_screen_data(
         if "unexpected keyword argument 'reporter'" not in str(exc):
             raise
         return _prepare_screen_data(market)
+
+
+def _prepare_b2_screen_data_for_pick(
+    connection,
+    *,
+    pick_date: str,
+    reporter: ProgressReporter | None = None,
+) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+    short_start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    if reporter:
+        reporter.emit("screen", f"fetch market window end_date={pick_date} mode=pool start_date={short_start_date}")
+    short_market = fetch_daily_window(
+        connection,
+        start_date=short_start_date,
+        end_date=pick_date,
+        symbols=None,
+    )
+    if reporter:
+        reporter.emit(
+            "screen",
+            f"fetched pool rows={len(short_market)} symbols={short_market['ts_code'].nunique() if not short_market.empty else 0}",
+        )
+    short_prepared = _call_prepare_screen_data(short_market, reporter=reporter)
+    top_turnover_pool = build_top_turnover_pool(short_prepared, top_m=DEFAULT_TOP_M)
+    pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
+    pooled_prepared = {code: short_prepared[code] for code in pool_codes if code in short_prepared}
+    if not pooled_prepared:
+        return short_prepared, {}
+    filtered_codes = prefilter_b2_non_macd(
+        pooled_prepared,
+        pd.Timestamp(pick_date),
+        DEFAULT_B1_CONFIG,
+    )
+    if not filtered_codes:
+        return short_prepared, {}
+    if reporter:
+        reporter.emit(
+            "screen",
+            f"fetch market window end_date={pick_date} mode=macd_warmup start_date={B2_PERIOD_MACD_WARMUP_START_DATE} symbols={len(filtered_codes)}",
+        )
+    warm_market = fetch_daily_window(
+        connection,
+        start_date=B2_PERIOD_MACD_WARMUP_START_DATE,
+        end_date=pick_date,
+        symbols=filtered_codes,
+    )
+    if reporter:
+        reporter.emit(
+            "screen",
+            f"fetched warmup rows={len(warm_market)} symbols={warm_market['ts_code'].nunique() if not warm_market.empty else 0}",
+        )
+    return short_prepared, _call_prepare_screen_data(warm_market, reporter=reporter)
 
 
 def _prepare_hcr_screen_data(
@@ -619,11 +714,13 @@ def _screen_impl(
 
     prepared_cache_path = _prepared_cache_path(runtime_root, pick_date, method)
     prepared: dict[str, pd.DataFrame] | None = None
-    start_date = (
-        (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-        if method in {"b1", "b2"}
-        else None
-    )
+    screen_prepared: dict[str, pd.DataFrame] | None = None
+    if method == "b1":
+        start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    elif method == "b2":
+        start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    else:
+        start_date = None
     if not recompute and prepared_cache_path.exists():
         try:
             cache_payload = _load_prepared_cache(prepared_cache_path)
@@ -638,10 +735,22 @@ def _screen_impl(
                 cached_prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
                 if _prepared_cache_covers_pick_date(cached_prepared, pick_date=pick_date):
                     prepared = cached_prepared
+                    screen_prepared = cached_prepared
                     if reporter:
                         reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
                 elif reporter:
                     reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=stale_pick_date")
+            elif reporter:
+                mismatch_reason = _prepared_cache_mismatch_reason(
+                    cached_pick_date=cached_pick_date,
+                    expected_pick_date=pick_date,
+                    cached_start_date=cached_start_date,
+                    expected_start_date=start_date,
+                    cached_end_date=cached_end_date,
+                    expected_end_date=pick_date,
+                )
+                if mismatch_reason:
+                    reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={mismatch_reason}")
 
     if prepared is None:
         resolved_dsn = _resolve_cli_dsn(dsn)
@@ -654,33 +763,42 @@ def _screen_impl(
                 end_date=pick_date,
                 trading_days=HCR_SCREEN_TRADING_DAYS,
             )
+        elif method == "b2":
+            screen_prepared, prepared = _prepare_b2_screen_data_for_pick(
+                connection,
+                pick_date=pick_date,
+                reporter=reporter,
+            )
+            start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
         elif start_date is None:
             start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-        if reporter:
-            reporter.emit("screen", "fetch market window")
-        market = fetch_daily_window(
-            connection,
-            start_date=start_date,
-            end_date=pick_date,
-            symbols=None,
-        )
-        if reporter:
-            reporter.emit(
-                "screen",
-                f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
+        if prepared is None:
+            if reporter:
+                reporter.emit("screen", "fetch market window")
+            market = fetch_daily_window(
+                connection,
+                start_date=start_date,
+                end_date=pick_date,
+                symbols=None,
             )
-        _validate_eod_pick_date_has_market_data(connection, market=market, pick_date=pick_date)
-        if method in {"b1", "b2"}:
-            prepared = _call_prepare_screen_data(market, reporter=reporter)
-        else:
-            prepared = _call_prepare_hcr_screen_data(market, reporter=reporter)
+            if reporter:
+                reporter.emit(
+                    "screen",
+                    f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
+                )
+            _validate_eod_pick_date_has_market_data(connection, market=market, pick_date=pick_date)
+            if method in {"b1", "b2"}:
+                prepared = _call_prepare_screen_data(market, reporter=reporter)
+                screen_prepared = prepared
+            else:
+                prepared = _call_prepare_hcr_screen_data(market, reporter=reporter)
         _write_prepared_cache(
             prepared_cache_path,
             method=method,
             pick_date=pick_date,
             start_date=start_date,
             end_date=pick_date,
-            prepared_by_symbol=prepared,
+            prepared_by_symbol=screen_prepared if screen_prepared is not None else prepared,
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")

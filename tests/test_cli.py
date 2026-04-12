@@ -2756,6 +2756,466 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
+def test_screen_b2_uses_longer_warmup_start_date_for_period_macd(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    fetch_calls: list[dict[str, object]] = []
+    trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        fetch_calls.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "symbols": None if symbols is None else list(symbols),
+            }
+        )
+        return pd.DataFrame(
+            {
+                "ts_code": ["BBB.SZ"] * len(trade_dates),
+                "trade_date": trade_dates,
+                "open": [10.0] * len(trade_dates),
+                "high": [10.2] * len(trade_dates),
+                "low": [10.0 + 0.02 * idx - 0.1 for idx in range(len(trade_dates))],
+                "close": [10.0 + 0.02 * idx for idx in range(len(trade_dates))],
+                "vol": [100.0 + idx for idx in range(len(trade_dates) - 1)] + [100.0 + len(trade_dates) - 2],
+            }
+        )
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "prefilter_b2_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(
+        cli,
+        "run_b2_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 200.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
+                "selected": 1,
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fetch_calls[-1] == {"start_date": "2023-01-01", "end_date": "2026-04-10", "symbols": ["BBB.SZ"]}
+
+
+def test_screen_b2_uses_two_phase_fetch_and_only_warms_pool_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+    fetch_calls: list[dict[str, object]] = []
+    prepared_calls: list[list[str]] = []
+    run_inputs: dict[str, pd.DataFrame] = {}
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def _market_frame(symbols: list[str]) -> pd.DataFrame:
+        market_rows: list[dict[str, object]] = []
+        for code, base in (("AAA.SZ", 10.0), ("BBB.SZ", 20.0), ("CCC.SZ", 30.0)):
+            if code not in symbols:
+                continue
+            for idx, trade_date in enumerate(trade_dates):
+                close = base + idx * 0.05
+                market_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": trade_date,
+                        "open": close - 0.1,
+                        "high": close + 0.2,
+                        "low": close - 0.2,
+                        "close": close,
+                        "vol": 100.0 + idx,
+                    }
+                )
+        return pd.DataFrame(market_rows)
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        request_symbols = ["AAA.SZ", "BBB.SZ", "CCC.SZ"] if symbols is None else list(symbols)
+        fetch_calls.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "symbols": None if symbols is None else list(symbols),
+            }
+        )
+        return _market_frame(request_symbols)
+
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        codes = sorted(market["ts_code"].unique().tolist())
+        prepared_calls.append(codes)
+        prepared: dict[str, pd.DataFrame] = {}
+        for code, group in market.groupby("ts_code"):
+            group = group.sort_values("trade_date").reset_index(drop=True).copy()
+            group["turnover_n"] = 100.0 if code != "BBB.SZ" else 999.0
+            group["J"] = 10.0
+            group["zxdq"] = group["close"] + 0.3
+            group["zxdkx"] = group["close"] - 0.1
+            group["low"] = group["close"] - 0.2
+            group["volume"] = group["vol"]
+            group["ma25"] = group["close"]
+            group["ma60"] = group["close"]
+            group["ma144"] = group["close"]
+            group["dif"] = 0.12
+            group["dea"] = 0.08
+            group["dif_w"] = 0.20
+            group["dea_w"] = 0.15
+            group["dif_m"] = 0.30
+            group["dea_m"] = 0.22
+            if code == "BBB.SZ":
+                group.loc[group.index[-1], "volume"] = group.loc[group.index[-2], "volume"] - 1.0
+                group.loc[group.index[-1], "vol"] = group.loc[group.index[-1], "volume"]
+            prepared[code] = group
+        return prepared
+
+    pool_calls: list[list[str]] = []
+
+    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+        pool_calls.append(sorted(prepared_by_symbol))
+        return {pd.Timestamp("2026-04-10"): ["BBB.SZ"]}
+
+    def fake_run_b2_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        run_inputs.update(prepared_by_symbol)
+        return (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
+                "selected": 1,
+            },
+        )
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "build_top_turnover_pool", fake_pool)
+    monkeypatch.setattr(cli, "run_b2_screen_with_stats", fake_run_b2_screen_with_stats)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fetch_calls == [
+        {"start_date": "2025-04-09", "end_date": "2026-04-10", "symbols": None},
+        {"start_date": "2023-01-01", "end_date": "2026-04-10", "symbols": ["BBB.SZ"]},
+    ]
+    assert prepared_calls == [["AAA.SZ", "BBB.SZ", "CCC.SZ"], ["BBB.SZ"]]
+    assert pool_calls == [["AAA.SZ", "BBB.SZ", "CCC.SZ"], ["BBB.SZ"]]
+    assert sorted(run_inputs) == ["BBB.SZ"]
+
+
+def test_screen_b2_phase_one_prefilters_non_macd_rules_before_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+    fetch_calls: list[dict[str, object]] = []
+    warmup_run_inputs: dict[str, pd.DataFrame] = {}
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def _market_frame(symbols: list[str]) -> pd.DataFrame:
+        market_rows: list[dict[str, object]] = []
+        for code, base in (("AAA.SZ", 10.0), ("BBB.SZ", 20.0), ("CCC.SZ", 30.0)):
+            if code not in symbols:
+                continue
+            for idx, trade_date in enumerate(trade_dates):
+                close = base + idx * 0.05
+                market_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": trade_date,
+                        "open": close - 0.1,
+                        "high": close + 0.2,
+                        "low": close - 0.2,
+                        "close": close,
+                        "vol": 100.0 + idx,
+                    }
+                )
+        return pd.DataFrame(market_rows)
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        request_symbols = ["AAA.SZ", "BBB.SZ", "CCC.SZ"] if symbols is None else list(symbols)
+        fetch_calls.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "symbols": None if symbols is None else list(symbols),
+            }
+        )
+        return _market_frame(request_symbols)
+
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        prepared: dict[str, pd.DataFrame] = {}
+        for code, group in market.groupby("ts_code"):
+            group = group.sort_values("trade_date").reset_index(drop=True).copy()
+            group["turnover_n"] = 999.0
+            group["J"] = 10.0
+            group["zxdq"] = group["close"] + 0.3
+            group["zxdkx"] = group["close"] - 0.1
+            group["low"] = group["close"] - 0.2
+            group["volume"] = group["vol"]
+            group["ma25"] = group["close"]
+            group["ma60"] = group["close"]
+            group["ma144"] = group["close"]
+            group["dif"] = 0.12
+            group["dea"] = 0.08
+            group["dif_w"] = 0.20
+            group["dea_w"] = 0.15
+            group["dif_m"] = 0.30
+            group["dea_m"] = 0.22
+            if code == "AAA.SZ":
+                group.loc[group.index[-1], "zxdq"] = group.loc[group.index[-1], "zxdkx"] - 0.01
+            elif code == "BBB.SZ":
+                group.loc[group.index[-1], "volume"] = group.loc[group.index[-2], "volume"] - 1.0
+                group.loc[group.index[-1], "vol"] = group.loc[group.index[-1], "volume"]
+            elif code == "CCC.SZ":
+                group.loc[group.index[-1], "volume"] = group.loc[group.index[-2], "volume"] + 1.0
+                group.loc[group.index[-1], "vol"] = group.loc[group.index[-1], "volume"]
+            prepared[code] = group
+        return prepared
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(
+        cli,
+        "run_b2_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            warmup_run_inputs.update(prepared_by_symbol) or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
+            {
+                "total_symbols": len(prepared_by_symbol),
+                "eligible": len(prepared_by_symbol),
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
+                "selected": 1,
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fetch_calls == [
+        {"start_date": "2025-04-09", "end_date": "2026-04-10", "symbols": None},
+        {"start_date": "2023-01-01", "end_date": "2026-04-10", "symbols": ["BBB.SZ"]},
+    ]
+    assert sorted(warmup_run_inputs) == ["BBB.SZ"]
+
+
+def test_screen_b2_writes_prepared_cache_before_prefilter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        request_symbols = ["AAA.SZ", "BBB.SZ", "CCC.SZ"] if symbols is None else list(symbols)
+        market_rows: list[dict[str, object]] = []
+        for code, base in (("AAA.SZ", 10.0), ("BBB.SZ", 20.0), ("CCC.SZ", 30.0)):
+            if code not in request_symbols:
+                continue
+            for idx, trade_date in enumerate(trade_dates):
+                close = base + idx * 0.05
+                market_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": trade_date,
+                        "open": close - 0.1,
+                        "high": close + 0.2,
+                        "low": close - 0.2,
+                        "close": close,
+                        "vol": 100.0 + idx,
+                    }
+                )
+        return pd.DataFrame(market_rows)
+
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        prepared: dict[str, pd.DataFrame] = {}
+        for code, group in market.groupby("ts_code"):
+            group = group.sort_values("trade_date").reset_index(drop=True).copy()
+            group["turnover_n"] = 999.0
+            group["J"] = 10.0
+            group["zxdq"] = group["close"] + 0.3
+            group["zxdkx"] = group["close"] - 0.1
+            group["low"] = group["close"] - 0.2
+            group["volume"] = group["vol"]
+            group["ma25"] = group["close"]
+            group["ma60"] = group["close"]
+            group["ma144"] = group["close"]
+            group["dif"] = 0.12
+            group["dea"] = 0.08
+            group["dif_w"] = 0.20
+            group["dea_w"] = 0.15
+            group["dif_m"] = 0.30
+            group["dea_m"] = 0.22
+            prepared[code] = group
+        return prepared
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "prefilter_b2_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(
+        cli,
+        "run_b2_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
+            {
+                "total_symbols": len(prepared_by_symbol),
+                "eligible": len(prepared_by_symbol),
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
+                "selected": 1,
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    cache_payload = cli._load_prepared_cache(runtime_root / "prepared" / f"{_eod_key('2026-04-10', 'b2')}.pkl")
+    assert cache_payload["start_date"] == "2025-04-09"
+    assert sorted(cache_payload["prepared_by_symbol"]) == ["AAA.SZ", "BBB.SZ", "CCC.SZ"]
+
+
 def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3357,6 +3817,60 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
     assert result.exit_code == 0
     assert "reason=stale_pick_date" in result.stderr
     assert "[screen] fetch market window" in result.stderr
+
+
+def test_compute_period_macd_alignment_uses_current_week_close_on_pick_date() -> None:
+    trade_dates = pd.bdate_range("2026-03-23", "2026-04-10")
+    close = [
+        10.0,
+        10.1,
+        10.2,
+        10.3,
+        11.0,
+        11.1,
+        11.2,
+        11.3,
+        11.4,
+        12.8,
+        12.9,
+        13.0,
+        13.1,
+        13.2,
+        15.0,
+    ]
+    frame = pd.DataFrame({"trade_date": trade_dates, "close": close})
+
+    aligned = cli._compute_period_macd_alignment(frame, period="W")
+    sampled = pd.DataFrame(
+        {"close": [11.0, 12.8, 15.0]},
+        index=pd.to_datetime(["2026-03-27", "2026-04-03", "2026-04-10"]),
+    )
+    expected = cli.compute_macd(sampled)
+
+    assert aligned.iloc[-1]["dif"] == pytest.approx(expected.iloc[-1]["dif"])
+    assert aligned.iloc[-1]["dea"] == pytest.approx(expected.iloc[-1]["dea"])
+    assert aligned.iloc[-1]["dif"] != pytest.approx(expected.iloc[-2]["dif"])
+    assert aligned.iloc[-1]["dea"] != pytest.approx(expected.iloc[-2]["dea"])
+
+
+def test_compute_period_macd_alignment_uses_current_month_close_on_pick_date() -> None:
+    trade_dates = pd.bdate_range("2026-02-23", "2026-04-10")
+    close = [20.0 + idx * 0.1 for idx in range(len(trade_dates))]
+    close[4] = 21.5
+    close[-1] = 30.0
+    frame = pd.DataFrame({"trade_date": trade_dates, "close": close})
+
+    aligned = cli._compute_period_macd_alignment(frame, period="ME")
+    sampled = pd.DataFrame(
+        {"close": [21.5, 22.6, 30.0]},
+        index=pd.to_datetime(["2026-02-27", "2026-03-31", "2026-04-10"]),
+    )
+    expected = cli.compute_macd(sampled)
+
+    assert aligned.iloc[-1]["dif"] == pytest.approx(expected.iloc[-1]["dif"])
+    assert aligned.iloc[-1]["dea"] == pytest.approx(expected.iloc[-1]["dea"])
+    assert aligned.iloc[-1]["dif"] != pytest.approx(expected.iloc[-2]["dif"])
+    assert aligned.iloc[-1]["dea"] != pytest.approx(expected.iloc[-2]["dea"])
 
 
 def test_screen_intraday_rejects_pick_date(tmp_path: Path) -> None:

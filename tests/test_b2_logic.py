@@ -22,6 +22,16 @@ def _load_run_b2_screen_with_stats():
     return module.run_b2_screen_with_stats
 
 
+def _load_prefilter_b2_non_macd():
+    try:
+        module = importlib.import_module("stock_select.strategies.b2")
+    except ModuleNotFoundError as exc:
+        if exc.name != "stock_select.strategies.b2":
+            raise
+        pytest.fail(f"Missing b2 strategy module: {exc}")
+    return module.prefilter_b2_non_macd
+
+
 def _base_b2_frame() -> pd.DataFrame:
     trade_dates = pd.date_range("2025-09-01", periods=160, freq="B")
     close = pd.Series([10.0 + 0.02 * idx for idx in range(159)] + [12.98])
@@ -70,6 +80,29 @@ def test_run_b2_screen_with_stats_passes_when_recent_j_hit_and_new_formula_all_h
 
     assert [item["code"] for item in candidates] == ["000001.SZ"]
     assert stats["selected"] == 1
+
+
+def test_prefilter_b2_non_macd_keeps_only_symbols_passing_non_macd_rules() -> None:
+    prefilter_b2_non_macd = _load_prefilter_b2_non_macd()
+    pick_date = pd.Timestamp("2026-04-10")
+    passing = _base_b2_frame()
+    fail_zxdq = _base_b2_frame()
+    fail_zxdq.loc[fail_zxdq.index[-1], "zxdq"] = fail_zxdq.loc[fail_zxdq.index[-1], "zxdkx"] - 0.01
+    fail_volume = _base_b2_frame()
+    fail_volume.loc[fail_volume.index[-1], "volume"] = fail_volume.loc[fail_volume.index[-2], "volume"] + 1.0
+    fail_volume.loc[fail_volume.index[-1], "vol"] = fail_volume.loc[fail_volume.index[-1], "volume"]
+
+    selected = prefilter_b2_non_macd(
+        {
+            "PASS.SZ": passing,
+            "FAILZXDQ.SZ": fail_zxdq,
+            "FAILVOL.SZ": fail_volume,
+        },
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert selected == ["PASS.SZ"]
 
 
 def test_run_b2_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:

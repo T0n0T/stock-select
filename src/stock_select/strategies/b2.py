@@ -54,6 +54,51 @@ def run_b2_screen(
     return results
 
 
+def prefilter_b2_non_macd(
+    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    pick_date: pd.Timestamp,
+    config: dict[str, float] | None = None,
+) -> list[str]:
+    screen_config = DEFAULT_B1_CONFIG if config is None else config
+    target_date = pd.Timestamp(pick_date)
+    selected: list[str] = []
+
+    for code, prepared in prepared_by_symbol.items():
+        if prepared.empty or _missing_required_columns(prepared):
+            continue
+
+        frame = _normalize_b2_frame(prepared)
+        if _has_invalid_required_inputs(prepared, frame):
+            continue
+
+        history = frame.loc[frame["trade_date"] <= target_date].reset_index(drop=True)
+        daily = history.loc[history["trade_date"] == target_date]
+        if daily.empty:
+            continue
+
+        row = daily.iloc[-1]
+        if not _has_minimum_history(history):
+            continue
+        if not _recent_j_rule_hit(history, screen_config):
+            continue
+        if not (float(row["zxdq"]) > float(row["zxdkx"])):
+            continue
+        if not _support_valid(row):
+            continue
+        if not _volume_shrink(history):
+            continue
+        if not _ma60_up(history):
+            continue
+        if not _ma144_distance_ok(row):
+            continue
+        if not _macd_red(row["dif"], row["dea"]):
+            continue
+
+        selected.append(code)
+
+    return selected
+
+
 def run_b2_screen_with_stats(
     prepared_by_symbol: Mapping[str, pd.DataFrame],
     pick_date: pd.Timestamp,
@@ -268,6 +313,7 @@ def _ma144_distance_ok(row: pd.Series) -> bool:
 __all__ = [
     "B2_MACD_TREND_DAYS",
     "B2_RECENT_J_LOOKBACK",
+    "prefilter_b2_non_macd",
     "run_b2_screen",
     "run_b2_screen_with_stats",
 ]
