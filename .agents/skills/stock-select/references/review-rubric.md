@@ -24,6 +24,10 @@ Assess whether advancing legs expand in volume, pullbacks contract in volume, an
 
 Assess whether the chart shows an earlier institutional-style accumulation burst, breakout candle, or abnormal move that still supports the current setup without already exhausting the move.
 
+### MACD Phase
+
+Assess the visible daily `MACD` panel only. Judge whether `dif` and `dea` are crossing up into expansion, widening constructively, flattening with weakening histogram bars, or already rolling over into a bearish phase.
+
 ## Signal Type
 
 Choose exactly one:
@@ -43,13 +47,20 @@ Choose exactly one:
 
 Return structured JSON with:
 
+- `trend_reasoning`
+- `position_reasoning`
+- `volume_reasoning`
+- `abnormal_move_reasoning`
+- `macd_reasoning`
+- `signal_reasoning`
 - `trend_structure`
 - `price_position`
 - `volume_behavior`
 - `previous_abnormal_move`
+- `macd_phase`
 - `signal_type`
 - `verdict`
 - `total_score`
 - `comment`
 
-The final `comment` should be one concise Chinese trader-style sentence covering trend, volume-price structure, prior abnormal move, and present risk or upside room.
+The final `comment` should be one concise Chinese trader-style sentence covering trend, volume-price structure, prior abnormal move, `MACD` phase, and present risk or upside room.

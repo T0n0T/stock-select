@@ -2548,9 +2548,18 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
                     "J": [10.0],
                     "zxdq": [10.5],
                     "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "macd_hist": [0.10],
+                    "low": [10.3],
                     "close": [10.6],
+                    "volume": [100.0],
+                    "ma25": [10.5],
+                    "ma60": [10.4],
+                    "ma144": [9.6],
+                    "dif": [0.11],
+                    "dea": [0.08],
+                    "dif_w": [0.20],
+                    "dea_w": [0.15],
+                    "dif_m": [0.30],
+                    "dea_m": [0.22],
                 }
             ),
             "BBB.SZ": pd.DataFrame(
@@ -2560,9 +2569,18 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
                     "J": [10.0],
                     "zxdq": [11.5],
                     "zxdkx": [11.2],
-                    "weekly_ma_bull": [True],
-                    "macd_hist": [0.20],
+                    "low": [11.3],
                     "close": [11.6],
+                    "volume": [120.0],
+                    "ma25": [11.5],
+                    "ma60": [11.4],
+                    "ma144": [10.6],
+                    "dif": [0.21],
+                    "dea": [0.18],
+                    "dif_w": [0.30],
+                    "dea_w": [0.25],
+                    "dif_m": [0.40],
+                    "dea_m": [0.32],
                 }
             ),
         }
@@ -2587,9 +2605,14 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
                 "eligible": 1,
                 "fail_recent_j": 0,
                 "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
                 "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_macd_trend": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
                 "selected": 1,
             },
         )
@@ -2640,10 +2663,10 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    trade_dates = pd.date_range("2026-03-20", periods=16, freq="B")
+    trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
     closes_by_code = {
-        "AAA.SZ": [10 + 0.03 * (idx**2) for idx in range(len(trade_dates))],
-        "BBB.SZ": [12 + 0.03 * (idx**2) for idx in range(len(trade_dates))],
+        "AAA.SZ": [10.0 + 0.02 * idx for idx in range(len(trade_dates) - 1)] + [12.90],
+        "BBB.SZ": [11.0 + 0.02 * idx for idx in range(len(trade_dates) - 1)] + [14.30],
     }
 
     def fake_connect(_: str) -> object:
@@ -2666,9 +2689,9 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
                         "trade_date": trade_date,
                         "open": close - 0.1,
                         "high": close + 0.2,
-                        "low": close - 0.2,
+                        "low": close - 0.2 if idx < len(trade_dates) - 1 else close - 0.30,
                         "close": close,
-                        "vol": 100.0 + idx,
+                        "vol": 100.0 + idx if idx < len(trade_dates) - 1 else 50.0,
                     }
                 )
         return pd.DataFrame(market_rows)
@@ -2681,21 +2704,28 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
     def fake_kdj(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(
             {
-                "J": [40.0, 12.0, 25.0, 30.0, 28.0, 27.0, 26.0, 24.0, 23.0, 22.0, 21.0, 20.0, 19.0, 18.0, 17.0, 16.0]
+                "J": [45.0] * (len(df) - 15) + [28.0, 26.0, 24.0, 22.0, 20.0, 18.0, 16.0, 14.0, 19.0, 21.0, 23.0, 25.0, 24.0, 22.0, 20.0]
             },
             index=df.index,
         )
 
     def fake_zx_lines(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         close = df["close"].astype(float)
-        return pd.Series(close - 0.1, index=df.index), pd.Series(close - 0.4, index=df.index)
+        return pd.Series(close + 0.3, index=df.index), pd.Series(close - 0.1, index=df.index)
 
-    def fake_weekly_ma_bull(
-        df: pd.DataFrame,
-        ma_periods: tuple[int, int, int] = (20, 60, 120),
-    ) -> pd.Series:
-        assert ma_periods == (10, 20, 30)
-        return pd.Series([True] * len(df), index=df.index)
+    def fake_macd(
+        frame: pd.DataFrame,
+        *,
+        fast: int = 12,
+        slow: int = 26,
+        signal: int = 9,
+    ) -> pd.DataFrame:
+        dif = pd.Series([0.04] * len(frame), index=frame.index)
+        dea = pd.Series([0.03] * len(frame), index=frame.index)
+        dif.iloc[-1] = 0.12
+        dea.iloc[-1] = 0.08
+        hist = dif - dea
+        return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": hist}, index=frame.index)
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -2703,12 +2733,7 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
     monkeypatch.setattr(cli, "compute_turnover_n", fake_turnover_n)
     monkeypatch.setattr(cli, "compute_kdj", fake_kdj)
     monkeypatch.setattr(cli, "compute_zx_lines", fake_zx_lines)
-    monkeypatch.setattr(cli, "compute_weekly_ma_bull", fake_weekly_ma_bull)
-    monkeypatch.setattr(
-        cli,
-        "max_vol_not_bearish",
-        lambda df, lookback: pd.Series([True] * len(df), index=df.index),
-    )
+    monkeypatch.setattr(cli, "compute_macd", fake_macd)
 
     result = runner.invoke(
         app,
@@ -2737,7 +2762,7 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    trade_dates = pd.date_range("2026-03-20", periods=16, freq="B")
+    trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
 
     def fake_connect(_: str) -> object:
         return object()
@@ -2753,15 +2778,17 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
         for code, base_close in (("AAA.SZ", 10.0), ("BBB.SZ", 12.0)):
             for idx, trade_date in enumerate(trade_dates):
                 close = base_close + idx * 0.1
+                if code == "BBB.SZ" and idx == len(trade_dates) - 1:
+                    close = 26.8
                 market_rows.append(
                     {
                         "ts_code": code,
                         "trade_date": trade_date,
                         "open": close - 0.1,
                         "high": close + 0.2,
-                        "low": close - 0.2,
+                        "low": close - 0.2 if idx < len(trade_dates) - 1 else close - 0.30,
                         "close": close,
-                        "vol": 100.0 + idx,
+                        "vol": 100.0 + idx if idx < len(trade_dates) - 1 else 50.0,
                     }
                 )
         return pd.DataFrame(market_rows)
@@ -2778,20 +2805,14 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
     def fake_kdj(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(
             {
-                "J": [40.0, 12.0, 25.0, 30.0, 28.0, 27.0, 26.0, 24.0, 23.0, 22.0, 21.0, 20.0, 19.0, 18.0, 17.0, 16.0]
+                "J": [45.0] * (len(df) - 15) + [28.0, 26.0, 24.0, 22.0, 20.0, 18.0, 16.0, 14.0, 19.0, 21.0, 23.0, 25.0, 24.0, 22.0, 20.0]
             },
             index=df.index,
         )
 
     def fake_zx_lines(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         close = df["close"].astype(float)
-        return pd.Series(close - 0.1, index=df.index), pd.Series(close - 0.4, index=df.index)
-
-    def fake_weekly_ma_bull(
-        df: pd.DataFrame,
-        ma_periods: tuple[int, int, int] = (20, 60, 120),
-    ) -> pd.Series:
-        return pd.Series([True] * len(df), index=df.index)
+        return pd.Series(close + 0.3, index=df.index), pd.Series(close - 0.1, index=df.index)
 
     def fake_macd(
         frame: pd.DataFrame,
@@ -2800,10 +2821,11 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
         slow: int = 26,
         signal: int = 9,
     ) -> pd.DataFrame:
-        base = 0.01 if frame["ts_code"].iat[0] == "AAA.SZ" else 0.02
-        hist = pd.Series([base + idx * 0.01 for idx in range(len(frame))], index=frame.index)
-        dif = hist + 0.05
-        dea = dif - hist
+        dif = pd.Series([0.04] * len(frame), index=frame.index)
+        dea = pd.Series([0.03] * len(frame), index=frame.index)
+        dif.iloc[-1] = 0.12
+        dea.iloc[-1] = 0.08
+        hist = dif - dea
         return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": hist}, index=frame.index)
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
@@ -2812,12 +2834,6 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
     monkeypatch.setattr(cli, "compute_turnover_n", fake_turnover_n)
     monkeypatch.setattr(cli, "compute_kdj", fake_kdj)
     monkeypatch.setattr(cli, "compute_zx_lines", fake_zx_lines)
-    monkeypatch.setattr(cli, "compute_weekly_ma_bull", fake_weekly_ma_bull)
-    monkeypatch.setattr(
-        cli,
-        "max_vol_not_bearish",
-        lambda df, lookback: pd.Series([True] * len(df), index=df.index),
-    )
     monkeypatch.setattr(cli, "compute_macd", fake_macd)
 
     result = runner.invoke(
@@ -3239,9 +3255,18 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
                     "J": [10.0],
                     "zxdq": [10.5],
                     "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "macd_hist": [0.1],
+                    "low": [10.3],
                     "close": [10.6],
+                    "volume": [100.0],
+                    "ma25": [10.5],
+                    "ma60": [10.4],
+                    "ma144": [9.6],
+                    "dif": [0.11],
+                    "dea": [0.08],
+                    "dif_w": [0.20],
+                    "dea_w": [0.15],
+                    "dif_m": [0.30],
+                    "dea_m": [0.22],
                 }
             )
         },
@@ -3274,9 +3299,18 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
                     "J": [10.0],
                     "zxdq": [10.5],
                     "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "macd_hist": [0.1],
+                    "low": [10.3],
                     "close": [10.6],
+                    "volume": [100.0],
+                    "ma25": [10.5],
+                    "ma60": [10.4],
+                    "ma144": [9.6],
+                    "dif": [0.11],
+                    "dea": [0.08],
+                    "dif_w": [0.20],
+                    "dea_w": [0.15],
+                    "dif_m": [0.30],
+                    "dea_m": [0.22],
                 }
             )
         },
@@ -3292,9 +3326,14 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
                 "eligible": 1,
                 "fail_recent_j": 0,
                 "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
                 "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_macd_trend": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
                 "selected": 1,
             },
         ),

@@ -10,7 +10,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 ## Required Workflow
 
 - Always require an explicit built-in method.
-- Built-in methods are `b1` and `hcr`.
+- Built-in methods are `b1`, `b2`, and `hcr`.
 - Do not use `stock-cache read` CLI as the primary data source.
 - Read PostgreSQL tables directly.
 - Resolve DSN from `--dsn` or `POSTGRES_DSN` before any database-backed step.
@@ -64,7 +64,7 @@ Review and merge instructions must follow the active mode's runtime key:
 1. Resolve the active mode and CLI arguments.
 2. For end-of-day runs, resolve `pick_date` and query PostgreSQL market data needed for the requested screening method.
 3. For intraday runs, resolve the active trade date, fetch PostgreSQL confirmed history through the previous trade date, then overlay Tushare `rt_k`.
-4. Run deterministic `b1` or `hcr` screening and write candidate outputs.
+4. Run deterministic `b1`, `b2`, or `hcr` screening and write candidate outputs.
 5. Render daily chart PNG files for each candidate.
 6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
 7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and `references/prompt.md`.
@@ -90,11 +90,13 @@ When running chart review for quality-first selection:
    - `position_reasoning`
    - `volume_reasoning`
    - `abnormal_move_reasoning`
+   - `macd_reasoning`
    - `signal_reasoning`
    - `scores.trend_structure`
    - `scores.price_position`
    - `scores.volume_behavior`
    - `scores.previous_abnormal_move`
+   - `scores.macd_phase`
    - `total_score`
    - `signal_type`
    - `verdict`
@@ -119,12 +121,14 @@ Before the main agent treats any subagent output as mergeable, it should verify 
    - `position_reasoning`
    - `volume_reasoning`
    - `abnormal_move_reasoning`
+   - `macd_reasoning`
    - `signal_reasoning`
 3. The JSON includes all required score fields under `scores`:
    - `trend_structure`
    - `price_position`
    - `volume_behavior`
    - `previous_abnormal_move`
+   - `macd_phase`
 4. The JSON includes:
    - `total_score`
    - `signal_type`
@@ -152,14 +156,18 @@ If any of the checks above fail:
 
 - `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the requested method's derived fields locally, and writes `runtime/candidates/<pick_date>.<method>.json`.
 - `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, and stores the matching prepared cache at `runtime/prepared/<run_id>.<method>.pkl`.
+- `b1` keeps the low-`J`, `close > zxdkx`, `zxdq > zxdkx`, weekly bullish alignment, and non-bearish max-volume-day filters described in `references/b1-selector.md`.
+- `b2` keeps the same top-turnover prefilter and the same recent 15-trading-day `b1` low-`J` history hit, then requires current `zxdq > zxdkx`, `MA25` support validity, shrinking volume, bullish daily/weekly/monthly `MACD`, upward `MA60`, and `MA144` distance within 30%.
+- Prepared `b2` frames now include daily `ma25`, `ma60`, `ma144`, plus weekly/monthly aligned `dif` and `dea` fields (`dif_w`, `dea_w`, `dif_m`, `dea_m`) for deterministic screening reuse.
 - `chart --pick-date` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
+- Daily chart PNGs include `zxdq`, `zxdkx`, and a separate `MACD` panel with `dif`, `dea`, and `macd_hist`.
 - `chart --intraday` reuses the latest intraday candidate for the requested method plus matching prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.
 - `review --pick-date` writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
 - `review --intraday` reuses the latest intraday candidate for the requested method plus matching prepared cache, writes baseline reviews under `runtime/reviews/<run_id>.<method>/`, and does not fetch fresh realtime data.
-- The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
+- The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `macd_phase`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
 - `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>.<method>/` for end-of-day or `runtime/reviews/<run_id>.<method>/` for intraday.
-- `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file.
+- `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file that includes `summary.html`, `summary.json`, and `charts/`.
 
 ## Future Upgrade Path
 
@@ -169,6 +177,7 @@ If any of the checks above fail:
 ## Bundled References
 
 - `references/b1-selector.md`
+- `references/b2-selector.md`
 - `references/prompt.md`
 - `references/review-rubric.md`
 - `references/runtime-layout.md`

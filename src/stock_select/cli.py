@@ -421,6 +421,9 @@ def _prepare_screen_data(
         group["turnover_n"] = compute_turnover_n(group, window=DEFAULT_TURNOVER_WINDOW)
         kdj = compute_kdj(group)
         group["J"] = kdj["J"]
+        group["ma25"] = group["close"].astype(float).rolling(window=25, min_periods=25).mean()
+        group["ma60"] = group["close"].astype(float).rolling(window=60, min_periods=60).mean()
+        group["ma144"] = group["close"].astype(float).rolling(window=144, min_periods=144).mean()
         zxdq, zxdkx = compute_zx_lines(group)
         group["zxdq"] = zxdq
         group["zxdkx"] = zxdkx
@@ -428,6 +431,12 @@ def _prepare_screen_data(
         group["dif"] = macd["dif"]
         group["dea"] = macd["dea"]
         group["macd_hist"] = macd["macd_hist"]
+        weekly_macd = _compute_period_macd_alignment(group, period="W")
+        group["dif_w"] = weekly_macd["dif"]
+        group["dea_w"] = weekly_macd["dea"]
+        monthly_macd = _compute_period_macd_alignment(group, period="ME")
+        group["dif_m"] = monthly_macd["dif"]
+        group["dea_m"] = monthly_macd["dea"]
         group["weekly_ma_bull"] = compute_weekly_ma_bull(group, ma_periods=DEFAULT_WEEKLY_MA_PERIODS)
         group["max_vol_not_bearish"] = max_vol_not_bearish(group, lookback=DEFAULT_MAX_VOL_LOOKBACK)
         prepared[code] = group
@@ -437,6 +446,23 @@ def _prepare_screen_data(
                 f"prepare {idx}/{total} symbol={code} elapsed={reporter.elapsed_seconds():.1f}s",
             )
     return prepared
+
+
+def _compute_period_macd_alignment(group: pd.DataFrame, *, period: str) -> pd.DataFrame:
+    daily = group.copy()
+    daily["trade_date"] = pd.to_datetime(daily["trade_date"])
+    close = daily.set_index("trade_date")["close"].astype(float)
+    sampled_close = close.resample(period).last().dropna()
+    sampled_frame = pd.DataFrame({"close": sampled_close.to_numpy()}, index=sampled_close.index)
+    period_macd = compute_macd(sampled_frame)
+    aligned = period_macd.reindex(close.index, method="ffill")
+    return pd.DataFrame(
+        {
+            "dif": aligned["dif"].to_numpy(),
+            "dea": aligned["dea"].to_numpy(),
+        },
+        index=group.index,
+    )
 
 
 def _prepare_chart_data(history: pd.DataFrame) -> pd.DataFrame:
@@ -543,9 +569,14 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"eligible={stats['eligible']} "
             f"fail_recent_j={stats['fail_recent_j']} "
             f"fail_insufficient_history={stats['fail_insufficient_history']} "
+            f"fail_support_ma25={stats['fail_support_ma25']} "
+            f"fail_volume_shrink={stats['fail_volume_shrink']} "
             f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
-            f"fail_weekly_ma={stats['fail_weekly_ma']} "
-            f"fail_macd_trend={stats['fail_macd_trend']} "
+            f"fail_daily_macd={stats['fail_daily_macd']} "
+            f"fail_weekly_macd={stats['fail_weekly_macd']} "
+            f"fail_monthly_macd={stats['fail_monthly_macd']} "
+            f"fail_ma60_trend={stats['fail_ma60_trend']} "
+            f"fail_ma144_distance={stats['fail_ma144_distance']} "
             f"selected={stats['selected']}",
         )
         return

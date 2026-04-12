@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 import pandas as pd
 
@@ -14,17 +13,34 @@ _B2_REQUIRED_COLUMNS = (
     "J",
     "zxdq",
     "zxdkx",
-    "weekly_ma_bull",
-    "macd_hist",
+    "low",
     "close",
+    "ma25",
+    "ma60",
+    "ma144",
+    "dif",
+    "dea",
+    "dif_w",
+    "dea_w",
+    "dif_m",
+    "dea_m",
     "turnover_n",
 )
 _B2_NUMERIC_COLUMNS = (
     "J",
     "zxdq",
     "zxdkx",
-    "macd_hist",
+    "low",
     "close",
+    "ma25",
+    "ma60",
+    "ma144",
+    "dif",
+    "dea",
+    "dif_w",
+    "dea_w",
+    "dif_m",
+    "dea_m",
     "turnover_n",
 )
 
@@ -51,9 +67,14 @@ def run_b2_screen_with_stats(
         "eligible": 0,
         "fail_recent_j": 0,
         "fail_insufficient_history": 0,
+        "fail_support_ma25": 0,
+        "fail_volume_shrink": 0,
         "fail_zxdq_zxdkx": 0,
-        "fail_weekly_ma": 0,
-        "fail_macd_trend": 0,
+        "fail_daily_macd": 0,
+        "fail_weekly_macd": 0,
+        "fail_monthly_macd": 0,
+        "fail_ma60_trend": 0,
+        "fail_ma144_distance": 0,
         "selected": 0,
     }
 
@@ -71,6 +92,7 @@ def run_b2_screen_with_stats(
             stats["eligible"] += 1
             stats["fail_insufficient_history"] += 1
             continue
+
         history = frame.loc[frame["trade_date"] <= target_date].reset_index(drop=True)
         daily = history.loc[history["trade_date"] == target_date]
         if daily.empty:
@@ -78,18 +100,8 @@ def run_b2_screen_with_stats(
 
         stats["eligible"] += 1
         row = daily.iloc[-1]
-        recent_j = history["J"].tail(B2_RECENT_J_LOOKBACK)
-        recent_macd = history["macd_hist"].tail(B2_MACD_TREND_DAYS)
 
-        if (
-            len(history) < B2_RECENT_J_LOOKBACK
-            or recent_j.isna().any()
-            or pd.isna(row["zxdq"])
-            or pd.isna(row["zxdkx"])
-            or pd.isna(row["close"])
-            or pd.isna(row["turnover_n"])
-            or pd.isna(row["weekly_ma_bull"])
-        ):
+        if not _has_minimum_history(history):
             stats["fail_insufficient_history"] += 1
             continue
 
@@ -101,15 +113,32 @@ def run_b2_screen_with_stats(
             stats["fail_zxdq_zxdkx"] += 1
             continue
 
-        if not bool(row["weekly_ma_bull"]):
-            stats["fail_weekly_ma"] += 1
+        if not _support_valid(row):
+            stats["fail_support_ma25"] += 1
             continue
 
-        if len(recent_macd) < B2_MACD_TREND_DAYS or recent_macd.isna().any():
-            stats["fail_insufficient_history"] += 1
+        if not _volume_shrink(history):
+            stats["fail_volume_shrink"] += 1
             continue
-        if not _is_strictly_increasing(recent_macd):
-            stats["fail_macd_trend"] += 1
+
+        if not _macd_red(row["dif"], row["dea"]):
+            stats["fail_daily_macd"] += 1
+            continue
+
+        if not _macd_red(row["dif_w"], row["dea_w"]):
+            stats["fail_weekly_macd"] += 1
+            continue
+
+        if not _macd_red(row["dif_m"], row["dea_m"]):
+            stats["fail_monthly_macd"] += 1
+            continue
+
+        if not _ma60_up(history):
+            stats["fail_ma60_trend"] += 1
+            continue
+
+        if not _ma144_distance_ok(row):
+            stats["fail_ma144_distance"] += 1
             continue
 
         candidates.append(
@@ -125,20 +154,6 @@ def run_b2_screen_with_stats(
     return candidates, stats
 
 
-def _recent_j_rule_hit(history: pd.DataFrame, config: dict[str, float]) -> bool:
-    j_threshold = float(config.get("j_threshold", DEFAULT_B1_CONFIG["j_threshold"]))
-    q_threshold = float(config.get("j_q_threshold", DEFAULT_B1_CONFIG["j_q_threshold"]))
-    j_series = history["J"].astype(float)
-    j_quantile = compute_expanding_j_quantile(j_series, q_threshold)
-    recent = pd.DataFrame({"J": j_series, "j_quantile": j_quantile}).tail(B2_RECENT_J_LOOKBACK)
-    return bool(((recent["J"] < j_threshold) | (recent["J"] <= recent["j_quantile"])).any())
-
-
-def _is_strictly_increasing(values: pd.Series) -> bool:
-    diffs = values.astype(float).diff().iloc[1:]
-    return bool((diffs > 0.0).all())
-
-
 def _missing_required_columns(frame: pd.DataFrame) -> set[str]:
     return set(_B2_REQUIRED_COLUMNS) - set(frame.columns)
 
@@ -148,27 +163,11 @@ def _normalize_b2_frame(frame: pd.DataFrame) -> pd.DataFrame:
     normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], errors="coerce", format="mixed")
     for column in _B2_NUMERIC_COLUMNS:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
-    normalized["weekly_ma_bull"] = pd.Series(
-        [_normalize_weekly_ma_value(value) for value in normalized["weekly_ma_bull"]],
-        index=normalized.index,
-        dtype="boolean",
-    )
+    if "volume" in normalized.columns:
+        normalized["volume"] = pd.to_numeric(normalized["volume"], errors="coerce")
+    elif "vol" in normalized.columns:
+        normalized["volume"] = pd.to_numeric(normalized["vol"], errors="coerce")
     return normalized
-
-
-def _normalize_weekly_ma_value(value: Any) -> bool | pd.NA:
-    if isinstance(value, (bool,)):
-        return value
-    item = getattr(value, "item", None)
-    if callable(item):
-        try:
-            scalar = item()
-        except Exception:
-            scalar = value
-        else:
-            if isinstance(scalar, bool):
-                return scalar
-    return pd.NA
 
 
 def _coerced_numeric_columns(original: pd.DataFrame, normalized: pd.DataFrame) -> set[str]:
@@ -179,25 +178,91 @@ def _coerced_numeric_columns(original: pd.DataFrame, normalized: pd.DataFrame) -
         invalid_mask = original_series.notna() & normalized_series.isna()
         if bool(invalid_mask.any()):
             invalid_columns.add(column)
+    if "volume" in original.columns:
+        volume_mask = original["volume"].notna() & normalized["volume"].isna()
+        if bool(volume_mask.any()):
+            invalid_columns.add("volume")
+    elif "vol" in original.columns:
+        volume_mask = original["vol"].notna() & normalized["volume"].isna()
+        if bool(volume_mask.any()):
+            invalid_columns.add("volume")
     return invalid_columns
 
 
-def _coerced_weekly_ma_mask(original: pd.DataFrame) -> pd.Series:
-    original_series = original["weekly_ma_bull"]
-    normalized = pd.Series(
-        [_normalize_weekly_ma_value(value) for value in original_series],
-        index=original_series.index,
-        dtype="boolean",
-    )
-    return original_series.notna() & normalized.isna()
-
-
 def _has_invalid_required_inputs(original: pd.DataFrame, normalized: pd.DataFrame) -> bool:
-    return bool(
-        normalized["trade_date"].isna().any()
-        or _coerced_numeric_columns(original, normalized)
-        or _coerced_weekly_ma_mask(original).any()
+    return bool(normalized["trade_date"].isna().any() or _coerced_numeric_columns(original, normalized))
+
+
+def _has_minimum_history(history: pd.DataFrame) -> bool:
+    if len(history) < max(B2_RECENT_J_LOOKBACK, 144):
+        return False
+    if history["J"].tail(B2_RECENT_J_LOOKBACK).isna().any():
+        return False
+    if len(history) < 2:
+        return False
+    required_today = (
+        "zxdq",
+        "zxdkx",
+        "low",
+        "close",
+        "ma25",
+        "ma60",
+        "ma144",
+        "dif",
+        "dea",
+        "dif_w",
+        "dea_w",
+        "dif_m",
+        "dea_m",
+        "turnover_n",
+        "volume",
     )
+    row = history.iloc[-1]
+    if any(pd.isna(row[column]) for column in required_today):
+        return False
+    previous_row = history.iloc[-2]
+    if pd.isna(previous_row["ma60"]) or pd.isna(previous_row["volume"]):
+        return False
+    return True
+
+
+def _recent_j_rule_hit(history: pd.DataFrame, config: dict[str, float]) -> bool:
+    j_threshold = float(config.get("j_threshold", DEFAULT_B1_CONFIG["j_threshold"]))
+    q_threshold = float(config.get("j_q_threshold", DEFAULT_B1_CONFIG["j_q_threshold"]))
+    j_series = history["J"].astype(float)
+    j_quantile = compute_expanding_j_quantile(j_series, q_threshold)
+    recent = pd.DataFrame({"J": j_series, "j_quantile": j_quantile}).tail(B2_RECENT_J_LOOKBACK)
+    return bool(((recent["J"] < j_threshold) | (recent["J"] <= recent["j_quantile"])).any())
+
+
+def _support_valid(row: pd.Series) -> bool:
+    ma25 = float(row["ma25"])
+    low = float(row["low"])
+    close = float(row["close"])
+    return bool(low <= ma25 * 1.005 and close >= ma25)
+
+
+def _volume_shrink(history: pd.DataFrame) -> bool:
+    latest_volume = float(history.iloc[-1]["volume"])
+    previous_volume = float(history.iloc[-2]["volume"])
+    return latest_volume < previous_volume
+
+
+def _macd_red(dif: float, dea: float) -> bool:
+    return float(dif) > float(dea)
+
+
+def _ma60_up(history: pd.DataFrame) -> bool:
+    latest_ma60 = float(history.iloc[-1]["ma60"])
+    previous_ma60 = float(history.iloc[-2]["ma60"])
+    return latest_ma60 >= previous_ma60
+
+
+def _ma144_distance_ok(row: pd.Series) -> bool:
+    close = float(row["close"])
+    ma144 = float(row["ma144"])
+    distance = abs((close / ma144 - 1.0) * 100.0)
+    return distance <= 30.0
 
 
 __all__ = [
