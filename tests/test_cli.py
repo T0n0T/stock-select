@@ -357,13 +357,15 @@ def test_screen_writes_hcr_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_p
 def test_screen_rejects_pick_date_without_end_of_day_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
+    fetch_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
     monkeypatch.setattr(cli, "fetch_nth_latest_trade_date", lambda connection, *, end_date, n: "2026-04-09")
-    monkeypatch.setattr(
-        cli,
-        "fetch_daily_window",
-        lambda *args, **kwargs: pd.DataFrame(
+    monkeypatch.setattr(cli, "_prepare_screen_data", lambda market, reporter=None: pytest.fail("b2 validation should reject before phase-one preparation"))
+
+    def fake_fetch_daily_window(*args, **kwargs) -> pd.DataFrame:
+        fetch_calls.append(dict(kwargs))
+        return pd.DataFrame(
             {
                 "ts_code": ["000001.SZ"],
                 "trade_date": pd.to_datetime(["2026-04-09"]),
@@ -373,8 +375,9 @@ def test_screen_rejects_pick_date_without_end_of_day_data(monkeypatch: pytest.Mo
                 "close": [10.6],
                 "vol": [100.0],
             }
-        ),
-    )
+        )
+
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
 
     result = runner.invoke(
         app,
@@ -395,6 +398,13 @@ def test_screen_rejects_pick_date_without_end_of_day_data(monkeypatch: pytest.Mo
     assert "2026-04-10" in result.stderr
     assert "2026-04-09" in result.stderr
     assert "end-of-day" in result.stderr.lower()
+    assert fetch_calls == [
+        {
+            "start_date": (pd.Timestamp("2026-04-10") - pd.Timedelta(days=cli.DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d"),
+            "end_date": "2026-04-10",
+            "symbols": None,
+        }
+    ]
 
 
 def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
