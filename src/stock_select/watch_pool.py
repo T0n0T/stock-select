@@ -46,6 +46,26 @@ def load_watch_pool(csv_path: Path) -> pd.DataFrame:
     return frame
 
 
+def effective_watch_pool_symbols(rows: pd.DataFrame, *, screening_date: str) -> list[str]:
+    if rows.empty:
+        return []
+
+    frame = rows.copy().reset_index(drop=True)
+    frame = frame[
+        frame["code"].astype(str).str.strip().ne("")
+        & frame["pick_date"].astype(str).str.strip().ne("")
+        & (frame["pick_date"].astype(str) <= screening_date)
+    ].copy()
+    if frame.empty:
+        return []
+
+    frame["_row_order"] = range(len(frame))
+    frame = frame.sort_values(by=["pick_date", "_row_order"], ascending=[True, True], kind="stable")
+    frame = frame.drop_duplicates(subset=["code"], keep="last")
+    frame = frame.sort_values(by="_row_order", ascending=True, kind="stable")
+    return frame["code"].astype(str).tolist()
+
+
 def summary_to_watch_rows(
     summary_payload: dict[str, object],
     *,

@@ -136,6 +136,28 @@ def test_screen_accepts_pool_source_and_passes_it_to_screen_impl(
     assert result.stdout.strip() == str(expected_path)
 
 
+def test_screen_rejects_invalid_pool_source() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--pool-source",
+            "nonsense",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "unsupported pool source" in result.stderr.lower()
+    assert "turnover-top" in result.stderr
+    assert "record-watch" in result.stderr
+
+
 def test_chart_requires_candidate_file(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -3795,6 +3817,293 @@ def test_screen_b2_writes_prepared_cache_before_prefilter(
     cache_payload = cli._load_prepared_cache(runtime_root / "prepared" / f"{_eod_key('2026-04-10', 'b2')}.pkl")
     assert cache_payload["start_date"] == "2025-04-09"
     assert sorted(cache_payload["prepared_by_symbol"]) == ["AAA.SZ", "BBB.SZ", "CCC.SZ"]
+
+
+def test_screen_record_watch_uses_latest_effective_rows_per_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    watch_dir = runtime_root / "watch_pool"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    (watch_dir / "b1.csv").write_text(
+        "\n".join(
+            [
+                "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
+                "b1,2026-04-01,AAA.SZ,WATCH,1.0,signal,first,2026-04-01T10:00:00+08:00",
+                "b1,2026-04-02,AAA.SZ,WATCH,2.0,signal,second,2026-04-02T10:00:00+08:00",
+                "b1,2026-04-02,AAA.SZ,WATCH,3.0,signal,latest-same-day,2026-04-02T11:00:00+08:00",
+                "b1,2026-04-05,BBB.SZ,WATCH,4.0,signal,future,2026-04-05T10:00:00+08:00",
+                "b1,2026-04-03,CCC.SZ,PASS,5.0,signal,eligible,2026-04-03T10:00:00+08:00",
+                "b1,2026-04-04,DDD.SZ,WATCH,6.0,signal,missing-from-prepared,2026-04-04T10:00:00+08:00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ", "CCC.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04", "2026-04-04"]),
+                "open": [10.0, 20.0],
+                "high": [10.5, 20.5],
+                "low": [9.8, 19.8],
+                "close": [10.2, 20.2],
+                "vol": [100.0, 200.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        return {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-04"]),
+                    "close": [10.2],
+                    "J": [10.0],
+                    "zxdq": [10.4],
+                    "zxdkx": [10.0],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "turnover_n": [100.0],
+                }
+            ),
+            "CCC.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-04"]),
+                    "close": [20.2],
+                    "J": [10.0],
+                    "zxdq": [20.4],
+                    "zxdkx": [20.0],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "turnover_n": [200.0],
+                }
+            ),
+        }
+
+    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+        raise AssertionError("turnover-top pool should not be used for record-watch")
+
+    def fake_run_b1_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert list(prepared_by_symbol) == ["AAA.SZ", "CCC.SZ"]
+        assert pick_date == pd.Timestamp("2026-04-04")
+        return (
+            [
+                {"code": "AAA.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0},
+                {"code": "CCC.SZ", "pick_date": "2026-04-04", "close": 20.2, "turnover_n": 200.0},
+            ],
+            {
+                "total_symbols": 2,
+                "eligible": 2,
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": 2,
+            },
+        )
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "build_top_turnover_pool", fake_pool)
+    monkeypatch.setattr(cli, "run_b1_screen_with_stats", fake_run_b1_screen_with_stats)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-04",
+            "--pool-source",
+            "record-watch",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-04')}.json").read_text(encoding="utf-8"))
+    assert [item["code"] for item in payload["candidates"]] == ["AAA.SZ", "CCC.SZ"]
+
+
+def test_screen_record_watch_rejects_missing_watch_pool_csv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.8],
+                "close": [10.2],
+                "vol": [100.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        return {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-04"]),
+                    "close": [10.2],
+                    "J": [10.0],
+                    "zxdq": [10.4],
+                    "zxdkx": [10.0],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "turnover_n": [100.0],
+                }
+            )
+        }
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-04",
+            "--pool-source",
+            "record-watch",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "watch pool csv" in result.stderr.lower()
+    assert "b1.csv" in result.stderr
+
+
+def test_screen_record_watch_rejects_empty_effective_pool_after_intersection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    watch_dir = runtime_root / "watch_pool"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    (watch_dir / "b1.csv").write_text(
+        "\n".join(
+            [
+                "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
+                "b1,2026-04-02,ZZZ.SZ,WATCH,1.0,signal,not-in-prepared,2026-04-02T10:00:00+08:00",
+                "b1,2026-04-05,AAA.SZ,WATCH,2.0,signal,too-new,2026-04-05T10:00:00+08:00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.8],
+                "close": [10.2],
+                "vol": [100.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        return {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-04"]),
+                    "close": [10.2],
+                    "J": [10.0],
+                    "zxdq": [10.4],
+                    "zxdkx": [10.0],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "turnover_n": [100.0],
+                }
+            )
+        }
+
+    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+        raise AssertionError("turnover-top pool should not be used for record-watch")
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "build_top_turnover_pool", fake_pool)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-04",
+            "--pool-source",
+            "record-watch",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "effective watch pool" in result.stderr.lower()
+    assert "2026-04-04" in result.stderr
 
 
 def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(

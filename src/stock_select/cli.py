@@ -58,6 +58,7 @@ from stock_select.review_orchestrator import (
     summarize_reviews,
 )
 from stock_select.watch_pool import (
+    effective_watch_pool_symbols,
     load_watch_pool,
     merge_watch_rows,
     summary_to_watch_rows,
@@ -357,6 +358,27 @@ def _resolve_previous_trade_date(connection, trade_date: str) -> str:
 
 def _resolve_hcr_start_date(connection, *, end_date: str, trading_days: int) -> str:
     return fetch_nth_latest_trade_date(connection, end_date=end_date, n=trading_days)
+
+
+def _resolve_record_watch_pool_codes(
+    *,
+    runtime_root: Path,
+    method: str,
+    pick_date: str,
+    prepared_by_symbol: dict[str, pd.DataFrame],
+) -> list[str]:
+    csv_path = _watch_pool_path(runtime_root, method)
+    if not csv_path.exists():
+        raise typer.BadParameter(f"Missing watch pool CSV for pool_source=record-watch: {csv_path}")
+
+    watch_rows = load_watch_pool(csv_path)
+    effective_symbols = effective_watch_pool_symbols(watch_rows, screening_date=pick_date)
+    pool_codes = [code for code in effective_symbols if code in prepared_by_symbol]
+    if not pool_codes:
+        raise typer.BadParameter(
+            f"Effective watch pool is empty after applying screening date {pick_date} and prepared-data intersection."
+        )
+    return pool_codes
 
 
 def _validate_eod_pick_date_has_market_data(connection, *, market: pd.DataFrame, pick_date: str) -> None:
@@ -738,7 +760,6 @@ def _screen_impl(
     recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    _ = pool_source
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = _candidate_path(runtime_root, pick_date, method)
@@ -848,8 +869,16 @@ def _screen_impl(
     if method in {"b1", "b2"}:
         if prepared is None:
             prepared = {}
-        top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
-        pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
+        if pool_source == "record-watch":
+            pool_codes = _resolve_record_watch_pool_codes(
+                runtime_root=runtime_root,
+                method=method,
+                pick_date=pick_date,
+                prepared_by_symbol=prepared,
+            )
+        else:
+            top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
+            pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
             reporter.emit("screen", f"run {method} screen")
