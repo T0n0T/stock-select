@@ -607,6 +607,8 @@ def _prepare_b2_screen_data_for_pick(
     connection,
     *,
     pick_date: str,
+    pool_source: str,
+    runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
     short_start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
@@ -625,8 +627,16 @@ def _prepare_b2_screen_data_for_pick(
         )
     _validate_eod_pick_date_has_market_data(connection, market=short_market, pick_date=pick_date)
     short_prepared = _call_prepare_screen_data(short_market, reporter=reporter)
-    top_turnover_pool = build_top_turnover_pool(short_prepared, top_m=DEFAULT_TOP_M)
-    pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
+    if pool_source == "record-watch":
+        pool_codes = _resolve_record_watch_pool_codes(
+            runtime_root=runtime_root,
+            method="b2",
+            pick_date=pick_date,
+            prepared_by_symbol=short_prepared,
+        )
+    else:
+        top_turnover_pool = build_top_turnover_pool(short_prepared, top_m=DEFAULT_TOP_M)
+        pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
     pooled_prepared = {code: short_prepared[code] for code in pool_codes if code in short_prepared}
     if not pooled_prepared:
         return short_prepared, {}
@@ -763,7 +773,8 @@ def _screen_impl(
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = _candidate_path(runtime_root, pick_date, method)
-    if not recompute and out_path.exists():
+    allow_reuse = not recompute and pool_source == "turnover-top"
+    if allow_reuse and out_path.exists():
         try:
             existing_payload = _load_candidate_payload(out_path)
         except (json.JSONDecodeError, OSError, ValueError) as exc:
@@ -785,7 +796,7 @@ def _screen_impl(
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     else:
         start_date = None
-    if not recompute and prepared_cache_path.exists():
+    if allow_reuse and prepared_cache_path.exists():
         try:
             cache_payload = _load_prepared_cache(prepared_cache_path)
         except (OSError, ValueError, pickle.PickleError) as exc:
@@ -831,6 +842,8 @@ def _screen_impl(
             screen_prepared, prepared = _prepare_b2_screen_data_for_pick(
                 connection,
                 pick_date=pick_date,
+                pool_source=pool_source,
+                runtime_root=runtime_root,
                 reporter=reporter,
             )
             start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
