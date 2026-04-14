@@ -39,6 +39,8 @@ def test_normalize_rt_k_snapshot_maps_required_columns() -> None:
     ]
     assert normalized.iloc[0]["ts_code"] == "000001.SZ"
     assert normalized.iloc[0]["close"] == 12.34
+    assert normalized.iloc[0]["vol"] == 12345.67
+    assert normalized.iloc[0]["amount"] == 152300.0
 
 
 def test_normalize_rt_k_snapshot_accepts_english_columns() -> None:
@@ -63,6 +65,8 @@ def test_normalize_rt_k_snapshot_accepts_english_columns() -> None:
     assert normalized.iloc[0]["ts_code"] == "600000.SH"
     assert normalized.iloc[0]["name"] == "浦发银行"
     assert normalized.iloc[0]["close"] == 10.34
+    assert normalized.iloc[0]["vol"] == 22345.67
+    assert normalized.iloc[0]["amount"] == 252300.0
 
 
 def test_normalize_rt_k_snapshot_falls_back_when_trade_time_missing() -> None:
@@ -92,6 +96,8 @@ def test_normalize_rt_k_snapshot_falls_back_when_trade_time_missing() -> None:
     assert normalized.iloc[0]["ts_code"] == "600000.SH"
     assert normalized.iloc[0]["trade_time"] == "10:15:30"
     assert normalized.iloc[0]["close"] == 10.34
+    assert normalized.iloc[0]["vol"] == 22345.67
+    assert normalized.iloc[0]["amount"] == 252300.0
 
 
 def test_build_intraday_market_frame_appends_current_day_bar() -> None:

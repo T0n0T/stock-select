@@ -16,6 +16,8 @@ RT_K_COLUMN_MAP = {
 }
 
 RT_K_REQUIRED_COLUMNS = ["code", "name", "open", "high", "low", "close", "vol", "amount"]
+RT_K_VOLUME_TO_DAILY_VOL = 100.0
+RT_K_AMOUNT_TO_DAILY_AMOUNT = 1000.0
 
 
 def _normalize_ts_code(code: str) -> str:
@@ -63,8 +65,9 @@ def normalize_rt_k_snapshot(
             "high": renamed["high"].astype(float),
             "low": renamed["low"].astype(float),
             "close": renamed["close"].astype(float),
-            "vol": renamed["vol"].astype(float),
-            "amount": renamed["amount"].astype(float),
+            # rt_k uses shares and yuan; daily_market stores hands and CNY thousands.
+            "vol": renamed["vol"].astype(float) / RT_K_VOLUME_TO_DAILY_VOL,
+            "amount": renamed["amount"].astype(float) / RT_K_AMOUNT_TO_DAILY_AMOUNT,
         }
     )
     return normalized.sort_values(["ts_code"]).reset_index(drop=True)
