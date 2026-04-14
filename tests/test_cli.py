@@ -4414,6 +4414,504 @@ def test_screen_record_watch_bypasses_existing_candidate_and_prepared_reuse(
     assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
 
 
+def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    prepared_dir = runtime_root / "prepared"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+
+    (candidate_dir / f"{_eod_key('2026-04-04')}.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-04",
+                "method": "b1",
+                "pool_source": "record-watch",
+                "candidates": [{"code": "OLD.SZ", "pick_date": "2026-04-04", "close": 9.9, "turnover_n": 90.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli._write_prepared_cache(
+        prepared_dir / f"{_eod_key('2026-04-04')}.pkl",
+        method="b1",
+        pick_date="2026-04-04",
+        start_date="2025-04-03",
+        end_date="2026-04-04",
+        prepared_by_symbol={
+            "OLD.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-04"]),
+                    "close": [9.9],
+                    "J": [10.0],
+                    "zxdq": [10.1],
+                    "zxdkx": [9.8],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "turnover_n": [90.0],
+                }
+            )
+        },
+        metadata_overrides={"pool_source": "record-watch"},
+    )
+
+    calls = {"connect": 0, "prepare": 0}
+
+    def fake_connect(_: str) -> object:
+        calls["connect"] += 1
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.8],
+                "close": [10.2],
+                "vol": [100.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        calls["prepare"] += 1
+        return {
+            "NEW.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-04"]),
+                    "close": [10.2],
+                    "J": [10.0],
+                    "zxdq": [10.4],
+                    "zxdkx": [10.0],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "turnover_n": [100.0],
+                }
+            )
+        }
+
+    def fake_turnover_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+        return {pd.Timestamp("2026-04-04"): ["NEW.SZ"]}
+
+    def fake_run_b1_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert list(prepared_by_symbol) == ["NEW.SZ"]
+        return (
+            [{"code": "NEW.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": 1,
+            },
+        )
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "build_top_turnover_pool", fake_turnover_pool)
+    monkeypatch.setattr(cli, "run_b1_screen_with_stats", fake_run_b1_screen_with_stats)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-04",
+            "--pool-source",
+            "turnover-top",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {"connect": 1, "prepare": 1}
+    assert "[screen] reuse candidates path=" not in result.stderr
+    assert "[screen] reuse prepared path=" not in result.stderr
+    payload = json.loads((candidate_dir / f"{_eod_key('2026-04-04')}.json").read_text(encoding="utf-8"))
+    assert payload["pool_source"] == "turnover-top"
+    assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
+    cache_payload = cli._load_prepared_cache(prepared_dir / f"{_eod_key('2026-04-04')}.pkl")
+    assert cache_payload["metadata"]["pool_source"] == "turnover-top"
+
+
+def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    watch_dir = runtime_root / "watch_pool"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    (watch_dir / "b2.csv").write_text(
+        "\n".join(
+            [
+                "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
+                "b2,2026-04-08,BBB.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    fetch_calls: list[tuple[str, tuple[str, ...] | None]] = []
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        fetch_calls.append((start_date, tuple(symbols) if symbols is not None else None))
+        return pd.DataFrame(
+            {
+                "ts_code": ["BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10"]),
+                "open": [20.0],
+                "high": [20.5],
+                "low": [19.8],
+                "close": [20.2],
+                "vol": [200.0],
+            }
+        )
+
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        return {
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "close": [20.2],
+                    "J": [10.0],
+                    "zxdq": [20.4],
+                    "zxdkx": [20.0],
+                    "low": [19.9],
+                    "volume": [200.0],
+                    "ma25": [20.0],
+                    "ma60": [19.8],
+                    "ma144": [19.6],
+                    "dif": [0.11],
+                    "dea": [0.08],
+                    "dif_w": [0.20],
+                    "dea_w": [0.15],
+                    "dif_m": [0.30],
+                    "dea_m": [0.22],
+                    "turnover_n": [200.0],
+                }
+            )
+        }
+
+    def fail_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+        raise AssertionError("turnover-top pool should not gate b2 record-watch screening")
+
+    def fake_prefilter_b2_non_macd(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> list[str]:
+        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        return []
+
+    def fake_run_b2_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert prepared_by_symbol == {}
+        return (
+            [],
+            {
+                "total_symbols": 0,
+                "eligible": 0,
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
+                "selected": 0,
+            },
+        )
+
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "build_top_turnover_pool", fail_pool)
+    monkeypatch.setattr(cli, "prefilter_b2_non_macd", fake_prefilter_b2_non_macd)
+    monkeypatch.setattr(cli, "run_b2_screen_with_stats", fake_run_b2_screen_with_stats)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--pool-source",
+            "record-watch",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "effective watch pool" not in result.stderr.lower()
+    assert fetch_calls == [("2025-04-09", None)]
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    assert payload["pool_source"] == "record-watch"
+    assert payload["candidates"] == []
+
+
+def test_screen_hcr_turnover_top_uses_liquidity_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_hcr_start_date",
+        lambda connection, *, end_date, trading_days: "2025-04-29",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ", "BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10", "2026-04-10"]),
+                "open": [10.0, 20.0],
+                "high": [10.8, 20.8],
+                "low": [9.8, 19.8],
+                "close": [10.6, 20.6],
+                "vol": [100.0, 200.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_hcr_screen_data",
+        lambda market, reporter=None: {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "close": [10.6],
+                    "yx": [10.4],
+                    "p": [10.5],
+                    "resonance_gap_pct": [0.003],
+                    "turnover_n": [100.0],
+                }
+            ),
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "close": [20.6],
+                    "yx": [20.4],
+                    "p": [20.5],
+                    "resonance_gap_pct": [0.003],
+                    "turnover_n": [200.0],
+                }
+            ),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_hcr_screen_with_stats",
+        lambda prepared_by_symbol, pick_date: (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 20.6, "turnover_n": 200.0, "yx": 20.4, "p": 20.5, "resonance_gap_pct": 0.003}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 0,
+                "selected": 1,
+            },
+        )
+        if list(prepared_by_symbol) == ["BBB.SZ"]
+        else pytest.fail("hcr should screen only the turnover-top subset"),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "hcr",
+            "--pick-date",
+            "2026-04-10",
+            "--pool-source",
+            "turnover-top",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'hcr')}.json").read_text(encoding="utf-8"))
+    assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
+
+
+def test_screen_hcr_record_watch_uses_watch_pool_subset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    watch_dir = runtime_root / "watch_pool"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    (watch_dir / "hcr.csv").write_text(
+        "\n".join(
+            [
+                "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
+                "hcr,2026-04-08,AAA.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
+                "hcr,2026-04-08,CCC.SZ,WATCH,1.0,signal,missing,2026-04-08T10:00:00+08:00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_hcr_start_date",
+        lambda connection, *, end_date, trading_days: "2025-04-29",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ", "BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10", "2026-04-10"]),
+                "open": [10.0, 20.0],
+                "high": [10.8, 20.8],
+                "low": [9.8, 19.8],
+                "close": [10.6, 20.6],
+                "vol": [100.0, 200.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_hcr_screen_data",
+        lambda market, reporter=None: {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "close": [10.6],
+                    "yx": [10.4],
+                    "p": [10.5],
+                    "resonance_gap_pct": [0.003],
+                    "turnover_n": [100.0],
+                }
+            ),
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "close": [20.6],
+                    "yx": [20.4],
+                    "p": [20.5],
+                    "resonance_gap_pct": [0.003],
+                    "turnover_n": [200.0],
+                }
+            ),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: pytest.fail("turnover-top pool should not be used for hcr record-watch"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_hcr_screen_with_stats",
+        lambda prepared_by_symbol, pick_date: (
+            [{"code": "AAA.SZ", "pick_date": "2026-04-10", "close": 10.6, "turnover_n": 100.0, "yx": 10.4, "p": 10.5, "resonance_gap_pct": 0.003}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 0,
+                "selected": 1,
+            },
+        )
+        if list(prepared_by_symbol) == ["AAA.SZ"]
+        else pytest.fail("hcr should screen only the effective watch-pool subset"),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "hcr",
+            "--pick-date",
+            "2026-04-10",
+            "--pool-source",
+            "record-watch",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'hcr')}.json").read_text(encoding="utf-8"))
+    assert payload["pool_source"] == "record-watch"
+    assert [item["code"] for item in payload["candidates"]] == ["AAA.SZ"]
+
+
 def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5445,6 +5943,282 @@ def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, 
     assert prepared_payload["metadata"]["source"] == "tushare_rt_k"
     assert prepared_payload["metadata"]["run_id"] == expected_run_id
     assert prepared_payload["metadata"]["previous_trade_date"] == "2026-04-08"
+
+
+def test_screen_intraday_record_watch_uses_watch_pool_subset(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    watch_dir = runtime_root / "watch_pool"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    (watch_dir / "b1.csv").write_text(
+        "\n".join(
+            [
+                "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
+                "b1,2026-04-08,000001.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
+                "b1,2026-04-08,000002.SZ,WATCH,1.0,signal,missing,2026-04-08T10:00:00+08:00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 11:31:08.123456", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_resolve_tushare_token", lambda token: "token", raising=False)
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_previous_trade_date",
+        lambda _connection, trade_date: "2026-04-08",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_fetch_rt_k_snapshot",
+        lambda token, trade_date: pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "name": "平安银行",
+                    "trade_date": "2026-04-09",
+                    "trade_time": "11:31:07",
+                    "open": 12.1,
+                    "high": 12.5,
+                    "low": 12.0,
+                    "close": 12.34,
+                    "vol": 150.0,
+                    "amount": 999.0,
+                }
+            ]
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "2026-04-08",
+                    "open": 11.9,
+                    "high": 12.1,
+                    "low": 11.8,
+                    "close": 12.0,
+                    "vol": 120.0,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: pytest.fail("turnover-top pool should not be used for intraday record-watch"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 12.34, "turnover_n": 120.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": 1,
+            },
+        )
+        if list(prepared_by_symbol) == ["000001.SZ"]
+        else pytest.fail("intraday record-watch should screen only the watch-pool subset"),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--pool-source",
+            "record-watch",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    candidate_files = list((runtime_root / "candidates").glob("*.json"))
+    assert len(candidate_files) == 1
+    candidate_payload = json.loads(candidate_files[0].read_text(encoding="utf-8"))
+    assert candidate_payload["pool_source"] == "record-watch"
+    assert [item["code"] for item in candidate_payload["candidates"]] == ["000001.SZ"]
+    prepared_payload = pickle.loads(next((runtime_root / "prepared").glob("*.pkl")).read_bytes())
+    assert prepared_payload["metadata"]["pool_source"] == "record-watch"
+
+
+def test_screen_intraday_hcr_turnover_top_uses_liquidity_pool(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 11:31:08.123456", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_resolve_tushare_token", lambda token: "token", raising=False)
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_resolve_previous_trade_date",
+        lambda _connection, trade_date: "2026-04-08",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_resolve_hcr_start_date",
+        lambda connection, *, end_date, trading_days: "2025-04-29",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_fetch_rt_k_snapshot",
+        lambda token, trade_date: pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "name": "平安银行",
+                    "trade_date": "2026-04-09",
+                    "trade_time": "11:31:07",
+                    "open": 12.1,
+                    "high": 12.5,
+                    "low": 12.0,
+                    "close": 12.34,
+                    "vol": 150.0,
+                    "amount": 999.0,
+                },
+                {
+                    "ts_code": "000002.SZ",
+                    "name": "万科A",
+                    "trade_date": "2026-04-09",
+                    "trade_time": "11:31:07",
+                    "open": 22.1,
+                    "high": 22.5,
+                    "low": 22.0,
+                    "close": 22.34,
+                    "vol": 250.0,
+                    "amount": 1999.0,
+                },
+            ]
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "2026-04-08",
+                    "open": 11.9,
+                    "high": 12.1,
+                    "low": 11.8,
+                    "close": 12.0,
+                    "vol": 120.0,
+                },
+                {
+                    "ts_code": "000002.SZ",
+                    "trade_date": "2026-04-08",
+                    "open": 21.9,
+                    "high": 22.1,
+                    "low": 21.8,
+                    "close": 22.0,
+                    "vol": 220.0,
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_hcr_screen_data",
+        lambda market, reporter=None: {
+            "000001.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09"]),
+                    "close": [12.0, 12.34],
+                    "yx": [11.9, 12.2],
+                    "p": [12.0, 12.25],
+                    "resonance_gap_pct": [0.0083, 0.0041],
+                    "turnover_n": [900.0, 1000.0],
+                }
+            ),
+            "000002.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09"]),
+                    "close": [22.0, 22.34],
+                    "yx": [21.9, 22.2],
+                    "p": [22.0, 22.25],
+                    "resonance_gap_pct": [0.0045, 0.0020],
+                    "turnover_n": [1900.0, 2000.0],
+                }
+            ),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-09"): ["000002.SZ"]},
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_hcr_screen_with_stats",
+        lambda prepared_by_symbol, pick_date: (
+            [{"code": "000002.SZ", "pick_date": "2026-04-09", "close": 22.34, "turnover_n": 2000.0, "yx": 22.2, "p": 22.25, "resonance_gap_pct": 0.0020}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 0,
+                "selected": 1,
+            },
+        )
+        if list(prepared_by_symbol) == ["000002.SZ"]
+        else pytest.fail("intraday hcr turnover-top should screen only the liquidity pool subset"),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "hcr",
+            "--intraday",
+            "--pool-source",
+            "turnover-top",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    candidate_payload = json.loads(next((runtime_root / "candidates").glob("*.json")).read_text(encoding="utf-8"))
+    assert candidate_payload["pool_source"] == "turnover-top"
+    assert [item["code"] for item in candidate_payload["candidates"]] == ["000002.SZ"]
 
 
 def test_screen_intraday_hcr_uses_trade_date_lookback_window(monkeypatch, tmp_path: Path) -> None:
