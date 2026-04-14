@@ -56,6 +56,8 @@ uv run stock-select chart --method b1 --pick-date YYYY-MM-DD --dsn postgresql://
 uv run stock-select chart --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select record-watch --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select record-watch --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 ```
@@ -105,7 +107,13 @@ uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://.
   - 当前写出以本地 baseline 为主的 review 结果结构
   - 同时写出 `llm_review_tasks.json`，供 CLI 返回后由 skill 继续派发子代理图评
   - 该结果结构已经预留 `llm_review` 字段，供后续基于 PNG + `.agents/skills/stock-select/references/prompt.md` 的子代理图评回填
-  - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>.<method>/summary.json`
+  - 将汇总结果写入 `~/.agent/skills/stock-select/runtime/reviews/<pick_date>.<method>/summary.json`
+- `record-watch`
+  - 读取 `reviews/<pick_date>.<method>/summary.json`
+  - 抽取 `PASS` / `WATCH` 股票，写入 `watch_pool/<method>.csv`
+  - 每条记录写入命令执行时间 `recorded_at`
+  - 按距离本次执行日的交易日间隔排序
+  - 按 `--window-trading-days` 保留最近窗口内的记录，删除更老的票
 - `review-merge`
   - 读取 `reviews/<pick_date>.<method>/llm_review_results/*.json`
   - 校验并归一化子代理图评 JSON
@@ -165,7 +173,7 @@ uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://.
 运行时产物默认写入：
 
 ```text
-~/.agents/skills/stock-select/runtime/
+~/.agent/skills/stock-select/runtime/
 ```
 
 其中常见目录包括：
@@ -177,6 +185,7 @@ charts/<pick_date>.<method>/<code>_day.png
 reviews/<pick_date>.<method>/llm_review_tasks.json
 reviews/<pick_date>.<method>/llm_review_results/<code>.json
 reviews/<pick_date>.<method>/summary.json
+watch_pool/<method>.csv
 ```
 
 盘中 `--intraday` 运行使用同样的后缀模式，只是把 `<pick_date>` 换成 `<run_id>`：

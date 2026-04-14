@@ -25,7 +25,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Let the agent framework choose the model; do not hard-code a vendor-specific SDK in the workflow.
 - Require each subagent to return strict JSON aligned with the prompt contract.
 - If a subagent cannot return valid JSON, record that symbol in failures instead of fabricating a result.
-- Write outputs under `~/.agents/skills/stock-select/runtime/`.
+- Write outputs under `~/.agent/skills/stock-select/runtime/`.
 - Preserve existing end-of-day instructions for `--pick-date` runs.
 - `screen --intraday` uses PostgreSQL confirmed history up to the previous trade date plus Tushare `rt_k` for the active trade date snapshot.
 - `chart --intraday` and `review --intraday` must reuse the latest intraday candidate plus the matching prepared cache instead of fetching fresh realtime data.
@@ -46,6 +46,7 @@ End-of-day `--pick-date` runs use:
 - `runtime/prepared/<pick_date>.<method>.pkl`
 - `runtime/charts/<pick_date>.<method>/`
 - `runtime/reviews/<pick_date>.<method>/`
+- `runtime/watch_pool/<method>.csv`
 
 Intraday `--intraday` runs use an intraday `run_id` keyed layout:
 
@@ -71,6 +72,7 @@ Review and merge instructions must follow the active mode's runtime key:
 8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>.<method>` for end-of-day and `<run_id>.<method>` for intraday.
 9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
 10. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
+11. If the caller wants to persist end-of-day `PASS` and `WATCH` ideas across review dates, run CLI `record-watch` after `review` or `review-merge`.
 
 ## Subagent Review Protocol
 
@@ -167,6 +169,7 @@ If any of the checks above fail:
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `macd_phase`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
 - `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>.<method>/` for end-of-day or `runtime/reviews/<run_id>.<method>/` for intraday.
+- `record-watch` is end-of-day only. It reads `runtime/reviews/<pick_date>.<method>/summary.json`, keeps rows with verdict `PASS` or `WATCH`, writes or overwrites `runtime/watch_pool/<method>.csv`, stamps `recorded_at`, sorts by trading-day distance from the command execution day, and trims rows older than the configured `--window-trading-days` window.
 - `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file that includes `summary.html`, `summary.json`, and `charts/`.
 
 ## Future Upgrade Path

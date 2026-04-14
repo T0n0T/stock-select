@@ -4,6 +4,7 @@ import json
 import os
 import pickle
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +37,7 @@ from stock_select.strategies.hcr import (
 )
 from stock_select.charting import export_daily_chart
 from stock_select.db_access import (
+    fetch_available_trade_dates,
     fetch_daily_window,
     fetch_instrument_names,
     fetch_nth_latest_trade_date,
@@ -54,6 +56,13 @@ from stock_select.review_orchestrator import (
     normalize_llm_review,
     review_symbol_history,
     summarize_reviews,
+)
+from stock_select.watch_pool import (
+    load_watch_pool,
+    merge_watch_rows,
+    summary_to_watch_rows,
+    trim_and_sort_watch_rows,
+    write_watch_pool,
 )
 
 
@@ -105,7 +114,7 @@ def _validate_cli_method(method: str) -> str:
 
 
 def _default_runtime_root() -> Path:
-    return Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
+    return Path.home() / ".agent" / "skills" / "stock-select" / "runtime"
 
 
 def _connect(dsn: str):
@@ -119,6 +128,16 @@ def _resolve_cli_dsn(dsn: str | None) -> str:
 
 def _load_candidate_payload(candidate_path: Path) -> dict:
     return json.loads(candidate_path.read_text(encoding="utf-8"))
+
+
+def _load_summary_payload(summary_path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"Invalid summary json: {summary_path}") from exc
+    if not isinstance(payload, dict):
+        raise typer.BadParameter(f"Invalid summary json: {summary_path}")
+    return payload
 
 
 def _artifact_key(base_key: str, method: str) -> str:
@@ -141,8 +160,20 @@ def _review_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
     return runtime_root / "reviews" / _artifact_key(base_key, method)
 
 
+def _watch_pool_path(runtime_root: Path, method: str) -> Path:
+    return runtime_root / "watch_pool" / f"{method}.csv"
+
+
 def _intraday_candidate_path(runtime_root: Path, run_id: str, method: str) -> Path:
     return _candidate_path(runtime_root, run_id, method)
+
+
+def _today_local_date() -> str:
+    return datetime.now().astimezone().strftime("%Y-%m-%d")
+
+
+def _recorded_at_timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _candidate_payload_method(candidate_path: Path, payload: dict[str, object]) -> str | None:
@@ -1325,6 +1356,78 @@ def _render_html_impl(
     return zip_path
 
 
+def _record_watch_impl(
+    *,
+    method: str,
+    pick_date: str,
+    dsn: str | None,
+    runtime_root: Path,
+    window_trading_days: int,
+    overwrite: bool,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    if window_trading_days <= 0:
+        raise typer.BadParameter("--window-trading-days must be positive.")
+
+    summary_path = _review_dir_path(runtime_root, pick_date, method) / "summary.json"
+    if not summary_path.exists():
+        raise typer.BadParameter(f"Summary file not found: {summary_path}")
+
+    if reporter:
+        reporter.emit("record-watch", f"load summary path={summary_path}")
+    summary_payload = _load_summary_payload(summary_path)
+    incoming_rows = summary_to_watch_rows(
+        summary_payload,
+        method=method,
+        pick_date=pick_date,
+        recorded_at=_recorded_at_timestamp(),
+    )
+
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    if reporter:
+        reporter.emit("record-watch", "connect db")
+    connection = _connect(resolved_dsn)
+    execution_date = _today_local_date()
+    execution_trade_date = fetch_nth_latest_trade_date(connection, end_date=execution_date, n=1)
+    cutoff_trade_date = fetch_nth_latest_trade_date(connection, end_date=execution_trade_date, n=window_trading_days)
+    trade_dates_frame = fetch_available_trade_dates(connection)
+    if "trade_date" not in trade_dates_frame.columns:
+        raise typer.BadParameter("Trade date calendar is unavailable.")
+    trade_dates_desc = [str(value) for value in trade_dates_frame["trade_date"].tolist()]
+    if not trade_dates_desc:
+        raise typer.BadParameter("Trade date calendar is unavailable.")
+
+    csv_path = _watch_pool_path(runtime_root, method)
+    existing_rows = load_watch_pool(csv_path)
+    try:
+        merged_rows, overwritten_count, imported_count = merge_watch_rows(
+            existing_rows,
+            incoming_rows,
+            overwrite=overwrite,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    try:
+        final_rows, trimmed_count = trim_and_sort_watch_rows(
+            merged_rows,
+            trade_dates_desc=trade_dates_desc,
+            execution_trade_date=execution_trade_date,
+            cutoff_trade_date=cutoff_trade_date,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    write_watch_pool(csv_path, final_rows)
+    if reporter:
+        reporter.emit(
+            "record-watch",
+            (
+                f"done imported={imported_count} overwritten={overwritten_count} trimmed={trimmed_count} "
+                f"execution_trade_date={execution_trade_date} cutoff_trade_date={cutoff_trade_date} write={csv_path}"
+            ),
+        )
+    return csv_path
+
+
 @app.command()
 def screen(
     method: str = typer.Option(..., "--method"),
@@ -1423,6 +1526,30 @@ def review(
             reporter=reporter,
         )
     typer.echo(str(summary_path))
+
+
+@app.command(name="record-watch")
+def record_watch(
+    method: str = typer.Option(..., "--method"),
+    pick_date: str = typer.Option(..., "--pick-date"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    window_trading_days: int = typer.Option(10, "--window-trading-days"),
+    overwrite: bool = typer.Option(True, "--overwrite/--no-overwrite"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    normalized_method = _validate_cli_method(method)
+    reporter = ProgressReporter(enabled=progress)
+    csv_path = _record_watch_impl(
+        method=normalized_method,
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        window_trading_days=window_trading_days,
+        overwrite=overwrite,
+        reporter=reporter,
+    )
+    typer.echo(str(csv_path))
 
 
 @app.command(name="review-merge")

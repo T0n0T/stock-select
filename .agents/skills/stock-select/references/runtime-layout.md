@@ -3,7 +3,7 @@
 Write all generated outputs under:
 
 ```text
-~/.agents/skills/stock-select/runtime/
+~/.agent/skills/stock-select/runtime/
   candidates/<base_key>.<method>.json
   prepared/<base_key>.<method>.pkl
   charts/<base_key>.<method>/<code>_day.png
@@ -11,6 +11,7 @@ Write all generated outputs under:
   reviews/<base_key>.<method>/summary.json
   reviews/<base_key>.<method>/llm_review_tasks.json
   reviews/<base_key>.<method>/llm_review_results/<code>.json
+  watch_pool/<method>.csv
 ```
 
 Current behavior:
@@ -23,6 +24,7 @@ Current behavior:
 - `reviews/<base_key>.<method>/summary.json` stores the aggregated recommendations, exclusions, and failures.
 - `reviews/<base_key>.<method>/llm_review_tasks.json` stores one dispatch task per candidate.
 - `reviews/<base_key>.<method>/llm_review_results/<code>.json` stores raw subagent JSON before `review-merge` validation.
+- `watch_pool/<method>.csv` stores end-of-day `PASS` and `WATCH` rows imported by `record-watch`, including `recorded_at`, with retention trimmed by trading-day window.
 
 Optional additions:
 
