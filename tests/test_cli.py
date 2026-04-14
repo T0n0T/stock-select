@@ -3002,7 +3002,7 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
     cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
     cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
     cli.build_top_turnover_pool = fake_pool  # type: ignore[assignment]
-    cli.prefilter_b2_non_macd = lambda prepared_by_symbol, pick_date, config=None: ["AAA.SZ", "BBB.SZ"]  # type: ignore[assignment]
+    cli.prefilter_b2_non_macd = lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"]  # type: ignore[assignment]
     cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
 
     try:
