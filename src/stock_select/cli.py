@@ -58,6 +58,7 @@ from stock_select.review_orchestrator import (
     summarize_reviews,
 )
 from stock_select.watch_pool import (
+    effective_watch_pool_symbols,
     load_watch_pool,
     merge_watch_rows,
     summary_to_watch_rows,
@@ -111,6 +112,15 @@ def _validate_cli_method(method: str) -> str:
         return validate_method(method)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _validate_pool_source(pool_source: str) -> str:
+    normalized = pool_source.strip().lower()
+    supported_sources = {"turnover-top", "record-watch"}
+    if normalized not in supported_sources:
+        supported = ", ".join(sorted(supported_sources))
+        raise typer.BadParameter(f"Unsupported pool source '{pool_source}'. Supported pool sources: {supported}")
+    return normalized
 
 
 def _default_runtime_root() -> Path:
@@ -350,6 +360,63 @@ def _resolve_hcr_start_date(connection, *, end_date: str, trading_days: int) -> 
     return fetch_nth_latest_trade_date(connection, end_date=end_date, n=trading_days)
 
 
+def _resolve_record_watch_pool_codes(
+    *,
+    runtime_root: Path,
+    method: str,
+    pick_date: str,
+    prepared_by_symbol: dict[str, pd.DataFrame],
+) -> list[str]:
+    csv_path = _watch_pool_path(runtime_root, method)
+    if not csv_path.exists():
+        raise typer.BadParameter(f"Missing watch pool CSV for pool_source=record-watch: {csv_path}")
+
+    watch_rows = load_watch_pool(csv_path)
+    effective_symbols = effective_watch_pool_symbols(watch_rows, screening_date=pick_date)
+    pool_codes = [code for code in effective_symbols if code in prepared_by_symbol]
+    if not pool_codes:
+        raise typer.BadParameter(
+            f"Effective watch pool is empty after applying screening date {pick_date} and prepared-data intersection."
+    )
+    return pool_codes
+
+
+def _resolve_pool_codes(
+    *,
+    pool_source: str,
+    runtime_root: Path,
+    method: str,
+    pick_date: str,
+    prepared_by_symbol: dict[str, pd.DataFrame],
+) -> list[str]:
+    if pool_source == "record-watch":
+        return _resolve_record_watch_pool_codes(
+            runtime_root=runtime_root,
+            method=method,
+            pick_date=pick_date,
+            prepared_by_symbol=prepared_by_symbol,
+        )
+    top_turnover_pool = build_top_turnover_pool(prepared_by_symbol, top_m=DEFAULT_TOP_M)
+    return top_turnover_pool.get(pd.Timestamp(pick_date), [])
+
+
+def _candidate_payload_matches_pool_source(payload: dict[str, object], *, pool_source: str) -> bool:
+    payload_pool_source = payload.get("pool_source")
+    if isinstance(payload_pool_source, str):
+        return payload_pool_source.strip().lower() == pool_source
+    return pool_source == "turnover-top"
+
+
+def _prepared_cache_matches_pool_source(payload: dict[str, object], *, pool_source: str) -> bool:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    cached_pool_source = metadata.get("pool_source")
+    if isinstance(cached_pool_source, str):
+        return cached_pool_source.strip().lower() == pool_source
+    return pool_source == "turnover-top"
+
+
 def _validate_eod_pick_date_has_market_data(connection, *, market: pd.DataFrame, pick_date: str) -> None:
     if not market.empty:
         trade_dates = pd.to_datetime(market["trade_date"], errors="coerce")
@@ -576,6 +643,8 @@ def _prepare_b2_screen_data_for_pick(
     connection,
     *,
     pick_date: str,
+    pool_source: str,
+    runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
     short_start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
@@ -592,9 +661,15 @@ def _prepare_b2_screen_data_for_pick(
             "screen",
             f"fetched pool rows={len(short_market)} symbols={short_market['ts_code'].nunique() if not short_market.empty else 0}",
         )
+    _validate_eod_pick_date_has_market_data(connection, market=short_market, pick_date=pick_date)
     short_prepared = _call_prepare_screen_data(short_market, reporter=reporter)
-    top_turnover_pool = build_top_turnover_pool(short_prepared, top_m=DEFAULT_TOP_M)
-    pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
+    pool_codes = _resolve_pool_codes(
+        pool_source=pool_source,
+        runtime_root=runtime_root,
+        method="b2",
+        pick_date=pick_date,
+        prepared_by_symbol=short_prepared,
+    )
     pooled_prepared = {code: short_prepared[code] for code in pool_codes if code in short_prepared}
     if not pooled_prepared:
         return short_prepared, {}
@@ -724,24 +799,29 @@ def _screen_impl(
     pick_date: str,
     dsn: str | None,
     runtime_root: Path,
+    pool_source: str,
     recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = _candidate_path(runtime_root, pick_date, method)
-    if not recompute and out_path.exists():
+    allow_reuse = not recompute
+    if allow_reuse and out_path.exists():
         try:
             existing_payload = _load_candidate_payload(out_path)
         except (json.JSONDecodeError, OSError, ValueError) as exc:
             if reporter:
                 reporter.emit("screen", f"candidate reuse skipped path={out_path} reason={type(exc).__name__}")
         else:
-            existing_candidates = existing_payload.get("candidates", [])
-            if isinstance(existing_candidates, list) and existing_candidates:
-                if reporter:
-                    reporter.emit("screen", f"reuse candidates path={out_path}")
-                return out_path
+            if _candidate_payload_matches_pool_source(existing_payload, pool_source=pool_source):
+                existing_candidates = existing_payload.get("candidates", [])
+                if isinstance(existing_candidates, list) and existing_candidates:
+                    if reporter:
+                        reporter.emit("screen", f"reuse candidates path={out_path}")
+                    return out_path
+            elif reporter:
+                reporter.emit("screen", f"candidate reuse skipped path={out_path} reason=pool_source_mismatch")
 
     prepared_cache_path = _prepared_cache_path(runtime_root, pick_date, method)
     prepared: dict[str, pd.DataFrame] | None = None
@@ -752,36 +832,39 @@ def _screen_impl(
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     else:
         start_date = None
-    if not recompute and prepared_cache_path.exists():
+    if allow_reuse and prepared_cache_path.exists():
         try:
             cache_payload = _load_prepared_cache(prepared_cache_path)
         except (OSError, ValueError, pickle.PickleError) as exc:
             if reporter:
                 reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={type(exc).__name__}")
         else:
-            cached_pick_date = cache_payload.get("pick_date")
-            cached_start_date = cache_payload.get("start_date")
-            cached_end_date = cache_payload.get("end_date")
-            if cached_pick_date == pick_date and cached_start_date == start_date and cached_end_date == pick_date:
-                cached_prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
-                if _prepared_cache_covers_pick_date(cached_prepared, pick_date=pick_date):
-                    prepared = cached_prepared
-                    screen_prepared = cached_prepared
-                    if reporter:
-                        reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+            if _prepared_cache_matches_pool_source(cache_payload, pool_source=pool_source):
+                cached_pick_date = cache_payload.get("pick_date")
+                cached_start_date = cache_payload.get("start_date")
+                cached_end_date = cache_payload.get("end_date")
+                if cached_pick_date == pick_date and cached_start_date == start_date and cached_end_date == pick_date:
+                    cached_prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
+                    if _prepared_cache_covers_pick_date(cached_prepared, pick_date=pick_date):
+                        prepared = cached_prepared
+                        screen_prepared = cached_prepared
+                        if reporter:
+                            reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+                    elif reporter:
+                        reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=stale_pick_date")
                 elif reporter:
-                    reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=stale_pick_date")
+                    mismatch_reason = _prepared_cache_mismatch_reason(
+                        cached_pick_date=cached_pick_date,
+                        expected_pick_date=pick_date,
+                        cached_start_date=cached_start_date,
+                        expected_start_date=start_date,
+                        cached_end_date=cached_end_date,
+                        expected_end_date=pick_date,
+                    )
+                    if mismatch_reason:
+                        reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={mismatch_reason}")
             elif reporter:
-                mismatch_reason = _prepared_cache_mismatch_reason(
-                    cached_pick_date=cached_pick_date,
-                    expected_pick_date=pick_date,
-                    cached_start_date=cached_start_date,
-                    expected_start_date=start_date,
-                    cached_end_date=cached_end_date,
-                    expected_end_date=pick_date,
-                )
-                if mismatch_reason:
-                    reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={mismatch_reason}")
+                reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=pool_source_mismatch")
 
     if prepared is None:
         resolved_dsn = _resolve_cli_dsn(dsn)
@@ -798,6 +881,8 @@ def _screen_impl(
             screen_prepared, prepared = _prepare_b2_screen_data_for_pick(
                 connection,
                 pick_date=pick_date,
+                pool_source=pool_source,
+                runtime_root=runtime_root,
                 reporter=reporter,
             )
             start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
@@ -830,16 +915,28 @@ def _screen_impl(
             start_date=start_date,
             end_date=pick_date,
             prepared_by_symbol=screen_prepared if screen_prepared is not None else prepared,
+            metadata_overrides={"pool_source": pool_source},
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
     if method in {"b1", "b2"}:
         if prepared is None:
             prepared = {}
-        top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
-        pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])
+        if method == "b2" and screen_prepared is not None:
+            pool_codes = list(prepared)
+        else:
+            pool_codes = _resolve_pool_codes(
+                pool_source=pool_source,
+                runtime_root=runtime_root,
+                method=method,
+                pick_date=pick_date,
+                prepared_by_symbol=prepared,
+            )
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared_for_pick)}")
+            if pool_source == "record-watch":
+                reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", f"run {method} screen")
         if method == "b1":
             candidates, stats = run_b1_screen_with_stats(
@@ -854,10 +951,23 @@ def _screen_impl(
                 DEFAULT_B1_CONFIG,
             )
     else:
+        if prepared is None:
+            prepared = {}
+        pool_codes = _resolve_pool_codes(
+            pool_source=pool_source,
+            runtime_root=runtime_root,
+            method=method,
+            pick_date=pick_date,
+            prepared_by_symbol=prepared,
+        )
+        prepared = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared)}")
+            if pool_source == "record-watch":
+                reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", "run hcr screen")
         candidates, stats = run_hcr_screen_with_stats(prepared, pd.Timestamp(pick_date))
-    payload = {"pick_date": pick_date, "method": method, "candidates": candidates}
+    payload = {"pick_date": pick_date, "method": method, "pool_source": pool_source, "candidates": candidates}
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     _emit_screen_breakdown(method, stats, reporter)
     if reporter:
@@ -871,6 +981,7 @@ def _screen_intraday_impl(
     dsn: str | None,
     tushare_token: str | None,
     runtime_root: Path,
+    pool_source: str,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     trade_date = _resolve_intraday_trade_date()
@@ -921,16 +1032,25 @@ def _screen_intraday_impl(
             "source": "tushare_rt_k",
             "run_id": run_id,
             "previous_trade_date": previous_trade_date,
+            "pool_source": pool_source,
         },
     )
     if reporter:
         reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
     if method in {"b1", "b2"}:
-        top_turnover_pool = build_top_turnover_pool(prepared, top_m=DEFAULT_TOP_M)
-        pool_codes = top_turnover_pool.get(pd.Timestamp(trade_date), [])
+        pool_codes = _resolve_pool_codes(
+            pool_source=pool_source,
+            runtime_root=runtime_root,
+            method=method,
+            pick_date=trade_date,
+            prepared_by_symbol=prepared,
+        )
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared_for_pick)}")
+            if pool_source == "record-watch":
+                reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", f"run {method} screen")
         if method == "b1":
             candidates, stats = run_b1_screen_with_stats(
@@ -945,7 +1065,18 @@ def _screen_intraday_impl(
                 DEFAULT_B1_CONFIG,
             )
     else:
+        pool_codes = _resolve_pool_codes(
+            pool_source=pool_source,
+            runtime_root=runtime_root,
+            method=method,
+            pick_date=trade_date,
+            prepared_by_symbol=prepared,
+        )
+        prepared = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared)}")
+            if pool_source == "record-watch":
+                reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", "run hcr screen")
         candidates, stats = run_hcr_screen_with_stats(prepared, pd.Timestamp(trade_date))
     out_path = _intraday_candidate_path(runtime_root, run_id, method)
@@ -957,6 +1088,7 @@ def _screen_intraday_impl(
         "fetched_at": run_id,
         "run_id": run_id,
         "source": "tushare_rt_k",
+        "pool_source": pool_source,
         "candidates": candidates,
     }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1432,6 +1564,7 @@ def _record_watch_impl(
 def screen(
     method: str = typer.Option(..., "--method"),
     pick_date: str | None = typer.Option(None, "--pick-date"),
+    pool_source: str = typer.Option("turnover-top", "--pool-source"),
     dsn: str | None = typer.Option(None, "--dsn"),
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
@@ -1440,6 +1573,7 @@ def screen(
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_cli_method(method)
+    normalized_pool_source = _validate_pool_source(pool_source)
     reporter = ProgressReporter(enabled=progress)
     try:
         if intraday:
@@ -1450,6 +1584,7 @@ def screen(
                 dsn=dsn,
                 tushare_token=tushare_token,
                 runtime_root=runtime_root,
+                pool_source=normalized_pool_source,
                 reporter=reporter,
             )
         else:
@@ -1460,6 +1595,7 @@ def screen(
                 pick_date=pick_date,
                 dsn=dsn,
                 runtime_root=runtime_root,
+                pool_source=normalized_pool_source,
                 recompute=recompute,
                 reporter=reporter,
             )
@@ -1597,6 +1733,7 @@ def render_html(
 def run_all(
     method: str = typer.Option(..., "--method"),
     pick_date: str | None = typer.Option(None, "--pick-date"),
+    pool_source: str = typer.Option("turnover-top", "--pool-source"),
     dsn: str | None = typer.Option(None, "--dsn"),
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
@@ -1605,6 +1742,7 @@ def run_all(
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_cli_method(method)
+    normalized_pool_source = _validate_pool_source(pool_source)
     reporter = ProgressReporter(enabled=progress)
     if intraday and pick_date is not None:
         raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
@@ -1619,6 +1757,7 @@ def run_all(
             dsn=dsn,
             tushare_token=tushare_token,
             runtime_root=runtime_root,
+            pool_source=normalized_pool_source,
             reporter=reporter,
         )
     else:
@@ -1627,6 +1766,7 @@ def run_all(
             pick_date=pick_date,
             dsn=dsn,
             runtime_root=runtime_root,
+            pool_source=normalized_pool_source,
             recompute=recompute,
             reporter=reporter,
         )
