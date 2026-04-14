@@ -113,6 +113,15 @@ def _validate_cli_method(method: str) -> str:
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _validate_pool_source(pool_source: str) -> str:
+    normalized = pool_source.strip().lower()
+    supported_sources = {"turnover-top", "record-watch"}
+    if normalized not in supported_sources:
+        supported = ", ".join(sorted(supported_sources))
+        raise typer.BadParameter(f"Unsupported pool source '{pool_source}'. Supported pool sources: {supported}")
+    return normalized
+
+
 def _default_runtime_root() -> Path:
     return Path.home() / ".agent" / "skills" / "stock-select" / "runtime"
 
@@ -725,9 +734,11 @@ def _screen_impl(
     pick_date: str,
     dsn: str | None,
     runtime_root: Path,
+    pool_source: str,
     recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
+    _ = pool_source
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = _candidate_path(runtime_root, pick_date, method)
@@ -872,8 +883,10 @@ def _screen_intraday_impl(
     dsn: str | None,
     tushare_token: str | None,
     runtime_root: Path,
+    pool_source: str,
     reporter: ProgressReporter | None = None,
 ) -> Path:
+    _ = pool_source
     trade_date = _resolve_intraday_trade_date()
     resolved_token = _resolve_tushare_token(tushare_token)
     resolved_dsn = _resolve_cli_dsn(dsn)
@@ -1433,6 +1446,7 @@ def _record_watch_impl(
 def screen(
     method: str = typer.Option(..., "--method"),
     pick_date: str | None = typer.Option(None, "--pick-date"),
+    pool_source: str = typer.Option("turnover-top", "--pool-source"),
     dsn: str | None = typer.Option(None, "--dsn"),
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
@@ -1441,6 +1455,7 @@ def screen(
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_cli_method(method)
+    normalized_pool_source = _validate_pool_source(pool_source)
     reporter = ProgressReporter(enabled=progress)
     try:
         if intraday:
@@ -1451,6 +1466,7 @@ def screen(
                 dsn=dsn,
                 tushare_token=tushare_token,
                 runtime_root=runtime_root,
+                pool_source=normalized_pool_source,
                 reporter=reporter,
             )
         else:
@@ -1461,6 +1477,7 @@ def screen(
                 pick_date=pick_date,
                 dsn=dsn,
                 runtime_root=runtime_root,
+                pool_source=normalized_pool_source,
                 recompute=recompute,
                 reporter=reporter,
             )
@@ -1598,6 +1615,7 @@ def render_html(
 def run_all(
     method: str = typer.Option(..., "--method"),
     pick_date: str | None = typer.Option(None, "--pick-date"),
+    pool_source: str = typer.Option("turnover-top", "--pool-source"),
     dsn: str | None = typer.Option(None, "--dsn"),
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
@@ -1606,6 +1624,7 @@ def run_all(
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_cli_method(method)
+    normalized_pool_source = _validate_pool_source(pool_source)
     reporter = ProgressReporter(enabled=progress)
     if intraday and pick_date is not None:
         raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
@@ -1620,6 +1639,7 @@ def run_all(
             dsn=dsn,
             tushare_token=tushare_token,
             runtime_root=runtime_root,
+            pool_source=normalized_pool_source,
             reporter=reporter,
         )
     else:
@@ -1628,6 +1648,7 @@ def run_all(
             pick_date=pick_date,
             dsn=dsn,
             runtime_root=runtime_root,
+            pool_source=normalized_pool_source,
             recompute=recompute,
             reporter=reporter,
         )

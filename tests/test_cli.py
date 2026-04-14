@@ -97,6 +97,45 @@ def test_screen_accepts_whitespace_padded_b1_method(monkeypatch: pytest.MonkeyPa
     assert result.stdout.strip() == str(expected_path)
 
 
+def test_screen_accepts_pool_source_and_passes_it_to_screen_impl(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json"
+
+    def fake_screen_impl(**kwargs: object) -> Path:
+        assert kwargs["method"] == "b1"
+        assert kwargs["pick_date"] == "2026-04-01"
+        assert kwargs["dsn"] == "postgresql://example"
+        assert kwargs["runtime_root"] == runtime_root
+        assert kwargs["pool_source"] == "record-watch"
+        return expected_path
+
+    monkeypatch.setattr(cli, "_screen_impl", fake_screen_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--pool-source",
+            " record-watch ",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(expected_path)
+
+
 def test_chart_requires_candidate_file(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -1632,6 +1671,82 @@ def test_run_writes_final_summary(tmp_path: Path) -> None:
     assert "elapsed=" in result.stderr
 
 
+def test_run_accepts_pool_source_and_passes_it_to_screen_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    calls: list[tuple[str, str]] = []
+
+    def fake_screen_impl(**kwargs: object) -> Path:
+        assert kwargs["method"] == "b1"
+        assert kwargs["pick_date"] == "2026-04-01"
+        assert kwargs["dsn"] == "postgresql://example"
+        assert kwargs["runtime_root"] == runtime_root
+        assert kwargs["pool_source"] == "record-watch"
+        calls.append(("screen", kwargs["pool_source"]))  # type: ignore[arg-type]
+        return runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json"
+
+    def fake_chart_impl(
+        *,
+        method: str,
+        pick_date: str,
+        dsn: str | None,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        assert method == "b1"
+        assert pick_date == "2026-04-01"
+        assert dsn == "postgresql://example"
+        assert runtime_root == tmp_path / "runtime"
+        calls.append(("chart", method))
+        return runtime_root / "charts" / _eod_key("2026-04-01")
+
+    def fake_review_impl(
+        *,
+        method: str,
+        pick_date: str,
+        dsn: str | None,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        assert method == "b1"
+        assert pick_date == "2026-04-01"
+        assert dsn == "postgresql://example"
+        assert runtime_root == tmp_path / "runtime"
+        calls.append(("review", method))
+        return runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json"
+
+    monkeypatch.setattr(cli, "_screen_impl", fake_screen_impl)
+    monkeypatch.setattr(cli, "_chart_impl", fake_chart_impl)
+    monkeypatch.setattr(cli, "_review_impl", fake_review_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--pool-source",
+            " record-watch ",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("screen", "record-watch"),
+        ("chart", "b1"),
+        ("review", "b1"),
+    ]
+
+
 def test_run_intraday_rejects_pick_date(tmp_path: Path) -> None:
     runner = CliRunner()
 
@@ -1664,6 +1779,7 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         dsn: str | None,
         tushare_token: str | None,
         runtime_root: Path,
+        pool_source: str,
         reporter: object | None = None,
     ) -> Path:
         calls.append(("screen", tushare_token))
@@ -1671,6 +1787,7 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         assert dsn == "postgresql://example"
         assert tushare_token == "token"
         assert runtime_root == tmp_path / "runtime"
+        assert pool_source == "turnover-top"
         return runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json"
 
     def fake_chart_intraday_impl(
@@ -1725,6 +1842,83 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         str(runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json"),
         str(runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08-123456+08-00")),
         str(runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"),
+    ]
+
+
+def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    calls: list[tuple[str, str]] = []
+
+    def fake_screen_intraday_impl(
+        *,
+        method: str,
+        dsn: str | None,
+        tushare_token: str | None,
+        runtime_root: Path,
+        pool_source: str,
+        reporter: object | None = None,
+    ) -> Path:
+        assert method == "b1"
+        assert dsn == "postgresql://example"
+        assert tushare_token == "token"
+        assert runtime_root == tmp_path / "runtime"
+        assert pool_source == "record-watch"
+        calls.append(("screen", pool_source))
+        return runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json"
+
+    def fake_chart_intraday_impl(
+        *,
+        method: str,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        assert method == "b1"
+        assert runtime_root == tmp_path / "runtime"
+        calls.append(("chart", method))
+        return runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08-123456+08-00")
+
+    def fake_review_intraday_impl(
+        *,
+        method: str,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        assert method == "b1"
+        assert runtime_root == tmp_path / "runtime"
+        calls.append(("review", method))
+        return runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"
+
+    monkeypatch.setattr(cli, "_screen_intraday_impl", fake_screen_intraday_impl)
+    monkeypatch.setattr(cli, "_chart_intraday_impl", fake_chart_intraday_impl)
+    monkeypatch.setattr(cli, "_review_intraday_impl", fake_review_intraday_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--intraday",
+            "--pool-source",
+            " record-watch ",
+            "--dsn",
+            "postgresql://example",
+            "--tushare-token",
+            "token",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("screen", "record-watch"),
+        ("chart", "b1"),
+        ("review", "b1"),
     ]
     assert "[run] step=screen start" in result.stderr
     assert "[run] step=chart start" in result.stderr
