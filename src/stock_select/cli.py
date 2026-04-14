@@ -47,7 +47,7 @@ from stock_select.db_access import (
     resolve_dsn,
 )
 from stock_select.html_export import write_summary_package
-from stock_select.intraday import build_intraday_market_frame, normalize_rt_k_snapshot
+from stock_select.intraday import _normalize_ts_code, build_intraday_market_frame, normalize_rt_k_snapshot
 from stock_select.review_orchestrator import (
     REFERENCE_PROMPT_PATH,
     build_review_payload,
@@ -116,7 +116,7 @@ def _validate_cli_method(method: str) -> str:
 
 def _validate_pool_source(pool_source: str) -> str:
     normalized = pool_source.strip().lower()
-    supported_sources = {"turnover-top", "record-watch"}
+    supported_sources = {"turnover-top", "record-watch", "custom"}
     if normalized not in supported_sources:
         supported = ", ".join(sorted(supported_sources))
         raise typer.BadParameter(f"Unsupported pool source '{pool_source}'. Supported pool sources: {supported}")
@@ -172,6 +172,10 @@ def _review_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
 
 def _watch_pool_path(runtime_root: Path, method: str) -> Path:
     return runtime_root / "watch_pool" / f"{method}.csv"
+
+
+def _default_custom_pool_path() -> Path:
+    return _default_runtime_root() / "custom-pool.txt"
 
 
 def _intraday_candidate_path(runtime_root: Path, run_id: str, method: str) -> Path:
@@ -381,6 +385,43 @@ def _resolve_record_watch_pool_codes(
     return pool_codes
 
 
+def _custom_pool_guidance_message(path: Path) -> str:
+    return (
+        f"Missing custom pool file: {path}. Define a custom pool with --pool-file PATH, "
+        f"or set STOCK_SELECT_POOL_FILE, or create {_default_custom_pool_path()}."
+    )
+
+
+def _resolve_custom_pool_file(pool_file: Path | None) -> Path:
+    if pool_file is not None:
+        return pool_file.expanduser()
+    env_value = os.getenv("STOCK_SELECT_POOL_FILE")
+    if env_value and env_value.strip():
+        return Path(env_value.strip()).expanduser()
+    return _default_custom_pool_path()
+
+
+def _load_custom_pool_codes(*, pool_file: Path | None) -> tuple[Path, list[str]]:
+    resolved_path = _resolve_custom_pool_file(pool_file)
+    if not resolved_path.exists():
+        raise typer.BadParameter(_custom_pool_guidance_message(resolved_path))
+    raw_tokens = [token.strip() for token in resolved_path.read_text(encoding="utf-8").split() if token.strip()]
+    codes: list[str] = []
+    for token in raw_tokens:
+        try:
+            normalized = _normalize_ts_code(token.upper())
+        except ValueError:
+            continue
+        if normalized not in codes:
+            codes.append(normalized)
+    if not codes:
+        raise typer.BadParameter(
+            "Custom pool must contain at least one stock code. "
+            "Provide codes separated by whitespace, for example: 603138 300058"
+        )
+    return resolved_path, codes
+
+
 def _resolve_pool_codes(
     *,
     pool_source: str,
@@ -388,6 +429,7 @@ def _resolve_pool_codes(
     method: str,
     pick_date: str,
     prepared_by_symbol: dict[str, pd.DataFrame],
+    pool_file: Path | None = None,
 ) -> list[str]:
     if pool_source == "record-watch":
         return _resolve_record_watch_pool_codes(
@@ -396,24 +438,52 @@ def _resolve_pool_codes(
             pick_date=pick_date,
             prepared_by_symbol=prepared_by_symbol,
         )
+    if pool_source == "custom":
+        _resolved_path, custom_codes = _load_custom_pool_codes(pool_file=pool_file)
+        pool_codes = [code for code in custom_codes if code in prepared_by_symbol]
+        if not pool_codes:
+            raise typer.BadParameter("Effective custom pool is empty after prepared-data intersection.")
+        return pool_codes
     top_turnover_pool = build_top_turnover_pool(prepared_by_symbol, top_m=DEFAULT_TOP_M)
     return top_turnover_pool.get(pd.Timestamp(pick_date), [])
 
 
-def _candidate_payload_matches_pool_source(payload: dict[str, object], *, pool_source: str) -> bool:
+def _candidate_payload_matches_pool_source(
+    payload: dict[str, object],
+    *,
+    pool_source: str,
+    pool_file: Path | None = None,
+) -> bool:
     payload_pool_source = payload.get("pool_source")
     if isinstance(payload_pool_source, str):
-        return payload_pool_source.strip().lower() == pool_source
+        if payload_pool_source.strip().lower() != pool_source:
+            return False
+        if pool_source == "custom":
+            payload_pool_file = payload.get("pool_file")
+            resolved_pool_file = str(_resolve_custom_pool_file(pool_file))
+            return isinstance(payload_pool_file, str) and payload_pool_file == resolved_pool_file
+        return True
     return pool_source == "turnover-top"
 
 
-def _prepared_cache_matches_pool_source(payload: dict[str, object], *, pool_source: str) -> bool:
+def _prepared_cache_matches_pool_source(
+    payload: dict[str, object],
+    *,
+    pool_source: str,
+    pool_file: Path | None = None,
+) -> bool:
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         return False
     cached_pool_source = metadata.get("pool_source")
     if isinstance(cached_pool_source, str):
-        return cached_pool_source.strip().lower() == pool_source
+        if cached_pool_source.strip().lower() != pool_source:
+            return False
+        if pool_source == "custom":
+            cached_pool_file = metadata.get("pool_file")
+            resolved_pool_file = str(_resolve_custom_pool_file(pool_file))
+            return isinstance(cached_pool_file, str) and cached_pool_file == resolved_pool_file
+        return True
     return pool_source == "turnover-top"
 
 
@@ -644,6 +714,7 @@ def _prepare_b2_screen_data_for_pick(
     *,
     pick_date: str,
     pool_source: str,
+    pool_file: Path | None,
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
@@ -669,6 +740,7 @@ def _prepare_b2_screen_data_for_pick(
         method="b2",
         pick_date=pick_date,
         prepared_by_symbol=short_prepared,
+        pool_file=pool_file,
     )
     pooled_prepared = {code: short_prepared[code] for code in pool_codes if code in short_prepared}
     if not pooled_prepared:
@@ -800,6 +872,7 @@ def _screen_impl(
     dsn: str | None,
     runtime_root: Path,
     pool_source: str,
+    pool_file: Path | None,
     recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
@@ -814,7 +887,7 @@ def _screen_impl(
             if reporter:
                 reporter.emit("screen", f"candidate reuse skipped path={out_path} reason={type(exc).__name__}")
         else:
-            if _candidate_payload_matches_pool_source(existing_payload, pool_source=pool_source):
+            if _candidate_payload_matches_pool_source(existing_payload, pool_source=pool_source, pool_file=pool_file):
                 existing_candidates = existing_payload.get("candidates", [])
                 if isinstance(existing_candidates, list) and existing_candidates:
                     if reporter:
@@ -839,7 +912,7 @@ def _screen_impl(
             if reporter:
                 reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={type(exc).__name__}")
         else:
-            if _prepared_cache_matches_pool_source(cache_payload, pool_source=pool_source):
+            if _prepared_cache_matches_pool_source(cache_payload, pool_source=pool_source, pool_file=pool_file):
                 cached_pick_date = cache_payload.get("pick_date")
                 cached_start_date = cache_payload.get("start_date")
                 cached_end_date = cache_payload.get("end_date")
@@ -882,6 +955,7 @@ def _screen_impl(
                 connection,
                 pick_date=pick_date,
                 pool_source=pool_source,
+                pool_file=pool_file,
                 runtime_root=runtime_root,
                 reporter=reporter,
             )
@@ -915,7 +989,10 @@ def _screen_impl(
             start_date=start_date,
             end_date=pick_date,
             prepared_by_symbol=screen_prepared if screen_prepared is not None else prepared,
-            metadata_overrides={"pool_source": pool_source},
+            metadata_overrides={
+                "pool_source": pool_source,
+                "pool_file": str(_resolve_custom_pool_file(pool_file)) if pool_source == "custom" else None,
+            },
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
@@ -931,6 +1008,7 @@ def _screen_impl(
                 method=method,
                 pick_date=pick_date,
                 prepared_by_symbol=prepared,
+                pool_file=pool_file,
             )
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
@@ -956,10 +1034,11 @@ def _screen_impl(
         pool_codes = _resolve_pool_codes(
             pool_source=pool_source,
             runtime_root=runtime_root,
-            method=method,
-            pick_date=pick_date,
-            prepared_by_symbol=prepared,
-        )
+                method=method,
+                pick_date=pick_date,
+                prepared_by_symbol=prepared,
+                pool_file=pool_file,
+            )
         prepared = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
             reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared)}")
@@ -968,6 +1047,8 @@ def _screen_impl(
             reporter.emit("screen", "run hcr screen")
         candidates, stats = run_hcr_screen_with_stats(prepared, pd.Timestamp(pick_date))
     payload = {"pick_date": pick_date, "method": method, "pool_source": pool_source, "candidates": candidates}
+    if pool_source == "custom":
+        payload["pool_file"] = str(_resolve_custom_pool_file(pool_file))
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     _emit_screen_breakdown(method, stats, reporter)
     if reporter:
@@ -982,6 +1063,7 @@ def _screen_intraday_impl(
     tushare_token: str | None,
     runtime_root: Path,
     pool_source: str,
+    pool_file: Path | None,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     trade_date = _resolve_intraday_trade_date()
@@ -1033,6 +1115,7 @@ def _screen_intraday_impl(
             "run_id": run_id,
             "previous_trade_date": previous_trade_date,
             "pool_source": pool_source,
+            "pool_file": str(_resolve_custom_pool_file(pool_file)) if pool_source == "custom" else None,
         },
     )
     if reporter:
@@ -1045,6 +1128,7 @@ def _screen_intraday_impl(
             method=method,
             pick_date=trade_date,
             prepared_by_symbol=prepared,
+            pool_file=pool_file,
         )
         prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
@@ -1071,6 +1155,7 @@ def _screen_intraday_impl(
             method=method,
             pick_date=trade_date,
             prepared_by_symbol=prepared,
+            pool_file=pool_file,
         )
         prepared = {code: prepared[code] for code in pool_codes if code in prepared}
         if reporter:
@@ -1091,6 +1176,8 @@ def _screen_intraday_impl(
         "pool_source": pool_source,
         "candidates": candidates,
     }
+    if pool_source == "custom":
+        payload["pool_file"] = str(_resolve_custom_pool_file(pool_file))
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     _emit_screen_breakdown(method, stats, reporter)
     if reporter:
@@ -1565,6 +1652,7 @@ def screen(
     method: str = typer.Option(..., "--method"),
     pick_date: str | None = typer.Option(None, "--pick-date"),
     pool_source: str = typer.Option("turnover-top", "--pool-source"),
+    pool_file: Path | None = typer.Option(None, "--pool-file"),
     dsn: str | None = typer.Option(None, "--dsn"),
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
@@ -1585,6 +1673,7 @@ def screen(
                 tushare_token=tushare_token,
                 runtime_root=runtime_root,
                 pool_source=normalized_pool_source,
+                pool_file=pool_file,
                 reporter=reporter,
             )
         else:
@@ -1596,6 +1685,7 @@ def screen(
                 dsn=dsn,
                 runtime_root=runtime_root,
                 pool_source=normalized_pool_source,
+                pool_file=pool_file,
                 recompute=recompute,
                 reporter=reporter,
             )
@@ -1734,6 +1824,7 @@ def run_all(
     method: str = typer.Option(..., "--method"),
     pick_date: str | None = typer.Option(None, "--pick-date"),
     pool_source: str = typer.Option("turnover-top", "--pool-source"),
+    pool_file: Path | None = typer.Option(None, "--pool-file"),
     dsn: str | None = typer.Option(None, "--dsn"),
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
@@ -1758,6 +1849,7 @@ def run_all(
             tushare_token=tushare_token,
             runtime_root=runtime_root,
             pool_source=normalized_pool_source,
+            pool_file=pool_file,
             reporter=reporter,
         )
     else:
@@ -1767,6 +1859,7 @@ def run_all(
             dsn=dsn,
             runtime_root=runtime_root,
             pool_source=normalized_pool_source,
+            pool_file=pool_file,
             recompute=recompute,
             reporter=reporter,
         )

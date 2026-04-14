@@ -11,6 +11,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 
 - Always require an explicit built-in method.
 - Built-in methods are `b1`, `b2`, and `hcr`.
+- Pool sources are `turnover-top`, `record-watch`, and `custom`.
 - Do not use `stock-cache read` CLI as the primary data source.
 - Read PostgreSQL tables directly.
 - Resolve DSN from `--dsn` or `POSTGRES_DSN` before any database-backed step.
@@ -18,6 +19,10 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Run deterministic screening in Python first.
 - Generate daily charts before review.
 - Expect progress output on `stderr` by default; use `--no-progress` only when the caller needs quiet stdout-only path output.
+- `custom` pool uses `--pool-source custom` plus optional `--pool-file`.
+- Custom pool path precedence is `--pool-file`, then `STOCK_SELECT_POOL_FILE`, then `~/.agent/skills/stock-select/runtime/custom-pool.txt`.
+- Custom pool files contain whitespace-separated stock codes such as `603138 300058`.
+- Custom pool codes still intersect with the prepared screening universe before the strategy runs.
 - Use the bundled review rubric and runtime layout references.
 - Use `references/prompt.md` from this skill as the chart-review prompt source when dispatching subagents.
 - Review should use rendered chart images, not HTML text.
@@ -47,6 +52,7 @@ End-of-day `--pick-date` runs use:
 - `runtime/charts/<pick_date>.<method>/`
 - `runtime/reviews/<pick_date>.<method>/`
 - `runtime/watch_pool/<method>.csv`
+- `runtime/custom-pool.txt`
 
 Intraday `--intraday` runs use an intraday `run_id` keyed layout:
 
