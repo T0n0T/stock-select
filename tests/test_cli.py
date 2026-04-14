@@ -22,10 +22,33 @@ def _intraday_key(run_id: str, method: str = "b1") -> str:
     return f"{run_id}.{method}"
 
 
-def test_default_runtime_root_uses_agent_skill_runtime() -> None:
-    expected = Path.home() / ".agent" / "skills" / "stock-select" / "runtime"
+def test_default_runtime_root_uses_agents_skill_runtime() -> None:
+    expected = Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
 
     assert cli._default_runtime_root() == expected
+
+
+def test_validate_eod_pick_date_has_market_data_rejects_placeholder_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    market = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-14", "2026-04-14"]),
+            "open": [None, None],
+            "high": [None, None],
+            "low": [None, None],
+            "close": [None, None],
+            "vol": [None, None],
+        }
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "fetch_nth_latest_trade_date",
+        lambda _connection, *, end_date, n: "2026-04-13",
+    )
+
+    with pytest.raises(cli.typer.BadParameter, match="incomplete end-of-day rows"):
+        cli._validate_eod_pick_date_has_market_data(object(), market=market, pick_date="2026-04-14")
 
 
 def test_screen_rejects_unknown_method() -> None:
@@ -1407,16 +1430,15 @@ def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
                     ]
                 )
             },
-            "metadata": {
-                "b1_config": cli.DEFAULT_B1_CONFIG,
-                "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
-                "weekly_ma_periods": cli.DEFAULT_WEEKLY_MA_PERIODS,
-                "max_vol_lookback": cli.DEFAULT_MAX_VOL_LOOKBACK,
-                "mode": "intraday_snapshot",
-                "run_id": "2026-04-09T10-00-00+08-00",
+                "metadata": {
+                    "b1_config": cli.DEFAULT_B1_CONFIG,
+                    "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
+                    "weekly_ma_periods": cli.DEFAULT_WEEKLY_MA_PERIODS,
+                    "max_vol_lookback": cli.DEFAULT_MAX_VOL_LOOKBACK,
+                    "mode": "not_intraday_snapshot",
+                },
             },
-        },
-    )
+        )
 
     result = runner.invoke(app, ["review", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
 
@@ -1789,7 +1811,7 @@ def test_readme_mentions_record_watch_and_new_runtime_root() -> None:
     content = Path("README.md").read_text(encoding="utf-8")
 
     assert "record-watch" in content
-    assert "~/.agent/skills/stock-select/runtime" in content
+    assert "~/.agents/skills/stock-select/runtime" in content
 
 
 def test_run_writes_final_summary(tmp_path: Path) -> None:
@@ -2004,6 +2026,7 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         runtime_root: Path,
         pool_source: str,
         pool_file: Path | None,
+        recompute: bool = False,
         reporter: object | None = None,
     ) -> Path:
         calls.append(("screen", tushare_token))
@@ -2013,6 +2036,7 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         assert runtime_root == tmp_path / "runtime"
         assert pool_source == "turnover-top"
         assert pool_file is None
+        assert recompute is False
         return runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json"
 
     def fake_chart_intraday_impl(
@@ -2086,6 +2110,7 @@ def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
         runtime_root: Path,
         pool_source: str,
         pool_file: Path | None,
+        recompute: bool = False,
         reporter: object | None = None,
     ) -> Path:
         assert method == "b1"
@@ -2094,6 +2119,7 @@ def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
         assert runtime_root == tmp_path / "runtime"
         assert pool_source == "record-watch"
         assert pool_file is None
+        assert recompute is False
         calls.append(("screen", pool_source))
         return runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json"
 
@@ -3169,6 +3195,51 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
     ) in result.stderr
 
 
+def test_screen_rejects_placeholder_end_of_day_rows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda connection, *, start_date, end_date, symbols=None: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-14"]),
+                "open": [None],
+                "high": [None],
+                "low": [None],
+                "close": [None],
+                "vol": [None],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_nth_latest_trade_date",
+        lambda _connection, *, end_date, n: "2026-04-13",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-14",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "incomplete end-of-day rows for pick_date 2026-04-14" in result.stderr
+    assert "Latest complete trade date is 2026-04-13" in result.stderr
+
+
 def test_prepare_screen_data_uses_reference_b1_windows() -> None:
     importlib.reload(cli)
 
@@ -3257,6 +3328,31 @@ def test_prepared_cache_round_trip(tmp_path: Path) -> None:
     assert payload["start_date"] == "2025-03-31"
     assert payload["end_date"] == "2026-04-01"
     pd.testing.assert_frame_equal(payload["prepared_by_symbol"]["AAA.SZ"], prepared_by_symbol["AAA.SZ"])
+
+
+def test_prepared_cache_path_uses_shared_eod_file_for_b1_and_b2(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+
+    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b1") == runtime_root / "prepared" / "2026-04-01.pkl"
+    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b2") == runtime_root / "prepared" / "2026-04-01.pkl"
+    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "hcr") == runtime_root / "prepared" / "2026-04-01.hcr.pkl"
+
+
+def test_prepared_cache_path_uses_shared_intraday_file_for_b1_and_b2(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+
+    assert (
+        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "b1")
+        == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
+    )
+    assert (
+        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "b2")
+        == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
+    )
+    assert (
+        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "hcr")
+        == runtime_root / "prepared" / "2026-04-09.intraday.hcr.pkl"
+    )
 
 
 def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) -> None:
@@ -4081,9 +4177,121 @@ def test_screen_b2_writes_prepared_cache_before_prefilter(
     )
 
     assert result.exit_code == 0
-    cache_payload = cli._load_prepared_cache(runtime_root / "prepared" / f"{_eod_key('2026-04-10', 'b2')}.pkl")
+    cache_payload = cli._load_prepared_cache(runtime_root / "prepared" / "2026-04-10.pkl")
     assert cache_payload["start_date"] == "2025-04-09"
     assert sorted(cache_payload["prepared_by_symbol"]) == ["AAA.SZ", "BBB.SZ", "CCC.SZ"]
+
+
+def test_screen_b2_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    shared_prepared = {
+        "BBB.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-10"]),
+                "turnover_n": [200.0],
+                "J": [10.0],
+                "zxdq": [11.5],
+                "zxdkx": [11.2],
+                "low": [11.1],
+                "close": [11.6],
+                "ma25": [11.3],
+                "ma60": [11.0],
+                "ma144": [10.8],
+                "dif": [0.12],
+                "dea": [0.08],
+                "dif_w": [0.20],
+                "dea_w": [0.15],
+                "dif_m": [0.30],
+                "dea_m": [0.22],
+                "volume": [120.0],
+                "vol": [120.0],
+            }
+        )
+    }
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-10.pkl",
+        method="b1",
+        pick_date="2026-04-10",
+        start_date="2025-04-09",
+        end_date="2026-04-10",
+        prepared_by_symbol=shared_prepared,
+    )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_prefilter = cli.prefilter_b2_non_macd
+    original_run = cli.run_b2_screen_with_stats
+
+    def fail_connect(_: str) -> object:
+        raise AssertionError("b2 should reuse shared b1 prepared cache before phase-two warmup")
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("b2 should not fetch market window when shared prepared cache is reusable")
+
+    def fail_prepare(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        raise AssertionError("b2 should not recompute phase-one prepare when shared prepared cache is reusable")
+
+    def fake_prefilter_b2_non_macd(prepared_by_symbol: dict[str, pd.DataFrame], pick_date: pd.Timestamp, config=None) -> list[str]:
+        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        return []
+
+    def fake_run_b2_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert prepared_by_symbol == {}
+        return (
+            [],
+            {
+                "total_symbols": 0,
+                "eligible": 0,
+                "fail_recent_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_support_ma25": 0,
+                "fail_volume_shrink": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_daily_macd": 0,
+                "fail_weekly_macd": 0,
+                "fail_monthly_macd": 0,
+                "fail_ma60_trend": 0,
+                "fail_ma144_distance": 0,
+                "selected": 0,
+            },
+        )
+
+    cli._connect = fail_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
+    cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
+    cli.prefilter_b2_non_macd = fake_prefilter_b2_non_macd  # type: ignore[assignment]
+    cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b2",
+                "--pick-date",
+                "2026-04-10",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.prefilter_b2_non_macd = original_prefilter  # type: ignore[assignment]
+        cli.run_b2_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert "[screen] reuse prepared path=" in result.stderr
 
 
 def test_screen_record_watch_uses_latest_effective_rows_per_symbol(
@@ -4440,7 +4648,7 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    default_pool_file = Path.home() / ".agent" / "skills" / "stock-select" / "runtime" / "custom-pool.txt"
+    default_pool_file = Path.home() / ".agents" / "skills" / "stock-select" / "runtime" / "custom-pool.txt"
     default_pool_file.parent.mkdir(parents=True, exist_ok=True)
     original_content = default_pool_file.read_text(encoding="utf-8") if default_pool_file.exists() else None
     default_pool_file.write_text("603138", encoding="utf-8")
@@ -5299,8 +5507,8 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
     payload = json.loads((candidate_dir / f"{_eod_key('2026-04-04')}.json").read_text(encoding="utf-8"))
     assert payload["pool_source"] == "turnover-top"
     assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
-    cache_payload = cli._load_prepared_cache(prepared_dir / f"{_eod_key('2026-04-04')}.pkl")
-    assert cache_payload["metadata"]["pool_source"] == "turnover-top"
+    cache_payload = cli._load_prepared_cache(prepared_dir / "2026-04-04.pkl")
+    assert cache_payload["pick_date"] == "2026-04-04"
 
 
 def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates(
@@ -5941,7 +6149,7 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
         )
     }
     cli._write_prepared_cache(
-        runtime_root / "prepared" / f"{_eod_key('2026-04-01')}.pkl",
+        runtime_root / "prepared" / "2026-04-01.pkl",
         pick_date="2026-04-01",
         start_date="2025-03-31",
         end_date="2026-04-01",
@@ -6139,7 +6347,7 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
 def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    prepared_path = runtime_root / "prepared" / f"{_eod_key('2026-04-10', 'b2')}.pkl"
+    prepared_path = runtime_root / "prepared" / "2026-04-10.pkl"
     prepared_path.parent.mkdir(parents=True, exist_ok=True)
     cli._write_prepared_cache(
         prepared_path,
@@ -6602,7 +6810,7 @@ def test_fetch_rt_k_snapshot_uses_fetch_timestamp_when_trade_time_missing(monkey
     ]
 
 
-def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, tmp_path: Path) -> None:
+def test_screen_intraday_writes_timestamped_candidate_and_shared_prepared(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     expected_run_id = "2026-04-09T11-31-08-123456+08-00"
@@ -6674,7 +6882,7 @@ def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, 
 
     assert result.exit_code == 0
     candidate_path = runtime_root / "candidates" / f"{_intraday_key(expected_run_id)}.json"
-    prepared_path = runtime_root / "prepared" / f"{_intraday_key(expected_run_id)}.pkl"
+    prepared_path = runtime_root / "prepared" / "2026-04-09.intraday.pkl"
     assert candidate_path.exists()
     assert prepared_path.exists()
 
@@ -6687,6 +6895,86 @@ def test_screen_intraday_writes_timestamped_candidate_and_prepared(monkeypatch, 
     assert prepared_payload["metadata"]["source"] == "tushare_rt_k"
     assert prepared_payload["metadata"]["run_id"] == expected_run_id
     assert prepared_payload["metadata"]["previous_trade_date"] == "2026-04-08"
+
+
+def test_screen_intraday_reuses_shared_prepared_cache_without_recompute(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    prepared_by_symbol = {
+        "000001.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-09"]),
+                "turnover_n": [200.0],
+                "J": [10.0],
+                "zxdq": [11.5],
+                "zxdkx": [11.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "close": [11.6],
+            }
+        )
+    }
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
+        method="b1",
+        pick_date="2026-04-09",
+        start_date="2025-04-08",
+        end_date="2026-04-09",
+        prepared_by_symbol=prepared_by_symbol,
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "source": "tushare_rt_k",
+            "run_id": "2026-04-09T10-00-00+08-00",
+            "previous_trade_date": "2026-04-08",
+        },
+    )
+
+    monkeypatch.setattr(cli, "_current_shanghai_timestamp", lambda: pd.Timestamp("2026-04-09 11:31:08.123456", tz="Asia/Shanghai"), raising=False)
+    monkeypatch.setattr(cli, "_resolve_intraday_trade_date", lambda: "2026-04-09", raising=False)
+    monkeypatch.setattr(cli, "_resolve_tushare_token", lambda _token: pytest.fail("intraday cache reuse should not require a tushare token"), raising=False)
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: pytest.fail("intraday cache reuse should not resolve a dsn"))
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("intraday cache reuse should not connect to the database"))
+    monkeypatch.setattr(cli, "_fetch_rt_k_snapshot", lambda token, trade_date: pytest.fail("intraday cache reuse should not fetch a fresh snapshot"), raising=False)
+    monkeypatch.setattr(cli, "fetch_daily_window", lambda *args, **kwargs: pytest.fail("intraday cache reuse should not fetch market history"))
+    monkeypatch.setattr(cli, "_prepare_screen_data", lambda *args, **kwargs: pytest.fail("intraday cache reuse should not recompute prepare"))
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared_subset, pick_date, config: (
+            [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 11.6, "turnover_n": 200.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": 1,
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "[screen] reuse prepared path=" in result.stderr
+    candidate_payload = json.loads(
+        (runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json").read_text(encoding="utf-8")
+    )
+    assert candidate_payload["run_id"] == "2026-04-09T11-31-08-123456+08-00"
+    assert candidate_payload["trade_date"] == "2026-04-09"
 
 
 def test_screen_intraday_record_watch_uses_watch_pool_subset(monkeypatch, tmp_path: Path) -> None:
@@ -6806,7 +7094,7 @@ def test_screen_intraday_record_watch_uses_watch_pool_subset(monkeypatch, tmp_pa
     assert candidate_payload["pool_source"] == "record-watch"
     assert [item["code"] for item in candidate_payload["candidates"]] == ["000001.SZ"]
     prepared_payload = pickle.loads(next((runtime_root / "prepared").glob("*.pkl")).read_bytes())
-    assert prepared_payload["metadata"]["pool_source"] == "record-watch"
+    assert prepared_payload["metadata"]["mode"] == "intraday_snapshot"
 
 
 def test_screen_intraday_hcr_turnover_top_uses_liquidity_pool(monkeypatch, tmp_path: Path) -> None:

@@ -124,7 +124,7 @@ def _validate_pool_source(pool_source: str) -> str:
 
 
 def _default_runtime_root() -> Path:
-    return Path.home() / ".agent" / "skills" / "stock-select" / "runtime"
+    return Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
 
 
 def _connect(dsn: str):
@@ -159,6 +159,8 @@ def _candidate_path(runtime_root: Path, base_key: str, method: str) -> Path:
 
 
 def _prepared_cache_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    if method in {"b1", "b2"}:
+        return runtime_root / "prepared" / f"{base_key}.pkl"
     return runtime_root / "prepared" / f"{_artifact_key(base_key, method)}.pkl"
 
 
@@ -312,15 +314,14 @@ def _load_intraday_prepared_cache(
     run_id: str,
     trade_date: str,
 ) -> dict[str, pd.DataFrame]:
-    payload = _load_prepared_cache(_prepared_cache_path(runtime_root, run_id, method))
+    payload = _load_prepared_cache(_prepared_cache_path(runtime_root, f"{trade_date}.intraday", method))
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     if metadata.get("mode") != "intraday_snapshot":
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
-    if metadata.get("run_id") != run_id:
-        raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
-    if metadata.get("method", method) != method:
+    cached_method = metadata.get("method")
+    if isinstance(cached_method, str) and cached_method not in {method, "b1", "b2"}:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     if payload.get("pick_date") != trade_date:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
@@ -472,25 +473,28 @@ def _prepared_cache_matches_pool_source(
     pool_source: str,
     pool_file: Path | None = None,
 ) -> bool:
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        return False
-    cached_pool_source = metadata.get("pool_source")
-    if isinstance(cached_pool_source, str):
-        if cached_pool_source.strip().lower() != pool_source:
-            return False
-        if pool_source == "custom":
-            cached_pool_file = metadata.get("pool_file")
-            resolved_pool_file = str(_resolve_custom_pool_file(pool_file))
-            return isinstance(cached_pool_file, str) and cached_pool_file == resolved_pool_file
-        return True
-    return pool_source == "turnover-top"
+    # Prepared data is the raw indicator universe before pool selection.
+    # It is reusable across pool sources as long as the date window and base config match.
+    return True
 
 
 def _validate_eod_pick_date_has_market_data(connection, *, market: pd.DataFrame, pick_date: str) -> None:
     if not market.empty:
         trade_dates = pd.to_datetime(market["trade_date"], errors="coerce")
-        if bool((trade_dates == pd.Timestamp(pick_date)).any()):
+        target_rows = market.loc[trade_dates == pd.Timestamp(pick_date)]
+        if not target_rows.empty:
+            price_columns = [column for column in ("open", "high", "low", "close") if column in target_rows.columns]
+            volume_columns = [column for column in ("vol", "volume") if column in target_rows.columns]
+            required_columns = price_columns + volume_columns
+            if required_columns:
+                usable_mask = target_rows[required_columns].notna().all(axis=1)
+                if bool(usable_mask.any()):
+                    return
+                latest_trade_date = fetch_nth_latest_trade_date(connection, end_date=pick_date, n=1)
+                raise typer.BadParameter(
+                    f"Found incomplete end-of-day rows for pick_date {pick_date}. "
+                    f"Latest complete trade date is {latest_trade_date}."
+                )
             return
     latest_trade_date = fetch_nth_latest_trade_date(connection, end_date=pick_date, n=1)
     raise typer.BadParameter(
@@ -767,8 +771,78 @@ def _prepare_b2_screen_data_for_pick(
         reporter.emit(
             "screen",
             f"fetched warmup rows={len(warm_market)} symbols={warm_market['ts_code'].nunique() if not warm_market.empty else 0}",
-        )
+    )
     return short_prepared, _call_prepare_screen_data(warm_market, reporter=reporter)
+
+
+def _prepare_b2_warmup_from_base_prepared(
+    connection,
+    *,
+    pick_date: str,
+    pool_source: str,
+    pool_file: Path | None,
+    runtime_root: Path,
+    base_prepared: dict[str, pd.DataFrame],
+    reporter: ProgressReporter | None = None,
+) -> dict[str, pd.DataFrame]:
+    pool_codes = _resolve_pool_codes(
+        pool_source=pool_source,
+        runtime_root=runtime_root,
+        method="b2",
+        pick_date=pick_date,
+        prepared_by_symbol=base_prepared,
+        pool_file=pool_file,
+    )
+    pooled_prepared = {code: base_prepared[code] for code in pool_codes if code in base_prepared}
+    if not pooled_prepared:
+        return {}
+
+    filtered_codes = prefilter_b2_non_macd(
+        pooled_prepared,
+        pd.Timestamp(pick_date),
+        DEFAULT_B1_CONFIG,
+    )
+    if not filtered_codes:
+        return {}
+
+    if reporter:
+        reporter.emit(
+            "screen",
+            f"fetch market window end_date={pick_date} mode=macd_warmup start_date={B2_PERIOD_MACD_WARMUP_START_DATE} symbols={len(filtered_codes)}",
+        )
+    warm_market = fetch_daily_window(
+        connection,
+        start_date=B2_PERIOD_MACD_WARMUP_START_DATE,
+        end_date=pick_date,
+        symbols=filtered_codes,
+    )
+    if reporter:
+        reporter.emit(
+            "screen",
+            f"fetched warmup rows={len(warm_market)} symbols={warm_market['ts_code'].nunique() if not warm_market.empty else 0}",
+        )
+    return _call_prepare_screen_data(warm_market, reporter=reporter)
+
+
+def _resolve_shared_base_prepared_payload(
+    runtime_root: Path,
+    *,
+    method: str,
+    pick_date: str,
+    intraday: bool,
+) -> tuple[Path, dict[str, object] | None]:
+    if intraday:
+        base_key = f"{pick_date}.intraday"
+    else:
+        base_key = pick_date
+    cache_method = "b1" if method in {"b1", "b2"} else method
+    cache_path = _prepared_cache_path(runtime_root, base_key, cache_method)
+    if not cache_path.exists():
+        return cache_path, None
+    try:
+        return cache_path, _load_prepared_cache(cache_path)
+    except (OSError, ValueError, pickle.PickleError):
+        return cache_path, None
 
 
 def _prepare_hcr_screen_data(
@@ -899,6 +973,7 @@ def _screen_impl(
     prepared_cache_path = _prepared_cache_path(runtime_root, pick_date, method)
     prepared: dict[str, pd.DataFrame] | None = None
     screen_prepared: dict[str, pd.DataFrame] | None = None
+    reused_base_prepared = False
     if method == "b1":
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     elif method == "b2":
@@ -921,6 +996,7 @@ def _screen_impl(
                     if _prepared_cache_covers_pick_date(cached_prepared, pick_date=pick_date):
                         prepared = cached_prepared
                         screen_prepared = cached_prepared
+                        reused_base_prepared = True
                         if reporter:
                             reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
                     elif reporter:
@@ -996,6 +1072,37 @@ def _screen_impl(
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
+    elif method == "b2" and reused_base_prepared:
+        pool_codes = _resolve_pool_codes(
+            pool_source=pool_source,
+            runtime_root=runtime_root,
+            method=method,
+            pick_date=pick_date,
+            prepared_by_symbol=prepared,
+            pool_file=pool_file,
+        )
+        pooled_prepared = {code: prepared[code] for code in pool_codes if code in prepared}
+        filtered_codes = prefilter_b2_non_macd(
+            pooled_prepared,
+            pd.Timestamp(pick_date),
+            DEFAULT_B1_CONFIG,
+        )
+        if filtered_codes:
+            resolved_dsn = _resolve_cli_dsn(dsn)
+            if reporter:
+                reporter.emit("screen", "connect db")
+            connection = _connect(resolved_dsn)
+            prepared = _prepare_b2_warmup_from_base_prepared(
+                connection,
+                pick_date=pick_date,
+                pool_source=pool_source,
+                pool_file=pool_file,
+                runtime_root=runtime_root,
+                base_prepared=screen_prepared if screen_prepared is not None else prepared,
+                reporter=reporter,
+            )
+        else:
+            prepared = {}
     if method in {"b1", "b2"}:
         if prepared is None:
             prepared = {}
@@ -1064,62 +1171,84 @@ def _screen_intraday_impl(
     runtime_root: Path,
     pool_source: str,
     pool_file: Path | None,
+    recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     trade_date = _resolve_intraday_trade_date()
-    resolved_token = _resolve_tushare_token(tushare_token)
-    resolved_dsn = _resolve_cli_dsn(dsn)
-    if reporter:
-        reporter.emit("screen", "connect db")
-    connection = _connect(resolved_dsn)
-    previous_trade_date = _resolve_previous_trade_date(connection, trade_date)
-    if reporter:
-        reporter.emit("screen", f"fetch snapshot trade_date={trade_date}")
-    snapshot = _fetch_rt_k_snapshot(resolved_token, trade_date)
     run_id = _format_intraday_run_id(_current_shanghai_timestamp())
-    if method == "hcr":
-        start_date = _resolve_hcr_start_date(
-            connection,
-            end_date=previous_trade_date,
-            trading_days=HCR_SCREEN_TRADING_DAYS - 1,
-        )
-    else:
-        start_date = (pd.Timestamp(previous_trade_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
-            "%Y-%m-%d"
-        )
-    if reporter:
-        reporter.emit("screen", f"fetch market window end_date={previous_trade_date}")
-    market = fetch_daily_window(
-        connection,
-        start_date=start_date,
-        end_date=previous_trade_date,
-        symbols=None,
-    )
-    overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
-    if method in {"b1", "b2"}:
-        prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
-    else:
-        prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
-    prepared_cache_path = _prepared_cache_path(runtime_root, run_id, method)
-    _write_prepared_cache(
-        prepared_cache_path,
+    prepared_cache_path, cache_payload = _resolve_shared_base_prepared_payload(
+        runtime_root,
         method=method,
         pick_date=trade_date,
-        start_date=start_date,
-        end_date=trade_date,
-        prepared_by_symbol=prepared,
-        metadata_overrides={
-            "method": method,
-            "mode": "intraday_snapshot",
-            "source": "tushare_rt_k",
-            "run_id": run_id,
-            "previous_trade_date": previous_trade_date,
-            "pool_source": pool_source,
-            "pool_file": str(_resolve_custom_pool_file(pool_file)) if pool_source == "custom" else None,
-        },
+        intraday=True,
     )
-    if reporter:
-        reporter.emit("screen", f"write prepared path={prepared_cache_path}")
+    prepared: dict[str, pd.DataFrame]
+    previous_trade_date: str
+    if not recompute and cache_payload is not None:
+        metadata = cache_payload.get("metadata")
+        cached_prepared = cache_payload.get("prepared_by_symbol")
+        if (
+            isinstance(metadata, dict)
+            and metadata.get("mode") == "intraday_snapshot"
+            and cache_payload.get("pick_date") == trade_date
+            and isinstance(cached_prepared, dict)
+        ):
+            prepared = cached_prepared  # type: ignore[assignment]
+            previous_trade_date = str(metadata.get("previous_trade_date") or "")
+            if reporter:
+                reporter.emit("screen", f"reuse prepared path={prepared_cache_path}")
+        else:
+            cache_payload = None
+    if recompute or cache_payload is None:
+        resolved_token = _resolve_tushare_token(tushare_token)
+        resolved_dsn = _resolve_cli_dsn(dsn)
+        if reporter:
+            reporter.emit("screen", "connect db")
+        connection = _connect(resolved_dsn)
+        previous_trade_date = _resolve_previous_trade_date(connection, trade_date)
+        if reporter:
+            reporter.emit("screen", f"fetch snapshot trade_date={trade_date}")
+        snapshot = _fetch_rt_k_snapshot(resolved_token, trade_date)
+        if method == "hcr":
+            start_date = _resolve_hcr_start_date(
+                connection,
+                end_date=previous_trade_date,
+                trading_days=HCR_SCREEN_TRADING_DAYS - 1,
+            )
+        else:
+            start_date = (pd.Timestamp(previous_trade_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
+                "%Y-%m-%d"
+            )
+        if reporter:
+            reporter.emit("screen", f"fetch market window end_date={previous_trade_date}")
+        market = fetch_daily_window(
+            connection,
+            start_date=start_date,
+            end_date=previous_trade_date,
+            symbols=None,
+        )
+        overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
+        if method in {"b1", "b2"}:
+            prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
+        else:
+            prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
+        _write_prepared_cache(
+            prepared_cache_path,
+            method=method,
+            pick_date=trade_date,
+            start_date=start_date,
+            end_date=trade_date,
+            prepared_by_symbol=prepared,
+            metadata_overrides={
+                "method": method,
+                "mode": "intraday_snapshot",
+                "source": "tushare_rt_k",
+                "run_id": run_id,
+                "previous_trade_date": previous_trade_date,
+            },
+        )
+        if reporter:
+            reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
     if method in {"b1", "b2"}:
         pool_codes = _resolve_pool_codes(
@@ -1674,6 +1803,7 @@ def screen(
                 runtime_root=runtime_root,
                 pool_source=normalized_pool_source,
                 pool_file=pool_file,
+                recompute=recompute,
                 reporter=reporter,
             )
         else:
@@ -1850,6 +1980,7 @@ def run_all(
             runtime_root=runtime_root,
             pool_source=normalized_pool_source,
             pool_file=pool_file,
+            recompute=recompute,
             reporter=reporter,
         )
     else:

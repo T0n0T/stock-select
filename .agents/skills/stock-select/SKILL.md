@@ -20,7 +20,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Generate daily charts before review.
 - Expect progress output on `stderr` by default; use `--no-progress` only when the caller needs quiet stdout-only path output.
 - `custom` pool uses `--pool-source custom` plus optional `--pool-file`.
-- Custom pool path precedence is `--pool-file`, then `STOCK_SELECT_POOL_FILE`, then `~/.agent/skills/stock-select/runtime/custom-pool.txt`.
+- Custom pool path precedence is `--pool-file`, then `STOCK_SELECT_POOL_FILE`, then `~/.agents/skills/stock-select/runtime/custom-pool.txt`.
 - Custom pool files contain whitespace-separated stock codes such as `603138 300058`.
 - Custom pool codes still intersect with the prepared screening universe before the strategy runs.
 - Use the bundled review rubric and runtime layout references.
@@ -30,34 +30,31 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Let the agent framework choose the model; do not hard-code a vendor-specific SDK in the workflow.
 - Require each subagent to return strict JSON aligned with the prompt contract.
 - If a subagent cannot return valid JSON, record that symbol in failures instead of fabricating a result.
-- Write outputs under `~/.agent/skills/stock-select/runtime/`.
+- Write outputs under `~/.agents/skills/stock-select/runtime/`.
 - Preserve existing end-of-day instructions for `--pick-date` runs.
 - `screen --intraday` uses PostgreSQL confirmed history up to the previous trade date plus Tushare `rt_k` for the active trade date snapshot.
-- `chart --intraday` and `review --intraday` must reuse the latest intraday candidate plus the matching prepared cache instead of fetching fresh realtime data.
+- `chart --intraday` and `review --intraday` must reuse the latest intraday candidate plus the same-trade-date shared prepared cache instead of fetching fresh realtime data.
 - When the caller needs a shareable offline report, run CLI `render-html` after `review-merge`.
 - `render-html` must look up stock names from PostgreSQL and render `code + name` in the HTML, not only the code.
 - The packaged export should be a zip containing `summary.html`, `summary.json`, and the referenced chart PNG files under `charts/`.
 
 ## Runtime Paths By Mode
 
-All runtime artifacts are keyed by `<base_key>.<method>`, where `<base_key>` is:
-
-- end-of-day mode: `<pick_date>`
-- intraday mode: `<run_id>`
-
 End-of-day `--pick-date` runs use:
 
 - `runtime/candidates/<pick_date>.<method>.json`
-- `runtime/prepared/<pick_date>.<method>.pkl`
+- `runtime/prepared/<pick_date>.pkl` for shared `b1` / `b2` base prepare
+- `runtime/prepared/<pick_date>.hcr.pkl` for `hcr`
 - `runtime/charts/<pick_date>.<method>/`
 - `runtime/reviews/<pick_date>.<method>/`
 - `runtime/watch_pool/<method>.csv`
 - `runtime/custom-pool.txt`
 
-Intraday `--intraday` runs use an intraday `run_id` keyed layout:
+Intraday `--intraday` runs use:
 
 - `runtime/candidates/<run_id>.<method>.json`
-- `runtime/prepared/<run_id>.<method>.pkl`
+- `runtime/prepared/<trade_date>.intraday.pkl` for shared `b1` / `b2` base prepare
+- `runtime/prepared/<trade_date>.intraday.hcr.pkl` for `hcr`
 - `runtime/charts/<run_id>.<method>/`
 - `runtime/reviews/<run_id>.<method>/`
 
@@ -65,6 +62,10 @@ Review and merge instructions must follow the active mode's runtime key:
 
 - end-of-day mode: use `<pick_date>.<method>`
 - intraday mode: use the latest intraday `<run_id>.<method>` selected by the candidate artifact
+- prepared-cache lookup is different from candidate/review lookup:
+  - end-of-day `b1` / `b2`: `<pick_date>.pkl`
+  - intraday `b1` / `b2`: `<trade_date>.intraday.pkl`
+  - `hcr`: keep method-specific prepared files
 
 ## Execution Order
 
@@ -163,16 +164,19 @@ If any of the checks above fail:
 ## Current Implementation
 
 - `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the requested method's derived fields locally, and writes `runtime/candidates/<pick_date>.<method>.json`.
-- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, and stores the matching prepared cache at `runtime/prepared/<run_id>.<method>.pkl`.
+- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, and stores shared base prepare at `runtime/prepared/<trade_date>.intraday.pkl` for `b1` / `b2`.
 - `b1` keeps the low-`J`, `close > zxdkx`, `zxdq > zxdkx`, weekly bullish alignment, and non-bearish max-volume-day filters described in `references/b1-selector.md`.
 - `b2` keeps the same top-turnover prefilter and the same recent 15-trading-day `b1` low-`J` history hit, then requires current `zxdq > zxdkx`, `MA25` support validity, shrinking volume, bullish daily/weekly/monthly `MACD`, upward `MA60`, and `MA144` distance within 30%.
-- Prepared `b2` frames now include daily `ma25`, `ma60`, `ma144`, plus weekly/monthly aligned `dif` and `dea` fields (`dif_w`, `dea_w`, `dif_m`, `dea_m`) for deterministic screening reuse.
+- `b1` and `b2` share the same base prepared frame shape for EOD and intraday reuse.
+- Prepared `b2` frames still require the same daily `ma25`, `ma60`, `ma144`, plus weekly/monthly aligned `dif` and `dea` fields (`dif_w`, `dea_w`, `dif_m`, `dea_m`) for deterministic screening reuse.
+- `b2` phase-two MACD warmup remains on-demand and is not written as a separate prepared cache.
 - `chart --pick-date` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
 - Daily chart PNGs include `zxdq`, `zxdkx`, and a separate `MACD` panel with `dif`, `dea`, and `macd_hist`.
-- `chart --intraday` reuses the latest intraday candidate for the requested method plus matching prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.
+- `chart --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.
 - `review --pick-date` writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
-- `review --intraday` reuses the latest intraday candidate for the requested method plus matching prepared cache, writes baseline reviews under `runtime/reviews/<run_id>.<method>/`, and does not fetch fresh realtime data.
+- `review --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache, writes baseline reviews under `runtime/reviews/<run_id>.<method>/`, and does not fetch fresh realtime data.
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `macd_phase`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
+- `screen --intraday --recompute` forces the shared same-trade-date prepared cache to be rewritten; without it, the command reuses the existing shared cache when compatible.
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
 - `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>.<method>/` for end-of-day or `runtime/reviews/<run_id>.<method>/` for intraday.
 - `record-watch` is end-of-day only. It reads `runtime/reviews/<pick_date>.<method>/summary.json`, keeps rows with verdict `PASS` or `WATCH`, writes or overwrites `runtime/watch_pool/<method>.csv`, stamps `recorded_at`, sorts by trading-day distance from the command execution day, and trims rows older than the configured `--window-trading-days` window.
