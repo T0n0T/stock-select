@@ -592,6 +592,7 @@ def _prepare_b2_screen_data_for_pick(
             "screen",
             f"fetched pool rows={len(short_market)} symbols={short_market['ts_code'].nunique() if not short_market.empty else 0}",
         )
+    _validate_eod_pick_date_has_market_data(connection, market=short_market, pick_date=pick_date)
     short_prepared = _call_prepare_screen_data(short_market, reporter=reporter)
     top_turnover_pool = build_top_turnover_pool(short_prepared, top_m=DEFAULT_TOP_M)
     pool_codes = top_turnover_pool.get(pd.Timestamp(pick_date), [])

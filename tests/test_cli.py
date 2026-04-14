@@ -2995,12 +2995,14 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
     original_fetch = cli.fetch_daily_window
     original_prepare = cli._prepare_screen_data
     original_pool = cli.build_top_turnover_pool
+    original_prefilter = cli.prefilter_b2_non_macd
     original_run = cli.run_b2_screen_with_stats
 
     cli._connect = fake_connect  # type: ignore[assignment]
     cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
     cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
     cli.build_top_turnover_pool = fake_pool  # type: ignore[assignment]
+    cli.prefilter_b2_non_macd = lambda prepared_by_symbol, pick_date, config=None: ["AAA.SZ", "BBB.SZ"]  # type: ignore[assignment]
     cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
 
     try:
@@ -3023,6 +3025,7 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
         cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
         cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
         cli.build_top_turnover_pool = original_pool  # type: ignore[assignment]
+        cli.prefilter_b2_non_macd = original_prefilter  # type: ignore[assignment]
         cli.run_b2_screen_with_stats = original_run  # type: ignore[assignment]
 
     assert result.exit_code == 0
@@ -4468,8 +4471,8 @@ def test_fetch_rt_k_snapshot_batches_market_wildcards_and_normalizes_rows(monkey
             "high": 12.5,
             "low": 12.0,
             "close": 12.34,
-            "vol": 1234567.0,
-            "amount": 152300000.0,
+            "vol": 12345.67,
+            "amount": 152300.0,
         },
         {
             "ts_code": "600000.SH",
@@ -4480,8 +4483,8 @@ def test_fetch_rt_k_snapshot_batches_market_wildcards_and_normalizes_rows(monkey
             "high": 10.5,
             "low": 10.0,
             "close": 10.34,
-            "vol": 2234567.0,
-            "amount": 252300000.0,
+            "vol": 22345.67,
+            "amount": 252300.0,
         },
     ]
 
@@ -4530,8 +4533,8 @@ def test_fetch_rt_k_snapshot_uses_fetch_timestamp_when_trade_time_missing(monkey
             "high": 10.5,
             "low": 10.0,
             "close": 10.34,
-            "vol": 2234567.0,
-            "amount": 252300000.0,
+            "vol": 22345.67,
+            "amount": 252300.0,
         }
     ]
 
