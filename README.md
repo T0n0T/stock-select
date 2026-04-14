@@ -95,6 +95,31 @@ uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://.
 [screen] prepare 500/5497 symbol=000001.SZ elapsed=12.4s
 ```
 
+## Custom 初始票池文件格式
+
+当使用 `--pool-source custom` 时，CLI 会从 `--pool-file PATH`、环境变量 `STOCK_SELECT_POOL_FILE`，或默认文件 `~/.agents/skills/stock-select/runtime/custom-pool.txt` 读取初始股票池。
+
+文件格式规则：
+
+- 文件内容按任意空白字符分隔，空格、换行、Tab 都可以
+- 每个 token 应为一个股票代码
+- 支持直接写标准 TS 代码，例如 `600519.SH`、`300750.SZ`
+- 也支持只写 6 位代码，CLI 会自动补交易所后缀，例如：
+  - `600519` -> `600519.SH`
+  - `300750` -> `300750.SZ`
+  - `830799` -> `830799.BJ`
+- 重复代码会自动去重
+- 无法识别的 token 会被忽略
+- 如果过滤后一个有效代码都没有，CLI 会报错
+
+示例：
+
+```text
+600519 300750 830799
+002594.SZ
+601318.SH
+```
+
 ## 运行行为
 
 当前 CLI 的行为如下：
@@ -116,7 +141,7 @@ uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://.
   - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>.<method>/summary.json`
 - `record-watch`
   - 读取 `reviews/<pick_date>.<method>/summary.json`
-  - 抽取 `PASS` / `WATCH` 股票，写入 `watch_pool/<method>.csv`
+  - 抽取 `PASS` / `WATCH` 股票，写入 `watch_pool.csv`
   - 每条记录写入命令执行时间 `recorded_at`
   - 按距离本次执行日的交易日间隔排序
   - 按 `--window-trading-days` 保留最近窗口内的记录，删除更老的票
@@ -192,7 +217,7 @@ charts/<pick_date>.<method>/<code>_day.png
 reviews/<pick_date>.<method>/llm_review_tasks.json
 reviews/<pick_date>.<method>/llm_review_results/<code>.json
 reviews/<pick_date>.<method>/summary.json
-watch_pool/<method>.csv
+watch_pool.csv
 ```
 
 盘中 `--intraday` 运行保持候选、图表、review 目录按 `<run_id>.<method>` 隔离，但 prepared cache 改为按交易日共享：
