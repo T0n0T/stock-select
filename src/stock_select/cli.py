@@ -922,7 +922,7 @@ def _screen_impl(
     if method in {"b1", "b2"}:
         if prepared is None:
             prepared = {}
-        if method == "b2" and screen_prepared is not None:
+        if method == "b2" and pool_source == "record-watch" and screen_prepared is not None:
             pool_codes = list(prepared)
         else:
             pool_codes = _resolve_pool_codes(
