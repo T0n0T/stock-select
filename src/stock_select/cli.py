@@ -49,14 +49,13 @@ from stock_select.db_access import (
 from stock_select.html_export import write_summary_package
 from stock_select.intraday import _normalize_ts_code, build_intraday_market_frame, normalize_rt_k_snapshot
 from stock_select.review_orchestrator import (
-    REFERENCE_PROMPT_PATH,
     build_review_payload,
     build_review_result,
     merge_review_result,
     normalize_llm_review,
-    review_symbol_history,
     summarize_reviews,
 )
+from stock_select.review_resolvers import get_review_resolver
 from stock_select.watch_pool import (
     effective_watch_pool_symbols,
     load_watch_pool,
@@ -1408,6 +1407,7 @@ def _review_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
+    resolver = get_review_resolver(method)
     chart_dir = _chart_dir_path(runtime_root, pick_date, method)
     if not chart_dir.exists():
         raise typer.BadParameter(f"Chart input directory not found: {chart_dir}")
@@ -1443,7 +1443,7 @@ def _review_impl(
             start_date=start_date,
             end_date=pick_date,
         )
-        baseline_review = review_symbol_history(
+        baseline_review = resolver.review_history(
             code=code,
             pick_date=pick_date,
             history=history,
@@ -1462,6 +1462,7 @@ def _review_impl(
             pick_date=pick_date,
             chart_path=str(chart_path),
             rubric_path="references/review-rubric.md",
+            prompt_path=resolver.prompt_path,
         )
         llm_review_tasks.append(
             {
@@ -1484,7 +1485,7 @@ def _review_impl(
     tasks_payload = {
         "pick_date": pick_date,
         "method": method.lower(),
-        "prompt_path": REFERENCE_PROMPT_PATH,
+        "prompt_path": resolver.prompt_path,
         "tasks": llm_review_tasks,
     }
     tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")
@@ -1500,6 +1501,7 @@ def _review_intraday_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
+    resolver = get_review_resolver(method)
     try:
         _, payload = _resolve_latest_intraday_candidate(runtime_root, method)
     except IntradayArtifactError as exc:
@@ -1546,7 +1548,7 @@ def _review_intraday_impl(
                 reporter.emit("review", f"skip code={code} reason=missing_prepared_history")
             continue
 
-        baseline_review = review_symbol_history(
+        baseline_review = resolver.review_history(
             code=code,
             pick_date=pick_date,
             history=history,
@@ -1565,6 +1567,7 @@ def _review_intraday_impl(
             pick_date=pick_date,
             chart_path=str(chart_path),
             rubric_path="references/review-rubric.md",
+            prompt_path=resolver.prompt_path,
         )
         llm_review_tasks.append(
             {
@@ -1587,7 +1590,7 @@ def _review_intraday_impl(
     tasks_payload = {
         "pick_date": pick_date,
         "method": method.lower(),
-        "prompt_path": REFERENCE_PROMPT_PATH,
+        "prompt_path": resolver.prompt_path,
         "tasks": llm_review_tasks,
     }
     tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")

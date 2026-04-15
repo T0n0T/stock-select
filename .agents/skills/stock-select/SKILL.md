@@ -24,7 +24,9 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Custom pool files contain whitespace-separated stock codes such as `603138 300058`.
 - Custom pool codes still intersect with the prepared screening universe before the strategy runs.
 - Use the bundled review rubric and runtime layout references.
-- Use `references/prompt.md` from this skill as the chart-review prompt source when dispatching subagents.
+- Use method-specific chart-review prompts from this skill when dispatching subagents:
+  - `b1` and `hcr` use `references/prompt.md`
+  - `b2` uses `references/prompt-b2.md`
 - Review should use rendered chart images, not HTML text.
 - Dispatch one subagent per candidate for multimodal chart review when chart quality is the priority.
 - Let the agent framework choose the model; do not hard-code a vendor-specific SDK in the workflow.
@@ -75,7 +77,7 @@ Review and merge instructions must follow the active mode's runtime key:
 4. Run deterministic `b1`, `b2`, or `hcr` screening and write candidate outputs.
 5. Render daily chart PNG files for each candidate.
 6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
-7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and `references/prompt.md`.
+7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` / `hcr` use `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
 8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>.<method>` for end-of-day and `<run_id>.<method>` for intraday.
 9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
 10. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
@@ -87,13 +89,15 @@ When running chart review for quality-first selection:
 
 1. Run the Python CLI `review` command first.
 2. Load `runtime/reviews/<mode_key>/llm_review_tasks.json`.
-3. Load `references/prompt.md` and pass it as the subagent's core chart-review prompt.
+3. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
+   - `b1` and `hcr`: `references/prompt.md`
+   - `b2`: `references/prompt-b2.md`
 4. Send each subagent exactly one candidate at a time.
 5. Provide these inputs to the subagent:
    - stock code
    - pick date
    - chart image path pointing to `<code>_day.png`
-   - the prompt from `references/prompt.md`
+   - the prompt from the method-specific prompt file (`references/prompt.md` for `b1` / `hcr`, `references/prompt-b2.md` for `b2`)
 6. Require the subagent to return strict JSON matching the prompt contract:
    - `trend_reasoning`
    - `position_reasoning`
@@ -184,7 +188,7 @@ If any of the checks above fail:
 
 ## Future Upgrade Path
 
-- The intended end state is multimodal subagent chart review driven by `references/prompt.md`.
+- The intended end state is multimodal subagent chart review driven by the method-specific prompt files: `references/prompt.md` for `b1` / `hcr`, and `references/prompt-b2.md` for `b2`.
 - Keep the deterministic `screen` and `chart` stages unchanged and swap only the `review` stage orchestration.
 
 ## Bundled References
@@ -193,4 +197,5 @@ If any of the checks above fail:
 - `references/b2-selector.md`
 - `references/prompt.md`
 - `references/review-rubric.md`
+- `references/prompt-b2.md`
 - `references/runtime-layout.md`

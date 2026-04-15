@@ -4,10 +4,12 @@ import pytest
 from stock_select.review_orchestrator import (
     build_review_payload,
     build_review_result,
+    merge_review_result,
     normalize_llm_review,
-    review_symbol_history,
+    review_symbol_history as orchestrator_review_symbol_history,
     summarize_reviews,
 )
+from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
 
 
 def test_build_review_payload_includes_chart_and_rubric() -> None:
@@ -190,7 +192,7 @@ def test_summarize_reviews_keeps_method_value_for_hcr() -> None:
     assert summary["method"] == "hcr"
 
 
-def test_review_symbol_history_returns_watch_for_constructive_trend() -> None:
+def test_default_review_symbol_history_returns_watch_for_constructive_trend() -> None:
     history = pd.DataFrame(
         {
             "trade_date": pd.date_range("2026-01-01", periods=160, freq="B"),
@@ -202,28 +204,73 @@ def test_review_symbol_history_returns_watch_for_constructive_trend() -> None:
         }
     )
 
-    review = review_symbol_history(
+    review = default_review_symbol_history(
         code="000001.SZ",
         pick_date="2026-04-01",
         history=history,
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert review == {
-        "code": "000001.SZ",
-        "pick_date": "2026-04-01",
-        "chart_path": "/tmp/000001.SZ_day.png",
-        "review_type": "baseline",
-        "trend_structure": 5.0,
-        "price_position": 3.0,
-        "volume_behavior": 5.0,
-        "previous_abnormal_move": 3.0,
-        "macd_phase": 3.0,
-        "total_score": 3.84,
-        "signal_type": "trend_start",
-        "verdict": "WATCH",
-        "comment": "结构有修复迹象，但量价与位置优势一般，暂时更适合继续观察。",
-    }
+    assert review["code"] == "000001.SZ"
+    assert review["pick_date"] == "2026-04-01"
+    assert review["chart_path"] == "/tmp/000001.SZ_day.png"
+    assert review["review_type"] == "baseline"
+    assert review["trend_structure"] == 5.0
+    assert review["price_position"] == 3.0
+    assert review["volume_behavior"] == 5.0
+    assert review["previous_abnormal_move"] == 3.0
+    assert review["macd_phase"] == 3.0
+    assert review["total_score"] == 3.84
+    assert review["signal_type"] == "trend_start"
+    assert review["verdict"] == "WATCH"
+    assert review["comment"] == "结构有修复迹象，但量价与位置优势一般，暂时更适合继续观察。"
+
+
+def test_default_review_symbol_history_ignores_future_rows_after_pick_date() -> None:
+    dates = pd.date_range("2026-01-01", periods=200, freq="B")
+    pivot_index = 159
+    pick_date = dates[pivot_index].strftime("%Y-%m-%d")
+
+    constructive_history = pd.DataFrame(
+        {
+            "trade_date": dates[: pivot_index + 1],
+            "open": [10.0 + idx * 0.05 for idx in range(pivot_index + 1)],
+            "high": [10.3 + idx * 0.05 for idx in range(pivot_index + 1)],
+            "low": [9.8 + idx * 0.05 for idx in range(pivot_index + 1)],
+            "close": [10.2 + idx * 0.05 for idx in range(pivot_index + 1)],
+            "vol": [1000.0 + idx * 5.0 for idx in range(pivot_index + 1)],
+        }
+    )
+    future_collapse = pd.DataFrame(
+        {
+            "trade_date": dates[pivot_index + 1 :],
+            "open": [18.0 - idx * 0.3 for idx in range(len(dates) - pivot_index - 1)],
+            "high": [18.1 - idx * 0.3 for idx in range(len(dates) - pivot_index - 1)],
+            "low": [17.3 - idx * 0.3 for idx in range(len(dates) - pivot_index - 1)],
+            "close": [17.5 - idx * 0.3 for idx in range(len(dates) - pivot_index - 1)],
+            "vol": [2000.0 + idx * 20.0 for idx in range(len(dates) - pivot_index - 1)],
+        }
+    )
+    full_history = pd.concat([constructive_history, future_collapse], ignore_index=True)
+
+    review_from_pick_slice = default_review_symbol_history(
+        code="000001.SZ",
+        pick_date=pick_date,
+        history=constructive_history,
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+    review_with_future_rows = default_review_symbol_history(
+        code="000001.SZ",
+        pick_date=pick_date,
+        history=full_history,
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert review_with_future_rows["pick_date"] == pick_date
+    assert review_with_future_rows["verdict"] == review_from_pick_slice["verdict"]
+    assert review_with_future_rows["signal_type"] == review_from_pick_slice["signal_type"]
+    assert review_with_future_rows["total_score"] == review_from_pick_slice["total_score"]
+    assert review_with_future_rows["comment"] == review_from_pick_slice["comment"]
 
 
 def test_review_symbol_history_flags_distribution_risk() -> None:
@@ -238,7 +285,7 @@ def test_review_symbol_history_flags_distribution_risk() -> None:
         }
     )
 
-    review = review_symbol_history(
+    review = orchestrator_review_symbol_history(
         code="000002.SZ",
         pick_date="2026-04-01",
         history=history,
@@ -248,6 +295,97 @@ def test_review_symbol_history_flags_distribution_risk() -> None:
     assert review["verdict"] == "FAIL"
     assert review["signal_type"] == "distribution_risk"
     assert review["volume_behavior"] <= 2.0
+
+
+@pytest.mark.parametrize("invalid_score", [float("nan"), float("inf"), -1, 9])
+def test_normalize_llm_review_rejects_non_finite_and_out_of_range_scores(invalid_score: float) -> None:
+    with pytest.raises(ValueError, match="trend_structure"):
+        normalize_llm_review(
+            {
+                "trend_reasoning": "趋势向上",
+                "position_reasoning": "位置中位",
+                "volume_reasoning": "量价配合良好",
+                "abnormal_move_reasoning": "前期有异动",
+                "macd_reasoning": "MACD 进入启动阶段",
+                "signal_reasoning": "更像主升启动",
+                "scores": {
+                    "trend_structure": invalid_score,
+                    "price_position": 4,
+                    "volume_behavior": 5,
+                    "previous_abnormal_move": 4,
+                    "macd_phase": 5,
+                },
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "非法评分",
+            }
+        )
+
+
+def test_merge_review_result_preserves_distribution_risk_failures() -> None:
+    merged = merge_review_result(
+        existing_review={
+            "code": "000001.SZ",
+            "pick_date": "2026-04-01",
+            "chart_path": "/tmp/000001_day.png",
+            "review_mode": "baseline_local",
+            "baseline_review": {
+                "total_score": 5.0,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "baseline",
+            },
+            "llm_review": None,
+            "total_score": 5.0,
+            "signal_type": "trend_start",
+            "verdict": "PASS",
+            "comment": "baseline",
+        },
+        llm_review={
+            "total_score": 3.6,
+            "signal_type": "distribution_risk",
+            "verdict": "FAIL",
+            "comment": "llm hard fail",
+        },
+    )
+
+    assert merged["review_mode"] == "merged"
+    assert merged["signal_type"] == "distribution_risk"
+    assert merged["verdict"] == "FAIL"
+    assert merged["comment"] == "llm hard fail"
+
+
+def test_merge_review_result_preserves_explicit_fail_verdicts() -> None:
+    merged = merge_review_result(
+        existing_review={
+            "code": "000001.SZ",
+            "pick_date": "2026-04-01",
+            "chart_path": "/tmp/000001_day.png",
+            "review_mode": "baseline_local",
+            "baseline_review": {
+                "total_score": 4.5,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "baseline",
+            },
+            "llm_review": None,
+            "total_score": 4.5,
+            "signal_type": "trend_start",
+            "verdict": "PASS",
+            "comment": "baseline",
+        },
+        llm_review={
+            "total_score": 3.8,
+            "signal_type": "rebound",
+            "verdict": "FAIL",
+            "comment": "llm explicit fail",
+        },
+    )
+
+    assert merged["signal_type"] == "rebound"
+    assert merged["verdict"] == "FAIL"
+    assert merged["comment"] == "llm explicit fail"
 
 
 def test_normalize_llm_review_validates_macd_phase_score() -> None:

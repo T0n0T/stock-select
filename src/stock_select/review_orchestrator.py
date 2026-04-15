@@ -5,7 +5,13 @@ from typing import Any
 
 import pandas as pd
 
-from stock_select.strategies import compute_macd
+from stock_select.review_protocol import (
+    BASELINE_SCORE_WEIGHTS,
+    build_baseline_comment,
+    compute_weighted_total,
+    infer_final_verdict,
+    validate_score_field,
+)
 
 REFERENCE_PROMPT_PATH = str(
     (Path(__file__).resolve().parents[2] / ".agents" / "skills" / "stock-select" / "references" / "prompt.md")
@@ -27,28 +33,20 @@ REQUIRED_SCORE_FIELDS = (
 )
 ALLOWED_SIGNAL_TYPES = {"trend_start", "rebound", "distribution_risk"}
 ALLOWED_VERDICTS = {"PASS", "WATCH", "FAIL"}
-BASELINE_SCORE_WEIGHTS = {
-    "trend_structure": 0.18,
-    "price_position": 0.18,
-    "volume_behavior": 0.24,
-    "previous_abnormal_move": 0.20,
-    "macd_phase": 0.20,
-}
-
-
 def build_review_payload(
     *,
     code: str,
     pick_date: str,
     chart_path: str,
     rubric_path: str,
+    prompt_path: str = REFERENCE_PROMPT_PATH,
 ) -> dict[str, str]:
     return {
         "code": code,
         "pick_date": pick_date,
         "chart_path": chart_path,
         "rubric_path": rubric_path,
-        "prompt_path": REFERENCE_PROMPT_PATH,
+        "prompt_path": prompt_path,
         "input_mode": "image",
         "dispatch": "subagent",
     }
@@ -88,7 +86,10 @@ def merge_review_result(
     baseline_score = float(baseline_review.get("total_score", 0.0))
     llm_score = float(llm_review.get("total_score", 0.0))
     final_score = round(baseline_score * baseline_weight + llm_score * llm_weight, 2)
-    verdict = _infer_final_verdict(final_score)
+    if str(llm_review.get("signal_type", "")) == "distribution_risk" or str(llm_review.get("verdict", "")) == "FAIL":
+        verdict = "FAIL"
+    else:
+        verdict = infer_final_verdict(final_score)
 
     return {
         **existing_review,
@@ -116,7 +117,7 @@ def normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
     for field in REQUIRED_SCORE_FIELDS:
         if field not in scores:
             raise ValueError(f"Missing score field: {field}")
-        normalized_scores[field] = float(scores[field])
+        normalized_scores[field] = validate_score_field(field, scores[field])
 
     signal_type = str(payload.get("signal_type", ""))
     if signal_type not in ALLOWED_SIGNAL_TYPES:
@@ -130,7 +131,7 @@ def normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(comment, str) or not comment.strip():
         raise ValueError("Missing or empty required field: comment")
 
-    total_score = _compute_weighted_total(normalized_scores)
+    total_score = compute_weighted_total(normalized_scores)
 
     return {
         **{field: str(payload[field]).strip() for field in REQUIRED_REASONING_FIELDS},
@@ -150,69 +151,14 @@ def review_symbol_history(
     history: pd.DataFrame,
     chart_path: str,
 ) -> dict[str, Any]:
-    frame = history.copy()
-    if frame.empty:
-        msg = "No daily history available for review."
-        raise ValueError(msg)
+    from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
 
-    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
-    frame = frame.sort_values("trade_date").reset_index(drop=True)
-    close = frame["close"].astype(float)
-    open_ = frame["open"].astype(float)
-    volume = frame["vol"].astype(float) if "vol" in frame.columns else frame["volume"].astype(float)
-
-    ma20 = close.rolling(window=20, min_periods=20).mean()
-    ma60 = close.rolling(window=60, min_periods=60).mean()
-    latest_close = float(close.iloc[-1])
-    latest_open = float(open_.iloc[-1])
-    recent_window = frame.tail(20)
-    recent_close = recent_window["close"].astype(float)
-    recent_open = recent_window["open"].astype(float)
-    recent_volume = (
-        recent_window["vol"].astype(float)
-        if "vol" in recent_window.columns
-        else recent_window["volume"].astype(float)
+    return default_review_symbol_history(
+        code=code,
+        pick_date=pick_date,
+        history=history,
+        chart_path=chart_path,
     )
-
-    trend_structure = _score_trend_structure(close, ma20, ma60)
-    price_position = _score_price_position(close)
-    volume_behavior = _score_volume_behavior(recent_open, recent_close, recent_volume)
-    previous_abnormal_move = _score_previous_abnormal_move(close, volume)
-    macd_phase = _score_macd_phase(close)
-
-    total_score = _compute_weighted_total(
-        {
-            "trend_structure": trend_structure,
-            "price_position": price_position,
-            "volume_behavior": volume_behavior,
-            "previous_abnormal_move": previous_abnormal_move,
-            "macd_phase": macd_phase,
-        }
-    )
-    signal_type = _infer_signal_type(
-        latest_close=latest_close,
-        latest_open=latest_open,
-        trend_structure=trend_structure,
-        volume_behavior=volume_behavior,
-        price_position=price_position,
-    )
-    verdict = _infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
-
-    return {
-        "code": code,
-        "pick_date": pick_date,
-        "chart_path": chart_path,
-        "review_type": "baseline",
-        "trend_structure": trend_structure,
-        "price_position": price_position,
-        "volume_behavior": volume_behavior,
-        "previous_abnormal_move": previous_abnormal_move,
-        "macd_phase": macd_phase,
-        "total_score": total_score,
-        "signal_type": signal_type,
-        "verdict": verdict,
-        "comment": _build_comment(signal_type=signal_type, verdict=verdict),
-    }
 
 
 def summarize_reviews(
@@ -245,161 +191,3 @@ def summarize_reviews(
         "excluded": excluded,
         "failures": failures,
     }
-
-
-def _score_trend_structure(close: pd.Series, ma20: pd.Series, ma60: pd.Series) -> float:
-    if len(close) < 60 or pd.isna(ma20.iloc[-1]) or pd.isna(ma60.iloc[-1]):
-        return 3.0
-    recent_gain = float(close.iloc[-1] / close.iloc[-20] - 1.0) if close.iloc[-20] else 0.0
-    ma20_slope = float(ma20.iloc[-1] - ma20.iloc[-5])
-    ma60_slope = float(ma60.iloc[-1] - ma60.iloc[-5])
-    if close.iloc[-1] > ma20.iloc[-1] > ma60.iloc[-1] and ma20_slope > 0 and ma60_slope >= 0 and recent_gain > 0.05:
-        return 5.0
-    if close.iloc[-1] >= ma20.iloc[-1] and ma20.iloc[-1] >= ma60.iloc[-1] and ma20_slope >= 0:
-        return 4.0
-    if close.iloc[-1] >= ma20.iloc[-1]:
-        return 3.0
-    if close.iloc[-1] >= ma60.iloc[-1]:
-        return 2.0
-    return 1.0
-
-
-def _score_price_position(close: pd.Series) -> float:
-    if len(close) < 60:
-        return 3.0
-    recent = close.tail(120)
-    low = float(recent.min())
-    high = float(recent.max())
-    if high <= low:
-        return 3.0
-    position = (float(close.iloc[-1]) - low) / (high - low)
-    near_term_mean = float(close.tail(20).mean())
-    mid_term_mean = float(close.tail(60).mean())
-    if position <= 0.35:
-        return 5.0
-    if position <= 0.55:
-        return 4.0
-    if position <= 0.75:
-        return 3.0
-    if position <= 0.90:
-        return 2.0
-    if near_term_mean > mid_term_mean:
-        return 3.0
-    return 1.0
-
-
-def _score_volume_behavior(open_: pd.Series, close: pd.Series, volume: pd.Series) -> float:
-    bullish = volume[close >= open_]
-    bearish = volume[close < open_]
-    avg_bullish = float(bullish.mean()) if not bullish.empty else 0.0
-    avg_bearish = float(bearish.mean()) if not bearish.empty else 0.0
-    max_volume_index = int(volume.idxmax())
-    max_volume_bullish = bool(close.loc[max_volume_index] >= open_.loc[max_volume_index])
-    latest_green = bool(close.iloc[-1] >= open_.iloc[-1])
-
-    if max_volume_bullish and avg_bullish > avg_bearish * 1.2 and latest_green:
-        return 5.0
-    if max_volume_bullish and avg_bullish >= avg_bearish:
-        return 4.0
-    if max_volume_bullish:
-        return 3.0
-    if latest_green and avg_bullish * 0.9 >= avg_bearish:
-        return 2.0
-    return 1.0
-
-
-def _score_previous_abnormal_move(close: pd.Series, volume: pd.Series) -> float:
-    if len(close) < 40:
-        return 3.0
-    latest_close = float(close.iloc[-1])
-    early_close = float(close.iloc[-40])
-    gain = latest_close / early_close - 1.0 if early_close else 0.0
-    avg_volume = float(volume.tail(60).mean())
-    peak_volume = float(volume.tail(60).max())
-
-    if gain < 0.5 and peak_volume > avg_volume * 1.8:
-        return 5.0
-    if gain < 0.5 and peak_volume > avg_volume * 1.4:
-        return 4.0
-    if gain < 0.5:
-        return 3.0
-    if gain < 1.0:
-        return 2.0
-    return 1.0
-
-
-def _score_macd_phase(close: pd.Series) -> float:
-    if len(close) < 35:
-        return 3.0
-
-    macd = compute_macd(pd.DataFrame({"close": close}))
-    dif = macd["dif"].astype(float)
-    dea = macd["dea"].astype(float)
-    hist = macd["macd_hist"].astype(float)
-    recent_hist = hist.tail(5)
-
-    if len(recent_hist) < 5:
-        return 3.0
-
-    if hist.iloc[-1] < 0.0 and hist.iloc[-2] >= 0.0:
-        return 1.0
-    if dif.iloc[-1] < dea.iloc[-1]:
-        return 2.0
-
-    recent_cross = ((dif.shift(1) <= dea.shift(1)) & (dif > dea)).tail(5).any()
-    hist_increasing = bool((recent_hist.diff().iloc[1:] > 0.0).all())
-    hist_decreasing = bool((recent_hist.diff().iloc[1:] < 0.0).all())
-    lines_stretched = abs(float(dif.iloc[-1] - dea.iloc[-1])) > abs(float(hist.iloc[-1])) * 1.5
-
-    if recent_cross and hist_increasing and hist.iloc[-1] > 0.0:
-        return 5.0
-    if hist_increasing and lines_stretched and hist.iloc[-1] > 0.0:
-        return 4.0
-    if hist_decreasing and close.iloc[-1] >= close.tail(5).max():
-        return 3.0
-    return 3.0
-
-
-def _compute_weighted_total(scores: dict[str, float]) -> float:
-    return round(sum(float(scores[field]) * weight for field, weight in BASELINE_SCORE_WEIGHTS.items()), 2)
-
-
-def _infer_signal_type(
-    *,
-    latest_close: float,
-    latest_open: float,
-    trend_structure: float,
-    volume_behavior: float,
-    price_position: float,
-) -> str:
-    if trend_structure <= 2.0 or volume_behavior <= 2.0:
-        return "distribution_risk"
-    if latest_close >= latest_open and trend_structure >= 4.0 and price_position >= 3.0:
-        return "trend_start"
-    return "rebound"
-
-
-def _infer_verdict(*, total_score: float, volume_behavior: float, signal_type: str) -> str:
-    if volume_behavior <= 1.0 or signal_type == "distribution_risk":
-        return "FAIL"
-    if total_score >= 4.0:
-        return "PASS"
-    if total_score >= 3.2:
-        return "WATCH"
-    return "FAIL"
-
-
-def _infer_final_verdict(total_score: float) -> str:
-    if total_score >= 4.0:
-        return "PASS"
-    if total_score >= 3.2:
-        return "WATCH"
-    return "FAIL"
-
-
-def _build_comment(*, signal_type: str, verdict: str) -> str:
-    if signal_type == "distribution_risk":
-        return "趋势走弱且量价失衡，前期异动后的承接不足，当前更偏出货风险。"
-    if verdict == "PASS":
-        return "趋势结构顺畅，量价配合正常，前期异动仍有承接，当前具备继续走强条件。"
-    return "结构有修复迹象，但量价与位置优势一般，暂时更适合继续观察。"

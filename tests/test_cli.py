@@ -28,6 +28,27 @@ def test_default_runtime_root_uses_agents_skill_runtime() -> None:
     assert cli._default_runtime_root() == expected
 
 
+
+def test_b2_prompt_reference_exists_and_preserves_default_json_contract() -> None:
+    references_dir = (
+        Path(__file__).resolve().parents[1]
+        / ".agents"
+        / "skills"
+        / "stock-select"
+        / "references"
+    )
+    default_prompt = references_dir / "prompt.md"
+    b2_prompt = references_dir / "prompt-b2.md"
+
+    assert default_prompt.exists()
+    assert b2_prompt.exists()
+
+    content = b2_prompt.read_text(encoding="utf-8")
+
+    assert "b2" in content.lower()
+    assert "output json format must remain identical to the default prompt contract" in content.lower()
+
+
 def test_validate_eod_pick_date_has_market_data_rejects_placeholder_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     market = pd.DataFrame(
         {
@@ -1254,6 +1275,166 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert "[review] done reviewed=1 failures=0" in result.stderr
 
 
+
+def test_review_uses_method_specific_resolver_prompt_and_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-01", "b2")
+    review_dir = runtime_root / "reviews" / method_key
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b2",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    chart_dir = runtime_root / "charts" / method_key
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol, symbol, symbol],
+                "trade_date": pd.to_datetime(["2026-03-28", "2026-03-31", "2026-04-01"]),
+                "open": [10.0, 10.2, 10.4],
+                "high": [10.3, 10.6, 10.9],
+                "low": [9.9, 10.1, 10.3],
+                "close": [10.2, 10.5, 10.8],
+                "vol": [100.0, 120.0, 150.0],
+            }
+        ),
+    )
+
+    prompt_path = str(tmp_path / "prompt-b2-stub.md")
+    resolver_calls: list[dict[str, object]] = []
+    resolver_methods: list[str] = []
+    expected_rows = [
+        {
+            "ts_code": "000001.SZ",
+            "trade_date": pd.Timestamp("2026-03-28"),
+            "open": 10.0,
+            "high": 10.3,
+            "low": 9.9,
+            "close": 10.2,
+            "vol": 100.0,
+        },
+        {
+            "ts_code": "000001.SZ",
+            "trade_date": pd.Timestamp("2026-03-31"),
+            "open": 10.2,
+            "high": 10.6,
+            "low": 10.1,
+            "close": 10.5,
+            "vol": 120.0,
+        },
+        {
+            "ts_code": "000001.SZ",
+            "trade_date": pd.Timestamp("2026-04-01"),
+            "open": 10.4,
+            "high": 10.9,
+            "low": 10.3,
+            "close": 10.8,
+            "vol": 150.0,
+        },
+    ]
+
+    def fake_review_history(
+        *,
+        code: str,
+        pick_date: str,
+        history: pd.DataFrame,
+        chart_path: str,
+    ) -> dict[str, object]:
+        resolver_calls.append(
+            {
+                "code": code,
+                "pick_date": pick_date,
+                "chart_path": chart_path,
+                "rows": history.to_dict(orient="records"),
+            }
+        )
+        return {
+            "review_type": "baseline",
+            "total_score": 4.6,
+            "signal_type": "trend_start",
+            "verdict": "PASS",
+            "comment": "resolver baseline",
+        }
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: resolver_methods.append(method)
+        or SimpleNamespace(
+            name="b2",
+            prompt_path=prompt_path,
+            review_history=fake_review_history,
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-01",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert resolver_methods == ["b2"]
+    assert len(resolver_calls) == 1
+    assert resolver_calls[0]["code"] == "000001.SZ"
+    assert resolver_calls[0]["pick_date"] == "2026-04-01"
+    assert resolver_calls[0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert resolver_calls[0]["rows"] == expected_rows
+    review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    assert review["code"] == "000001.SZ"
+    assert review["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert review["review_mode"] == "baseline_local"
+    assert review["llm_review"] is None
+    assert review["baseline_review"]["review_type"] == "baseline"
+    assert review["baseline_review"]["comment"] == "resolver baseline"
+    assert review["total_score"] == 4.6
+    assert review["signal_type"] == "trend_start"
+    assert review["verdict"] == "PASS"
+    assert summary == {
+        "pick_date": "2026-04-01",
+        "method": "b2",
+        "reviewed_count": 1,
+        "recommendations": [review],
+        "excluded": [],
+        "failures": [],
+    }
+    assert tasks["prompt_path"] == prompt_path
+    assert tasks["method"] == "b2"
+    assert tasks["tasks"][0]["prompt_path"] == prompt_path
+    assert tasks["tasks"][0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
+    assert tasks["tasks"][0]["baseline_verdict"] == review["verdict"]
+
+
 def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -1326,7 +1507,7 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
         lambda *args, **kwargs: pytest.fail("review --intraday should not fetch symbol history"),
     )
 
-    def fake_review_symbol_history(
+    def fake_review_history(
         *,
         code: str,
         pick_date: str,
@@ -1348,22 +1529,15 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
             "comment": "intraday baseline",
         }
 
-    monkeypatch.setattr(cli, "review_symbol_history", fake_review_symbol_history)
     monkeypatch.setattr(
         cli,
-        "build_review_result",
-        lambda **kwargs: {
-            "code": kwargs["code"],
-            "pick_date": kwargs["pick_date"],
-            "chart_path": kwargs["chart_path"],
-            "review_mode": "baseline_local",
-            "baseline_review": kwargs["baseline_review"],
-            "llm_review": None,
-            "total_score": kwargs["baseline_review"]["total_score"],
-            "signal_type": kwargs["baseline_review"]["signal_type"],
-            "verdict": kwargs["baseline_review"]["verdict"],
-            "comment": kwargs["baseline_review"]["comment"],
-        },
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="default",
+            prompt_path="resolver-prompt.md",
+            review_history=fake_review_history,
+        ),
+        raising=False,
     )
     monkeypatch.setattr(
         cli,
@@ -1392,6 +1566,226 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
 
     assert result.exit_code == 0
     assert (runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08+08-00") / "summary.json").exists()
+
+
+
+def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    run_id = "2026-04-09T11-31-08+08-00"
+    candidate_dir = runtime_root / "candidates"
+    chart_dir = runtime_root / "charts" / _intraday_key(run_id, "b2")
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (candidate_dir / f"{_intraday_key(run_id, 'b2')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b2",
+                "trade_date": "2026-04-09",
+                "run_id": run_id,
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_load_intraday_prepared_cache",
+        lambda current_runtime_root, *, method, run_id, trade_date: (
+            {
+                "000001.SZ": pd.DataFrame(
+                    [
+                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                        {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                    ]
+                )
+            }
+            if current_runtime_root == runtime_root
+            and method == "b2"
+            and run_id == "2026-04-09T11-31-08+08-00"
+            and trade_date == "2026-04-09"
+            else pytest.fail("review did not request the expected intraday prepared cache")
+        ),
+    )
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("review --intraday should not connect to the database"))
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda *args, **kwargs: pytest.fail("review --intraday should not fetch symbol history"),
+    )
+
+    prompt_path = str(tmp_path / "prompt-b2-stub.md")
+    resolver_calls: list[dict[str, object]] = []
+    resolver_methods: list[str] = []
+    expected_rows = [
+        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+        {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+    ]
+
+    def fake_review_history(
+        *,
+        code: str,
+        pick_date: str,
+        history: pd.DataFrame,
+        chart_path: str,
+    ) -> dict[str, object]:
+        resolver_calls.append(
+            {
+                "code": code,
+                "pick_date": pick_date,
+                "chart_path": chart_path,
+                "rows": history.to_dict(orient="records"),
+            }
+        )
+        return {
+            "review_type": "baseline",
+            "total_score": 4.3,
+            "signal_type": "trend_start",
+            "verdict": "PASS",
+            "comment": "resolver intraday baseline",
+        }
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: resolver_methods.append(method)
+        or SimpleNamespace(
+            name="b2",
+            prompt_path=prompt_path,
+            review_history=fake_review_history,
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(app, ["review", "--method", "b2", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code == 0
+    assert resolver_methods == ["b2"]
+    assert len(resolver_calls) == 1
+    assert resolver_calls[0]["code"] == "000001.SZ"
+    assert resolver_calls[0]["pick_date"] == "2026-04-09"
+    assert resolver_calls[0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert resolver_calls[0]["rows"] == expected_rows
+    review_dir = runtime_root / "reviews" / _intraday_key(run_id, "b2")
+    review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    assert review["code"] == "000001.SZ"
+    assert review["pick_date"] == "2026-04-09"
+    assert review["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert review["review_mode"] == "baseline_local"
+    assert review["llm_review"] is None
+    assert review["baseline_review"]["comment"] == "resolver intraday baseline"
+    assert review["total_score"] == 4.3
+    assert review["signal_type"] == "trend_start"
+    assert review["verdict"] == "PASS"
+    assert summary == {
+        "pick_date": "2026-04-09",
+        "method": "b2",
+        "reviewed_count": 1,
+        "recommendations": [review],
+        "excluded": [],
+        "failures": [],
+    }
+    assert tasks["prompt_path"] == prompt_path
+    assert tasks["method"] == "b2"
+    assert tasks["tasks"][0]["prompt_path"] == prompt_path
+    assert tasks["tasks"][0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
+    assert tasks["tasks"][0]["baseline_verdict"] == review["verdict"]
+
+
+
+def test_review_default_resolver_method_uses_resolver_prompt_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-02", "b1")
+    review_dir = runtime_root / "reviews" / method_key
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-02",
+                "method": "b1",
+                "candidates": [{"code": "000002.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    chart_dir = runtime_root / "charts" / method_key
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000002.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol],
+                "trade_date": pd.to_datetime(["2026-04-02"]),
+                "open": [8.0],
+                "high": [8.4],
+                "low": [7.9],
+                "close": [8.3],
+                "vol": [210.0],
+            }
+        ),
+    )
+
+    prompt_path = str(tmp_path / "prompt-default-stub.md")
+    resolver_methods: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: resolver_methods.append(method)
+        or SimpleNamespace(
+            name="default",
+            prompt_path=prompt_path,
+            review_history=lambda **kwargs: {
+                "review_type": "baseline",
+                "total_score": 3.7,
+                "signal_type": "rebound",
+                "verdict": "WATCH",
+                "comment": "default resolver baseline",
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-02",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert resolver_methods == ["b1"]
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    assert tasks["method"] == "b1"
+    assert tasks["prompt_path"] == prompt_path
+    assert tasks["tasks"][0]["prompt_path"] == prompt_path
+    assert tasks["tasks"][0]["code"] == "000002.SZ"
 
 
 def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
