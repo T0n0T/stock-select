@@ -108,6 +108,9 @@ uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://.
   - `600519` -> `600519.SH`
   - `300750` -> `300750.SZ`
   - `830799` -> `830799.BJ`
+- 也支持按行写带市场前缀和名称的列表，CLI 会从每行提取第一个 6 位数字代码，例如：
+  - `SH603876 鼎胜新材` -> `603876.SH`
+  - `SZ002008 大族激光` -> `002008.SZ`
 - 重复代码会自动去重
 - 无法识别的 token 会被忽略
 - 如果过滤后一个有效代码都没有，CLI 会报错
@@ -118,6 +121,14 @@ uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://.
 600519 300750 830799
 002594.SZ
 601318.SH
+```
+
+也可以使用这种每行一只、附带名称的格式：
+
+```text
+SH603876 鼎胜新材
+SZ002008 大族激光
+SZ002703 浙江世宝
 ```
 
 ## 运行行为

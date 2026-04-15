@@ -28,7 +28,6 @@ def test_default_runtime_root_uses_agents_skill_runtime() -> None:
     assert cli._default_runtime_root() == expected
 
 
-
 def test_b2_prompt_reference_exists_and_preserves_default_json_contract() -> None:
     references_dir = (
         Path(__file__).resolve().parents[1]
@@ -252,6 +251,7 @@ def test_screen_custom_pool_rejects_missing_configuration_with_guidance(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
+    missing_default_pool = tmp_path / "missing-custom-pool.txt"
 
     def fake_connect(_: str) -> object:
         return object()
@@ -294,6 +294,7 @@ def test_screen_custom_pool_rejects_missing_configuration_with_guidance(
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "_default_custom_pool_path", lambda: missing_default_pool)
     monkeypatch.delenv("STOCK_SELECT_POOL_FILE", raising=False)
 
     result = runner.invoke(
@@ -316,7 +317,8 @@ def test_screen_custom_pool_rejects_missing_configuration_with_guidance(
     assert result.exit_code != 0
     assert "--pool-file" in result.stderr
     assert "STOCK_SELECT_POOL_FILE" in result.stderr
-    assert "custom-pool.txt" in result.stderr
+    normalized_stderr = result.stderr.replace("\n", "").replace(" ", "").replace("│", "")
+    assert str(missing_default_pool).replace(" ", "") in normalized_stderr
 
 
 def test_screen_custom_pool_rejects_empty_code_list(
@@ -1275,7 +1277,6 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert "[review] done reviewed=1 failures=0" in result.stderr
 
 
-
 def test_review_uses_method_specific_resolver_prompt_and_baseline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1568,7 +1569,6 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
     assert (runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08+08-00") / "summary.json").exists()
 
 
-
 def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1699,7 +1699,6 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
     assert tasks["tasks"][0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
     assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
     assert tasks["tasks"][0]["baseline_verdict"] == review["verdict"]
-
 
 
 def test_review_default_resolver_method_uses_resolver_prompt_metadata(
@@ -1915,7 +1914,7 @@ def test_record_watch_writes_csv_from_pass_and_watch_summary(
         ],
     )
 
-    csv_path = runtime_root / "watch_pool" / "b1.csv"
+    csv_path = runtime_root / "watch_pool.csv"
     assert result.exit_code == 0
     assert result.stdout.strip() == str(csv_path)
     rows = pd.read_csv(csv_path).to_dict(orient="records")
@@ -1952,8 +1951,7 @@ def test_record_watch_rejects_duplicate_without_overwrite(
         ),
         encoding="utf-8",
     )
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
+    runtime_root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
         [
             {
@@ -1967,7 +1965,7 @@ def test_record_watch_rejects_duplicate_without_overwrite(
                 "recorded_at": "2026-04-11T10:00:00+08:00",
             }
         ]
-    ).to_csv(watch_dir / "b1.csv", index=False)
+    ).to_csv(runtime_root / "watch_pool.csv", index=False)
 
     monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
     monkeypatch.setattr(cli, "_today_local_date", lambda: "2026-04-14")
@@ -2033,8 +2031,7 @@ def test_record_watch_overwrites_and_trims_old_rows(
         ),
         encoding="utf-8",
     )
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
+    runtime_root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
         [
             {
@@ -2058,7 +2055,7 @@ def test_record_watch_overwrites_and_trims_old_rows(
                 "recorded_at": "2026-03-20T10:00:00+08:00",
             },
         ]
-    ).to_csv(watch_dir / "b1.csv", index=False)
+    ).to_csv(runtime_root / "watch_pool.csv", index=False)
 
     monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
     monkeypatch.setattr(cli, "_today_local_date", lambda: "2026-04-14")
@@ -2094,7 +2091,7 @@ def test_record_watch_overwrites_and_trims_old_rows(
         ],
     )
 
-    rows = pd.read_csv(runtime_root / "watch_pool" / "b1.csv").to_dict(orient="records")
+    rows = pd.read_csv(runtime_root / "watch_pool.csv").to_dict(orient="records")
     assert result.exit_code == 0
     assert rows == [
         {
@@ -2138,8 +2135,7 @@ def test_record_watch_sorts_rows_by_trade_day_distance(
         ),
         encoding="utf-8",
     )
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
+    runtime_root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
         [
             {
@@ -2163,7 +2159,7 @@ def test_record_watch_sorts_rows_by_trade_day_distance(
                 "recorded_at": "2026-04-08T10:00:00+08:00",
             },
         ]
-    ).to_csv(watch_dir / "b1.csv", index=False)
+    ).to_csv(runtime_root / "watch_pool.csv", index=False)
 
     monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
     monkeypatch.setattr(cli, "_today_local_date", lambda: "2026-04-14")
@@ -2196,7 +2192,7 @@ def test_record_watch_sorts_rows_by_trade_day_distance(
         ],
     )
 
-    rows = pd.read_csv(runtime_root / "watch_pool" / "b1.csv").to_dict(orient="records")
+    rows = pd.read_csv(runtime_root / "watch_pool.csv").to_dict(orient="records")
     assert result.exit_code == 0
     assert [row["code"] for row in rows] == ["CCC.SZ", "AAA.SZ", "BBB.SZ"]
 
@@ -4694,9 +4690,8 @@ def test_screen_record_watch_uses_latest_effective_rows_per_symbol(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    (watch_dir / "b1.csv").write_text(
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "watch_pool.csv").write_text(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
@@ -5294,6 +5289,108 @@ def test_screen_custom_pool_does_not_reuse_artifacts_from_different_pool_file(
     assert [item["code"] for item in payload["candidates"]] == ["300058.SZ"]
 
 
+def test_screen_custom_pool_extracts_numeric_codes_from_prefixed_lines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    pool_file = tmp_path / "custom-pool.txt"
+    pool_file.write_text(
+        "\n".join(
+            [
+                "SH603876 鼎胜新材",
+                "SZ002008 大族激光",
+                "SZ002703 浙江世宝",
+                "垃圾行",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["603876.SH", "002008.SZ", "002703.SZ", "300058.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"] * 4),
+                "open": [10.0, 20.0, 30.0, 40.0],
+                "high": [10.5, 20.5, 30.5, 40.5],
+                "low": [9.8, 19.8, 29.8, 39.8],
+                "close": [10.2, 20.2, 30.2, 40.2],
+                "vol": [100.0, 200.0, 300.0, 400.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_screen_data",
+        lambda _market, reporter=None: {
+            code: pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-04"]),
+                    "close": [10.0],
+                    "J": [10.0],
+                    "zxdq": [10.4],
+                    "zxdkx": [10.0],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "turnover_n": [100.0],
+                }
+            )
+            for code in ["603876.SH", "002008.SZ", "002703.SZ", "300058.SZ"]
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            [
+                {"code": code, "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}
+                for code in prepared_by_symbol
+            ],
+            {
+                "total_symbols": len(prepared_by_symbol),
+                "eligible": len(prepared_by_symbol),
+                "fail_j": 0,
+                "fail_insufficient_history": 0,
+                "fail_close_zxdkx": 0,
+                "fail_zxdq_zxdkx": 0,
+                "fail_weekly_ma": 0,
+                "fail_max_vol": 0,
+                "selected": len(prepared_by_symbol),
+            },
+        )
+        if list(prepared_by_symbol) == ["603876.SH", "002008.SZ", "002703.SZ"]
+        else pytest.fail("custom pool should extract numeric codes from prefixed lines only"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-04",
+            "--pool-source",
+            "custom",
+            "--pool-file",
+            str(pool_file),
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-04')}.json").read_text(encoding="utf-8"))
+    assert [item["code"] for item in payload["candidates"]] == ["603876.SH", "002008.SZ", "002703.SZ"]
+
+
 def test_screen_record_watch_rejects_missing_watch_pool_csv(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5362,7 +5459,8 @@ def test_screen_record_watch_rejects_missing_watch_pool_csv(
 
     assert result.exit_code != 0
     assert "watch pool csv" in result.stderr.lower()
-    assert "b1.csv" in result.stderr
+    normalized_stderr = result.stderr.replace("\n", "").replace(" ", "").replace("│", "")
+    assert "watch_pool.csv" in normalized_stderr
 
 
 def test_screen_record_watch_rejects_empty_effective_pool_after_intersection(
@@ -5371,9 +5469,8 @@ def test_screen_record_watch_rejects_empty_effective_pool_after_intersection(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    (watch_dir / "b1.csv").write_text(
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "watch_pool.csv").write_text(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
@@ -5458,9 +5555,8 @@ def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    (watch_dir / "b2.csv").write_text(
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "watch_pool.csv").write_text(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
@@ -5617,10 +5713,10 @@ def test_screen_record_watch_bypasses_existing_candidate_and_prepared_reuse(
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
     prepared_dir = runtime_root / "prepared"
-    watch_dir = runtime_root / "watch_pool"
+    watch_file = runtime_root / "watch_pool.csv"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     prepared_dir.mkdir(parents=True, exist_ok=True)
-    watch_dir.mkdir(parents=True, exist_ok=True)
+    runtime_root.mkdir(parents=True, exist_ok=True)
 
     (candidate_dir / f"{_eod_key('2026-04-04')}.json").write_text(
         json.dumps(
@@ -5653,7 +5749,7 @@ def test_screen_record_watch_bypasses_existing_candidate_and_prepared_reuse(
             )
         },
     )
-    (watch_dir / "b1.csv").write_text(
+    watch_file.write_text(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
@@ -5911,9 +6007,8 @@ def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    (watch_dir / "b2.csv").write_text(
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "watch_pool.csv").write_text(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
@@ -6142,20 +6237,19 @@ def test_screen_hcr_turnover_top_uses_liquidity_pool(
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
-def test_screen_hcr_record_watch_uses_watch_pool_subset(
+def test_screen_hcr_record_watch_uses_shared_watch_pool_subset(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    (watch_dir / "hcr.csv").write_text(
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "watch_pool.csv").write_text(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
-                "hcr,2026-04-08,AAA.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
-                "hcr,2026-04-08,CCC.SZ,WATCH,1.0,signal,missing,2026-04-08T10:00:00+08:00",
+                "b1,2026-04-08,AAA.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
+                "b2,2026-04-08,CCC.SZ,WATCH,1.0,signal,missing,2026-04-08T10:00:00+08:00",
             ]
         ),
         encoding="utf-8",
@@ -7374,9 +7468,8 @@ def test_screen_intraday_reuses_shared_prepared_cache_without_recompute(monkeypa
 def test_screen_intraday_record_watch_uses_watch_pool_subset(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    watch_dir = runtime_root / "watch_pool"
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    (watch_dir / "b1.csv").write_text(
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "watch_pool.csv").write_text(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",

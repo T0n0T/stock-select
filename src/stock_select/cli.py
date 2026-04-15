@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pickle
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -62,6 +63,7 @@ from stock_select.watch_pool import (
     merge_watch_rows,
     summary_to_watch_rows,
     trim_and_sort_watch_rows,
+    update_watch_pool,
     write_watch_pool,
 )
 
@@ -172,7 +174,8 @@ def _review_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
 
 
 def _watch_pool_path(runtime_root: Path, method: str) -> Path:
-    return runtime_root / "watch_pool" / f"{method}.csv"
+    _ = method
+    return runtime_root / "watch_pool.csv"
 
 
 def _default_custom_pool_path() -> Path:
@@ -405,15 +408,39 @@ def _load_custom_pool_codes(*, pool_file: Path | None) -> tuple[Path, list[str]]
     resolved_path = _resolve_custom_pool_file(pool_file)
     if not resolved_path.exists():
         raise typer.BadParameter(_custom_pool_guidance_message(resolved_path))
-    raw_tokens = [token.strip() for token in resolved_path.read_text(encoding="utf-8").split() if token.strip()]
+
+    def normalize_candidate_token(token: str) -> str | None:
+        stripped = token.strip()
+        if not stripped:
+            return None
+        try:
+            return _normalize_ts_code(stripped.upper())
+        except ValueError:
+            match = re.search(r"(\d{6})", stripped)
+            if match is None:
+                return None
+            try:
+                return _normalize_ts_code(match.group(1))
+            except ValueError:
+                return None
+
+    raw_content = resolved_path.read_text(encoding="utf-8")
+    raw_tokens = [token.strip() for token in raw_content.split() if token.strip()]
     codes: list[str] = []
     for token in raw_tokens:
-        try:
-            normalized = _normalize_ts_code(token.upper())
-        except ValueError:
+        normalized = normalize_candidate_token(token)
+        if normalized is None:
             continue
         if normalized not in codes:
             codes.append(normalized)
+
+    if not codes:
+        for line in raw_content.splitlines():
+            normalized = normalize_candidate_token(line)
+            if normalized is None or normalized in codes:
+                continue
+            codes.append(normalized)
+
     if not codes:
         raise typer.BadParameter(
             "Custom pool must contain at least one stock code. "
@@ -1749,25 +1776,29 @@ def _record_watch_impl(
         raise typer.BadParameter("Trade date calendar is unavailable.")
 
     csv_path = _watch_pool_path(runtime_root, method)
-    existing_rows = load_watch_pool(csv_path)
-    try:
+    overwritten_count = 0
+    imported_count = 0
+    trimmed_count = 0
+
+    def apply_watch_pool_update(existing_rows: pd.DataFrame) -> pd.DataFrame:
+        nonlocal overwritten_count, imported_count, trimmed_count
         merged_rows, overwritten_count, imported_count = merge_watch_rows(
             existing_rows,
             incoming_rows,
             overwrite=overwrite,
         )
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    try:
         final_rows, trimmed_count = trim_and_sort_watch_rows(
             merged_rows,
             trade_dates_desc=trade_dates_desc,
             execution_trade_date=execution_trade_date,
             cutoff_trade_date=cutoff_trade_date,
         )
+        return final_rows
+
+    try:
+        update_watch_pool(csv_path, apply_watch_pool_update)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    write_watch_pool(csv_path, final_rows)
     if reporter:
         reporter.emit(
             "record-watch",

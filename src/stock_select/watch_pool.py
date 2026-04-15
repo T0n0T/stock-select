@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
+import fcntl
 import pandas as pd
 
 
@@ -165,3 +169,33 @@ def write_watch_pool(csv_path: Path, rows: pd.DataFrame) -> None:
     frame = rows.copy() if not rows.empty else empty_watch_pool()
     frame = frame[WATCH_POOL_COLUMNS].copy()
     frame.to_csv(csv_path, index=False)
+
+
+def update_watch_pool(
+    csv_path: Path,
+    updater: Callable[[pd.DataFrame], pd.DataFrame],
+) -> pd.DataFrame:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = csv_path.with_name(f"{csv_path.name}.lock")
+
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        existing = load_watch_pool(csv_path)
+        updated = updater(existing)
+        frame = updated.copy() if not updated.empty else empty_watch_pool()
+        frame = frame[WATCH_POOL_COLUMNS].copy()
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=csv_path.parent,
+            prefix=f".{csv_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            frame.to_csv(handle, index=False)
+
+        os.replace(temp_path, csv_path)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return frame

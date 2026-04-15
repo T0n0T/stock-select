@@ -14,7 +14,7 @@ Write all generated outputs under:
   reviews/<base_key>.<method>/summary.json
   reviews/<base_key>.<method>/llm_review_tasks.json
   reviews/<base_key>.<method>/llm_review_results/<code>.json
-  watch_pool/<method>.csv
+  watch_pool.csv
 ```
 
 Current behavior:
@@ -29,7 +29,8 @@ Current behavior:
 - `reviews/<base_key>.<method>/summary.json` stores the aggregated recommendations, exclusions, and failures.
 - `reviews/<base_key>.<method>/llm_review_tasks.json` stores one dispatch task per candidate.
 - `reviews/<base_key>.<method>/llm_review_results/<code>.json` stores raw subagent JSON before `review-merge` validation.
-- `watch_pool/<method>.csv` stores end-of-day `PASS` and `WATCH` rows imported by `record-watch`, including `recorded_at`, with retention trimmed by trading-day window.
+- `watch_pool.csv` stores end-of-day `PASS` and `WATCH` rows imported by `record-watch`, including `recorded_at`, with retention trimmed by trading-day window.
+- The watch pool is shared across methods; the CSV still keeps a `method` column, but runtime storage is no longer split into per-method files.
 - `b2` phase-two MACD warmup is on-demand and is not stored as a separate prepared cache.
 
 Optional additions:
