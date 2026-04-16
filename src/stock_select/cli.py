@@ -347,6 +347,31 @@ def _current_shanghai_timestamp() -> pd.Timestamp:
     return pd.Timestamp.now(tz="Asia/Shanghai")
 
 
+def _is_within_intraday_market_hours(current: pd.Timestamp) -> bool:
+    if current.day_of_week >= 5:
+        return False
+    current_time = current.timetz().replace(tzinfo=None)
+    morning_open = datetime.strptime("09:30", "%H:%M").time()
+    morning_close = datetime.strptime("11:30", "%H:%M").time()
+    afternoon_open = datetime.strptime("13:00", "%H:%M").time()
+    afternoon_close = datetime.strptime("15:00", "%H:%M").time()
+    return (morning_open <= current_time <= morning_close) or (afternoon_open <= current_time <= afternoon_close)
+
+
+def _emit_intraday_hours_warning(reporter: ProgressReporter | None) -> None:
+    current = _current_shanghai_timestamp()
+    if _is_within_intraday_market_hours(current):
+        return
+    message = (
+        "--intraday requested outside trading-day intraday market hours; "
+        "prefer --pick-date unless you explicitly need a stale or special intraday workflow."
+    )
+    if reporter is not None:
+        reporter.emit("warning", message)
+        return
+    typer.echo(f"[warning] {message}", err=True)
+
+
 def _format_intraday_run_id(timestamp: pd.Timestamp) -> str:
     return timestamp.isoformat(timespec="microseconds").replace(":", "-").replace(".", "-")
 
@@ -1664,13 +1689,13 @@ def _review_merge_impl(
 
         llm_payload = json.loads(llm_path.read_text(encoding="utf-8"))
         try:
-            normalized_llm = normalize_llm_review(llm_payload)
+            normalized_llm = normalize_llm_review({**llm_payload, "method": method})
         except ValueError as exc:
             failures.append({"code": code, "reason": str(exc)})
             merged_reviews.append(existing_review)
             continue
 
-        merged_review = merge_review_result(existing_review=existing_review, llm_review=normalized_llm)
+        merged_review = merge_review_result(method=method, existing_review=existing_review, llm_review=normalized_llm)
         review_path.write_text(json.dumps(merged_review, indent=2), encoding="utf-8")
         merged_reviews.append(merged_review)
 
@@ -1830,6 +1855,7 @@ def screen(
         if intraday:
             if pick_date is not None:
                 raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+            _emit_intraday_hours_warning(reporter)
             out_path = _screen_intraday_impl(
                 method=normalized_method,
                 dsn=dsn,
@@ -1872,6 +1898,7 @@ def chart(
     if intraday:
         if pick_date is not None:
             raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+        _emit_intraday_hours_warning(reporter)
         chart_dir = _chart_intraday_impl(method=normalized_method, runtime_root=runtime_root, reporter=reporter)
     else:
         if pick_date is None:
@@ -1900,6 +1927,7 @@ def review(
     if intraday:
         if pick_date is not None:
             raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+        _emit_intraday_hours_warning(reporter)
         summary_path = _review_intraday_impl(
             method=normalized_method,
             runtime_root=runtime_root,
@@ -2007,6 +2035,7 @@ def run_all(
     reporter.emit("run", "step=screen start")
     screen_started_at = reporter.checkpoint()
     if intraday:
+        _emit_intraday_hours_warning(reporter)
         screen_path = _screen_intraday_impl(
             method=normalized_method,
             dsn=dsn,

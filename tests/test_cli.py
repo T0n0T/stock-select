@@ -1105,6 +1105,26 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
     assert (runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08+08-00") / "000001.SZ_day.png").exists()
 
 
+def test_chart_intraday_warns_outside_trading_hours(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 15:30:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_chart_intraday_impl", lambda **kwargs: tmp_path / "charts" / "fake")
+
+    result = runner.invoke(
+        app,
+        ["chart", "--method", "b1", "--intraday", "--runtime-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "outside trading-day intraday market hours" in result.stderr
+
+
 def test_chart_intraday_rejects_malformed_latest_candidate_payload(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -1567,6 +1587,26 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
 
     assert result.exit_code == 0
     assert (runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08+08-00") / "summary.json").exists()
+
+
+def test_review_intraday_warns_outside_trading_hours(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 12:15:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_review_intraday_impl", lambda **kwargs: tmp_path / "reviews" / "fake.json")
+
+    result = runner.invoke(
+        app,
+        ["review", "--method", "b1", "--intraday", "--runtime-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "outside trading-day intraday market hours" in result.stderr
 
 
 def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
@@ -2484,6 +2524,40 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
     ]
 
 
+def test_run_intraday_warns_outside_trading_hours(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 15:30:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_screen_intraday_impl",
+        lambda **kwargs: tmp_path / "candidates" / "fake.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_chart_intraday_impl",
+        lambda **kwargs: tmp_path / "charts" / "fake",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_review_intraday_impl",
+        lambda **kwargs: tmp_path / "reviews" / "fake.json",
+    )
+
+    result = runner.invoke(
+        app,
+        ["run", "--method", "b1", "--intraday", "--runtime-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "outside trading-day intraday market hours" in result.stderr
+
+
 def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2742,7 +2816,7 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "comment": "baseline",
     }
     assert merged["llm_review"]["verdict"] == "PASS"
-    assert merged["llm_review"]["total_score"] == 4.62
+    assert merged["llm_review"]["total_score"] == 4.53
     assert merged["llm_review"]["scores"] == {
         "trend_structure": 5.0,
         "price_position": 4.0,
@@ -2750,8 +2824,8 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "previous_abnormal_move": 4.0,
         "macd_phase": 5.0,
     }
-    assert merged["final_score"] == 4.13
-    assert merged["total_score"] == 4.13
+    assert merged["final_score"] == 4.08
+    assert merged["total_score"] == 4.08
     assert merged["verdict"] == "PASS"
     assert summary["recommendations"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr
@@ -2850,7 +2924,7 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
     untouched = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
     assert merged["review_mode"] == "merged"
-    assert merged["llm_review"]["total_score"] == 4.62
+    assert merged["llm_review"]["total_score"] == 4.53
     assert untouched["review_mode"] == "baseline_local"
     assert untouched["baseline_review"] == {
         "review_type": "baseline",
@@ -7055,6 +7129,60 @@ def test_screen_intraday_rejects_weekend_execution(monkeypatch, tmp_path: Path) 
     assert result.exit_code != 0
     assert "weekend" in result.stderr.lower()
     assert "traceback" not in result.stderr.lower()
+
+
+def test_screen_intraday_warns_outside_trading_hours_before_open(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 08:45:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_screen_intraday_impl", lambda **kwargs: tmp_path / "candidates" / "fake.json")
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "outside trading-day intraday market hours" in result.stderr
+
+
+def test_screen_intraday_does_not_warn_during_trading_hours(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-09 10:15:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_screen_intraday_impl", lambda **kwargs: tmp_path / "candidates" / "fake.json")
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "outside trading-day intraday market hours" not in result.stderr
 
 
 def test_screen_intraday_requires_tushare_token(monkeypatch, tmp_path: Path) -> None:

@@ -9,10 +9,20 @@ BASELINE_SCORE_WEIGHTS = {
     "previous_abnormal_move": 0.20,
     "macd_phase": 0.20,
 }
+NO_MACD_SCORE_WEIGHTS = {
+    "trend_structure": 0.225,
+    "price_position": 0.225,
+    "volume_behavior": 0.30,
+    "previous_abnormal_move": 0.25,
+}
 
 
 def compute_weighted_total(scores: dict[str, float]) -> float:
     return round(sum(float(scores[field]) * weight for field, weight in BASELINE_SCORE_WEIGHTS.items()), 2)
+
+
+def compute_weighted_total_without_macd(scores: dict[str, float]) -> float:
+    return round(sum(float(scores[field]) * weight for field, weight in NO_MACD_SCORE_WEIGHTS.items()), 2)
 
 
 def infer_signal_type(

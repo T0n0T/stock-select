@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from stock_select.review_orchestrator import (
+    compute_method_total_score,
     build_review_payload,
     build_review_result,
     merge_review_result,
@@ -107,6 +108,43 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
     assert normalized["total_score"] == pytest.approx(4.62)
     assert normalized["verdict"] == "PASS"
     assert normalized["signal_type"] == "trend_start"
+
+
+def test_compute_method_total_score_excludes_macd_for_b1_and_hcr() -> None:
+    scores = {
+        "trend_structure": 5.0,
+        "price_position": 4.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 1.0,
+    }
+
+    assert compute_method_total_score("b1", scores) == pytest.approx(4.53)
+    assert compute_method_total_score("hcr", scores) == pytest.approx(4.53)
+
+
+def test_compute_method_total_score_keeps_macd_for_b2() -> None:
+    scores = {
+        "trend_structure": 5.0,
+        "price_position": 4.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 1.0,
+    }
+
+    assert compute_method_total_score("b2", scores) == pytest.approx(3.82)
+
+
+def test_compute_method_total_score_keeps_macd_for_default() -> None:
+    scores = {
+        "trend_structure": 5.0,
+        "price_position": 4.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 1.0,
+    }
+
+    assert compute_method_total_score("default", scores) == pytest.approx(3.82)
 
 
 def test_normalize_llm_review_rejects_missing_reasoning() -> None:
@@ -224,6 +262,35 @@ def test_default_review_symbol_history_returns_watch_for_constructive_trend() ->
     assert review["signal_type"] == "trend_start"
     assert review["verdict"] == "WATCH"
     assert review["comment"] == "结构有修复迹象，但量价与位置优势一般，暂时更适合继续观察。"
+
+
+def test_default_review_symbol_history_excludes_macd_from_total_score_for_b1() -> None:
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-01-01", periods=160, freq="B"),
+            "open": [10.0 + idx * 0.05 for idx in range(160)],
+            "high": [10.3 + idx * 0.05 for idx in range(160)],
+            "low": [9.8 + idx * 0.05 for idx in range(160)],
+            "close": [10.2 + idx * 0.05 for idx in range(160)],
+            "vol": [1000.0 + idx * 5.0 for idx in range(160)],
+        }
+    )
+
+    review = default_review_symbol_history(
+        method="b1",
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert review["trend_structure"] == 5.0
+    assert review["price_position"] == 3.0
+    assert review["volume_behavior"] == 5.0
+    assert review["previous_abnormal_move"] == 3.0
+    assert review["macd_phase"] == 3.0
+    assert review["total_score"] == pytest.approx(4.05)
+    assert review["verdict"] == "PASS"
 
 
 def test_default_review_symbol_history_ignores_future_rows_after_pick_date() -> None:

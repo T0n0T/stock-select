@@ -6,10 +6,10 @@ import pandas as pd
 
 from stock_select.review_protocol import (
     build_baseline_comment,
-    compute_weighted_total,
     infer_signal_type,
     infer_verdict,
 )
+from stock_select.review_orchestrator import compute_method_total_score
 from stock_select.strategies import compute_macd
 
 _B2_MACD_CONFIRMATION_WEEKLY_POINTS = 40
@@ -49,14 +49,15 @@ def review_b2_symbol_history(
     previous_abnormal_move = _score_b2_previous_abnormal_move(close=close, volume=volume, ma25=ma25, ma60=ma60)
     macd_phase = _score_b2_macd_phase(frame)
 
-    total_score = compute_weighted_total(
+    total_score = compute_method_total_score(
+        "b2",
         {
             "trend_structure": trend_structure,
             "price_position": price_position,
             "volume_behavior": volume_behavior,
             "previous_abnormal_move": previous_abnormal_move,
             "macd_phase": macd_phase,
-        }
+        },
     )
     signal_type = infer_signal_type(
         latest_close=float(close.iloc[-1]),

@@ -31,5 +31,5 @@ def get_review_resolver(method: str) -> ReviewResolver:
     return ReviewResolver(
         name="default",
         prompt_path=DEFAULT_PROMPT_PATH,
-        review_history=review_symbol_history,
+        review_history=lambda **kwargs: review_symbol_history(method=normalized or "default", **kwargs),
     )

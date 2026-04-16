@@ -9,6 +9,7 @@ from stock_select.review_protocol import (
     BASELINE_SCORE_WEIGHTS,
     build_baseline_comment,
     compute_weighted_total,
+    compute_weighted_total_without_macd,
     infer_final_verdict,
     validate_score_field,
 )
@@ -33,6 +34,15 @@ REQUIRED_SCORE_FIELDS = (
 )
 ALLOWED_SIGNAL_TYPES = {"trend_start", "rebound", "distribution_risk"}
 ALLOWED_VERDICTS = {"PASS", "WATCH", "FAIL"}
+
+
+def compute_method_total_score(method: str, scores: dict[str, float]) -> float:
+    normalized = str(method).strip().lower()
+    if normalized in {"b1", "hcr"}:
+        return compute_weighted_total_without_macd(scores)
+    return compute_weighted_total(scores)
+
+
 def build_review_payload(
     *,
     code: str,
@@ -77,6 +87,7 @@ def build_review_result(
 
 def merge_review_result(
     *,
+    method: str = "default",
     existing_review: dict[str, Any],
     llm_review: dict[str, Any],
     baseline_weight: float = 0.4,
@@ -131,7 +142,7 @@ def normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(comment, str) or not comment.strip():
         raise ValueError("Missing or empty required field: comment")
 
-    total_score = compute_weighted_total(normalized_scores)
+    total_score = compute_method_total_score(str(payload.get("method", "default")), normalized_scores)
 
     return {
         **{field: str(payload[field]).strip() for field in REQUIRED_REASONING_FIELDS},
@@ -146,6 +157,7 @@ def normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
 
 def review_symbol_history(
     *,
+    method: str = "default",
     code: str,
     pick_date: str,
     history: pd.DataFrame,
@@ -154,6 +166,7 @@ def review_symbol_history(
     from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
 
     return default_review_symbol_history(
+        method=method,
         code=code,
         pick_date=pick_date,
         history=history,

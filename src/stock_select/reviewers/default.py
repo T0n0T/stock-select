@@ -6,15 +6,16 @@ import pandas as pd
 
 from stock_select.review_protocol import (
     build_baseline_comment,
-    compute_weighted_total,
     infer_signal_type,
     infer_verdict,
 )
+from stock_select.review_orchestrator import compute_method_total_score
 from stock_select.strategies import compute_macd
 
 
 def review_symbol_history(
     *,
+    method: str = "default",
     code: str,
     pick_date: str,
     history: pd.DataFrame,
@@ -55,15 +56,14 @@ def review_symbol_history(
     previous_abnormal_move = _score_previous_abnormal_move(close, volume)
     macd_phase = _score_macd_phase(close)
 
-    total_score = compute_weighted_total(
-        {
-            "trend_structure": trend_structure,
-            "price_position": price_position,
-            "volume_behavior": volume_behavior,
-            "previous_abnormal_move": previous_abnormal_move,
-            "macd_phase": macd_phase,
-        }
-    )
+    score_fields = {
+        "trend_structure": trend_structure,
+        "price_position": price_position,
+        "volume_behavior": volume_behavior,
+        "previous_abnormal_move": previous_abnormal_move,
+        "macd_phase": macd_phase,
+    }
+    total_score = compute_method_total_score(method, score_fields)
     signal_type = infer_signal_type(
         latest_close=latest_close,
         latest_open=latest_open,
