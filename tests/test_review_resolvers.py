@@ -1,13 +1,18 @@
 from stock_select.review_resolvers import get_review_resolver
 
 
-def test_get_review_resolver_uses_default_for_b1_and_hcr() -> None:
+def test_get_review_resolver_uses_dedicated_b1_prompt() -> None:
     b1 = get_review_resolver("b1")
+
+    assert b1.name == "b1"
+    assert b1.prompt_path.endswith(".agents/skills/stock-select/references/prompt-b1.md")
+    assert b1.review_history.__module__ == "stock_select.reviewers.b1"
+
+
+def test_get_review_resolver_uses_default_for_hcr() -> None:
     hcr = get_review_resolver("hcr")
 
-    assert b1.name == "default"
     assert hcr.name == "default"
-    assert b1.prompt_path.endswith(".agents/skills/stock-select/references/prompt.md")
     assert hcr.prompt_path.endswith(".agents/skills/stock-select/references/prompt.md")
 
 

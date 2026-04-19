@@ -5,8 +5,8 @@ from typing import Any
 import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
-from stock_select.review_protocol import compute_weighted_total, infer_signal_type, infer_verdict
-from stock_select.reviewers.b2 import _is_b2_wave_combo_ok
+from stock_select.review_orchestrator import compute_method_total_score
+from stock_select.review_protocol import infer_signal_type, infer_verdict
 from stock_select.reviewers.default import (
     _score_macd_phase as _legacy_score_macd_phase,
     _score_previous_abnormal_move,
@@ -57,14 +57,15 @@ def review_b1_symbol_history(
     weekly_wave = classify_weekly_macd_wave(frame[["trade_date", "close"]], pick_date)
     daily_wave = classify_daily_macd_wave(frame[["trade_date", "close"]], pick_date)
     macd_phase = _score_b1_macd_phase(close=close, weekly_wave=weekly_wave, daily_wave=daily_wave)
-    total_score = compute_weighted_total(
+    total_score = compute_method_total_score(
+        "b1",
         {
             "trend_structure": trend_structure,
             "price_position": price_position,
             "volume_behavior": volume_behavior,
             "previous_abnormal_move": previous_abnormal_move,
             "macd_phase": macd_phase,
-        }
+        },
     )
     signal_type = infer_signal_type(
         latest_close=float(close.iloc[-1]),
@@ -96,7 +97,7 @@ def _score_b1_macd_phase(*, close: pd.Series, weekly_wave: Any, daily_wave: Any)
     if len(close) < 60:
         return 3.0
 
-    if _is_b2_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave):
+    if _is_b1_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave):
         return 5.0
     if weekly_wave.label in {"wave1", "wave3"}:
         return 4.0
@@ -105,8 +106,17 @@ def _score_b1_macd_phase(*, close: pd.Series, weekly_wave: Any, daily_wave: Any)
     return max(1.0, min(3.0, float(_legacy_score_macd_phase(close))))
 
 
+def _is_b1_wave_combo_ok(*, weekly_wave: Any, daily_wave: Any) -> bool:
+    combo_ok = weekly_wave.label in {"wave1", "wave3"} and daily_wave.label in {"wave2_end", "wave4_end"}
+    if not combo_ok:
+        return False
+    if daily_wave.label != "wave4_end":
+        return True
+    return float(daily_wave.details.get("third_wave_gain", 0.0)) <= 0.30
+
+
 def _build_b1_comment(*, weekly_wave: Any, daily_wave: Any, verdict: str) -> str:
-    combo_ok = _is_b2_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave)
+    combo_ok = _is_b1_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave)
     combo_text = "符合" if combo_ok else "不符合"
     if daily_wave.label == "wave4_end":
         gain = float(daily_wave.details.get("third_wave_gain", 0.0)) * 100.0

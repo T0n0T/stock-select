@@ -38,7 +38,7 @@ ALLOWED_VERDICTS = {"PASS", "WATCH", "FAIL"}
 
 def compute_method_total_score(method: str, scores: dict[str, float]) -> float:
     normalized = str(method).strip().lower()
-    if normalized in {"b1", "hcr"}:
+    if normalized == "hcr":
         return compute_weighted_total_without_macd(scores)
     return compute_weighted_total(scores)
 
