@@ -1407,7 +1407,7 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert review["baseline_review"]["review_type"] == "baseline"
     assert review["llm_review"] is None
     assert tasks["pick_date"] == "2026-04-01"
-    assert tasks["prompt_path"].endswith(".agents/skills/stock-select/references/prompt.md")
+    assert tasks["prompt_path"].endswith(".agents/skills/stock-select/references/prompt-b1.md")
     assert tasks["max_concurrency"] == 6
     assert tasks["tasks"][0]["code"] == "000001.SZ"
     assert tasks["tasks"][0]["rank"] == 1
