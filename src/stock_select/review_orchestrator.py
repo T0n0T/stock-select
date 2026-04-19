@@ -50,8 +50,9 @@ def build_review_payload(
     chart_path: str,
     rubric_path: str,
     prompt_path: str = REFERENCE_PROMPT_PATH,
+    extra_context: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    return {
+    payload = {
         "code": code,
         "pick_date": pick_date,
         "chart_path": chart_path,
@@ -60,6 +61,9 @@ def build_review_payload(
         "input_mode": "image",
         "dispatch": "subagent",
     }
+    if extra_context:
+        payload.update(extra_context)
+    return payload
 
 
 def build_review_result(

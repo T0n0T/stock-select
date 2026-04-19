@@ -1574,6 +1574,12 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
     assert tasks["tasks"][0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
     assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
     assert tasks["tasks"][0]["baseline_verdict"] == review["verdict"]
+    assert "weekly_wave_context" in tasks["tasks"][0]
+    assert "daily_wave_context" in tasks["tasks"][0]
+    assert "wave_combo_context" in tasks["tasks"][0]
+    assert "周线" in tasks["tasks"][0]["weekly_wave_context"]
+    assert "日线" in tasks["tasks"][0]["daily_wave_context"]
+    assert "b2" in tasks["tasks"][0]["wave_combo_context"]
 
 
 def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1859,6 +1865,21 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
     assert tasks["tasks"][0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
     assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
     assert tasks["tasks"][0]["baseline_verdict"] == review["verdict"]
+    assert "weekly_wave_context" in tasks["tasks"][0]
+    assert "daily_wave_context" in tasks["tasks"][0]
+    assert "wave_combo_context" in tasks["tasks"][0]
+
+
+def test_prompt_b2_requires_weekly_and_daily_wave_language() -> None:
+    prompt_path = Path(".agents/skills/stock-select/references/prompt-b2.md")
+    content = prompt_path.read_text(encoding="utf-8")
+
+    assert "weekly_wave_context" in content
+    assert "daily_wave_context" in content
+    assert "wave_combo_context" in content
+    assert "周线" in content
+    assert "日线" in content
+    assert "浪" in content
 
 
 def test_review_default_resolver_method_uses_resolver_prompt_metadata(

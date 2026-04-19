@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from stock_select.strategies.b1 import compute_macd
+from stock_select.indicators import compute_macd
 
 
 @dataclass(frozen=True)

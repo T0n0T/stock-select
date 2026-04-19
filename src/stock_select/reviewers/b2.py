@@ -4,13 +4,9 @@ from typing import Any
 
 import pandas as pd
 
+from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
 from stock_select.review_protocol import infer_signal_type, infer_verdict
 from stock_select.review_orchestrator import compute_method_total_score
-from stock_select.strategies import compute_macd
-from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
-
-_B2_MACD_CONFIRMATION_WEEKLY_POINTS = 40
-_B2_MACD_CONFIRMATION_MONTHLY_POINTS = 40
 
 
 def review_b2_symbol_history(
@@ -66,8 +62,6 @@ def review_b2_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
-    macd_reasoning = _build_b2_macd_reasoning(weekly_wave=weekly_wave, daily_wave=daily_wave)
-    signal_reasoning = _build_b2_signal_reasoning(weekly_wave=weekly_wave, daily_wave=daily_wave)
     comment = _build_b2_comment(weekly_wave=weekly_wave, daily_wave=daily_wave, verdict=verdict)
 
     return {
@@ -83,8 +77,6 @@ def review_b2_symbol_history(
         "total_score": total_score,
         "signal_type": signal_type,
         "verdict": verdict,
-        "macd_reasoning": macd_reasoning,
-        "signal_reasoning": signal_reasoning,
         "comment": comment,
     }
 
@@ -207,52 +199,34 @@ def _score_b2_macd_phase(
     weekly_wave: Any,
     daily_wave: Any,
 ) -> float:
-    if len(frame) < 35:
+    if len(frame) < 60:
         return 3.0
 
-    daily = compute_macd(frame[["close"]])
-    weekly_close = frame.set_index("trade_date")["close"].astype(float).resample("W-FRI").last().dropna()
-    monthly_close = frame.set_index("trade_date")["close"].astype(float).resample("ME").last().dropna()
+    weekly_label = str(weekly_wave.label)
+    daily_label = str(daily_wave.label)
 
-    daily_dif = float(daily["dif"].iloc[-1])
-    daily_dea = float(daily["dea"].iloc[-1])
-    daily_hist = float(daily["macd_hist"].iloc[-1])
-
-    if (
-        len(weekly_close) < _B2_MACD_CONFIRMATION_WEEKLY_POINTS
-        or len(monthly_close) < _B2_MACD_CONFIRMATION_MONTHLY_POINTS
-    ):
-        if daily_dif > daily_dea and daily_hist > 0.0:
-            return 3.0
-        if daily_dif >= daily_dea:
-            return 2.0
-        return 1.0
-
-    weekly = compute_macd(pd.DataFrame({"close": weekly_close.to_numpy()}))
-    monthly = compute_macd(pd.DataFrame({"close": monthly_close.to_numpy()}))
-    weekly_positive = float(weekly["dif"].iloc[-1]) > float(weekly["dea"].iloc[-1])
-    monthly_positive = float(monthly["dif"].iloc[-1]) > float(monthly["dea"].iloc[-1])
-
-    if weekly_positive and monthly_positive and daily_dif > daily_dea and daily_hist > 0.0:
+    if weekly_label in {"wave1", "wave3"} and daily_label in {"wave2_end", "wave4_end"}:
         return 5.0
-    if weekly_positive and monthly_positive and daily_hist >= -0.03:
-        return 4.0
-    if weekly_positive and monthly_positive:
+    if weekly_label in {"wave1", "wave3"}:
         return 3.0
-    if daily_dif >= daily_dea:
+    if daily_label in {"wave2_end", "wave4_end"}:
         return 2.0
     return 1.0
 
 
-def _build_b2_macd_reasoning(*, weekly_wave: Any, daily_wave: Any) -> str:
-    return f"周线处于{weekly_wave.label}，日线处于{daily_wave.label}，当前按 MACD 浪型结构解释该票。"
-
-
-def _build_b2_signal_reasoning(*, weekly_wave: Any, daily_wave: Any) -> str:
+def _is_b2_wave_combo_ok(*, weekly_wave: Any, daily_wave: Any) -> bool:
     combo_ok = weekly_wave.label in {"wave1", "wave3"} and daily_wave.label in {"wave2_end", "wave4_end"}
-    status = "符合" if combo_ok else "不符合"
-    return f"周线与日线浪型组合{status} b2 预设组合。"
+    if not combo_ok:
+        return False
+    if daily_wave.label != "wave4_end":
+        return True
+    return float(daily_wave.details.get("third_wave_gain", 0.0)) <= 0.30
 
 
 def _build_b2_comment(*, weekly_wave: Any, daily_wave: Any, verdict: str) -> str:
-    return f"周线{weekly_wave.label}、日线{daily_wave.label}，当前结论为{verdict}。"
+    combo_ok = _is_b2_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave)
+    combo_text = "符合" if combo_ok else "不符合"
+    if daily_wave.label == "wave4_end":
+        gain = float(daily_wave.details.get("third_wave_gain", 0.0)) * 100.0
+        return f"周线{weekly_wave.label}、日线{daily_wave.label}，三浪涨幅约{gain:.1f}%且该组合{combo_text}b2，当前结论为{verdict}。"
+    return f"周线{weekly_wave.label}、日线{daily_wave.label}，该组合{combo_text}b2，当前结论为{verdict}。"
