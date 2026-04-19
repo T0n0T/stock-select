@@ -58,6 +58,29 @@ def test_classify_daily_macd_wave_invalidates_wave4_when_third_wave_gain_exceeds
     assert result.details["third_wave_gain"] > 0.30
 
 
+def test_classify_daily_macd_wave_invalidates_negative_converging_pullback_above_30_pct() -> None:
+    frame = _frame_with_close(
+        [10.0] * 40
+        + [9.7, 9.5, 9.8, 10.2, 10.7, 11.2, 11.8, 12.4, 13.0, 13.4, 13.0, 12.6, 12.2, 11.9, 11.7, 11.6, 11.58, 11.57]
+    )
+
+    result = classify_daily_macd_wave(frame, pick_date="2026-04-10")
+
+    assert result.label == "invalid"
+    assert result.details["third_wave_gain"] > 0.30
+
+
+def test_classify_weekly_macd_wave_prefers_wave2_for_fading_bullish_pullback_before_wave3() -> None:
+    frame = _frame_with_close(
+        [10.0] * 40
+        + [9.6, 9.4, 9.3, 9.5, 9.9, 10.4, 10.9, 11.4, 11.8, 12.1, 12.4, 12.1, 11.8, 11.5, 11.2, 11.0, 10.9, 10.85, 10.8]
+    )
+
+    result = classify_weekly_macd_wave(frame, pick_date="2026-04-10")
+
+    assert result.label == "wave2"
+
+
 def test_classify_weekly_macd_wave_returns_invalid_for_churn() -> None:
     frame = _frame_with_close(
         [10.0, 10.2, 9.9, 10.1, 9.8, 10.0, 9.85, 10.05, 9.9, 10.1] * 8

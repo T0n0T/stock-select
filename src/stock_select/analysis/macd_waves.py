@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from stock_select.strategies import compute_macd
+from stock_select.strategies.b1 import compute_macd
 
 
 @dataclass(frozen=True)
@@ -38,10 +38,10 @@ def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCl
         and float(weekly_close.iloc[-1]) < float(weekly_close.iloc[-2])
     )
 
-    if bullish and latest_hist > 0.0 and previous_hist > 0.0 and had_pullback:
-        return MacdWaveClassification("wave3", True, "weekly second bullish advance after pullback", {})
     if bullish and fading_bullish_impulse:
         return MacdWaveClassification("wave2", False, "weekly pullback after prior advance", {})
+    if bullish and latest_hist > 0.0 and previous_hist > 0.0 and had_pullback:
+        return MacdWaveClassification("wave3", True, "weekly second bullish advance after pullback", {})
     if bullish and latest_hist > 0.0:
         return MacdWaveClassification("wave1", True, "weekly first bullish advance after golden cross", {})
     if not bullish and had_pullback:
@@ -96,6 +96,16 @@ def classify_daily_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCla
             "invalid",
             False,
             "daily pullback already re-crossed",
+            {"third_wave_gain": third_wave_gain, "needs_recross": False},
+        )
+
+    if third_wave_gain > 0.30 and (
+        (shrinking_positive and converging) or (shrinking_negative and converging)
+    ):
+        return MacdWaveClassification(
+            "invalid",
+            False,
+            "daily third-wave gain exceeded wave4 allowance",
             {"third_wave_gain": third_wave_gain, "needs_recross": False},
         )
 
