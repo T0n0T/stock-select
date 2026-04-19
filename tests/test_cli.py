@@ -153,7 +153,7 @@ def test_screen_b2_phase_one_does_not_filter_on_daily_macd(monkeypatch: pytest.M
                     "high": [value + 0.2 for value in close_values],
                     "low": [value - 0.2 for value in close_values[:-1]] + [12.40],
                     "close": close_values,
-                        "vol": [100.0 + idx for idx in range(len(trade_dates) - 1)] + [50.0],
+                    "vol": [100.0 + idx for idx in range(len(trade_dates) - 1)] + [50.0],
                 }
             )
         assert start_date == "2023-01-01"
@@ -227,6 +227,7 @@ def test_screen_b2_phase_one_does_not_filter_on_daily_macd(monkeypatch: pytest.M
 
     assert result.exit_code == 0
     assert "mode=macd_warmup" in result.stderr
+    assert "fail_weekly_wave=" in result.stderr
 
 
 def test_screen_accepts_whitespace_padded_b1_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

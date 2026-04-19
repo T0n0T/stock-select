@@ -1,4 +1,5 @@
 import importlib
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -121,6 +122,39 @@ def test_prefilter_b2_non_macd_does_not_require_daily_macd_any_more() -> None:
     assert selected == ["PASS.SZ"]
 
 
+def test_run_b2_screen_with_stats_ignores_missing_legacy_macd_columns() -> None:
+    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+    pick_date = pd.Timestamp("2026-04-10")
+    frame = _base_b2_frame().drop(columns=["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
+
+    candidates, stats = run_b2_screen_with_stats(
+        {"000001.SZ": frame},
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert [item["code"] for item in candidates] == ["000001.SZ"]
+    assert stats["fail_insufficient_history"] == 0
+
+
+@pytest.mark.parametrize("column_name", ["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
+def test_run_b2_screen_with_stats_ignores_malformed_legacy_macd_columns(column_name: str) -> None:
+    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+    pick_date = pd.Timestamp("2026-04-10")
+    frame = _base_b2_frame()
+    frame[column_name] = frame[column_name].astype(object)
+    frame.loc[3, column_name] = "boom"
+
+    candidates, stats = run_b2_screen_with_stats(
+        {"000001.SZ": frame},
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert [item["code"] for item in candidates] == ["000001.SZ"]
+    assert stats["fail_insufficient_history"] == 0
+
+
 def test_run_b2_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
     run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
@@ -225,6 +259,24 @@ def test_run_b2_screen_with_stats_fails_when_daily_wave_is_invalid() -> None:
     assert stats["fail_daily_wave"] == 1
 
 
+def test_run_b2_screen_with_stats_fails_when_wave_combo_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.b2")
+    pick_date = pd.Timestamp("2026-04-10")
+    frame = _base_b2_frame()
+
+    monkeypatch.setattr(module, "classify_weekly_macd_wave", lambda frame, pick_date: SimpleNamespace(label="wave1"))
+    monkeypatch.setattr(module, "classify_daily_macd_wave", lambda frame, pick_date: SimpleNamespace(label="waveX"))
+
+    candidates, stats = module.run_b2_screen_with_stats(
+        {"000001.SZ": frame},
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert candidates == []
+    assert stats["fail_wave_combo"] == 1
+
+
 def test_run_b2_screen_with_stats_fails_when_ma60_is_not_upward() -> None:
     run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
@@ -266,7 +318,7 @@ def test_run_b2_screen_with_stats_treats_missing_required_columns_as_insufficien
 
     candidates, stats = run_b2_screen_with_stats(
         {
-            "000001.SZ": _base_b2_frame().drop(columns=["dif_m", "dea_m", "ma144"]),
+            "000001.SZ": _base_b2_frame().drop(columns=["ma144"]),
         },
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -309,7 +361,7 @@ def test_run_b2_screen_with_stats_treats_malformed_trade_dates_as_insufficient_h
 
 @pytest.mark.parametrize(
     "column_name",
-    ["J", "zxdq", "zxdkx", "low", "close", "volume", "ma25", "ma60", "ma144", "dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m", "turnover_n"],
+    ["J", "zxdq", "zxdkx", "low", "close", "volume", "ma25", "ma60", "ma144", "turnover_n"],
 )
 def test_run_b2_screen_with_stats_treats_any_malformed_required_numeric_value_as_insufficient_history(
     column_name: str,

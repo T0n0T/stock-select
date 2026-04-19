@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import pandas as pd
+from stock_select.analysis.macd_waves import classify_daily_macd_wave, classify_weekly_macd_wave
 from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, compute_expanding_j_quantile
 
 B2_RECENT_J_LOOKBACK = 15
@@ -17,12 +18,6 @@ _B2_REQUIRED_COLUMNS = (
     "ma25",
     "ma60",
     "ma144",
-    "dif",
-    "dea",
-    "dif_w",
-    "dea_w",
-    "dif_m",
-    "dea_m",
     "turnover_n",
 )
 _B2_NUMERIC_COLUMNS = (
@@ -34,12 +29,6 @@ _B2_NUMERIC_COLUMNS = (
     "ma25",
     "ma60",
     "ma144",
-    "dif",
-    "dea",
-    "dif_w",
-    "dea_w",
-    "dif_m",
-    "dea_m",
     "turnover_n",
 )
 
@@ -101,8 +90,6 @@ def run_b2_screen_with_stats(
     pick_date: pd.Timestamp,
     config: dict[str, float] | None = None,
 ) -> tuple[list[dict], dict[str, int]]:
-    from stock_select.analysis.macd_waves import classify_daily_macd_wave, classify_weekly_macd_wave
-
     screen_config = DEFAULT_B1_CONFIG if config is None else config
     target_date = pd.Timestamp(pick_date)
     candidates: list[dict] = []
@@ -260,12 +247,6 @@ def _has_minimum_history(history: pd.DataFrame) -> bool:
         "ma25",
         "ma60",
         "ma144",
-        "dif",
-        "dea",
-        "dif_w",
-        "dea_w",
-        "dif_m",
-        "dea_m",
         "turnover_n",
         "volume",
     )
