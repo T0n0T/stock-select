@@ -1970,6 +1970,38 @@ def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytes
     assert any(word in task["wave_combo_context"] for word in ("符合", "不符合"))
 
 
+@pytest.mark.parametrize("method", ["b1", "b2"])
+def test_build_wave_task_context_rejects_wave4_when_third_wave_gain_exceeds_limit(
+    method: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(end="2026-04-01", periods=10),
+            "close": [10.0 + 0.1 * idx for idx in range(10)],
+        }
+    )
+    monkeypatch.setattr(
+        cli,
+        "classify_weekly_macd_wave",
+        lambda _history, _pick_date: SimpleNamespace(label="wave3", reason="weekly ok", details={}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "classify_daily_macd_wave",
+        lambda _history, _pick_date: SimpleNamespace(
+            label="wave4_end",
+            reason="daily wave4",
+            details={"third_wave_gain": 0.35},
+        ),
+    )
+
+    context = cli._build_wave_task_context(history, "2026-04-01", method=method)
+
+    assert f"不符合 {method} 候选要求" in context["wave_combo_context"]
+    assert "35.0%" in context["wave_combo_context"]
+
+
 def test_prompt_b1_requires_weekly_and_daily_wave_language() -> None:
     content = Path(".agents/skills/stock-select/references/prompt-b1.md").read_text(encoding="utf-8")
 
@@ -3059,7 +3091,7 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "comment": "baseline",
     }
     assert merged["llm_review"]["verdict"] == "PASS"
-    assert merged["llm_review"]["total_score"] == 4.53
+    assert merged["llm_review"]["total_score"] == 4.62
     assert merged["llm_review"]["scores"] == {
         "trend_structure": 5.0,
         "price_position": 4.0,
@@ -3067,8 +3099,8 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "previous_abnormal_move": 4.0,
         "macd_phase": 5.0,
     }
-    assert merged["final_score"] == 4.08
-    assert merged["total_score"] == 4.08
+    assert merged["final_score"] == 4.13
+    assert merged["total_score"] == 4.13
     assert merged["verdict"] == "PASS"
     assert summary["recommendations"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr
@@ -3167,7 +3199,7 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
     untouched = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
     assert merged["review_mode"] == "merged"
-    assert merged["llm_review"]["total_score"] == 4.53
+    assert merged["llm_review"]["total_score"] == 4.62
     assert untouched["review_mode"] == "baseline_local"
     assert untouched["baseline_review"] == {
         "review_type": "baseline",

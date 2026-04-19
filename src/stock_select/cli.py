@@ -157,7 +157,7 @@ def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: s
     wave_input = history[["trade_date", "close"]].copy()
     weekly_wave = classify_weekly_macd_wave(wave_input, pick_date)
     daily_wave = classify_daily_macd_wave(wave_input, pick_date)
-    combo_ok = weekly_wave.label in {"wave1", "wave3"} and daily_wave.label in {"wave2_end", "wave4_end"}
+    combo_ok = _is_review_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave)
     weekly_context = f"确定性识别结果：周线 {weekly_wave.label}；原因：{weekly_wave.reason}。"
     daily_context = f"确定性识别结果：日线 {daily_wave.label}；原因：{daily_wave.reason}。"
     if daily_wave.label == "wave4_end":
@@ -173,6 +173,18 @@ def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: s
         "daily_wave_context": daily_context,
         "wave_combo_context": combo_context,
     }
+
+
+def _is_review_wave_combo_ok(*, weekly_wave: object, daily_wave: object) -> bool:
+    weekly_label = str(getattr(weekly_wave, "label", ""))
+    daily_label = str(getattr(daily_wave, "label", ""))
+    combo_ok = weekly_label in {"wave1", "wave3"} and daily_label in {"wave2_end", "wave4_end"}
+    if not combo_ok:
+        return False
+    if daily_label != "wave4_end":
+        return True
+    details = getattr(daily_wave, "details", {}) or {}
+    return float(details.get("third_wave_gain", 0.0)) <= 0.30
 
 
 def _artifact_key(base_key: str, method: str) -> str:
