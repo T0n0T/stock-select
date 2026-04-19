@@ -183,11 +183,11 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
         "price_position": 5.0,
         "volume_behavior": 5.0,
         "previous_abnormal_move": 5.0,
-        "macd_phase": 4.0,
-        "total_score": 4.62,
+        "macd_phase": 3.0,
+        "total_score": 4.42,
         "signal_type": "trend_start",
         "verdict": "PASS",
-        "comment": "趋势结构顺畅，量价配合正常，前期异动仍有承接，当前具备继续走强条件。",
+        "comment": "周线wave1、日线invalid，该组合不符合b2，当前结论为PASS。",
     }
 
 
@@ -208,12 +208,49 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
         "price_position": 2.0,
         "volume_behavior": 1.0,
         "previous_abnormal_move": 2.0,
-        "macd_phase": 1.0,
-        "total_score": 1.38,
+        "macd_phase": 2.0,
+        "total_score": 1.58,
         "signal_type": "distribution_risk",
         "verdict": "FAIL",
-        "comment": "趋势走弱且量价失衡，前期异动后的承接不足，当前更偏出货风险。",
+        "comment": "周线wave2、日线wave4_end，三浪涨幅约1.4%且该组合不符合b2，当前结论为FAIL。",
     }
+
+
+def test_b2_review_keeps_schema_stable_without_extra_reasoning_fields() -> None:
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert "macd_reasoning" not in review
+    assert "signal_reasoning" not in review
+
+
+def test_b2_review_comment_mentions_weekly_and_daily_waves() -> None:
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert "周线" in review["comment"]
+    assert "日线" in review["comment"]
+    assert "b2" in review["comment"]
+
+
+def test_b2_review_comment_mentions_wave4_gain_constraint_when_applicable() -> None:
+    review = review_b2_symbol_history(
+        code="000002.SZ",
+        pick_date="2026-04-30",
+        history=_damaged_b2_history(),
+        chart_path="/tmp/000002.SZ_day.png",
+    )
+
+    assert "wave4_end" in review["comment"]
+    assert "三浪涨幅约" in review["comment"]
 
 
 def test_b2_review_ignores_future_rows_after_pick_date() -> None:
@@ -246,7 +283,7 @@ def test_b2_review_ignores_future_rows_after_pick_date() -> None:
     assert review_with_future_rows == review_from_pick_slice
 
 
-def test_b2_review_uses_conservative_macd_fallback_when_monthly_history_is_too_short() -> None:
+def test_b2_review_keeps_neutral_macd_score_when_history_is_too_short_for_wave_judgment() -> None:
     history = pd.DataFrame(
         {
             "trade_date": pd.bdate_range(end="2026-04-30", periods=40),
@@ -268,33 +305,7 @@ def test_b2_review_uses_conservative_macd_fallback_when_monthly_history_is_too_s
     assert review["macd_phase"] == 3.0
 
 
-def test_b2_review_keeps_startup_bias_guard_before_true_multi_timeframe_warmup() -> None:
-    history = pd.DataFrame(
-        {
-            "trade_date": pd.bdate_range(end="2026-04-30", periods=65),
-            "open": [10.0 + idx * 0.05 for idx in range(65)],
-            "high": [10.2 + idx * 0.05 for idx in range(65)],
-            "low": [9.9 + idx * 0.05 for idx in range(65)],
-            "close": [10.1 + idx * 0.05 for idx in range(65)],
-            "vol": [1000.0 + idx * 5.0 for idx in range(65)],
-        }
-    )
-    weekly_closes = history.set_index("trade_date")["close"].resample("W-FRI").last().dropna()
-    monthly_closes = history.set_index("trade_date")["close"].resample("ME").last().dropna()
-
-    review = review_b2_symbol_history(
-        code="000004.SZ",
-        pick_date="2026-04-30",
-        history=history,
-        chart_path="/tmp/000004.SZ_day.png",
-    )
-
-    assert len(weekly_closes) == 14
-    assert len(monthly_closes) == 4
-    assert review["macd_phase"] == 3.0
-
-
-def test_b2_review_covers_first_non_fallback_multi_timeframe_macd_boundary() -> None:
+def test_b2_review_uses_wave_combo_for_macd_scoring_when_both_waves_align() -> None:
     periods = _first_non_fallback_periods()
     history = pd.DataFrame(
         {
@@ -434,10 +445,10 @@ def test_b2_review_covers_first_non_fallback_multi_timeframe_macd_boundary() -> 
     assert len(monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS
     assert len(previous_monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS - 1
     assert len(previous_weekly_closes) >= _MULTI_TIMEFRAME_CONFIRMATION_POINTS
-    assert review["macd_phase"] == 4.0
+    assert review["macd_phase"] == 3.0
 
 
-def test_b2_review_stays_on_fallback_one_step_before_new_multi_timeframe_boundary() -> None:
+def test_b2_review_uses_neutral_wave_score_one_step_before_boundary_when_daily_wave_is_invalid() -> None:
     periods = _first_non_fallback_periods() - 1
     history = pd.DataFrame(
         {

@@ -4,6 +4,8 @@ from collections.abc import Mapping
 
 import pandas as pd
 
+from stock_select.indicators import compute_macd
+
 
 DEFAULT_B1_CONFIG: dict[str, float] = {
     "j_threshold": 15.0,
@@ -14,20 +16,6 @@ DEFAULT_TURNOVER_WINDOW = 43
 DEFAULT_WEEKLY_MA_PERIODS = (10, 20, 30)
 DEFAULT_MAX_VOL_LOOKBACK = 20
 DEFAULT_TOP_M = 5000
-
-
-def compute_macd(
-    df: pd.DataFrame,
-    *,
-    fast: int = 12,
-    slow: int = 26,
-    signal: int = 9,
-) -> pd.DataFrame:
-    close = df["close"].astype(float)
-    dif = close.ewm(span=fast, adjust=False).mean() - close.ewm(span=slow, adjust=False).mean()
-    dea = dif.ewm(span=signal, adjust=False).mean()
-    macd_hist = dif - dea
-    return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": macd_hist}, index=df.index)
 
 
 def compute_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:

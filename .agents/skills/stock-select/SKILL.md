@@ -170,16 +170,23 @@ If any of the checks above fail:
 - `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the requested method's derived fields locally, and writes `runtime/candidates/<pick_date>.<method>.json`.
 - `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, and stores shared base prepare at `runtime/prepared/<trade_date>.intraday.pkl` for `b1` / `b2`.
 - `b1` keeps the low-`J`, `close > zxdkx`, `zxdq > zxdkx`, weekly bullish alignment, and non-bearish max-volume-day filters described in `references/b1-selector.md`.
-- `b2` keeps the same top-turnover prefilter and the same recent 15-trading-day `b1` low-`J` history hit, then requires current `zxdq > zxdkx`, `MA25` support validity, shrinking volume, bullish daily/weekly/monthly `MACD`, upward `MA60`, and `MA144` distance within 30%.
+- `b2` keeps the same top-turnover prefilter and the same recent 15-trading-day `b1` low-`J` history hit, then uses a two-stage rule:
+  - phase 1 keeps only structural conditions: current `zxdq > zxdkx`, `MA25` support validity, shrinking volume, upward `MA60`, and `MA144` distance within 30%
+  - phase 2 classifies weekly and daily `MACD` waves and only accepts weekly `wave1` / `wave3` with daily `wave2_end` / `wave4_end`
 - `b1` and `b2` share the same base prepared frame shape for EOD and intraday reuse.
-- Prepared `b2` frames still require the same daily `ma25`, `ma60`, `ma144`, plus weekly/monthly aligned `dif` and `dea` fields (`dif_w`, `dea_w`, `dif_m`, `dea_m`) for deterministic screening reuse.
-- `b2` phase-two MACD warmup remains on-demand and is not written as a separate prepared cache.
+- Prepared `b2` frames still require daily `ma25`, `ma60`, and `ma144`, but deterministic screening no longer requires legacy daily/weekly/monthly aligned `dif` / `dea` columns.
+- `b2` phase-two wave classification remains on-demand and is not written as a separate prepared cache.
 - `chart --pick-date` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
 - Daily chart PNGs include `zxdq`, `zxdkx`, and a separate `MACD` panel with `dif`, `dea`, and `macd_hist`.
 - `chart --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.
 - `review --pick-date` writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
 - `review --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache, writes baseline reviews under `runtime/reviews/<run_id>.<method>/`, and does not fetch fresh realtime data.
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `macd_phase`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
+- For `b2`, the baseline comment compresses the same weekly/daily wave interpretation used by deterministic screening, while keeping the final baseline schema stable.
+- `b2` review task payloads add text-only deterministic context:
+  - `weekly_wave_context`
+  - `daily_wave_context`
+  - `wave_combo_context`
 - `screen --intraday --recompute` forces the shared same-trade-date prepared cache to be rewritten; without it, the command reuses the existing shared cache when compatible.
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
 - `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>.<method>/` for end-of-day or `runtime/reviews/<run_id>.<method>/` for intraday.

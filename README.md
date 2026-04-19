@@ -9,6 +9,12 @@
 - 为候选股票生成日线 PNG 图
 - 对候选股票执行本地 review 流程
 
+当前 `b2` 流程已经改为两阶段：
+
+- 第一阶段只做非 `MACD` 结构预筛
+- 第二阶段只做日线 / 周线 `MACD` 浪型识别
+- `review` 与 LLM review task 会复用同一套浪型理解，但最终 review JSON schema 保持稳定
+
 该仓库与 `/home/pi/Documents/agents/StockTradebyZ` 分离，后者当前仅作为迁移期间的只读参考。
 
 ## 安装
@@ -157,6 +163,7 @@ SZ002703 浙江世宝
   - 当前写出以本地 baseline 为主的 review 结果结构
   - 同时写出 `llm_review_tasks.json`，供 CLI 返回后由 skill 继续派发子代理图评
   - 该结果结构已经预留 `llm_review` 字段，供后续基于 PNG + `.agents/skills/stock-select/references/prompt.md` 的子代理图评回填
+  - `b2` 会在任务文件中额外写入周线 / 日线浪型和组合判定的文本上下文，供 `prompt-b2.md` 使用
   - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>.<method>/summary.json`
 - `record-watch`
   - 读取 `reviews/<pick_date>.<method>/summary.json`

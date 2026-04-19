@@ -31,7 +31,11 @@ Current behavior:
 - `reviews/<base_key>.<method>/llm_review_results/<code>.json` stores raw subagent JSON before `review-merge` validation.
 - `watch_pool.csv` stores end-of-day `PASS` and `WATCH` rows imported by `record-watch`, including `recorded_at`, with retention trimmed by trading-day window.
 - The watch pool is shared across methods; the CSV still keeps a `method` column, but runtime storage is no longer split into per-method files.
-- `b2` phase-two MACD warmup is on-demand and is not stored as a separate prepared cache.
+- `b2` phase-two weekly/daily MACD wave analysis is on-demand and is not stored as a separate prepared cache.
+- `b2` review tasks also carry deterministic text context for:
+  - weekly wave classification
+  - daily wave classification
+  - wave-combo acceptance
 
 Optional additions:
 

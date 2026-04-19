@@ -29,6 +29,18 @@ def test_build_review_payload_includes_chart_and_rubric() -> None:
     assert payload["dispatch"] == "subagent"
 
 
+def test_build_review_payload_merges_extra_context() -> None:
+    payload = build_review_payload(
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        chart_path="/tmp/000001_day.png",
+        rubric_path="references/review-rubric.md",
+        extra_context={"weekly_wave_context": "周线 wave1"},
+    )
+
+    assert payload["weekly_wave_context"] == "周线 wave1"
+
+
 def test_build_review_result_prefers_llm_review_when_present() -> None:
     result = build_review_result(
         code="000001.SZ",

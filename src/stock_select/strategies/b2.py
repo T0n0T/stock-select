@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import pandas as pd
-
+from stock_select.analysis.macd_waves import classify_daily_macd_wave, classify_weekly_macd_wave
 from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, compute_expanding_j_quantile
 
 B2_RECENT_J_LOOKBACK = 15
@@ -18,12 +18,6 @@ _B2_REQUIRED_COLUMNS = (
     "ma25",
     "ma60",
     "ma144",
-    "dif",
-    "dea",
-    "dif_w",
-    "dea_w",
-    "dif_m",
-    "dea_m",
     "turnover_n",
 )
 _B2_NUMERIC_COLUMNS = (
@@ -35,12 +29,6 @@ _B2_NUMERIC_COLUMNS = (
     "ma25",
     "ma60",
     "ma144",
-    "dif",
-    "dea",
-    "dif_w",
-    "dea_w",
-    "dif_m",
-    "dea_m",
     "turnover_n",
 )
 
@@ -91,8 +79,6 @@ def prefilter_b2_non_macd(
             continue
         if not _ma144_distance_ok(row):
             continue
-        if not _macd_red(row["dif"], row["dea"]):
-            continue
 
         selected.append(code)
 
@@ -115,11 +101,11 @@ def run_b2_screen_with_stats(
         "fail_support_ma25": 0,
         "fail_volume_shrink": 0,
         "fail_zxdq_zxdkx": 0,
-        "fail_daily_macd": 0,
-        "fail_weekly_macd": 0,
-        "fail_monthly_macd": 0,
         "fail_ma60_trend": 0,
         "fail_ma144_distance": 0,
+        "fail_weekly_wave": 0,
+        "fail_daily_wave": 0,
+        "fail_wave_combo": 0,
         "selected": 0,
     }
 
@@ -166,24 +152,32 @@ def run_b2_screen_with_stats(
             stats["fail_volume_shrink"] += 1
             continue
 
-        if not _macd_red(row["dif"], row["dea"]):
-            stats["fail_daily_macd"] += 1
-            continue
-
-        if not _macd_red(row["dif_w"], row["dea_w"]):
-            stats["fail_weekly_macd"] += 1
-            continue
-
-        if not _macd_red(row["dif_m"], row["dea_m"]):
-            stats["fail_monthly_macd"] += 1
-            continue
-
         if not _ma60_up(history):
             stats["fail_ma60_trend"] += 1
             continue
 
         if not _ma144_distance_ok(row):
             stats["fail_ma144_distance"] += 1
+            continue
+
+        weekly_wave = classify_weekly_macd_wave(
+            history[["trade_date", "close"]],
+            target_date.strftime("%Y-%m-%d"),
+        )
+        if weekly_wave.label not in {"wave1", "wave3"}:
+            stats["fail_weekly_wave"] += 1
+            continue
+
+        daily_wave = classify_daily_macd_wave(
+            history[["trade_date", "close"]],
+            target_date.strftime("%Y-%m-%d"),
+        )
+        if daily_wave.label == "invalid":
+            stats["fail_daily_wave"] += 1
+            continue
+
+        if daily_wave.label not in {"wave2_end", "wave4_end"}:
+            stats["fail_wave_combo"] += 1
             continue
 
         candidates.append(
@@ -253,12 +247,6 @@ def _has_minimum_history(history: pd.DataFrame) -> bool:
         "ma25",
         "ma60",
         "ma144",
-        "dif",
-        "dea",
-        "dif_w",
-        "dea_w",
-        "dif_m",
-        "dea_m",
         "turnover_n",
         "volume",
     )
