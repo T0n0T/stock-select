@@ -1885,6 +1885,97 @@ def test_prompt_b2_requires_weekly_and_daily_wave_language() -> None:
     assert "浪" in content
 
 
+def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-01", "b1")
+    review_dir = runtime_root / "reviews" / method_key
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    chart_dir = runtime_root / "charts" / method_key
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    trade_dates = pd.bdate_range(end="2026-04-01", periods=180)
+    close = [10.0 + 0.02 * idx for idx in range(len(trade_dates))]
+    history = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"] * len(trade_dates),
+            "trade_date": trade_dates,
+            "open": [value - 0.05 for value in close],
+            "high": [value + 0.1 for value in close],
+            "low": [value - 0.1 for value in close],
+            "close": close,
+            "vol": [1000.0 + idx for idx in range(len(trade_dates))],
+        }
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: history,
+    )
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="b1",
+            prompt_path="prompt-b1-stub.md",
+            review_history=lambda **kwargs: {
+                "review_type": "baseline",
+                "total_score": 4.1,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "b1 baseline",
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    task = tasks["tasks"][0]
+    assert "weekly_wave_context" in task
+    assert "daily_wave_context" in task
+    assert "wave_combo_context" in task
+
+
+def test_prompt_b1_requires_weekly_and_daily_wave_language() -> None:
+    content = Path(".agents/skills/stock-select/references/prompt-b1.md").read_text(encoding="utf-8")
+
+    assert "weekly_wave_context" in content
+    assert "daily_wave_context" in content
+    assert "wave_combo_context" in content
+    assert "周线" in content
+    assert "日线" in content
+
+
 def test_review_default_resolver_method_uses_resolver_prompt_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
