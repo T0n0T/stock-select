@@ -34,7 +34,7 @@ def _load_prefilter_b2_non_macd():
 
 def _base_b2_frame() -> pd.DataFrame:
     trade_dates = pd.date_range("2025-09-01", periods=160, freq="B")
-    close = pd.Series([10.0 + 0.02 * idx for idx in range(159)] + [12.98])
+    close = pd.Series([10.0] * 146 + [9.8, 9.7, 9.9, 10.1, 10.4, 10.8, 11.1, 11.4, 11.2, 11.0, 10.9, 10.92, 10.97, 11.02])
     ma25 = close.rolling(window=25, min_periods=25).mean()
     ma60 = close.rolling(window=60, min_periods=60).mean()
     ma144 = close.rolling(window=144, min_periods=144).mean()
@@ -98,6 +98,22 @@ def test_prefilter_b2_non_macd_keeps_only_symbols_passing_non_macd_rules() -> No
             "FAILZXDQ.SZ": fail_zxdq,
             "FAILVOL.SZ": fail_volume,
         },
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert selected == ["PASS.SZ"]
+
+
+def test_prefilter_b2_non_macd_does_not_require_daily_macd_any_more() -> None:
+    prefilter_b2_non_macd = _load_prefilter_b2_non_macd()
+    pick_date = pd.Timestamp("2026-04-10")
+    frame = _base_b2_frame()
+    frame.loc[frame.index[-1], "dif"] = 0.07
+    frame.loc[frame.index[-1], "dea"] = 0.08
+
+    selected = prefilter_b2_non_macd(
+        {"PASS.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -172,12 +188,16 @@ def test_run_b2_screen_with_stats_fails_when_volume_does_not_shrink() -> None:
     assert stats["fail_volume_shrink"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_daily_macd_is_not_red() -> None:
+def test_run_b2_screen_with_stats_fails_when_weekly_wave_is_not_allowed() -> None:
     run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
     frame = _base_b2_frame()
-    frame.loc[frame.index[-1], "dif"] = 0.07
-    frame.loc[frame.index[-1], "dea"] = 0.08
+    frame.loc[frame.index[-14] :, "close"] = [11.4, 11.3, 11.1, 10.9, 10.8, 10.7, 10.65, 10.6, 10.58, 10.56, 10.54, 10.52, 10.5, 10.48]
+    frame["ma25"] = frame["close"].rolling(window=25, min_periods=25).mean()
+    frame["ma60"] = frame["close"].rolling(window=60, min_periods=60).mean()
+    frame["ma144"] = frame["close"].rolling(window=144, min_periods=144).mean()
+    frame["low"] = frame["close"] - 0.15
+    frame.loc[frame.index[-1], "low"] = float(frame.loc[frame.index[-1], "ma25"]) * 1.004
 
     candidates, stats = run_b2_screen_with_stats(
         {"000001.SZ": frame},
@@ -186,15 +206,14 @@ def test_run_b2_screen_with_stats_fails_when_daily_macd_is_not_red() -> None:
     )
 
     assert candidates == []
-    assert stats["fail_daily_macd"] == 1
+    assert stats["fail_weekly_wave"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_weekly_macd_is_not_red() -> None:
+def test_run_b2_screen_with_stats_fails_when_daily_wave_is_invalid() -> None:
     run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
     frame = _base_b2_frame()
-    frame.loc[frame.index[-1], "dif_w"] = 0.14
-    frame.loc[frame.index[-1], "dea_w"] = 0.15
+    frame.loc[frame.index[-3] :, "close"] = [13.0, 12.5, 12.0]
 
     candidates, stats = run_b2_screen_with_stats(
         {"000001.SZ": frame},
@@ -203,24 +222,7 @@ def test_run_b2_screen_with_stats_fails_when_weekly_macd_is_not_red() -> None:
     )
 
     assert candidates == []
-    assert stats["fail_weekly_macd"] == 1
-
-
-def test_run_b2_screen_with_stats_fails_when_monthly_macd_is_not_red() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
-    pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
-    frame.loc[frame.index[-1], "dif_m"] = 0.21
-    frame.loc[frame.index[-1], "dea_m"] = 0.22
-
-    candidates, stats = run_b2_screen_with_stats(
-        {"000001.SZ": frame},
-        pick_date=pick_date,
-        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
-    )
-
-    assert candidates == []
-    assert stats["fail_monthly_macd"] == 1
+    assert stats["fail_daily_wave"] == 1
 
 
 def test_run_b2_screen_with_stats_fails_when_ma60_is_not_upward() -> None:
@@ -279,11 +281,11 @@ def test_run_b2_screen_with_stats_treats_missing_required_columns_as_insufficien
         "fail_support_ma25": 0,
         "fail_volume_shrink": 0,
         "fail_zxdq_zxdkx": 0,
-        "fail_daily_macd": 0,
-        "fail_weekly_macd": 0,
-        "fail_monthly_macd": 0,
         "fail_ma60_trend": 0,
         "fail_ma144_distance": 0,
+        "fail_weekly_wave": 0,
+        "fail_daily_wave": 0,
+        "fail_wave_combo": 0,
         "selected": 0,
     }
 

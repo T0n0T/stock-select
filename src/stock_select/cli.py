@@ -970,11 +970,11 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"fail_support_ma25={stats['fail_support_ma25']} "
             f"fail_volume_shrink={stats['fail_volume_shrink']} "
             f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
-            f"fail_daily_macd={stats['fail_daily_macd']} "
-            f"fail_weekly_macd={stats['fail_weekly_macd']} "
-            f"fail_monthly_macd={stats['fail_monthly_macd']} "
             f"fail_ma60_trend={stats['fail_ma60_trend']} "
             f"fail_ma144_distance={stats['fail_ma144_distance']} "
+            f"fail_weekly_wave={stats['fail_weekly_wave']} "
+            f"fail_daily_wave={stats['fail_daily_wave']} "
+            f"fail_wave_combo={stats['fail_wave_combo']} "
             f"selected={stats['selected']}",
         )
         return

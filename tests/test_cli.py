@@ -14,6 +14,24 @@ from stock_select import cli
 from stock_select.cli import app
 
 
+def _b2_wave_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
+    return {
+        "total_symbols": total_symbols,
+        "eligible": eligible,
+        "fail_recent_j": 0,
+        "fail_insufficient_history": 0,
+        "fail_support_ma25": 0,
+        "fail_volume_shrink": 0,
+        "fail_zxdq_zxdkx": 0,
+        "fail_ma60_trend": 0,
+        "fail_ma144_distance": 0,
+        "fail_weekly_wave": 0,
+        "fail_daily_wave": 0,
+        "fail_wave_combo": 0,
+        "selected": selected,
+    }
+
+
 def _eod_key(pick_date: str, method: str = "b1") -> str:
     return f"{pick_date}.{method}"
 
@@ -108,6 +126,107 @@ def test_screen_accepts_whitespace_padded_b2_method(monkeypatch: pytest.MonkeyPa
 
     assert result.exit_code == 0
     assert result.stdout.strip() == str(expected_path)
+
+
+def test_screen_b2_phase_one_does_not_filter_on_daily_macd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+
+    trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        close_values = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
+        if start_date == "2025-04-09":
+            return pd.DataFrame(
+                {
+                    "ts_code": ["000001.SZ"] * len(trade_dates),
+                    "trade_date": trade_dates,
+                    "open": [value - 0.1 for value in close_values],
+                    "high": [value + 0.2 for value in close_values],
+                    "low": [value - 0.2 for value in close_values[:-1]] + [12.40],
+                    "close": close_values,
+                        "vol": [100.0 + idx for idx in range(len(trade_dates) - 1)] + [50.0],
+                }
+            )
+        assert start_date == "2023-01-01"
+        assert symbols == ["000001.SZ"]
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"] * len(trade_dates),
+                "trade_date": trade_dates,
+                "open": [value - 0.1 for value in close_values],
+                "high": [value + 0.2 for value in close_values],
+                "low": [value - 0.2 for value in close_values[:-1]] + [12.40],
+                "close": close_values,
+                "vol": [100.0 + idx for idx in range(len(trade_dates) - 1)] + [50.0],
+            }
+        )
+
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        prepared = {}
+        for code, group in market.groupby("ts_code"):
+            group = group.sort_values("trade_date").reset_index(drop=True).copy()
+            group["turnover_n"] = 999.0
+            group["J"] = 10.0
+            group["zxdq"] = group["close"] + 0.3
+            group["zxdkx"] = group["close"] - 0.1
+            group["ma25"] = group["close"].rolling(window=25, min_periods=25).mean()
+            group["ma60"] = group["close"].rolling(window=60, min_periods=60).mean()
+            group["ma144"] = group["close"].rolling(window=144, min_periods=144).mean()
+            group["low"] = group["close"] - 0.2
+            group["volume"] = group["vol"]
+            group.loc[group.index[-1], "low"] = float(group.loc[group.index[-1], "ma25"]) * 1.004
+            group["dif"] = 0.02
+            group["dea"] = 0.08
+            group["dif_w"] = 0.12
+            group["dea_w"] = 0.08
+            group["dif_m"] = 0.18
+            group["dea_m"] = 0.12
+            prepared[code] = group
+        return prepared
+
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]},
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_b2_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 999.0}],
+            _b2_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+            "--progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "mode=macd_warmup" in result.stderr
 
 
 def test_screen_accepts_whitespace_padded_b1_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -4027,21 +4146,7 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 11.6, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 1,
-            },
+            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     original_connect = cli._connect
@@ -4094,9 +4199,10 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+    valid_b2_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
     closes_by_code = {
-        "AAA.SZ": [10.0 + 0.02 * idx for idx in range(len(trade_dates) - 1)] + [12.90],
-        "BBB.SZ": [11.0 + 0.02 * idx for idx in range(len(trade_dates) - 1)] + [14.30],
+        "AAA.SZ": [10.0 + 0.02 * idx for idx in range(len(trade_dates))],
+        "BBB.SZ": valid_b2_close,
     }
 
     def fake_connect(_: str) -> object:
@@ -4119,7 +4225,7 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
                         "trade_date": trade_date,
                         "open": close - 0.1,
                         "high": close + 0.2,
-                        "low": close - 0.2 if idx < len(trade_dates) - 1 else close - 0.30,
+                        "low": close - 0.2 if idx < len(trade_dates) - 1 else (12.40 if code == "BBB.SZ" else close - 0.30),
                         "close": close,
                         "vol": 100.0 + idx if idx < len(trade_dates) - 1 else 50.0,
                     }
@@ -4232,21 +4338,7 @@ def test_screen_b2_uses_longer_warmup_start_date_for_period_macd(
         "run_b2_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 1,
-            },
+            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
         ),
     )
 
@@ -4361,21 +4453,7 @@ def test_screen_b2_uses_two_phase_fetch_and_only_warms_pool_symbols(
         run_inputs.update(prepared_by_symbol)
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 1,
-            },
+            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
@@ -4497,21 +4575,7 @@ def test_screen_b2_phase_one_prefilters_non_macd_rules_before_warmup(
         "run_b2_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             warmup_run_inputs.update(prepared_by_symbol) or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            {
-                "total_symbols": len(prepared_by_symbol),
-                "eligible": len(prepared_by_symbol),
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 1,
-            },
+            _b2_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -4545,6 +4609,7 @@ def test_screen_b2_writes_prepared_cache_before_prefilter(
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+    valid_b2_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
 
     def fake_connect(_: str) -> object:
         return object()
@@ -4607,21 +4672,7 @@ def test_screen_b2_writes_prepared_cache_before_prefilter(
         "run_b2_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            {
-                "total_symbols": len(prepared_by_symbol),
-                "eligible": len(prepared_by_symbol),
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 1,
-            },
+            _b2_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -4709,21 +4760,7 @@ def test_screen_b2_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path)
         assert prepared_by_symbol == {}
         return (
             [],
-            {
-                "total_symbols": 0,
-                "eligible": 0,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 0,
-            },
+            _b2_wave_stats(total_symbols=0, eligible=0, selected=0),
         )
 
     cli._connect = fail_connect  # type: ignore[assignment]
@@ -5729,21 +5766,7 @@ def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
         assert pick_date == pd.Timestamp("2026-04-10")
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 20.2, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 1,
-            },
+            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -6160,21 +6183,7 @@ def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates
         assert prepared_by_symbol == {}
         return (
             [],
-            {
-                "total_symbols": 0,
-                "eligible": 0,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 0,
-            },
+            _b2_wave_stats(total_symbols=0, eligible=0, selected=0),
         )
 
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -6433,6 +6442,7 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
+    valid_b2_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
 
     def fake_connect(_: str) -> object:
         return object()
@@ -6447,16 +6457,17 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
         market_rows: list[dict[str, object]] = []
         for code, base_close in (("AAA.SZ", 10.0), ("BBB.SZ", 12.0)):
             for idx, trade_date in enumerate(trade_dates):
-                close = base_close + idx * 0.1
-                if code == "BBB.SZ" and idx == len(trade_dates) - 1:
-                    close = 26.8
+                if code == "BBB.SZ":
+                    close = valid_b2_close[idx]
+                else:
+                    close = base_close + idx * 0.1
                 market_rows.append(
                     {
                         "ts_code": code,
                         "trade_date": trade_date,
                         "open": close - 0.1,
                         "high": close + 0.2,
-                        "low": close - 0.2 if idx < len(trade_dates) - 1 else close - 0.30,
+                        "low": close - 0.2 if idx < len(trade_dates) - 1 else (12.40 if code == "BBB.SZ" else close - 0.30),
                         "close": close,
                         "vol": 100.0 + idx if idx < len(trade_dates) - 1 else 50.0,
                     }
@@ -6991,21 +7002,7 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
         "run_b2_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 10.6, "turnover_n": 1030.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_recent_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_support_ma25": 0,
-                "fail_volume_shrink": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_daily_macd": 0,
-                "fail_weekly_macd": 0,
-                "fail_monthly_macd": 0,
-                "fail_ma60_trend": 0,
-                "fail_ma144_distance": 0,
-                "selected": 1,
-            },
+            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
         ),
     )
 
