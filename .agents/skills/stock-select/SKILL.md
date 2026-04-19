@@ -89,16 +89,18 @@ When running chart review for quality-first selection:
 
 1. Run the Python CLI `review` command first.
 2. Load `runtime/reviews/<mode_key>/llm_review_tasks.json`.
-3. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
+3. Read `max_concurrency` from the task file and treat it as a hard cap for concurrent subagents.
+4. Keep the `llm review` dispatch stage capped at 6 concurrent subagents.
+5. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
    - `b1` and `hcr`: `references/prompt.md`
    - `b2`: `references/prompt-b2.md`
-4. Send each subagent exactly one candidate at a time.
-5. Provide these inputs to the subagent:
+6. Send each subagent exactly one candidate at a time.
+7. Provide these inputs to the subagent:
    - stock code
    - pick date
    - chart image path pointing to `<code>_day.png`
    - the prompt from the method-specific prompt file (`references/prompt.md` for `b1` / `hcr`, `references/prompt-b2.md` for `b2`)
-6. Require the subagent to return strict JSON matching the prompt contract:
+8. Require the subagent to return strict JSON matching the prompt contract:
    - `trend_reasoning`
    - `position_reasoning`
    - `volume_reasoning`
@@ -114,10 +116,10 @@ When running chart review for quality-first selection:
    - `signal_type`
    - `verdict`
    - `comment`
-7. Write each raw subagent result to `runtime/reviews/<mode_key>/llm_review_results/<code>.json`.
-8. Run CLI `review-merge` so the repository code validates the returned JSON before treating it as usable output.
-9. If validation fails, let `review-merge` record the symbol in failures and continue.
-10. Keep the local baseline review result alongside the validated subagent result.
+9. Write each raw subagent result to `runtime/reviews/<mode_key>/llm_review_results/<code>.json`.
+10. Run CLI `review-merge` so the repository code validates the returned JSON before treating it as usable output.
+11. If validation fails, let `review-merge` record the symbol in failures and continue.
+12. Keep the local baseline review result alongside the validated subagent result.
 
 Use `<mode_key>` as follows:
 

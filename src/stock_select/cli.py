@@ -72,6 +72,7 @@ from stock_select.watch_pool import (
 app = typer.Typer(help="stock-select standalone CLI")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
+LLM_REVIEW_MAX_CONCURRENCY = 6
 B2_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
@@ -1562,6 +1563,7 @@ def _review_impl(
         "pick_date": pick_date,
         "method": method.lower(),
         "prompt_path": resolver.prompt_path,
+        "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,
     }
     tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")
@@ -1668,6 +1670,7 @@ def _review_intraday_impl(
         "pick_date": pick_date,
         "method": method.lower(),
         "prompt_path": resolver.prompt_path,
+        "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,
     }
     tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")

@@ -1408,6 +1408,7 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert review["llm_review"] is None
     assert tasks["pick_date"] == "2026-04-01"
     assert tasks["prompt_path"].endswith(".agents/skills/stock-select/references/prompt.md")
+    assert tasks["max_concurrency"] == 6
     assert tasks["tasks"][0]["code"] == "000001.SZ"
     assert tasks["tasks"][0]["rank"] == 1
     assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
@@ -1570,6 +1571,7 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
     }
     assert tasks["prompt_path"] == prompt_path
     assert tasks["method"] == "b2"
+    assert tasks["max_concurrency"] == 6
     assert tasks["tasks"][0]["prompt_path"] == prompt_path
     assert tasks["tasks"][0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
     assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
@@ -1861,6 +1863,7 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
     }
     assert tasks["prompt_path"] == prompt_path
     assert tasks["method"] == "b2"
+    assert tasks["max_concurrency"] == 6
     assert tasks["tasks"][0]["prompt_path"] == prompt_path
     assert tasks["tasks"][0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
     assert tasks["tasks"][0]["baseline_score"] == review["total_score"]
@@ -1964,6 +1967,7 @@ def test_review_default_resolver_method_uses_resolver_prompt_metadata(
     tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
     assert tasks["method"] == "b1"
     assert tasks["prompt_path"] == prompt_path
+    assert tasks["max_concurrency"] == 6
     assert tasks["tasks"][0]["prompt_path"] == prompt_path
     assert tasks["tasks"][0]["code"] == "000002.SZ"
 
