@@ -1964,6 +1964,10 @@ def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytes
     assert "weekly_wave_context" in task
     assert "daily_wave_context" in task
     assert "wave_combo_context" in task
+    assert "组合判定" in task["wave_combo_context"]
+    assert "b1" in task["wave_combo_context"]
+    assert "候选要求" in task["wave_combo_context"]
+    assert any(word in task["wave_combo_context"] for word in ("符合", "不符合"))
 
 
 def test_prompt_b1_requires_weekly_and_daily_wave_language() -> None:
@@ -1974,6 +1978,9 @@ def test_prompt_b1_requires_weekly_and_daily_wave_language() -> None:
     assert "wave_combo_context" in content
     assert "周线" in content
     assert "日线" in content
+    assert "signal_reasoning" in content
+    assert "符合 `b1`" in content or "符合 b1" in content
+    assert "Output JSON format must remain identical to the default prompt contract" in content
 
 
 def test_review_default_resolver_method_uses_resolver_prompt_metadata(
