@@ -1407,7 +1407,7 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert review["baseline_review"]["review_type"] == "baseline"
     assert review["llm_review"] is None
     assert tasks["pick_date"] == "2026-04-01"
-    assert tasks["prompt_path"].endswith(".agents/skills/stock-select/references/prompt.md")
+    assert tasks["prompt_path"].endswith(".agents/skills/stock-select/references/prompt-b1.md")
     assert tasks["max_concurrency"] == 6
     assert tasks["tasks"][0]["code"] == "000001.SZ"
     assert tasks["tasks"][0]["rank"] == 1
@@ -1883,6 +1883,136 @@ def test_prompt_b2_requires_weekly_and_daily_wave_language() -> None:
     assert "周线" in content
     assert "日线" in content
     assert "浪" in content
+
+
+def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-01", "b1")
+    review_dir = runtime_root / "reviews" / method_key
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    chart_dir = runtime_root / "charts" / method_key
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    trade_dates = pd.bdate_range(end="2026-04-01", periods=180)
+    close = [10.0 + 0.02 * idx for idx in range(len(trade_dates))]
+    history = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"] * len(trade_dates),
+            "trade_date": trade_dates,
+            "open": [value - 0.05 for value in close],
+            "high": [value + 0.1 for value in close],
+            "low": [value - 0.1 for value in close],
+            "close": close,
+            "vol": [1000.0 + idx for idx in range(len(trade_dates))],
+        }
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: history,
+    )
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="b1",
+            prompt_path="prompt-b1-stub.md",
+            review_history=lambda **kwargs: {
+                "review_type": "baseline",
+                "total_score": 4.1,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "b1 baseline",
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    task = tasks["tasks"][0]
+    assert "weekly_wave_context" in task
+    assert "daily_wave_context" in task
+    assert "wave_combo_context" in task
+    assert "组合判定" in task["wave_combo_context"]
+    assert "b1" in task["wave_combo_context"]
+    assert "候选要求" in task["wave_combo_context"]
+    assert any(word in task["wave_combo_context"] for word in ("符合", "不符合"))
+
+
+@pytest.mark.parametrize("method", ["b1", "b2"])
+def test_build_wave_task_context_rejects_wave4_when_third_wave_gain_exceeds_limit(
+    method: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(end="2026-04-01", periods=10),
+            "close": [10.0 + 0.1 * idx for idx in range(10)],
+        }
+    )
+    monkeypatch.setattr(
+        cli,
+        "classify_weekly_macd_wave",
+        lambda _history, _pick_date: SimpleNamespace(label="wave3", reason="weekly ok", details={}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "classify_daily_macd_wave",
+        lambda _history, _pick_date: SimpleNamespace(
+            label="wave4_end",
+            reason="daily wave4",
+            details={"third_wave_gain": 0.35},
+        ),
+    )
+
+    context = cli._build_wave_task_context(history, "2026-04-01", method=method)
+
+    assert f"不符合 {method} 候选要求" in context["wave_combo_context"]
+    assert "35.0%" in context["wave_combo_context"]
+
+
+def test_prompt_b1_requires_weekly_and_daily_wave_language() -> None:
+    content = Path(".agents/skills/stock-select/references/prompt-b1.md").read_text(encoding="utf-8")
+
+    assert "weekly_wave_context" in content
+    assert "daily_wave_context" in content
+    assert "wave_combo_context" in content
+    assert "周线" in content
+    assert "日线" in content
+    assert "signal_reasoning" in content
+    assert "符合 `b1`" in content or "符合 b1" in content
+    assert "Output JSON format must remain identical to the default prompt contract" in content
 
 
 def test_review_default_resolver_method_uses_resolver_prompt_metadata(
@@ -2961,7 +3091,7 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "comment": "baseline",
     }
     assert merged["llm_review"]["verdict"] == "PASS"
-    assert merged["llm_review"]["total_score"] == 4.53
+    assert merged["llm_review"]["total_score"] == 4.62
     assert merged["llm_review"]["scores"] == {
         "trend_structure": 5.0,
         "price_position": 4.0,
@@ -2969,8 +3099,8 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "previous_abnormal_move": 4.0,
         "macd_phase": 5.0,
     }
-    assert merged["final_score"] == 4.08
-    assert merged["total_score"] == 4.08
+    assert merged["final_score"] == 4.13
+    assert merged["total_score"] == 4.13
     assert merged["verdict"] == "PASS"
     assert summary["recommendations"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr
@@ -3069,7 +3199,7 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
     untouched = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
     assert merged["review_mode"] == "merged"
-    assert merged["llm_review"]["total_score"] == 4.53
+    assert merged["llm_review"]["total_score"] == 4.62
     assert untouched["review_mode"] == "baseline_local"
     assert untouched["baseline_review"] == {
         "review_type": "baseline",

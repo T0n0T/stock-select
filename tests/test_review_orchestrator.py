@@ -122,7 +122,7 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
     assert normalized["signal_type"] == "trend_start"
 
 
-def test_compute_method_total_score_excludes_macd_for_b1_and_hcr() -> None:
+def test_compute_method_total_score_includes_macd_for_b1() -> None:
     scores = {
         "trend_structure": 5.0,
         "price_position": 4.0,
@@ -131,7 +131,18 @@ def test_compute_method_total_score_excludes_macd_for_b1_and_hcr() -> None:
         "macd_phase": 1.0,
     }
 
-    assert compute_method_total_score("b1", scores) == pytest.approx(4.53)
+    assert compute_method_total_score("b1", scores) == pytest.approx(3.82)
+
+
+def test_compute_method_total_score_excludes_macd_for_hcr() -> None:
+    scores = {
+        "trend_structure": 5.0,
+        "price_position": 4.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 1.0,
+    }
+
     assert compute_method_total_score("hcr", scores) == pytest.approx(4.53)
 
 
@@ -276,7 +287,7 @@ def test_default_review_symbol_history_returns_watch_for_constructive_trend() ->
     assert review["comment"] == "结构有修复迹象，但量价与位置优势一般，暂时更适合继续观察。"
 
 
-def test_default_review_symbol_history_excludes_macd_from_total_score_for_b1() -> None:
+def test_default_review_symbol_history_includes_macd_in_total_score_for_b1() -> None:
     history = pd.DataFrame(
         {
             "trade_date": pd.date_range("2026-01-01", periods=160, freq="B"),
@@ -301,8 +312,8 @@ def test_default_review_symbol_history_excludes_macd_from_total_score_for_b1() -
     assert review["volume_behavior"] == 5.0
     assert review["previous_abnormal_move"] == 3.0
     assert review["macd_phase"] == 3.0
-    assert review["total_score"] == pytest.approx(4.05)
-    assert review["verdict"] == "PASS"
+    assert review["total_score"] == pytest.approx(3.84)
+    assert review["verdict"] == "WATCH"
 
 
 def test_default_review_symbol_history_ignores_future_rows_after_pick_date() -> None:

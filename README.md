@@ -15,6 +15,14 @@
 - 第二阶段只做日线 / 周线 `MACD` 浪型识别
 - `review` 与 LLM review task 会复用同一套浪型理解，但最终 review JSON schema 保持稳定
 
+当前 `b1` 的改动只发生在 review 层：
+
+- `screen` 阶段保持原有初筛条件不变
+- baseline review 改为专用 `b1` reviewer，并复用与 `b2` 相同的周线 / 日线 `MACD` 浪型识别核心
+- `b1` 的 baseline `comment` 会压缩写出周线 / 日线浪型判断
+- `b1 total_score` 现已计入 `macd_phase`
+- `b1` 的 LLM review task 会额外写入浪型文本上下文，并改为使用 `prompt-b1.md`
+
 该仓库与 `/home/pi/Documents/agents/StockTradebyZ` 分离，后者当前仅作为迁移期间的只读参考。
 
 ## 安装
@@ -163,8 +171,11 @@ SZ002703 浙江世宝
   - 当前写出以本地 baseline 为主的 review 结果结构
   - 同时写出 `llm_review_tasks.json`，供 CLI 返回后由 skill 继续派发子代理图评
   - `llm_review_tasks.json` 顶层固定写入 `max_concurrency: 6`，作为 llm review 阶段的并发上限
-  - 该结果结构已经预留 `llm_review` 字段，供后续基于 PNG + `.agents/skills/stock-select/references/prompt.md` 的子代理图评回填
-  - `b2` 会在任务文件中额外写入周线 / 日线浪型和组合判定的文本上下文，供 `prompt-b2.md` 使用
+  - 该结果结构已经预留 `llm_review` 字段，供后续基于 PNG + method-specific prompt 的子代理图评回填
+  - `b1` 使用 `.agents/skills/stock-select/references/prompt-b1.md`
+  - `b2` 使用 `.agents/skills/stock-select/references/prompt-b2.md`
+  - `hcr` 继续使用 `.agents/skills/stock-select/references/prompt.md`
+  - `b1` 与 `b2` 都会在任务文件中额外写入周线 / 日线浪型和组合判定的文本上下文，供对应 prompt 使用
   - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>.<method>/summary.json`
 - `record-watch`
   - 读取 `reviews/<pick_date>.<method>/summary.json`
