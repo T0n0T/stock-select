@@ -25,7 +25,8 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Custom pool codes still intersect with the prepared screening universe before the strategy runs.
 - Use the bundled review rubric and runtime layout references.
 - Use method-specific chart-review prompts from this skill when dispatching subagents:
-  - `b1` and `hcr` use `references/prompt.md`
+  - `b1` uses `references/prompt-b1.md`
+  - `hcr` uses `references/prompt.md`
   - `b2` uses `references/prompt-b2.md`
 - Review should use rendered chart images, not HTML text.
 - Dispatch one subagent per candidate for multimodal chart review when chart quality is the priority.
@@ -77,7 +78,7 @@ Review and merge instructions must follow the active mode's runtime key:
 4. Run deterministic `b1`, `b2`, or `hcr` screening and write candidate outputs.
 5. Render daily chart PNG files for each candidate.
 6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
-7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` / `hcr` use `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
+7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` uses `references/prompt-b1.md`; `hcr` uses `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
 8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>.<method>` for end-of-day and `<run_id>.<method>` for intraday.
 9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
 10. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
@@ -92,14 +93,15 @@ When running chart review for quality-first selection:
 3. Read `max_concurrency` from the task file and treat it as a hard cap for concurrent subagents.
 4. Keep the `llm review` dispatch stage capped at 6 concurrent subagents.
 5. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
-   - `b1` and `hcr`: `references/prompt.md`
+   - `b1`: `references/prompt-b1.md`
+   - `hcr`: `references/prompt.md`
    - `b2`: `references/prompt-b2.md`
 6. Send each subagent exactly one candidate at a time.
 7. Provide these inputs to the subagent:
    - stock code
    - pick date
    - chart image path pointing to `<code>_day.png`
-   - the prompt from the method-specific prompt file (`references/prompt.md` for `b1` / `hcr`, `references/prompt-b2.md` for `b2`)
+   - the prompt from the method-specific prompt file (`references/prompt-b1.md` for `b1`, `references/prompt.md` for `hcr`, `references/prompt-b2.md` for `b2`)
 8. Require the subagent to return strict JSON matching the prompt contract:
    - `trend_reasoning`
    - `position_reasoning`
@@ -184,6 +186,14 @@ If any of the checks above fail:
 - `review --pick-date` writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
 - `review --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache, writes baseline reviews under `runtime/reviews/<run_id>.<method>/`, and does not fetch fresh realtime data.
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `macd_phase`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
+- `b1` deterministic screening remains unchanged; only the review layer is wave-aware.
+- `b1` review now uses a dedicated reviewer plus `references/prompt-b1.md`.
+- For `b1`, the baseline comment compresses the same weekly/daily wave interpretation used by the shared MACD wave core, while keeping the final baseline schema stable.
+- `b1` total-score calculation now counts `macd_phase`.
+- `b1` review task payloads add text-only deterministic context:
+  - `weekly_wave_context`
+  - `daily_wave_context`
+  - `wave_combo_context`
 - For `b2`, the baseline comment compresses the same weekly/daily wave interpretation used by deterministic screening, while keeping the final baseline schema stable.
 - `b2` review task payloads add text-only deterministic context:
   - `weekly_wave_context`
@@ -198,13 +208,14 @@ If any of the checks above fail:
 
 ## Future Upgrade Path
 
-- The intended end state is multimodal subagent chart review driven by the method-specific prompt files: `references/prompt.md` for `b1` / `hcr`, and `references/prompt-b2.md` for `b2`.
+- The intended end state is multimodal subagent chart review driven by the method-specific prompt files: `references/prompt-b1.md` for `b1`, `references/prompt.md` for `hcr`, and `references/prompt-b2.md` for `b2`.
 - Keep the deterministic `screen` and `chart` stages unchanged and swap only the `review` stage orchestration.
 
 ## Bundled References
 
 - `references/b1-selector.md`
 - `references/b2-selector.md`
+- `references/prompt-b1.md`
 - `references/prompt.md`
 - `references/prompt-b2.md`
 - `references/review-rubric.md`
