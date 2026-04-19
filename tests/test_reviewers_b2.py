@@ -187,7 +187,9 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
         "total_score": 4.62,
         "signal_type": "trend_start",
         "verdict": "PASS",
-        "comment": "趋势结构顺畅，量价配合正常，前期异动仍有承接，当前具备继续走强条件。",
+        "macd_reasoning": "周线处于wave1，日线处于invalid，当前按 MACD 浪型结构解释该票。",
+        "signal_reasoning": "周线与日线浪型组合不符合 b2 预设组合。",
+        "comment": "周线wave1、日线invalid，当前结论为PASS。",
     }
 
 
@@ -212,8 +214,48 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
         "total_score": 1.38,
         "signal_type": "distribution_risk",
         "verdict": "FAIL",
-        "comment": "趋势走弱且量价失衡，前期异动后的承接不足，当前更偏出货风险。",
+        "macd_reasoning": "周线处于wave2，日线处于wave4_end，当前按 MACD 浪型结构解释该票。",
+        "signal_reasoning": "周线与日线浪型组合不符合 b2 预设组合。",
+        "comment": "周线wave2、日线wave4_end，当前结论为FAIL。",
     }
+
+
+def test_b2_review_macd_reasoning_mentions_weekly_and_daily_waves() -> None:
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert "周线" in review["macd_reasoning"]
+    assert "日线" in review["macd_reasoning"]
+    assert "浪" in review["macd_reasoning"]
+
+
+def test_b2_review_signal_reasoning_mentions_wave_combo() -> None:
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert "组合" in review["signal_reasoning"]
+    assert "周线" in review["signal_reasoning"]
+    assert "日线" in review["signal_reasoning"]
+
+
+def test_b2_review_comment_compresses_wave_conclusion() -> None:
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert "周线" in review["comment"]
+    assert "日线" in review["comment"]
 
 
 def test_b2_review_ignores_future_rows_after_pick_date() -> None:

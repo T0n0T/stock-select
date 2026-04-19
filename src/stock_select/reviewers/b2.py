@@ -4,13 +4,10 @@ from typing import Any
 
 import pandas as pd
 
-from stock_select.review_protocol import (
-    build_baseline_comment,
-    infer_signal_type,
-    infer_verdict,
-)
+from stock_select.review_protocol import infer_signal_type, infer_verdict
 from stock_select.review_orchestrator import compute_method_total_score
 from stock_select.strategies import compute_macd
+from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
 
 _B2_MACD_CONFIRMATION_WEEKLY_POINTS = 40
 _B2_MACD_CONFIRMATION_MONTHLY_POINTS = 40
@@ -47,7 +44,9 @@ def review_b2_symbol_history(
     price_position = _score_b2_price_position(close=close, high=high, ma25=ma25)
     volume_behavior = _score_b2_volume_behavior(close=close, volume=volume)
     previous_abnormal_move = _score_b2_previous_abnormal_move(close=close, volume=volume, ma25=ma25, ma60=ma60)
-    macd_phase = _score_b2_macd_phase(frame)
+    weekly_wave = classify_weekly_macd_wave(frame[["trade_date", "close"]], pick_date)
+    daily_wave = classify_daily_macd_wave(frame[["trade_date", "close"]], pick_date)
+    macd_phase = _score_b2_macd_phase(frame, weekly_wave=weekly_wave, daily_wave=daily_wave)
 
     total_score = compute_method_total_score(
         "b2",
@@ -67,6 +66,9 @@ def review_b2_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
+    macd_reasoning = _build_b2_macd_reasoning(weekly_wave=weekly_wave, daily_wave=daily_wave)
+    signal_reasoning = _build_b2_signal_reasoning(weekly_wave=weekly_wave, daily_wave=daily_wave)
+    comment = _build_b2_comment(weekly_wave=weekly_wave, daily_wave=daily_wave, verdict=verdict)
 
     return {
         "code": code,
@@ -81,7 +83,9 @@ def review_b2_symbol_history(
         "total_score": total_score,
         "signal_type": signal_type,
         "verdict": verdict,
-        "comment": build_baseline_comment(signal_type=signal_type, verdict=verdict),
+        "macd_reasoning": macd_reasoning,
+        "signal_reasoning": signal_reasoning,
+        "comment": comment,
     }
 
 
@@ -197,7 +201,12 @@ def _score_b2_previous_abnormal_move(
     return 1.0
 
 
-def _score_b2_macd_phase(frame: pd.DataFrame) -> float:
+def _score_b2_macd_phase(
+    frame: pd.DataFrame,
+    *,
+    weekly_wave: Any,
+    daily_wave: Any,
+) -> float:
     if len(frame) < 35:
         return 3.0
 
@@ -233,3 +242,17 @@ def _score_b2_macd_phase(frame: pd.DataFrame) -> float:
     if daily_dif >= daily_dea:
         return 2.0
     return 1.0
+
+
+def _build_b2_macd_reasoning(*, weekly_wave: Any, daily_wave: Any) -> str:
+    return f"周线处于{weekly_wave.label}，日线处于{daily_wave.label}，当前按 MACD 浪型结构解释该票。"
+
+
+def _build_b2_signal_reasoning(*, weekly_wave: Any, daily_wave: Any) -> str:
+    combo_ok = weekly_wave.label in {"wave1", "wave3"} and daily_wave.label in {"wave2_end", "wave4_end"}
+    status = "符合" if combo_ok else "不符合"
+    return f"周线与日线浪型组合{status} b2 预设组合。"
+
+
+def _build_b2_comment(*, weekly_wave: Any, daily_wave: Any, verdict: str) -> str:
+    return f"周线{weekly_wave.label}、日线{daily_wave.label}，当前结论为{verdict}。"
