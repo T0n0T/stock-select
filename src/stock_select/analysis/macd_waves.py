@@ -26,13 +26,22 @@ def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCl
     if len(hist) < 8 or _is_churn(hist):
         return MacdWaveClassification("invalid", False, "weekly MACD churn", {"periods": len(hist)})
 
+    bullish = bool(dif.iloc[-1] > dea.iloc[-1])
     latest_hist = float(hist.iloc[-1])
     previous_hist = float(hist.iloc[-2])
-    bullish = bool(dif.iloc[-1] > dea.iloc[-1])
     had_pullback = bool((hist < 0).any())
+    fading_bullish_impulse = bool(
+        len(weekly_close) >= 3
+        and latest_hist > 0.0
+        and previous_hist > 0.0
+        and latest_hist < previous_hist
+        and float(weekly_close.iloc[-1]) < float(weekly_close.iloc[-2])
+    )
 
     if bullish and latest_hist > 0.0 and previous_hist > 0.0 and had_pullback:
         return MacdWaveClassification("wave3", True, "weekly second bullish advance after pullback", {})
+    if bullish and fading_bullish_impulse:
+        return MacdWaveClassification("wave2", False, "weekly pullback after prior advance", {})
     if bullish and latest_hist > 0.0:
         return MacdWaveClassification("wave1", True, "weekly first bullish advance after golden cross", {})
     if not bullish and had_pullback:
@@ -57,8 +66,30 @@ def classify_daily_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCla
 
     third_wave_gain = _estimate_third_wave_gain(working["close"].astype(float))
     shrinking_negative = bool(hist.iloc[-1] < 0 and hist.iloc[-2] < 0 and abs(hist.iloc[-1]) < abs(hist.iloc[-2]))
+    shrinking_positive = bool(
+        len(hist) >= 4
+        and hist.iloc[-1] > 0
+        and hist.iloc[-2] > 0
+        and hist.iloc[-3] > 0
+        and float(hist.iloc[-1]) < float(hist.iloc[-2]) < float(hist.iloc[-3])
+    )
     converging = bool(abs(dif.iloc[-1] - dea.iloc[-1]) < abs(dif.iloc[-2] - dea.iloc[-2]))
     bullish_now = bool(dif.iloc[-1] > dea.iloc[-1])
+
+    if bullish_now and shrinking_positive and converging:
+        if third_wave_gain > 0.30:
+            return MacdWaveClassification(
+                "invalid",
+                False,
+                "daily third-wave gain exceeded wave4 allowance",
+                {"third_wave_gain": third_wave_gain, "needs_recross": False},
+            )
+        return MacdWaveClassification(
+            "wave2_end",
+            True,
+            "daily second-wave pullback nearing end",
+            {"third_wave_gain": third_wave_gain, "needs_recross": False},
+        )
 
     if bullish_now:
         return MacdWaveClassification(
