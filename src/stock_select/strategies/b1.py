@@ -16,6 +16,35 @@ DEFAULT_TURNOVER_WINDOW = 43
 DEFAULT_WEEKLY_MA_PERIODS = (10, 20, 30)
 DEFAULT_MAX_VOL_LOOKBACK = 20
 DEFAULT_TOP_M = 5000
+_B1_REQUIRED_COLUMNS = (
+    "trade_date",
+    "J",
+    "zxdq",
+    "zxdkx",
+    "close",
+    "weekly_ma_bull",
+    "max_vol_not_bearish",
+    "chg_d",
+    "v_shrink",
+    "safe_mode",
+    "lt_filter",
+    "turnover_n",
+)
+_B1_NUMERIC_COLUMNS = (
+    "J",
+    "zxdq",
+    "zxdkx",
+    "close",
+    "chg_d",
+    "turnover_n",
+)
+_B1_BOOLEAN_COLUMNS = (
+    "weekly_ma_bull",
+    "max_vol_not_bearish",
+    "v_shrink",
+    "safe_mode",
+    "lt_filter",
+)
 
 
 def compute_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
@@ -260,9 +289,19 @@ def run_b1_screen_with_stats(
         if prepared.empty:
             continue
 
-        frame = prepared.copy()
-        frame["trade_date"] = pd.to_datetime(frame["trade_date"])
-        daily = frame.loc[frame["trade_date"] == target_date]
+        if _missing_required_columns(prepared):
+            stats["eligible"] += 1
+            stats["fail_insufficient_history"] += 1
+            continue
+
+        frame = _normalize_b1_frame(prepared)
+        if _has_invalid_required_inputs(prepared, frame):
+            stats["eligible"] += 1
+            stats["fail_insufficient_history"] += 1
+            continue
+
+        history = frame.loc[frame["trade_date"] <= target_date].reset_index(drop=True)
+        daily = history.loc[history["trade_date"] == target_date]
         if daily.empty:
             continue
 
@@ -270,7 +309,7 @@ def run_b1_screen_with_stats(
         row = daily.iloc[-1]
         j_threshold = float(config.get("j_threshold", DEFAULT_B1_CONFIG["j_threshold"]))
         q_threshold = float(config.get("j_q_threshold", DEFAULT_B1_CONFIG["j_q_threshold"]))
-        j_series = frame.loc[frame["trade_date"] <= target_date, "J"]
+        j_series = history["J"]
         j_quantile = float(compute_expanding_j_quantile(j_series, q_threshold).iloc[-1])
 
         if not (float(row["J"]) < j_threshold or float(row["J"]) <= j_quantile):
@@ -285,22 +324,22 @@ def run_b1_screen_with_stats(
         if not (float(row["zxdq"]) > float(row["zxdkx"])):
             stats["fail_zxdq_zxdkx"] += 1
             continue
-        if not bool(row["weekly_ma_bull"]):
+        if not _flag_is_true(row["weekly_ma_bull"]):
             stats["fail_weekly_ma"] += 1
             continue
-        if not bool(row["max_vol_not_bearish"]):
+        if not _flag_is_true(row["max_vol_not_bearish"]):
             stats["fail_max_vol"] += 1
             continue
         if not (float(row["chg_d"]) <= 4.0):
             stats["fail_chg_cap"] += 1
             continue
-        if not bool(row["v_shrink"]):
+        if not _flag_is_true(row["v_shrink"]):
             stats["fail_v_shrink"] += 1
             continue
-        if not bool(row["safe_mode"]):
+        if not _flag_is_true(row["safe_mode"]):
             stats["fail_safe_mode"] += 1
             continue
-        if not bool(row["lt_filter"]):
+        if not _flag_is_true(row["lt_filter"]):
             stats["fail_lt_filter"] += 1
             continue
 
@@ -315,6 +354,58 @@ def run_b1_screen_with_stats(
         stats["selected"] += 1
 
     return results, stats
+
+
+def _missing_required_columns(frame: pd.DataFrame) -> set[str]:
+    return set(_B1_REQUIRED_COLUMNS) - set(frame.columns)
+
+
+def _normalize_b1_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], errors="coerce", format="mixed")
+    for column in _B1_NUMERIC_COLUMNS:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    for column in _B1_BOOLEAN_COLUMNS:
+        normalized[column] = normalized[column].map(_normalize_flag_value)
+    return normalized.sort_values("trade_date").reset_index(drop=True)
+
+
+def _coerced_numeric_columns(original: pd.DataFrame, normalized: pd.DataFrame) -> set[str]:
+    invalid_columns: set[str] = set()
+    for column in _B1_NUMERIC_COLUMNS:
+        original_series = original[column]
+        normalized_series = normalized[column]
+        invalid_mask = original_series.notna() & normalized_series.isna()
+        if bool(invalid_mask.any()):
+            invalid_columns.add(column)
+    return invalid_columns
+
+
+def _has_invalid_required_inputs(original: pd.DataFrame, normalized: pd.DataFrame) -> bool:
+    return bool(normalized["trade_date"].isna().any() or _coerced_numeric_columns(original, normalized))
+
+
+def _normalize_flag_value(value: object) -> object:
+    if pd.isna(value):
+        return pd.NA
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "0", "no", "n"}:
+            return False
+        return pd.NA
+    if value in {0, 1}:
+        return bool(value)
+    return pd.NA
+
+
+def _flag_is_true(value: object) -> bool:
+    if pd.isna(value):
+        return False
+    return bool(value)
 
 
 def _resolve_volume_series(df: pd.DataFrame) -> pd.Series:

@@ -439,6 +439,16 @@ def test_run_b1_screen_filters_symbols_on_pick_date() -> None:
             "zxdkx": [10.0, 10.2, 10.4],
             "weekly_ma_bull": [True, True, True],
             "max_vol_not_bearish": [True, True, True],
+            "chg_d": [0.5, 0.6, 1.0],
+            "amp_d": [2.0, 2.1, 2.2],
+            "body_d": [-1.0, -1.0, -1.0],
+            "vm3": [100.0, 110.0, 90.0],
+            "vm5": [100.0, 110.0, 105.0],
+            "vm10": [100.0, 110.0, 120.0],
+            "m5": [10.2, 10.4, 10.6],
+            "v_shrink": [True, True, True],
+            "safe_mode": [True, True, True],
+            "lt_filter": [True, True, True],
             "turnover_n": [1020.0, 2280.0, 3892.5],
         }
     )
@@ -582,6 +592,49 @@ def test_run_b1_screen_with_stats_keeps_legacy_order_before_new_filters() -> Non
     assert stats["fail_lt_filter"] == 0
 
 
+def test_run_b1_screen_with_stats_counts_missing_tightening_columns_as_insufficient_history() -> None:
+    pick_date = pd.Timestamp("2026-04-03")
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"]),
+            "open": [10.0, 10.2, 10.5],
+            "close": [10.4, 10.8, 11.0],
+            "high": [10.5, 10.9, 11.1],
+            "low": [9.9, 10.1, 10.4],
+            "volume": [100.0, 120.0, 150.0],
+            "J": [12.0, 11.0, 10.0],
+            "zxdq": [10.2, 10.5, 10.8],
+            "zxdkx": [10.0, 10.2, 10.4],
+            "weekly_ma_bull": [True, True, True],
+            "max_vol_not_bearish": [True, True, True],
+            "turnover_n": [1020.0, 2280.0, 3892.5],
+        }
+    )
+
+    candidates, stats = run_b1_screen_with_stats(
+        {"MISSINGTIGHTENING.SZ": frame},
+        pick_date=pick_date,
+        config={"j_threshold": 20.0, "j_q_threshold": 0.5},
+    )
+
+    assert candidates == []
+    assert stats == {
+        "total_symbols": 1,
+        "eligible": 1,
+        "fail_j": 0,
+        "fail_insufficient_history": 1,
+        "fail_close_zxdkx": 0,
+        "fail_zxdq_zxdkx": 0,
+        "fail_weekly_ma": 0,
+        "fail_max_vol": 0,
+        "fail_chg_cap": 0,
+        "fail_v_shrink": 0,
+        "fail_safe_mode": 0,
+        "fail_lt_filter": 0,
+        "selected": 0,
+    }
+
+
 def test_run_b1_screen_with_stats_counts_missing_zxdkx_as_insufficient_history() -> None:
     pick_date = pd.Timestamp("2026-04-03")
     frame = pd.DataFrame(
@@ -625,6 +678,100 @@ def test_run_b1_screen_with_stats_counts_missing_zxdkx_as_insufficient_history()
     }
 
 
+def test_run_b1_screen_with_stats_counts_nan_tightening_booleans_as_first_failures() -> None:
+    pick_date = pd.Timestamp("2026-04-03")
+
+    def make_frame(
+        *,
+        v_shrink: object = True,
+        safe_mode: object = True,
+        lt_filter: object = True,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"]),
+                "open": [10.0, 10.2, 10.5],
+                "close": [10.4, 10.8, 11.0],
+                "high": [10.5, 10.9, 11.1],
+                "low": [9.9, 10.1, 10.4],
+                "volume": [100.0, 120.0, 150.0],
+                "J": [12.0, 11.0, 10.0],
+                "zxdq": [10.2, 10.5, 10.8],
+                "zxdkx": [10.0, 10.2, 10.4],
+                "weekly_ma_bull": [True, True, True],
+                "max_vol_not_bearish": [True, True, True],
+                "chg_d": [0.5, 0.6, 1.0],
+                "amp_d": [2.0, 2.1, 2.2],
+                "body_d": [-1.0, -1.0, -1.0],
+                "vm3": [100.0, 110.0, 90.0],
+                "vm5": [100.0, 110.0, 105.0],
+                "vm10": [100.0, 110.0, 120.0],
+                "m5": [10.2, 10.4, 10.6],
+                "v_shrink": [True, True, v_shrink],
+                "safe_mode": [True, True, safe_mode],
+                "lt_filter": [True, True, lt_filter],
+                "turnover_n": [1020.0, 2280.0, 3892.5],
+            }
+        )
+
+    candidates, stats = run_b1_screen_with_stats(
+        {
+            "NANSHRINK.SZ": make_frame(v_shrink=float("nan")),
+            "NANSAFE.SZ": make_frame(safe_mode=float("nan")),
+            "NANLT.SZ": make_frame(lt_filter=float("nan")),
+        },
+        pick_date=pick_date,
+        config={"j_threshold": 20.0, "j_q_threshold": 0.5},
+    )
+
+    assert candidates == []
+    assert stats["fail_v_shrink"] == 1
+    assert stats["fail_safe_mode"] == 1
+    assert stats["fail_lt_filter"] == 1
+    assert stats["selected"] == 0
+
+
+def test_run_b1_screen_with_stats_counts_only_earliest_new_failure() -> None:
+    pick_date = pd.Timestamp("2026-04-03")
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"]),
+            "open": [10.0, 10.2, 10.5],
+            "close": [10.4, 10.8, 11.0],
+            "high": [10.5, 10.9, 11.1],
+            "low": [9.9, 10.1, 10.4],
+            "volume": [100.0, 120.0, 150.0],
+            "J": [12.0, 11.0, 10.0],
+            "zxdq": [10.2, 10.5, 10.8],
+            "zxdkx": [10.0, 10.2, 10.4],
+            "weekly_ma_bull": [True, True, True],
+            "max_vol_not_bearish": [True, True, True],
+            "chg_d": [0.5, 0.6, 5.5],
+            "amp_d": [2.0, 2.1, 2.2],
+            "body_d": [-1.0, -1.0, -1.0],
+            "vm3": [100.0, 110.0, 150.0],
+            "vm5": [100.0, 110.0, 105.0],
+            "vm10": [100.0, 110.0, 120.0],
+            "m5": [10.2, 10.4, 10.6],
+            "v_shrink": [True, True, False],
+            "safe_mode": [True, True, False],
+            "lt_filter": [True, True, False],
+            "turnover_n": [1020.0, 2280.0, 3892.5],
+        }
+    )
+
+    _, stats = run_b1_screen_with_stats(
+        {"ORDERNEW.SZ": frame},
+        pick_date=pick_date,
+        config={"j_threshold": 20.0, "j_q_threshold": 0.5},
+    )
+
+    assert stats["fail_chg_cap"] == 1
+    assert stats["fail_v_shrink"] == 0
+    assert stats["fail_safe_mode"] == 0
+    assert stats["fail_lt_filter"] == 0
+
+
 def test_run_b1_screen_uses_expanding_history_quantile_per_symbol() -> None:
     pick_date = pd.Timestamp("2026-04-04")
     frame = pd.DataFrame(
@@ -640,6 +787,16 @@ def test_run_b1_screen_uses_expanding_history_quantile_per_symbol() -> None:
             "zxdkx": [9.8, 9.9, 10.0, 10.2],
             "weekly_ma_bull": [True, True, True, True],
             "max_vol_not_bearish": [True, True, True, True],
+            "chg_d": [0.5, 0.6, 0.7, 0.8],
+            "amp_d": [2.0, 2.1, 2.2, 2.3],
+            "body_d": [-1.0, -1.0, -1.0, -1.0],
+            "vm3": [100.0, 105.0, 110.0, 90.0],
+            "vm5": [100.0, 105.0, 110.0, 100.0],
+            "vm10": [100.0, 105.0, 110.0, 120.0],
+            "m5": [10.0, 10.1, 10.2, 10.3],
+            "v_shrink": [True, True, True, True],
+            "safe_mode": [True, True, True, True],
+            "lt_filter": [True, True, True, True],
             "turnover_n": [1000.0, 2000.0, 3000.0, 4000.0],
         }
     )
