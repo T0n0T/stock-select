@@ -1007,6 +1007,10 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
             f"fail_weekly_ma={stats['fail_weekly_ma']} "
             f"fail_max_vol={stats['fail_max_vol']} "
+            f"fail_chg_cap={stats['fail_chg_cap']} "
+            f"fail_v_shrink={stats['fail_v_shrink']} "
+            f"fail_safe_mode={stats['fail_safe_mode']} "
+            f"fail_lt_filter={stats['fail_lt_filter']} "
             f"selected={stats['selected']}",
         )
         return

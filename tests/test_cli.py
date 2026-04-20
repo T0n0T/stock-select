@@ -32,6 +32,26 @@ def _dribull_wave_stats(*, total_symbols: int, eligible: int, selected: int) -> 
     }
 
 
+def _b1_screen_stats(*, total_symbols: int, eligible: int, selected: int, **overrides: int) -> dict[str, int]:
+    stats = {
+        "total_symbols": total_symbols,
+        "eligible": eligible,
+        "fail_j": 0,
+        "fail_insufficient_history": 0,
+        "fail_close_zxdkx": 0,
+        "fail_zxdq_zxdkx": 0,
+        "fail_weekly_ma": 0,
+        "fail_max_vol": 0,
+        "fail_chg_cap": 0,
+        "fail_v_shrink": 0,
+        "fail_safe_mode": 0,
+        "fail_lt_filter": 0,
+        "selected": selected,
+    }
+    stats.update(overrides)
+    return stats
+
+
 def _eod_key(pick_date: str, method: str = "b1") -> str:
     return f"{pick_date}.{method}"
 
@@ -438,6 +458,16 @@ def test_screen_custom_pool_rejects_missing_configuration_with_guidance(
                     "zxdkx": [10.0],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [100.0],
                 }
             )
@@ -515,6 +545,16 @@ def test_screen_custom_pool_rejects_empty_code_list(
                     "zxdkx": [10.0],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [100.0],
                 }
             )
@@ -641,6 +681,16 @@ def test_screen_writes_candidate_file(tmp_path: Path) -> None:
                     "zxdkx": [10.2],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [1030.0],
                 }
             )
@@ -3730,6 +3780,16 @@ def test_screen_writes_candidate_records_from_market_data(monkeypatch, tmp_path:
                     "zxdkx": [10.0, 10.2],
                     "weekly_ma_bull": [True, True],
                     "max_vol_not_bearish": [True, True],
+                    "chg_d": [1.0, 1.0],
+                    "amp_d": [2.0, 2.0],
+                    "body_d": [-1.0, -1.0],
+                    "vm3": [90.0, 90.0],
+                    "vm5": [100.0, 100.0],
+                    "vm10": [120.0, 120.0],
+                    "m5": [10.2, 10.5],
+                    "v_shrink": [True, True],
+                    "safe_mode": [True, True],
+                    "lt_filter": [True, True],
                     "turnover_n": [1020.0, 2280.0],
                 }
             ),
@@ -3742,6 +3802,16 @@ def test_screen_writes_candidate_records_from_market_data(monkeypatch, tmp_path:
                     "zxdkx": [9.4],
                     "weekly_ma_bull": [False],
                     "max_vol_not_bearish": [False],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [9.2],
+                    "v_shrink": [False],
+                    "safe_mode": [False],
+                    "lt_filter": [False],
                     "turnover_n": [760.0],
                 }
             ),
@@ -3818,6 +3888,16 @@ def test_screen_uses_env_dsn_when_option_missing(monkeypatch, tmp_path: Path) ->
                     "zxdkx": [10.2],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [1030.0],
                 }
             )
@@ -3884,6 +3964,16 @@ def test_screen_uses_dotenv_dsn_when_option_and_env_missing(monkeypatch, tmp_pat
                     "zxdkx": [10.2],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [1030.0],
                 }
             )
@@ -3951,6 +4041,16 @@ def test_screen_option_dsn_overrides_dotenv(monkeypatch, tmp_path: Path) -> None
                     "zxdkx": [10.2],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [1030.0],
                 }
             )
@@ -4017,6 +4117,16 @@ def test_screen_can_disable_progress_output(tmp_path: Path) -> None:
                     "zxdkx": [10.2],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [1030.0],
                 }
             )
@@ -4097,17 +4207,21 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
             [{"code": "000001.SZ", "pick_date": "2026-04-01", "close": 10.6, "turnover_n": 1030.0}],
-            {
-                "total_symbols": 10,
-                "eligible": 8,
-                "fail_j": 2,
-                "fail_insufficient_history": 3,
-                "fail_close_zxdkx": 1,
-                "fail_zxdq_zxdkx": 2,
-                "fail_weekly_ma": 1,
-                "fail_max_vol": 1,
-                "selected": 1,
-            },
+            _b1_screen_stats(
+                total_symbols=10,
+                eligible=8,
+                selected=1,
+                fail_j=2,
+                fail_insufficient_history=3,
+                fail_close_zxdkx=1,
+                fail_zxdq_zxdkx=2,
+                fail_weekly_ma=1,
+                fail_max_vol=1,
+                fail_chg_cap=4,
+                fail_v_shrink=5,
+                fail_safe_mode=6,
+                fail_lt_filter=7,
+            ),
         )
 
     def fake_build_top_turnover_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
@@ -4139,8 +4253,8 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert (
         "[screen] breakdown total_symbols=10 eligible=8 fail_j=2 fail_insufficient_history=3 "
-        "fail_close_zxdkx=1 "
-        "fail_zxdq_zxdkx=2 fail_weekly_ma=1 fail_max_vol=1 selected=1"
+        "fail_close_zxdkx=1 fail_zxdq_zxdkx=2 fail_weekly_ma=1 fail_max_vol=1 "
+        "fail_chg_cap=4 fail_v_shrink=5 fail_safe_mode=6 fail_lt_filter=7 selected=1"
     ) in result.stderr
 
 
@@ -4417,17 +4531,7 @@ def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) ->
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     original_connect = cli._connect
@@ -5318,17 +5422,7 @@ def test_screen_record_watch_uses_latest_effective_rows_per_symbol(
                 {"code": "AAA.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0},
                 {"code": "CCC.SZ", "pick_date": "2026-04-04", "close": 20.2, "turnover_n": 200.0},
             ],
-            {
-                "total_symbols": 2,
-                "eligible": 2,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 2,
-            },
+            _b1_screen_stats(total_symbols=2, eligible=2, selected=2),
         )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
@@ -5428,17 +5522,7 @@ def test_screen_custom_pool_uses_whitespace_separated_file_codes(
                 {"code": "300058.SZ", "pick_date": "2026-04-04", "close": 20.2, "turnover_n": 200.0},
                 {"code": "603138.SH", "pick_date": "2026-04-04", "close": 30.2, "turnover_n": 300.0},
             ],
-            {
-                "total_symbols": 3,
-                "eligible": 3,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 3,
-            },
+            _b1_screen_stats(total_symbols=3, eligible=3, selected=3),
         )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
@@ -5538,17 +5622,7 @@ def test_screen_custom_pool_uses_env_file_when_pool_file_not_passed(
         "run_b1_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "300058.SZ", "pick_date": "2026-04-04", "close": 20.2, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
         if list(prepared_by_symbol) == ["300058.SZ"]
         else pytest.fail("custom env pool should screen only env-provided symbols"),
@@ -5584,9 +5658,7 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    default_pool_file = Path.home() / ".agents" / "skills" / "stock-select" / "runtime" / "custom-pool.txt"
-    default_pool_file.parent.mkdir(parents=True, exist_ok=True)
-    original_content = default_pool_file.read_text(encoding="utf-8") if default_pool_file.exists() else None
+    default_pool_file = tmp_path / "default-custom-pool.txt"
     default_pool_file.write_text("603138", encoding="utf-8")
 
     def fake_connect(_: str) -> object:
@@ -5642,50 +5714,35 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "_default_custom_pool_path", lambda: default_pool_file)
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "603138.SH", "pick_date": "2026-04-04", "close": 30.2, "turnover_n": 300.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
         if list(prepared_by_symbol) == ["603138.SH"]
         else pytest.fail("default custom pool should screen only default-file symbols"),
     )
     monkeypatch.delenv("STOCK_SELECT_POOL_FILE", raising=False)
 
-    try:
-        result = runner.invoke(
-            app,
-            [
-                "screen",
-                "--method",
-                "b1",
-                "--pick-date",
-                "2026-04-04",
-                "--pool-source",
-                "custom",
-                "--runtime-root",
-                str(runtime_root),
-                "--dsn",
-                "postgresql://example",
-            ],
-        )
-    finally:
-        if original_content is None:
-            default_pool_file.unlink(missing_ok=True)
-        else:
-            default_pool_file.write_text(original_content, encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-04",
+            "--pool-source",
+            "custom",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
 
     assert result.exit_code == 0
     payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-04')}.json").read_text(encoding="utf-8"))
@@ -5794,17 +5851,7 @@ def test_screen_custom_pool_does_not_reuse_artifacts_from_different_pool_file(
         "run_b1_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "300058.SZ", "pick_date": "2026-04-04", "close": 20.2, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
         if list(prepared_by_symbol) == ["300058.SZ"]
         else pytest.fail("custom pool should recompute for a different pool file"),
@@ -5898,17 +5945,11 @@ def test_screen_custom_pool_extracts_numeric_codes_from_prefixed_lines(
                 {"code": code, "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}
                 for code in prepared_by_symbol
             ],
-            {
-                "total_symbols": len(prepared_by_symbol),
-                "eligible": len(prepared_by_symbol),
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": len(prepared_by_symbol),
-            },
+            _b1_screen_stats(
+                total_symbols=len(prepared_by_symbol),
+                eligible=len(prepared_by_symbol),
+                selected=len(prepared_by_symbol),
+            ),
         )
         if list(prepared_by_symbol) == ["603876.SH", "002008.SZ", "002703.SZ"]
         else pytest.fail("custom pool should extract numeric codes from prefixed lines only"),
@@ -5978,6 +6019,16 @@ def test_screen_record_watch_rejects_missing_watch_pool_csv(
                     "zxdkx": [10.0],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [100.0],
                 }
             )
@@ -6061,6 +6112,16 @@ def test_screen_record_watch_rejects_empty_effective_pool_after_intersection(
                     "zxdkx": [10.0],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [100.0],
                 }
             )
@@ -6345,17 +6406,7 @@ def test_screen_record_watch_bypasses_existing_candidate_and_prepared_reuse(
         assert list(prepared_by_symbol) == ["NEW.SZ"]
         return (
             [{"code": "NEW.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
@@ -6487,17 +6538,7 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
         assert list(prepared_by_symbol) == ["NEW.SZ"]
         return (
             [{"code": "NEW.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
@@ -7087,17 +7128,7 @@ def test_screen_ignores_existing_empty_candidate_file_and_recomputes(tmp_path: P
     ) -> tuple[list[dict], dict[str, int]]:
         return (
             [{"code": "AAA.SZ", "pick_date": "2026-04-01", "close": 10.6, "turnover_n": 100.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     original_connect = cli._connect
@@ -7182,17 +7213,7 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
         assert list(prepared_subset) == ["BBB.SZ"]
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     cli._connect = fail_connect  # type: ignore[assignment]
@@ -7394,17 +7415,7 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
     ) -> tuple[list[dict], dict[str, int]]:
         return (
             [{"code": "NEW.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     original_connect = cli._connect
@@ -8083,17 +8094,7 @@ def test_screen_intraday_reuses_shared_prepared_cache_without_recompute(monkeypa
         "run_b1_screen_with_stats",
         lambda prepared_subset, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 11.6, "turnover_n": 200.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         ),
     )
 
@@ -8284,17 +8285,7 @@ def test_screen_intraday_record_watch_uses_watch_pool_subset(monkeypatch, tmp_pa
         "run_b1_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 12.34, "turnover_n": 120.0}],
-            {
-                "total_symbols": 1,
-                "eligible": 1,
-                "fail_j": 0,
-                "fail_insufficient_history": 0,
-                "fail_close_zxdkx": 0,
-                "fail_zxdq_zxdkx": 0,
-                "fail_weekly_ma": 0,
-                "fail_max_vol": 0,
-                "selected": 1,
-            },
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
         if list(prepared_by_symbol) == ["000001.SZ"]
         else pytest.fail("intraday record-watch should screen only the watch-pool subset"),
