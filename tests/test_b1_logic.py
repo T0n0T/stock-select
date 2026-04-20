@@ -472,6 +472,10 @@ def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> Non
         zxdkx: float = 10.4,
         weekly_ma_bull: bool = True,
         max_vol_not_bearish_value: bool = True,
+        chg_d: float = 1.0,
+        v_shrink: bool = True,
+        safe_mode: bool = True,
+        lt_filter: bool = True,
     ) -> pd.DataFrame:
         return pd.DataFrame(
             {
@@ -486,6 +490,16 @@ def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> Non
                 "zxdkx": [10.0, 10.2, zxdkx],
                 "weekly_ma_bull": [True, True, weekly_ma_bull],
                 "max_vol_not_bearish": [True, True, max_vol_not_bearish_value],
+                "chg_d": [0.5, 0.6, chg_d],
+                "amp_d": [2.0, 2.1, 2.2],
+                "body_d": [-1.0, -1.0, -1.0],
+                "vm3": [100.0, 110.0, 90.0],
+                "vm5": [100.0, 110.0, 105.0],
+                "vm10": [100.0, 110.0, 120.0],
+                "m5": [10.2, 10.4, 10.6],
+                "v_shrink": [True, True, v_shrink],
+                "safe_mode": [True, True, safe_mode],
+                "lt_filter": [True, True, lt_filter],
                 "turnover_n": [1020.0, 2280.0, 3892.5],
             }
         )
@@ -498,6 +512,10 @@ def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> Non
             "FAILZXDQ.SZ": make_frame(zxdq=10.1),
             "FAILWEEKLY.SZ": make_frame(weekly_ma_bull=False),
             "FAILMAXVOL.SZ": make_frame(max_vol_not_bearish_value=False),
+            "FAILCHG.SZ": make_frame(chg_d=5.2),
+            "FAILSHRINK.SZ": make_frame(v_shrink=False),
+            "FAILSAFE.SZ": make_frame(safe_mode=False),
+            "FAILLT.SZ": make_frame(lt_filter=False),
             "MISSING.SZ": make_frame().iloc[[0, 1]].copy(),
         },
         pick_date=pick_date,
@@ -506,16 +524,62 @@ def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> Non
 
     assert [candidate["code"] for candidate in candidates] == ["PASS.SZ"]
     assert stats == {
-        "total_symbols": 7,
-        "eligible": 6,
+        "total_symbols": 11,
+        "eligible": 10,
         "fail_j": 1,
         "fail_insufficient_history": 0,
         "fail_close_zxdkx": 1,
         "fail_zxdq_zxdkx": 1,
         "fail_weekly_ma": 1,
         "fail_max_vol": 1,
+        "fail_chg_cap": 1,
+        "fail_v_shrink": 1,
+        "fail_safe_mode": 1,
+        "fail_lt_filter": 1,
         "selected": 1,
     }
+
+
+def test_run_b1_screen_with_stats_keeps_legacy_order_before_new_filters() -> None:
+    pick_date = pd.Timestamp("2026-04-03")
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"]),
+            "open": [10.0, 10.2, 10.5],
+            "close": [10.4, 10.8, 11.0],
+            "high": [10.5, 10.9, 11.1],
+            "low": [9.9, 10.1, 10.4],
+            "volume": [100.0, 120.0, 150.0],
+            "J": [12.0, 11.0, 10.0],
+            "zxdq": [10.2, 10.5, 10.8],
+            "zxdkx": [10.0, 10.2, 10.4],
+            "weekly_ma_bull": [True, True, False],
+            "max_vol_not_bearish": [True, True, True],
+            "chg_d": [0.5, 0.6, 5.5],
+            "amp_d": [2.0, 2.0, 2.0],
+            "body_d": [-1.0, -1.0, -1.0],
+            "vm3": [90.0, 90.0, 150.0],
+            "vm5": [95.0, 95.0, 120.0],
+            "vm10": [100.0, 100.0, 110.0],
+            "m5": [10.2, 10.4, 10.6],
+            "v_shrink": [True, True, False],
+            "safe_mode": [True, True, False],
+            "lt_filter": [True, True, False],
+            "turnover_n": [1020.0, 2280.0, 3892.5],
+        }
+    )
+
+    _, stats = run_b1_screen_with_stats(
+        {"ORDER.SZ": frame},
+        pick_date=pick_date,
+        config={"j_threshold": 20.0, "j_q_threshold": 0.5},
+    )
+
+    assert stats["fail_weekly_ma"] == 1
+    assert stats["fail_chg_cap"] == 0
+    assert stats["fail_v_shrink"] == 0
+    assert stats["fail_safe_mode"] == 0
+    assert stats["fail_lt_filter"] == 0
 
 
 def test_run_b1_screen_with_stats_counts_missing_zxdkx_as_insufficient_history() -> None:
@@ -553,6 +617,10 @@ def test_run_b1_screen_with_stats_counts_missing_zxdkx_as_insufficient_history()
         "fail_zxdq_zxdkx": 0,
         "fail_weekly_ma": 0,
         "fail_max_vol": 0,
+        "fail_chg_cap": 0,
+        "fail_v_shrink": 0,
+        "fail_safe_mode": 0,
+        "fail_lt_filter": 0,
         "selected": 0,
     }
 

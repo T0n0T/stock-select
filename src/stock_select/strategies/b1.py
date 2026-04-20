@@ -249,6 +249,10 @@ def run_b1_screen_with_stats(
         "fail_zxdq_zxdkx": 0,
         "fail_weekly_ma": 0,
         "fail_max_vol": 0,
+        "fail_chg_cap": 0,
+        "fail_v_shrink": 0,
+        "fail_safe_mode": 0,
+        "fail_lt_filter": 0,
         "selected": 0,
     }
 
@@ -286,6 +290,18 @@ def run_b1_screen_with_stats(
             continue
         if not bool(row["max_vol_not_bearish"]):
             stats["fail_max_vol"] += 1
+            continue
+        if not (float(row["chg_d"]) <= 4.0):
+            stats["fail_chg_cap"] += 1
+            continue
+        if not bool(row["v_shrink"]):
+            stats["fail_v_shrink"] += 1
+            continue
+        if not bool(row["safe_mode"]):
+            stats["fail_safe_mode"] += 1
+            continue
+        if not bool(row["lt_filter"]):
+            stats["fail_lt_filter"] += 1
             continue
 
         results.append(
