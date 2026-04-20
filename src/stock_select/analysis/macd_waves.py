@@ -6,6 +6,8 @@ import pandas as pd
 
 from stock_select.indicators import compute_macd
 
+_WEEKLY_CHURN_LOOKBACK_DAYS = 182
+
 
 @dataclass(frozen=True)
 class MacdWaveClassification:
@@ -22,14 +24,28 @@ def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCl
     hist = macd["macd_hist"].reset_index(drop=True)
     dif = macd["dif"].reset_index(drop=True)
     dea = macd["dea"].reset_index(drop=True)
+    recent_weekly = pd.DataFrame(
+        {
+            "trade_date": weekly_close.index,
+            "hist": hist.to_numpy(),
+            "dif": dif.to_numpy(),
+            "dea": dea.to_numpy(),
+        }
+    )
+    recent_cutoff = pd.Timestamp(pick_date) - pd.Timedelta(days=_WEEKLY_CHURN_LOOKBACK_DAYS)
+    recent_weekly = recent_weekly.loc[recent_weekly["trade_date"] >= recent_cutoff].reset_index(drop=True)
+    recent_hist = recent_weekly["hist"].reset_index(drop=True)
+    recent_dif = recent_weekly["dif"].reset_index(drop=True)
+    recent_dea = recent_weekly["dea"].reset_index(drop=True)
 
-    if len(hist) < 8 or _is_churn(hist):
+    if len(hist) < 8 or _is_churn(recent_hist):
         return MacdWaveClassification("invalid", False, "weekly MACD churn", {"periods": len(hist)})
 
     bullish = bool(dif.iloc[-1] > dea.iloc[-1])
     latest_hist = float(hist.iloc[-1])
     previous_hist = float(hist.iloc[-2])
     had_pullback = bool((hist < 0).any())
+    recent_underwater_pair = bool(((recent_dif < 0) & (recent_dea < 0)).any())
     fading_bullish_impulse = bool(
         len(weekly_close) >= 3
         and latest_hist > 0.0
@@ -40,7 +56,7 @@ def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCl
 
     if bullish and fading_bullish_impulse:
         return MacdWaveClassification("wave2", False, "weekly pullback after prior advance", {})
-    if bullish and latest_hist > 0.0 and previous_hist > 0.0 and had_pullback:
+    if bullish and latest_hist > 0.0 and previous_hist > 0.0 and had_pullback and recent_underwater_pair:
         return MacdWaveClassification("wave3", True, "weekly second bullish advance after pullback", {})
     if bullish and latest_hist > 0.0:
         return MacdWaveClassification("wave1", True, "weekly first bullish advance after golden cross", {})

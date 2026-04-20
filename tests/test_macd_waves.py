@@ -11,6 +11,11 @@ def _frame_with_close(close: list[float], *, start: str = "2026-01-05") -> pd.Da
     return pd.DataFrame({"trade_date": dates, "close": close})
 
 
+def _frame_from_weekly_close(weekly_close: list[float], *, start: str = "2025-01-03") -> pd.DataFrame:
+    dates = pd.date_range(start=start, periods=len(weekly_close), freq="W-FRI")
+    return pd.DataFrame({"trade_date": dates, "close": weekly_close})
+
+
 def test_classify_weekly_macd_wave_returns_wave1_for_first_constructive_advance() -> None:
     frame = _frame_with_close(
         [10.0] * 40
@@ -89,3 +94,25 @@ def test_classify_weekly_macd_wave_returns_invalid_for_churn() -> None:
     result = classify_weekly_macd_wave(frame, pick_date="2026-04-10")
 
     assert result.label == "invalid"
+
+
+def test_classify_weekly_macd_wave_ignores_churn_outside_recent_six_month_window() -> None:
+    frame = _frame_from_weekly_close(
+        [10.0, 12.0, 9.0, 11.0, 8.0, 10.0, 12.0, 9.0, 11.0, 8.0, 10.0, 12.0, 9.0, 11.0]
+        + [11.2, 11.4, 11.6, 11.8, 12.0, 12.2, 12.5, 12.8, 13.1, 13.4, 13.8, 14.2, 14.6, 15.0, 15.5, 16.0, 16.6, 17.2, 17.9, 18.6, 19.4, 20.2, 21.1, 22.0, 23.0, 24.0]
+    )
+
+    result = classify_weekly_macd_wave(frame, pick_date=str(frame["trade_date"].iloc[-1].date()))
+
+    assert result.label == "wave1"
+
+
+def test_classify_weekly_macd_wave_defaults_to_wave1_when_recent_window_has_no_underwater_cross() -> None:
+    frame = _frame_with_close(
+        [10.0] * 40
+        + [10.1, 10.2, 10.3, 10.4, 10.6, 10.8, 11.0, 11.3, 11.7, 12.1, 12.6, 13.2]
+    )
+
+    result = classify_weekly_macd_wave(frame, pick_date="2026-03-31")
+
+    assert result.label == "wave1"
