@@ -198,9 +198,10 @@ SZ002703 浙江世宝
 
 ## B1 筛选说明
 
-当前 B1 初筛按以下顺序逐条过滤：
+当前 B1 初筛的谓词过滤按以下顺序逐条执行。
 
-0. 先按目标日 `turnover_n` 构建流动性池，只保留成交额排名前 `5000` 的股票
+若使用默认 `--pool-source turnover-top`，在进入这些条件前会先按目标日 `turnover_n` 构建流动性池，只保留成交额排名前 `5000` 的股票。
+
 1. `J < 15` 或 `J <= 截至当日历史 J 的 10% expanding 分位`
 2. `zxdkx` 历史是否足够，目标日是否可计算
 3. `close > zxdkx`
@@ -222,8 +223,8 @@ SZ002703 浙江世宝
 
 - `fail_chg_cap`: 当日涨幅超过 4%
 - `fail_v_shrink`: 近 3 日均量未低于近 10 日均量
-- `fail_safe_mode`: 近期出现放量派发后仍处于危险冷却区
-- `fail_lt_filter`: 长趋势方向近 30 日翻向次数过多，且不满足 waiver
+- `fail_safe_mode`: 近期出现放量派发后，仍处于危险冷却区，或虽进入受控修复窗口但未满足 `shape_ok` / `cg_ok` 检查
+- `fail_lt_filter`: 长趋势方向近 30 日翻向次数过多，且不满足近期上穿或强偏离的例外条件
 
 ### 关于 `fail_insufficient_history`
 
