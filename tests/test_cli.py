@@ -2816,6 +2816,16 @@ def test_run_writes_final_summary(tmp_path: Path) -> None:
                     "zxdkx": [10.2],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [10.4],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [1030.0],
                 }
             )
@@ -5658,7 +5668,9 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    default_pool_file = tmp_path / "default-custom-pool.txt"
+    default_pool_file = Path.home() / ".agents" / "skills" / "stock-select" / "runtime" / "custom-pool.txt"
+    default_pool_file.parent.mkdir(parents=True, exist_ok=True)
+    original_content = default_pool_file.read_text(encoding="utf-8") if default_pool_file.exists() else None
     default_pool_file.write_text("603138", encoding="utf-8")
 
     def fake_connect(_: str) -> object:
@@ -5694,6 +5706,16 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
                     "zxdkx": [30.0],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [30.0],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [300.0],
                 }
             ),
@@ -5706,6 +5728,16 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
                     "zxdkx": [20.0],
                     "weekly_ma_bull": [True],
                     "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "amp_d": [2.0],
+                    "body_d": [-1.0],
+                    "vm3": [90.0],
+                    "vm5": [100.0],
+                    "vm10": [120.0],
+                    "m5": [20.0],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
                     "turnover_n": [200.0],
                 }
             ),
@@ -5714,7 +5746,6 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
-    monkeypatch.setattr(cli, "_default_custom_pool_path", lambda: default_pool_file)
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
@@ -5727,22 +5758,28 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
     )
     monkeypatch.delenv("STOCK_SELECT_POOL_FILE", raising=False)
 
-    result = runner.invoke(
-        app,
-        [
-            "screen",
-            "--method",
-            "b1",
-            "--pick-date",
-            "2026-04-04",
-            "--pool-source",
-            "custom",
-            "--runtime-root",
-            str(runtime_root),
-            "--dsn",
-            "postgresql://example",
-        ],
-    )
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b1",
+                "--pick-date",
+                "2026-04-04",
+                "--pool-source",
+                "custom",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        if original_content is None:
+            default_pool_file.unlink(missing_ok=True)
+        else:
+            default_pool_file.write_text(original_content, encoding="utf-8")
 
     assert result.exit_code == 0
     payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-04')}.json").read_text(encoding="utf-8"))
