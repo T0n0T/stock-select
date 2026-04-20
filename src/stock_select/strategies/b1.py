@@ -154,7 +154,13 @@ def compute_b1_tightening_columns(df: pd.DataFrame) -> pd.DataFrame:
     cg_ok = ((close > m5) | (m5 >= m5.shift(1)) | (((close - m5).abs() / m5) * 100.0 < 1.5)).fillna(False)
     safe_mode = ((dump_day >= cool_off) & (~in_rev | (shape_ok & cg_ok))).fillna(False)
 
-    st_t1, lt_t1 = compute_zx_lines(df)
+    st_t1 = close.ewm(span=10, adjust=False).mean().ewm(span=10, adjust=False).mean()
+    lt_t1 = (
+        close.rolling(window=14, min_periods=1).mean()
+        + close.rolling(window=28, min_periods=1).mean()
+        + close.rolling(window=57, min_periods=1).mean()
+        + close.rolling(window=114, min_periods=1).mean()
+    ) / 4.0
     cross_up = (st_t1 > lt_t1) & (st_t1.shift(1) <= lt_t1.shift(1))
     c_days = _barslast(cross_up.fillna(False))
     waiver = (((c_days >= 0.0) & (c_days <= 30.0) & (st_t1 > lt_t1)) | (st_t1 > lt_t1 * 1.03)).fillna(False)
