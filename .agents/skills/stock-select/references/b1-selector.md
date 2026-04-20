@@ -9,6 +9,10 @@ Required conditions:
 - `zxdq > zxdkx`.
 - Weekly moving averages are in bullish alignment.
 - The max-volume day inside the lookback window is not bearish.
+- `chg_d <= 4.0`.
+- `v_shrink`.
+- `safe_mode`.
+- `lt_filter`.
 
 Supporting calculations to preserve:
 

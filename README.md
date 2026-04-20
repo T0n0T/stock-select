@@ -206,14 +206,24 @@ SZ002703 浙江世宝
 3. `close > zxdkx`
 4. `zxdq > zxdkx`
 5. `weekly_ma_bull`
-   - 使用周线 `10/20/30` 均线多头排列
-   - 周线收盘价按 ISO 周内最后一个实际交易日计算
 6. `max_vol_not_bearish`
+7. `chg_d <= 4.0`
+8. `v_shrink`
+9. `safe_mode`
+10. `lt_filter`
 
 其中：
 
 - `turnover_n` 使用 `43` 日滚动成交额，公式为 `((open + close) / 2) * volume` 的滚动求和
 - `zxdq/zxdkx` 参数与参考仓库当前 B1 运行口径一致，分别基于 `14/28/57/114`
+- `weekly_ma_bull` 使用周线 `10/20/30` 均线多头排列，周线收盘价按 ISO 周内最后一个实际交易日计算
+
+新增失败计数含义：
+
+- `fail_chg_cap`: 当日涨幅超过 4%
+- `fail_v_shrink`: 近 3 日均量未低于近 10 日均量
+- `fail_safe_mode`: 近期出现放量派发后仍处于危险冷却区
+- `fail_lt_filter`: 长趋势方向近 30 日翻向次数过多，且不满足 waiver
 
 ### 关于 `fail_insufficient_history`
 
