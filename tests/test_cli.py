@@ -4309,6 +4309,45 @@ def test_prepared_cache_path_uses_shared_intraday_file_for_b1_and_b2(tmp_path: P
     )
 
 
+def test_prepare_screen_data_adds_b1_tightening_columns() -> None:
+    importlib.reload(cli)
+
+    trade_dates = pd.date_range("2025-10-01", periods=130, freq="B")
+    close = [10.0 + idx * 0.05 for idx in range(len(trade_dates))]
+    market = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"] * len(trade_dates),
+            "trade_date": trade_dates,
+            "open": [value - 0.08 for value in close],
+            "high": [value + 0.15 for value in close],
+            "low": [value - 0.20 for value in close],
+            "close": close,
+            "vol": [1000.0] * 127 + [900.0, 850.0, 800.0],
+        }
+    )
+
+    prepared = cli._prepare_screen_data(market)
+
+    frame = prepared["000001.SZ"]
+    row = frame.iloc[-1]
+    assert {
+        "chg_d",
+        "amp_d",
+        "body_d",
+        "vm3",
+        "vm5",
+        "vm10",
+        "m5",
+        "v_shrink",
+        "safe_mode",
+        "lt_filter",
+    }.issubset(frame.columns)
+    assert round(float(row["chg_d"]), 4) == round((close[-1] - close[-2]) / close[-2] * 100.0, 4)
+    assert bool(row["v_shrink"]) is True
+    assert bool(row["safe_mode"]) is True
+    assert bool(row["lt_filter"]) is True
+
+
 def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"

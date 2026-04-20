@@ -22,6 +22,7 @@ from stock_select.strategies import (
     DEFAULT_TURNOVER_WINDOW,
     DEFAULT_WEEKLY_MA_PERIODS,
     build_top_turnover_pool,
+    compute_b1_tightening_columns,
     compute_kdj,
     compute_macd,
     compute_turnover_n,
@@ -712,6 +713,8 @@ def _prepare_screen_data(
         group["dea_m"] = monthly_macd["dea"]
         group["weekly_ma_bull"] = compute_weekly_ma_bull(group, ma_periods=DEFAULT_WEEKLY_MA_PERIODS)
         group["max_vol_not_bearish"] = max_vol_not_bearish(group, lookback=DEFAULT_MAX_VOL_LOOKBACK)
+        tightening = compute_b1_tightening_columns(group)
+        group[list(tightening.columns)] = tightening
         prepared[code] = group
         if reporter and (idx == 1 or idx == total or idx % progress_every == 0):
             reporter.emit(

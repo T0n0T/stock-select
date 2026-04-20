@@ -125,6 +125,63 @@ def max_vol_not_bearish(df: pd.DataFrame, lookback: int) -> pd.Series:
     return pd.Series(out, index=df.index)
 
 
+def compute_b1_tightening_columns(df: pd.DataFrame) -> pd.DataFrame:
+    close = df["close"].astype(float)
+    open_ = df["open"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    volume = _resolve_volume_series(df)
+    ref_close = close.shift(1)
+
+    chg_d = (close - ref_close) / ref_close * 100.0
+    amp_d = (high - low) / ref_close * 100.0
+    body_d = (open_ - close) / ref_close * 100.0
+    vm3 = volume.rolling(window=3, min_periods=1).mean()
+    vm5 = volume.rolling(window=5, min_periods=1).mean()
+    vm10 = volume.rolling(window=10, min_periods=1).mean()
+    m5 = close.rolling(window=5, min_periods=1).mean()
+    v_shrink = (vm3 < vm10).fillna(False)
+
+    high_pos = ((high.rolling(window=20, min_periods=1).max() - low.rolling(window=20, min_periods=1).min()) /
+                low.rolling(window=20, min_periods=1).min() * 100.0) > 15.0
+    vol_big = (volume > vm5 * 1.3) | (volume > vm10 * 1.5)
+    bad_dump = (((body_d > 6.0) | (chg_d < -5.5)) & vol_big & high_pos).fillna(False)
+    dump_day = _barslast(bad_dump)
+    cool_off = pd.Series(5.0, index=df.index)
+    cool_off = cool_off.mask(bad_dump.rolling(window=10, min_periods=1).sum() >= 2, 10.0)
+    in_rev = (dump_day >= cool_off) & (dump_day <= 15.0)
+    shape_ok = ((amp_d <= 10.0) & (chg_d >= -4.0) & (chg_d <= 4.0)).fillna(False)
+    cg_ok = ((close > m5) | (m5 >= m5.shift(1)) | (((close - m5).abs() / m5) * 100.0 < 1.5)).fillna(False)
+    safe_mode = ((dump_day >= cool_off) & (~in_rev | (shape_ok & cg_ok))).fillna(False)
+
+    st_t1, lt_t1 = compute_zx_lines(df)
+    cross_up = (st_t1 > lt_t1) & (st_t1.shift(1) <= lt_t1.shift(1))
+    c_days = _barslast(cross_up.fillna(False))
+    waiver = (((c_days >= 0.0) & (c_days <= 30.0) & (st_t1 > lt_t1)) | (st_t1 > lt_t1 * 1.03)).fillna(False)
+
+    lt_dir = pd.Series(1.0, index=df.index)
+    mature = pd.Series(range(1, len(df) + 1), index=df.index, dtype=float) > 114.0
+    lt_dir.loc[mature] = (lt_t1.loc[mature] > lt_t1.shift(1).loc[mature]).map({True: 1.0, False: -1.0})
+    lt_flips = lt_dir.ne(lt_dir.shift(1)).fillna(False).rolling(window=30, min_periods=1).sum()
+    lt_filter = ((lt_flips <= 2.0) | waiver).fillna(False)
+
+    return pd.DataFrame(
+        {
+            "chg_d": chg_d,
+            "amp_d": amp_d,
+            "body_d": body_d,
+            "vm3": vm3,
+            "vm5": vm5,
+            "vm10": vm10,
+            "m5": m5,
+            "v_shrink": v_shrink,
+            "safe_mode": safe_mode,
+            "lt_filter": lt_filter,
+        },
+        index=df.index,
+    )
+
+
 def build_top_turnover_pool(
     prepared_by_symbol: Mapping[str, pd.DataFrame],
     *,
@@ -247,19 +304,36 @@ def _resolve_volume_series(df: pd.DataFrame) -> pd.Series:
     raise KeyError(msg)
 
 
+def _barslast(flags: pd.Series) -> pd.Series:
+    values = flags.fillna(False).astype(bool).tolist()
+    out: list[float] = []
+    last_true: int | None = None
+    default_distance = float(len(values) + 1)
+    for idx, value in enumerate(values):
+        if value:
+            last_true = idx
+            out.append(0.0)
+        elif last_true is None:
+            out.append(default_distance)
+        else:
+            out.append(float(idx - last_true))
+    return pd.Series(out, index=flags.index, dtype=float)
+
+
 __all__ = [
     "DEFAULT_B1_CONFIG",
     "DEFAULT_MAX_VOL_LOOKBACK",
     "DEFAULT_TOP_M",
     "DEFAULT_TURNOVER_WINDOW",
     "DEFAULT_WEEKLY_MA_PERIODS",
-        "build_top_turnover_pool",
-        "compute_expanding_j_quantile",
-        "compute_kdj",
-        "compute_macd",
-        "compute_turnover_n",
-        "compute_weekly_close",
-        "compute_weekly_ma_bull",
+    "build_top_turnover_pool",
+    "compute_b1_tightening_columns",
+    "compute_expanding_j_quantile",
+    "compute_kdj",
+    "compute_macd",
+    "compute_turnover_n",
+    "compute_weekly_close",
+    "compute_weekly_ma_bull",
     "compute_zx_lines",
     "max_vol_not_bearish",
     "run_b1_screen",

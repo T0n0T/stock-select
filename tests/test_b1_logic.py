@@ -1,12 +1,14 @@
 import pandas as pd
 
 import stock_select.strategies.b1 as strategy_b1
+from stock_select.strategies import compute_b1_tightening_columns as exported_compute_b1_tightening_columns
 from stock_select.strategies.b1 import (
     DEFAULT_MAX_VOL_LOOKBACK,
     DEFAULT_TOP_M,
     DEFAULT_TURNOVER_WINDOW,
     DEFAULT_WEEKLY_MA_PERIODS,
     build_top_turnover_pool,
+    compute_b1_tightening_columns,
     compute_expanding_j_quantile,
     compute_turnover_n,
     compute_weekly_close,
@@ -41,6 +43,7 @@ def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
         "DEFAULT_TURNOVER_WINDOW",
         "DEFAULT_WEEKLY_MA_PERIODS",
         "build_top_turnover_pool",
+        "compute_b1_tightening_columns",
         "compute_expanding_j_quantile",
         "compute_kdj",
         "compute_macd",
@@ -52,6 +55,7 @@ def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
         "run_b1_screen",
         "run_b1_screen_with_stats",
     }
+    assert exported_compute_b1_tightening_columns is compute_b1_tightening_columns
     assert strategy_run_b1_screen_with_stats is run_b1_screen_with_stats
     assert strategy_build_top_turnover_pool is build_top_turnover_pool
     assert strategy_compute_zx_lines is compute_zx_lines
