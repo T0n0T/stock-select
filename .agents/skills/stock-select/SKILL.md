@@ -10,7 +10,8 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 ## Required Workflow
 
 - Always require an explicit built-in method.
-- Built-in methods are `b1`, `b2`, and `hcr`.
+- Screening built-in methods are `b1`, `b2`, `dribull`, and `hcr`.
+- Review built-in methods are `b1`, `b2`, `dribull`, and `hcr`.
 - Pool sources are `turnover-top`, `record-watch`, and `custom`.
 - Do not use `stock-cache read` CLI as the primary data source.
 - Read PostgreSQL tables directly.
@@ -26,6 +27,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Use the bundled review rubric and runtime layout references.
 - Use method-specific chart-review prompts from this skill when dispatching subagents:
   - `b1` uses `references/prompt-b1.md`
+  - `dribull` uses `references/prompt-b2.md`
   - `hcr` uses `references/prompt.md`
   - `b2` uses `references/prompt-b2.md`
 - Review should use rendered chart images, not HTML text.
@@ -46,7 +48,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 End-of-day `--pick-date` runs use:
 
 - `runtime/candidates/<pick_date>.<method>.json`
-- `runtime/prepared/<pick_date>.pkl` for shared `b1` / `b2` base prepare
+- `runtime/prepared/<pick_date>.pkl` for shared `b1` / `dribull` base prepare
 - `runtime/prepared/<pick_date>.hcr.pkl` for `hcr`
 - `runtime/charts/<pick_date>.<method>/`
 - `runtime/reviews/<pick_date>.<method>/`
@@ -56,7 +58,7 @@ End-of-day `--pick-date` runs use:
 Intraday `--intraday` runs use:
 
 - `runtime/candidates/<run_id>.<method>.json`
-- `runtime/prepared/<trade_date>.intraday.pkl` for shared `b1` / `b2` base prepare
+- `runtime/prepared/<trade_date>.intraday.pkl` for shared `b1` / `dribull` base prepare
 - `runtime/prepared/<trade_date>.intraday.hcr.pkl` for `hcr`
 - `runtime/charts/<run_id>.<method>/`
 - `runtime/reviews/<run_id>.<method>/`
@@ -66,8 +68,10 @@ Review and merge instructions must follow the active mode's runtime key:
 - end-of-day mode: use `<pick_date>.<method>`
 - intraday mode: use the latest intraday `<run_id>.<method>` selected by the candidate artifact
 - prepared-cache lookup is different from candidate/review lookup:
-  - end-of-day `b1` / `b2`: `<pick_date>.pkl`
-  - intraday `b1` / `b2`: `<trade_date>.intraday.pkl`
+  - end-of-day `b1` / `dribull`: `<pick_date>.pkl`
+  - intraday `b1` / `dribull`: `<trade_date>.intraday.pkl`
+  - end-of-day `b2`: `<pick_date>.b2.pkl`
+  - intraday `b2`: `<trade_date>.intraday.b2.pkl`
   - `hcr`: keep method-specific prepared files
 
 ## Execution Order
@@ -75,7 +79,7 @@ Review and merge instructions must follow the active mode's runtime key:
 1. Resolve the active mode and CLI arguments.
 2. For end-of-day runs, resolve `pick_date` and query PostgreSQL market data needed for the requested screening method.
 3. For intraday runs, resolve the active trade date, fetch PostgreSQL confirmed history through the previous trade date, then overlay Tushare `rt_k`.
-4. Run deterministic `b1`, `b2`, or `hcr` screening and write candidate outputs.
+4. Run deterministic `b1`, `b2`, `dribull`, or `hcr` screening and write candidate outputs.
 5. Render daily chart PNG files for each candidate.
 6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
 7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` uses `references/prompt-b1.md`; `hcr` uses `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
@@ -94,6 +98,7 @@ When running chart review for quality-first selection:
 4. Keep the `llm review` dispatch stage capped at 6 concurrent subagents.
 5. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
    - `b1`: `references/prompt-b1.md`
+   - `dribull`: `references/prompt-b2.md`
    - `hcr`: `references/prompt.md`
    - `b2`: `references/prompt-b2.md`
 6. Send each subagent exactly one candidate at a time.
@@ -101,7 +106,7 @@ When running chart review for quality-first selection:
    - stock code
    - pick date
    - chart image path pointing to `<code>_day.png`
-   - the prompt from the method-specific prompt file (`references/prompt-b1.md` for `b1`, `references/prompt.md` for `hcr`, `references/prompt-b2.md` for `b2`)
+   - the prompt from the method-specific prompt file (`references/prompt-b1.md` for `b1`, `references/prompt-b2.md` for `b2` and `dribull`, `references/prompt.md` for `hcr`)
 8. Require the subagent to return strict JSON matching the prompt contract:
    - `trend_reasoning`
    - `position_reasoning`
@@ -172,14 +177,14 @@ If any of the checks above fail:
 ## Current Implementation
 
 - `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the requested method's derived fields locally, and writes `runtime/candidates/<pick_date>.<method>.json`.
-- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, and stores shared base prepare at `runtime/prepared/<trade_date>.intraday.pkl` for `b1` / `b2`.
+- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, stores shared base prepare at `runtime/prepared/<trade_date>.intraday.pkl` for `b1` / `dribull`, and stores method-specific prepare for `b2` / `hcr`.
 - `b1` keeps the low-`J`, `close > zxdkx`, `zxdq > zxdkx`, weekly bullish alignment, and non-bearish max-volume-day filters described in `references/b1-selector.md`.
-- `b2` keeps the same top-turnover prefilter and the same recent 15-trading-day `b1` low-`J` history hit, then uses a two-stage rule:
+- `b2` screening now follows the new主图信号口径 and emits deterministic `B2` / `B3` / `B3+` / `B4` / `B5` candidates from daily OHLCV + KDJ + trend context.
+- `dribull` keeps the former two-stage screening rule:
   - phase 1 keeps only structural conditions: current `zxdq > zxdkx`, `MA25` support validity, shrinking volume, upward `MA60`, and `MA144` distance within 30%
   - phase 2 classifies weekly and daily `MACD` waves and only accepts weekly `wave1` / `wave3` with daily `wave2_end` / `wave4_end`
-- `b1` and `b2` share the same base prepared frame shape for EOD and intraday reuse.
-- Prepared `b2` frames still require daily `ma25`, `ma60`, and `ma144`, but deterministic screening no longer requires legacy daily/weekly/monthly aligned `dif` / `dea` columns.
-- `b2` phase-two wave classification remains on-demand and is not written as a separate prepared cache.
+- `b1` and `dribull` share the same base prepared frame shape for EOD and intraday reuse.
+- `b2` screening uses method-specific prepared cache files and does not reuse the shared `b1` / `dribull` base cache.
 - `chart --pick-date` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
 - Daily chart PNGs include `zxdq`, `zxdkx`, and a separate `MACD` panel with `dif`, `dea`, and `macd_hist`.
 - `chart --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.
@@ -194,11 +199,13 @@ If any of the checks above fail:
   - `weekly_wave_context`
   - `daily_wave_context`
   - `wave_combo_context`
-- For `b2`, the baseline comment compresses the same weekly/daily wave interpretation used by deterministic screening, while keeping the final baseline schema stable.
+- For review namespace `b2`, the baseline comment compresses the same weekly/daily wave interpretation used by the legacy `b2` deterministic screening, while keeping the final baseline schema stable.
 - `b2` review task payloads add text-only deterministic context:
   - `weekly_wave_context`
   - `daily_wave_context`
   - `wave_combo_context`
+- `review --method dribull` reuses the existing `b2` reviewer and `references/prompt-b2.md`, but review artifacts keep the method key `dribull`.
+- `run --method b2` currently means: new `b2` screening + existing legacy `b2` review.
 - `screen --intraday --recompute` forces the shared same-trade-date prepared cache to be rewritten; without it, the command reuses the existing shared cache when compatible.
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
 - `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>.<method>/` for end-of-day or `runtime/reviews/<run_id>.<method>/` for intraday.
@@ -208,7 +215,7 @@ If any of the checks above fail:
 
 ## Future Upgrade Path
 
-- The intended end state is multimodal subagent chart review driven by the method-specific prompt files: `references/prompt-b1.md` for `b1`, `references/prompt.md` for `hcr`, and `references/prompt-b2.md` for `b2`.
+- The intended end state is multimodal subagent chart review driven by the method-specific prompt files: `references/prompt-b1.md` for `b1`, `references/prompt-b2.md` for `b2` and `dribull`, and `references/prompt.md` for `hcr`.
 - Keep the deterministic `screen` and `chart` stages unchanged and swap only the `review` stage orchestration.
 
 ## Bundled References

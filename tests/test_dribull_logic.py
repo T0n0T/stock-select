@@ -9,7 +9,6 @@ import stock_select.strategies as strategies
 
 def test_strategies_exports_dribull_support() -> None:
     assert "dribull" in strategies.SUPPORTED_METHODS
-    assert "b2" not in strategies.SUPPORTED_METHODS
     assert strategies.validate_method(" dribull ") == "dribull"
     assert hasattr(strategies, "run_dribull_screen_with_stats")
 

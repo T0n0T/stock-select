@@ -100,15 +100,34 @@ def test_screen_rejects_unknown_method() -> None:
     assert "dribull" in stderr
 
 
-def test_screen_rejects_b2_method_after_dribull_rename() -> None:
+def test_screen_accepts_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'b2')}.json"
 
-    result = runner.invoke(app, ["screen", "--method", "b2", "--pick-date", "2026-04-01"])
+    monkeypatch.setattr(
+        cli,
+        "_screen_impl",
+        lambda **kwargs: expected_path if kwargs["method"] == "b2" else None,
+    )
 
-    assert result.exit_code != 0
-    stderr = result.stderr.lower()
-    assert "supported methods:" in stderr
-    assert "dribull" in stderr
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(expected_path)
 
 
 def test_screen_accepts_whitespace_padded_dribull_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1682,6 +1701,97 @@ def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
     assert tasks["method"] == "dribull"
     assert summary["method"] == "dribull"
     assert "dribull" in tasks["tasks"][0]["wave_combo_context"]
+
+
+def test_run_b2_uses_new_b2_screen_and_existing_b2_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_path = runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json"
+    chart_dir = runtime_root / "charts" / _eod_key("2026-04-10", "b2")
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-10", "b2")
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    def fake_screen_impl(**kwargs):
+        assert kwargs["method"] == "b2"
+        candidate_path.write_text(
+            json.dumps(
+                {
+                    "pick_date": "2026-04-10",
+                    "method": "b2",
+                    "candidates": [{"code": "000001.SZ", "signal": "B2", "close": 10.65, "turnover_n": 1000.0}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return candidate_path
+
+    monkeypatch.setattr(cli, "_screen_impl", fake_screen_impl)
+    monkeypatch.setattr(cli, "_chart_impl", lambda **kwargs: chart_dir)
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol, symbol, symbol],
+                "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09", "2026-04-10"]),
+                "open": [10.0, 10.2, 10.4],
+                "high": [10.3, 10.6, 10.9],
+                "low": [9.9, 10.1, 10.3],
+                "close": [10.2, 10.5, 10.8],
+                "vol": [100.0, 120.0, 150.0],
+            }
+        ),
+    )
+
+    prompt_path = str(tmp_path / "prompt-b2-stub.md")
+    resolver_methods: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: resolver_methods.append(method)
+        or SimpleNamespace(
+            name="b2",
+            prompt_path=prompt_path,
+            review_history=lambda **kwargs: {
+                "review_type": "baseline",
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "resolver baseline",
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-10",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert resolver_methods == ["b2"]
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    assert tasks["method"] == "b2"
+    assert summary["method"] == "b2"
+    assert tasks["prompt_path"] == prompt_path
 
 
 def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

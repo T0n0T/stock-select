@@ -31,6 +31,7 @@ from stock_select.strategies import (
     prefilter_dribull_non_macd,
     run_b1_screen,
     run_b1_screen_with_stats,
+    run_b2_screen_with_stats,
     run_dribull_screen_with_stats,
     validate_method,
 )
@@ -1024,6 +1025,30 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"selected={stats['selected']}",
         )
         return
+    if method == "b2":
+        reporter.emit(
+            "screen",
+            "breakdown "
+            f"total_symbols={stats['total_symbols']} "
+            f"eligible={stats['eligible']} "
+            f"fail_insufficient_history={stats['fail_insufficient_history']} "
+            f"fail_pre_ok={stats['fail_pre_ok']} "
+            f"fail_pct={stats['fail_pct']} "
+            f"fail_volume={stats['fail_volume']} "
+            f"fail_k_shape={stats['fail_k_shape']} "
+            f"fail_j_up={stats['fail_j_up']} "
+            f"fail_tr_ok={stats['fail_tr_ok']} "
+            f"fail_above_lt={stats['fail_above_lt']} "
+            f"fail_duplicate_b2={stats['fail_duplicate_b2']} "
+            f"fail_no_signal={stats['fail_no_signal']} "
+            f"selected={stats['selected']} "
+            f"selected_b2={stats['selected_b2']} "
+            f"selected_b3={stats['selected_b3']} "
+            f"selected_b3_plus={stats['selected_b3_plus']} "
+            f"selected_b4={stats['selected_b4']} "
+            f"selected_b5={stats['selected_b5']}",
+        )
+        return
     reporter.emit(
         "screen",
         "breakdown "
@@ -1071,9 +1096,7 @@ def _screen_impl(
     prepared: dict[str, pd.DataFrame] | None = None
     screen_prepared: dict[str, pd.DataFrame] | None = None
     reused_base_prepared = False
-    if method == "b1":
-        start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    elif method == "dribull":
+    if method in {"b1", "b2", "dribull"}:
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     else:
         start_date = None
@@ -1150,7 +1173,7 @@ def _screen_impl(
                     f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
                 )
             _validate_eod_pick_date_has_market_data(connection, market=market, pick_date=pick_date)
-            if method in {"b1", "dribull"}:
+            if method in {"b1", "b2", "dribull"}:
                 prepared = _call_prepare_screen_data(market, reporter=reporter)
                 screen_prepared = prepared
             else:
@@ -1200,7 +1223,7 @@ def _screen_impl(
             )
         else:
             prepared = {}
-    if method in {"b1", "dribull"}:
+    if method in {"b1", "b2", "dribull"}:
         if prepared is None:
             prepared = {}
         if method == "dribull" and pool_source == "record-watch" and screen_prepared is not None:
@@ -1225,6 +1248,11 @@ def _screen_impl(
                 prepared_for_pick,
                 pd.Timestamp(pick_date),
                 DEFAULT_B1_CONFIG,
+            )
+        elif method == "b2":
+            candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(pick_date),
             )
         else:
             candidates, stats = run_dribull_screen_with_stats(
@@ -1325,7 +1353,7 @@ def _screen_intraday_impl(
             symbols=None,
         )
         overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
-        if method in {"b1", "dribull"}:
+        if method in {"b1", "b2", "dribull"}:
             prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
         else:
             prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
@@ -1347,7 +1375,7 @@ def _screen_intraday_impl(
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
-    if method in {"b1", "dribull"}:
+    if method in {"b1", "b2", "dribull"}:
         pool_codes = _resolve_pool_codes(
             pool_source=pool_source,
             runtime_root=runtime_root,
@@ -1367,6 +1395,11 @@ def _screen_intraday_impl(
                 prepared_for_pick,
                 pd.Timestamp(trade_date),
                 DEFAULT_B1_CONFIG,
+            )
+        elif method == "b2":
+            candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(trade_date),
             )
         else:
             candidates, stats = run_dribull_screen_with_stats(
