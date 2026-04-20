@@ -79,6 +79,7 @@ LLM_REVIEW_MAX_CONCURRENCY = 6
 DRIBULL_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
+SHARED_PREPARED_METHODS = frozenset({"b1", "b2", "dribull"})
 
 
 class IntradayUserError(ValueError):
@@ -207,7 +208,7 @@ def _candidate_path(runtime_root: Path, base_key: str, method: str) -> Path:
 
 
 def _prepared_cache_path(runtime_root: Path, base_key: str, method: str) -> Path:
-    if method in {"b1", "dribull"}:
+    if method in SHARED_PREPARED_METHODS:
         return runtime_root / "prepared" / f"{base_key}.pkl"
     return runtime_root / "prepared" / f"{_artifact_key(base_key, method)}.pkl"
 
@@ -370,7 +371,7 @@ def _load_intraday_prepared_cache(
     if metadata.get("mode") != "intraday_snapshot":
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     cached_method = metadata.get("method")
-    if isinstance(cached_method, str) and cached_method not in {method, "b1", "dribull"}:
+    if isinstance(cached_method, str) and cached_method not in {method, *SHARED_PREPARED_METHODS}:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     if payload.get("pick_date") != trade_date:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
@@ -933,7 +934,7 @@ def _resolve_shared_base_prepared_payload(
         base_key = f"{pick_date}.intraday"
     else:
         base_key = pick_date
-    cache_method = "b1" if method in {"b1", "dribull"} else method
+    cache_method = "b1" if method in SHARED_PREPARED_METHODS else method
     cache_path = _prepared_cache_path(runtime_root, base_key, cache_method)
     if not cache_path.exists():
         return cache_path, None

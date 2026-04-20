@@ -254,7 +254,7 @@ SZ002703 浙江世宝
 
 ```text
 candidates/<pick_date>.<method>.json
-prepared/<pick_date>.pkl                 # b1 / dribull 共享基础 prepare
+prepared/<pick_date>.pkl                 # b1 / b2 / dribull 共享基础 prepare
 prepared/<pick_date>.hcr.pkl             # hcr 独立 prepare
 charts/<pick_date>.<method>/<code>_day.png
 reviews/<pick_date>.<method>/llm_review_tasks.json
@@ -267,7 +267,7 @@ watch_pool.csv
 
 ```text
 candidates/<run_id>.<method>.json
-prepared/<trade_date>.intraday.pkl       # b1 / dribull 共享基础 prepare
+prepared/<trade_date>.intraday.pkl       # b1 / b2 / dribull 共享基础 prepare
 prepared/<trade_date>.intraday.hcr.pkl   # hcr 独立 prepare
 charts/<run_id>.<method>/
 reviews/<run_id>.<method>/
@@ -275,7 +275,7 @@ reviews/<run_id>.<method>/
 
 其中：
 
-- `b1` 和 `dribull` 在 EOD 与 intraday 下都共用基础 prepared cache
+- `b1`、`b2` 和 `dribull` 在 EOD 与 intraday 下都共用基础 prepared cache
 - `dribull` 的二阶段 MACD warmup 仍是按需现算，不单独落盘
 - intraday 只有在 `screen --intraday --recompute` 时才会重写当日共享 prepared cache
 

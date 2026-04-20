@@ -32,6 +32,9 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
   - `b2` uses `references/prompt-b2.md`
 - Review should use rendered chart images, not HTML text.
 - Dispatch one subagent per candidate for multimodal chart review when chart quality is the priority.
+- The main agent must use the platform's native subagent tools for chart review dispatch.
+- Do not substitute external `codex exec` sessions, shell background jobs, ad-hoc Python multiprocessing, or any other multi-threaded / multi-process workaround for subagent review.
+- If native subagent dispatch is temporarily unavailable, stop and surface that blocker instead of silently switching to another concurrency mechanism.
 - Let the agent framework choose the model; do not hard-code a vendor-specific SDK in the workflow.
 - Require each subagent to return strict JSON aligned with the prompt contract.
 - If a subagent cannot return valid JSON, record that symbol in failures instead of fabricating a result.
@@ -48,7 +51,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 End-of-day `--pick-date` runs use:
 
 - `runtime/candidates/<pick_date>.<method>.json`
-- `runtime/prepared/<pick_date>.pkl` for shared `b1` / `dribull` base prepare
+- `runtime/prepared/<pick_date>.pkl` for shared `b1` / `b2` / `dribull` base prepare
 - `runtime/prepared/<pick_date>.hcr.pkl` for `hcr`
 - `runtime/charts/<pick_date>.<method>/`
 - `runtime/reviews/<pick_date>.<method>/`
@@ -58,7 +61,7 @@ End-of-day `--pick-date` runs use:
 Intraday `--intraday` runs use:
 
 - `runtime/candidates/<run_id>.<method>.json`
-- `runtime/prepared/<trade_date>.intraday.pkl` for shared `b1` / `dribull` base prepare
+- `runtime/prepared/<trade_date>.intraday.pkl` for shared `b1` / `b2` / `dribull` base prepare
 - `runtime/prepared/<trade_date>.intraday.hcr.pkl` for `hcr`
 - `runtime/charts/<run_id>.<method>/`
 - `runtime/reviews/<run_id>.<method>/`
@@ -68,10 +71,8 @@ Review and merge instructions must follow the active mode's runtime key:
 - end-of-day mode: use `<pick_date>.<method>`
 - intraday mode: use the latest intraday `<run_id>.<method>` selected by the candidate artifact
 - prepared-cache lookup is different from candidate/review lookup:
-  - end-of-day `b1` / `dribull`: `<pick_date>.pkl`
-  - intraday `b1` / `dribull`: `<trade_date>.intraday.pkl`
-  - end-of-day `b2`: `<pick_date>.b2.pkl`
-  - intraday `b2`: `<trade_date>.intraday.b2.pkl`
+  - end-of-day `b1` / `b2` / `dribull`: `<pick_date>.pkl`
+  - intraday `b1` / `b2` / `dribull`: `<trade_date>.intraday.pkl`
   - `hcr`: keep method-specific prepared files
 
 ## Execution Order
@@ -96,18 +97,21 @@ When running chart review for quality-first selection:
 2. Load `runtime/reviews/<mode_key>/llm_review_tasks.json`.
 3. Read `max_concurrency` from the task file and treat it as a hard cap for concurrent subagents.
 4. Keep the `llm review` dispatch stage capped at 6 concurrent subagents.
-5. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
+5. Use only native subagent APIs such as `spawn_agent`, `send_input`, and `wait_agent` for dispatch and collection.
+6. Do not launch extra CLI agent sessions, shell-managed workers, or detached background processes to emulate subagents.
+7. Unless the user explicitly requests parallel subagent work, dispatch chart-review subagents serially: one candidate at a time, wait for completion, persist the JSON, then move to the next candidate.
+8. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
    - `b1`: `references/prompt-b1.md`
    - `dribull`: `references/prompt-b2.md`
    - `hcr`: `references/prompt.md`
    - `b2`: `references/prompt-b2.md`
-6. Send each subagent exactly one candidate at a time.
-7. Provide these inputs to the subagent:
+9. Send each subagent exactly one candidate at a time.
+10. Provide these inputs to the subagent:
    - stock code
    - pick date
    - chart image path pointing to `<code>_day.png`
    - the prompt from the method-specific prompt file (`references/prompt-b1.md` for `b1`, `references/prompt-b2.md` for `b2` and `dribull`, `references/prompt.md` for `hcr`)
-8. Require the subagent to return strict JSON matching the prompt contract:
+11. Require the subagent to return strict JSON matching the prompt contract:
    - `trend_reasoning`
    - `position_reasoning`
    - `volume_reasoning`
@@ -123,10 +127,10 @@ When running chart review for quality-first selection:
    - `signal_type`
    - `verdict`
    - `comment`
-9. Write each raw subagent result to `runtime/reviews/<mode_key>/llm_review_results/<code>.json`.
-10. Run CLI `review-merge` so the repository code validates the returned JSON before treating it as usable output.
-11. If validation fails, let `review-merge` record the symbol in failures and continue.
-12. Keep the local baseline review result alongside the validated subagent result.
+12. Write each raw subagent result to `runtime/reviews/<mode_key>/llm_review_results/<code>.json`.
+13. Run CLI `review-merge` so the repository code validates the returned JSON before treating it as usable output.
+14. If validation fails, let `review-merge` record the symbol in failures and continue.
+15. Keep the local baseline review result alongside the validated subagent result.
 
 Use `<mode_key>` as follows:
 
@@ -183,8 +187,7 @@ If any of the checks above fail:
 - `dribull` keeps the former two-stage screening rule:
   - phase 1 keeps only structural conditions: current `zxdq > zxdkx`, `MA25` support validity, shrinking volume, upward `MA60`, and `MA144` distance within 30%
   - phase 2 classifies weekly and daily `MACD` waves and only accepts weekly `wave1` / `wave3` with daily `wave2_end` / `wave4_end`
-- `b1` and `dribull` share the same base prepared frame shape for EOD and intraday reuse.
-- `b2` screening uses method-specific prepared cache files and does not reuse the shared `b1` / `dribull` base cache.
+- `b1`, `b2`, and `dribull` share the same base prepared frame shape for EOD and intraday reuse.
 - `chart --pick-date` fetches one year of real symbol history for each candidate and writes `<code>_day.png`.
 - Daily chart PNGs include `zxdq`, `zxdkx`, and a separate `MACD` panel with `dif`, `dea`, and `macd_hist`.
 - `chart --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.

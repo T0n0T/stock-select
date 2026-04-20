@@ -4283,6 +4283,7 @@ def test_prepared_cache_path_uses_shared_eod_file_for_b1_and_b2(tmp_path: Path) 
     runtime_root = tmp_path / "runtime"
 
     assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b1") == runtime_root / "prepared" / "2026-04-01.pkl"
+    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b2") == runtime_root / "prepared" / "2026-04-01.pkl"
     assert cli._prepared_cache_path(runtime_root, "2026-04-01", "dribull") == runtime_root / "prepared" / "2026-04-01.pkl"
     assert cli._prepared_cache_path(runtime_root, "2026-04-01", "hcr") == runtime_root / "prepared" / "2026-04-01.hcr.pkl"
 
@@ -4292,6 +4293,10 @@ def test_prepared_cache_path_uses_shared_intraday_file_for_b1_and_b2(tmp_path: P
 
     assert (
         cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "b1")
+        == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
+    )
+    assert (
+        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "b2")
         == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
     )
     assert (
@@ -7181,6 +7186,103 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
     assert "[screen] reuse prepared path=" in result.stderr
 
 
+def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    prepared_by_symbol = {
+        "BBB.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "open": [11.2],
+                "high": [11.8],
+                "low": [11.0],
+                "close": [11.6],
+                "turnover_n": [200.0],
+                "volume": [120.0],
+            }
+        )
+    }
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-01.pkl",
+        pick_date="2026-04-01",
+        start_date="2025-03-31",
+        end_date="2026-04-01",
+        prepared_by_symbol=prepared_by_symbol,
+    )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_run = cli.run_b2_screen_with_stats
+
+    def fail_connect(_: str) -> object:
+        raise AssertionError("b2 screen should not connect when shared prepared cache is reusable")
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("b2 screen should not fetch market window when shared prepared cache is reusable")
+
+    def fail_prepare(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        raise AssertionError("b2 screen should not prepare data when shared prepared cache is reusable")
+
+    def fake_run_b2_screen_with_stats(
+        prepared_subset: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert list(prepared_subset) == ["BBB.SZ"]
+        return (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0, "signal": "B2"}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_pre_ok": 0,
+                "fail_pct": 0,
+                "fail_volume": 0,
+                "fail_k_shape": 0,
+                "fail_j_up": 0,
+                "fail_tr_ok": 0,
+                "fail_above_lt": 0,
+                "fail_duplicate_b2": 0,
+                "fail_no_signal": 0,
+                "selected": 1,
+                "selected_b2": 1,
+                "selected_b3": 0,
+                "selected_b3_plus": 0,
+                "selected_b4": 0,
+                "selected_b5": 0,
+            },
+        )
+
+    cli._connect = fail_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
+    cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
+    cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b2",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.run_b2_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert "[screen] reuse prepared path=" in result.stderr
+
+
 def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -7970,8 +8072,96 @@ def test_screen_intraday_reuses_shared_prepared_cache_without_recompute(monkeypa
 
     assert result.exit_code == 0
     assert "[screen] reuse prepared path=" in result.stderr
+
+
+def test_screen_intraday_b2_reuses_shared_prepared_cache_without_recompute(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    prepared_by_symbol = {
+        "000001.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-09"]),
+                "open": [11.9],
+                "high": [12.1],
+                "low": [11.8],
+                "close": [12.0],
+                "turnover_n": [200.0],
+                "volume": [120.0],
+            }
+        )
+    }
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
+        method="b1",
+        pick_date="2026-04-09",
+        start_date="2025-04-08",
+        end_date="2026-04-09",
+        prepared_by_symbol=prepared_by_symbol,
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "source": "tushare_rt_k",
+            "run_id": "2026-04-09T10-00-00+08-00",
+            "previous_trade_date": "2026-04-08",
+        },
+    )
+
+    monkeypatch.setattr(cli, "_current_shanghai_timestamp", lambda: pd.Timestamp("2026-04-09 11:31:08.123456", tz="Asia/Shanghai"), raising=False)
+    monkeypatch.setattr(cli, "_resolve_intraday_trade_date", lambda: "2026-04-09", raising=False)
+    monkeypatch.setattr(cli, "_resolve_tushare_token", lambda _token: pytest.fail("intraday b2 cache reuse should not require a tushare token"), raising=False)
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: pytest.fail("intraday b2 cache reuse should not resolve a dsn"))
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("intraday b2 cache reuse should not connect to the database"))
+    monkeypatch.setattr(cli, "_fetch_rt_k_snapshot", lambda token, trade_date: pytest.fail("intraday b2 cache reuse should not fetch a fresh snapshot"), raising=False)
+    monkeypatch.setattr(cli, "fetch_daily_window", lambda *args, **kwargs: pytest.fail("intraday b2 cache reuse should not fetch market history"))
+    monkeypatch.setattr(cli, "_prepare_screen_data", lambda *args, **kwargs: pytest.fail("intraday b2 cache reuse should not recompute prepare"))
+    monkeypatch.setattr(
+        cli,
+        "run_b2_screen_with_stats",
+        lambda prepared_subset, pick_date: (
+            [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 12.0, "turnover_n": 200.0, "signal": "B2"}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_pre_ok": 0,
+                "fail_pct": 0,
+                "fail_volume": 0,
+                "fail_k_shape": 0,
+                "fail_j_up": 0,
+                "fail_tr_ok": 0,
+                "fail_above_lt": 0,
+                "fail_duplicate_b2": 0,
+                "fail_no_signal": 0,
+                "selected": 1,
+                "selected_b2": 1,
+                "selected_b3": 0,
+                "selected_b3_plus": 0,
+                "selected_b4": 0,
+                "selected_b5": 0,
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b2",
+            "--intraday",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "[screen] reuse prepared path=" in result.stderr
     candidate_payload = json.loads(
-        (runtime_root / "candidates" / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00')}.json").read_text(encoding="utf-8")
+        (
+            runtime_root
+            / "candidates"
+            / f"{_intraday_key('2026-04-09T11-31-08-123456+08-00', 'b2')}.json"
+        ).read_text(encoding="utf-8")
     )
     assert candidate_payload["run_id"] == "2026-04-09T11-31-08-123456+08-00"
     assert candidate_payload["trade_date"] == "2026-04-09"
