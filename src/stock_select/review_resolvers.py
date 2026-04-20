@@ -29,7 +29,7 @@ def get_review_resolver(method: str) -> ReviewResolver:
             prompt_path=B1_PROMPT_PATH,
             review_history=review_b1_symbol_history,
         )
-    if normalized == "b2":
+    if normalized in {"b2", "dribull"}:
         return ReviewResolver(
             name="b2",
             prompt_path=B2_PROMPT_PATH,

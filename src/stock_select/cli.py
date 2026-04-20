@@ -15,6 +15,8 @@ import typer
 from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
 from stock_select.strategies import (
     DEFAULT_B1_CONFIG,
+    DRIBULL_MACD_TREND_DAYS,
+    DRIBULL_RECENT_J_LOOKBACK,
     DEFAULT_MAX_VOL_LOOKBACK,
     DEFAULT_TOP_M,
     DEFAULT_TURNOVER_WINDOW,
@@ -26,10 +28,10 @@ from stock_select.strategies import (
     compute_weekly_ma_bull,
     compute_zx_lines,
     max_vol_not_bearish,
-    prefilter_b2_non_macd,
+    prefilter_dribull_non_macd,
     run_b1_screen,
     run_b1_screen_with_stats,
-    run_b2_screen_with_stats,
+    run_dribull_screen_with_stats,
     validate_method,
 )
 from stock_select.strategies.hcr import (
@@ -73,7 +75,7 @@ app = typer.Typer(help="stock-select standalone CLI")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
 LLM_REVIEW_MAX_CONCURRENCY = 6
-B2_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
+DRIBULL_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
 
@@ -115,6 +117,14 @@ def _validate_cli_method(method: str) -> str:
         return validate_method(method)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _validate_review_method(method: str) -> str:
+    normalized = method.strip().lower()
+    if normalized in {"b1", "b2", "dribull", "hcr"}:
+        return normalized
+    supported = ", ".join(("b1", "b2", "dribull", "hcr"))
+    raise typer.BadParameter(f"Supported methods: {supported}")
 
 
 def _validate_pool_source(pool_source: str) -> str:
@@ -196,7 +206,7 @@ def _candidate_path(runtime_root: Path, base_key: str, method: str) -> Path:
 
 
 def _prepared_cache_path(runtime_root: Path, base_key: str, method: str) -> Path:
-    if method in {"b1", "b2"}:
+    if method in {"b1", "dribull"}:
         return runtime_root / "prepared" / f"{base_key}.pkl"
     return runtime_root / "prepared" / f"{_artifact_key(base_key, method)}.pkl"
 
@@ -359,7 +369,7 @@ def _load_intraday_prepared_cache(
     if metadata.get("mode") != "intraday_snapshot":
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     cached_method = metadata.get("method")
-    if isinstance(cached_method, str) and cached_method not in {method, "b1", "b2"}:
+    if isinstance(cached_method, str) and cached_method not in {method, "b1", "dribull"}:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
     if payload.get("pick_date") != trade_date:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
@@ -800,7 +810,7 @@ def _call_prepare_screen_data(
         return _prepare_screen_data(market)
 
 
-def _prepare_b2_screen_data_for_pick(
+def _prepare_dribull_screen_data_for_pick(
     connection,
     *,
     pick_date: str,
@@ -828,7 +838,7 @@ def _prepare_b2_screen_data_for_pick(
     pool_codes = _resolve_pool_codes(
         pool_source=pool_source,
         runtime_root=runtime_root,
-        method="b2",
+        method="dribull",
         pick_date=pick_date,
         prepared_by_symbol=short_prepared,
         pool_file=pool_file,
@@ -836,7 +846,7 @@ def _prepare_b2_screen_data_for_pick(
     pooled_prepared = {code: short_prepared[code] for code in pool_codes if code in short_prepared}
     if not pooled_prepared:
         return short_prepared, {}
-    filtered_codes = prefilter_b2_non_macd(
+    filtered_codes = prefilter_dribull_non_macd(
         pooled_prepared,
         pd.Timestamp(pick_date),
         DEFAULT_B1_CONFIG,
@@ -846,11 +856,11 @@ def _prepare_b2_screen_data_for_pick(
     if reporter:
         reporter.emit(
             "screen",
-            f"fetch market window end_date={pick_date} mode=macd_warmup start_date={B2_PERIOD_MACD_WARMUP_START_DATE} symbols={len(filtered_codes)}",
+            f"fetch market window end_date={pick_date} mode=macd_warmup start_date={DRIBULL_PERIOD_MACD_WARMUP_START_DATE} symbols={len(filtered_codes)}",
         )
     warm_market = fetch_daily_window(
         connection,
-        start_date=B2_PERIOD_MACD_WARMUP_START_DATE,
+        start_date=DRIBULL_PERIOD_MACD_WARMUP_START_DATE,
         end_date=pick_date,
         symbols=filtered_codes,
     )
@@ -862,7 +872,7 @@ def _prepare_b2_screen_data_for_pick(
     return short_prepared, _call_prepare_screen_data(warm_market, reporter=reporter)
 
 
-def _prepare_b2_warmup_from_base_prepared(
+def _prepare_dribull_warmup_from_base_prepared(
     connection,
     *,
     pick_date: str,
@@ -875,7 +885,7 @@ def _prepare_b2_warmup_from_base_prepared(
     pool_codes = _resolve_pool_codes(
         pool_source=pool_source,
         runtime_root=runtime_root,
-        method="b2",
+        method="dribull",
         pick_date=pick_date,
         prepared_by_symbol=base_prepared,
         pool_file=pool_file,
@@ -884,7 +894,7 @@ def _prepare_b2_warmup_from_base_prepared(
     if not pooled_prepared:
         return {}
 
-    filtered_codes = prefilter_b2_non_macd(
+    filtered_codes = prefilter_dribull_non_macd(
         pooled_prepared,
         pd.Timestamp(pick_date),
         DEFAULT_B1_CONFIG,
@@ -895,11 +905,11 @@ def _prepare_b2_warmup_from_base_prepared(
     if reporter:
         reporter.emit(
             "screen",
-            f"fetch market window end_date={pick_date} mode=macd_warmup start_date={B2_PERIOD_MACD_WARMUP_START_DATE} symbols={len(filtered_codes)}",
+            f"fetch market window end_date={pick_date} mode=macd_warmup start_date={DRIBULL_PERIOD_MACD_WARMUP_START_DATE} symbols={len(filtered_codes)}",
         )
     warm_market = fetch_daily_window(
         connection,
-        start_date=B2_PERIOD_MACD_WARMUP_START_DATE,
+        start_date=DRIBULL_PERIOD_MACD_WARMUP_START_DATE,
         end_date=pick_date,
         symbols=filtered_codes,
     )
@@ -922,7 +932,7 @@ def _resolve_shared_base_prepared_payload(
         base_key = f"{pick_date}.intraday"
     else:
         base_key = pick_date
-    cache_method = "b1" if method in {"b1", "b2"} else method
+    cache_method = "b1" if method in {"b1", "dribull"} else method
     cache_path = _prepared_cache_path(runtime_root, base_key, cache_method)
     if not cache_path.exists():
         return cache_path, None
@@ -995,7 +1005,7 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"selected={stats['selected']}",
         )
         return
-    if method == "b2":
+    if method == "dribull":
         reporter.emit(
             "screen",
             "breakdown "
@@ -1063,7 +1073,7 @@ def _screen_impl(
     reused_base_prepared = False
     if method == "b1":
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    elif method == "b2":
+    elif method == "dribull":
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     else:
         start_date = None
@@ -1113,8 +1123,8 @@ def _screen_impl(
                 end_date=pick_date,
                 trading_days=HCR_SCREEN_TRADING_DAYS,
             )
-        elif method == "b2":
-            screen_prepared, prepared = _prepare_b2_screen_data_for_pick(
+        elif method == "dribull":
+            screen_prepared, prepared = _prepare_dribull_screen_data_for_pick(
                 connection,
                 pick_date=pick_date,
                 pool_source=pool_source,
@@ -1140,7 +1150,7 @@ def _screen_impl(
                     f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
                 )
             _validate_eod_pick_date_has_market_data(connection, market=market, pick_date=pick_date)
-            if method in {"b1", "b2"}:
+            if method in {"b1", "dribull"}:
                 prepared = _call_prepare_screen_data(market, reporter=reporter)
                 screen_prepared = prepared
             else:
@@ -1159,7 +1169,7 @@ def _screen_impl(
         )
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
-    elif method == "b2" and reused_base_prepared:
+    elif method == "dribull" and reused_base_prepared:
         pool_codes = _resolve_pool_codes(
             pool_source=pool_source,
             runtime_root=runtime_root,
@@ -1169,7 +1179,7 @@ def _screen_impl(
             pool_file=pool_file,
         )
         pooled_prepared = {code: prepared[code] for code in pool_codes if code in prepared}
-        filtered_codes = prefilter_b2_non_macd(
+        filtered_codes = prefilter_dribull_non_macd(
             pooled_prepared,
             pd.Timestamp(pick_date),
             DEFAULT_B1_CONFIG,
@@ -1179,7 +1189,7 @@ def _screen_impl(
             if reporter:
                 reporter.emit("screen", "connect db")
             connection = _connect(resolved_dsn)
-            prepared = _prepare_b2_warmup_from_base_prepared(
+            prepared = _prepare_dribull_warmup_from_base_prepared(
                 connection,
                 pick_date=pick_date,
                 pool_source=pool_source,
@@ -1190,10 +1200,10 @@ def _screen_impl(
             )
         else:
             prepared = {}
-    if method in {"b1", "b2"}:
+    if method in {"b1", "dribull"}:
         if prepared is None:
             prepared = {}
-        if method == "b2" and pool_source == "record-watch" and screen_prepared is not None:
+        if method == "dribull" and pool_source == "record-watch" and screen_prepared is not None:
             pool_codes = list(prepared)
         else:
             pool_codes = _resolve_pool_codes(
@@ -1217,7 +1227,7 @@ def _screen_impl(
                 DEFAULT_B1_CONFIG,
             )
         else:
-            candidates, stats = run_b2_screen_with_stats(
+            candidates, stats = run_dribull_screen_with_stats(
                 prepared_for_pick,
                 pd.Timestamp(pick_date),
                 DEFAULT_B1_CONFIG,
@@ -1315,7 +1325,7 @@ def _screen_intraday_impl(
             symbols=None,
         )
         overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
-        if method in {"b1", "b2"}:
+        if method in {"b1", "dribull"}:
             prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
         else:
             prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
@@ -1337,7 +1347,7 @@ def _screen_intraday_impl(
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
-    if method in {"b1", "b2"}:
+    if method in {"b1", "dribull"}:
         pool_codes = _resolve_pool_codes(
             pool_source=pool_source,
             runtime_root=runtime_root,
@@ -1359,7 +1369,7 @@ def _screen_intraday_impl(
                 DEFAULT_B1_CONFIG,
             )
         else:
-            candidates, stats = run_b2_screen_with_stats(
+            candidates, stats = run_dribull_screen_with_stats(
                 prepared_for_pick,
                 pd.Timestamp(trade_date),
                 DEFAULT_B1_CONFIG,
@@ -1553,7 +1563,7 @@ def _review_impl(
             prompt_path=resolver.prompt_path,
             extra_context=(
                 _build_wave_task_context(history, pick_date, method=method)
-                if method.lower() in {"b1", "b2"}
+                if method.lower() in {"b1", "b2", "dribull"}
                 else None
             ),
         )
@@ -1664,7 +1674,7 @@ def _review_intraday_impl(
             prompt_path=resolver.prompt_path,
             extra_context=(
                 _build_wave_task_context(history, pick_date, method=method)
-                if method.lower() in {"b1", "b2"}
+                if method.lower() in {"b1", "b2", "dribull"}
                 else None
             ),
         )
@@ -1970,7 +1980,7 @@ def review(
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    normalized_method = _validate_cli_method(method)
+    normalized_method = _validate_review_method(method)
     reporter = ProgressReporter(enabled=progress)
     if intraday:
         if pick_date is not None:
@@ -2026,7 +2036,7 @@ def review_merge(
     codes: str | None = typer.Option(None, "--codes"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    normalized_method = _validate_cli_method(method)
+    normalized_method = _validate_review_method(method)
     reporter = ProgressReporter(enabled=progress)
     selected_codes = [code.strip() for code in codes.split(",") if code.strip()] if codes else None
     summary_path = _review_merge_impl(
@@ -2047,7 +2057,7 @@ def render_html(
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
-    normalized_method = _validate_cli_method(method)
+    normalized_method = _validate_review_method(method)
     reporter = ProgressReporter(enabled=progress)
     zip_path = _render_html_impl(
         method=normalized_method,

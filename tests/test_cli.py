@@ -14,7 +14,7 @@ from stock_select import cli
 from stock_select.cli import app
 
 
-def _b2_wave_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
+def _dribull_wave_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
     return {
         "total_symbols": total_symbols,
         "eligible": eligible,
@@ -95,18 +95,31 @@ def test_screen_rejects_unknown_method() -> None:
     result = runner.invoke(app, ["screen", "--method", "brick", "--pick-date", "2026-04-01"])
 
     assert result.exit_code != 0
-    assert "supported methods: b1, b2, hcr" in result.stderr.lower()
+    stderr = result.stderr.lower()
+    assert "supported methods:" in stderr
+    assert "dribull" in stderr
 
 
-def test_screen_accepts_whitespace_padded_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_screen_rejects_b2_method_after_dribull_rename() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["screen", "--method", "b2", "--pick-date", "2026-04-01"])
+
+    assert result.exit_code != 0
+    stderr = result.stderr.lower()
+    assert "supported methods:" in stderr
+    assert "dribull" in stderr
+
+
+def test_screen_accepts_whitespace_padded_dribull_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'b2')}.json"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-01', 'dribull')}.json"
 
     monkeypatch.setattr(
         cli,
         "_screen_impl",
-        lambda **kwargs: expected_path if kwargs["method"] == "b2" else None,
+        lambda **kwargs: expected_path if kwargs["method"] == "dribull" else None,
     )
 
     result = runner.invoke(
@@ -114,7 +127,7 @@ def test_screen_accepts_whitespace_padded_b2_method(monkeypatch: pytest.MonkeyPa
         [
             "screen",
             "--method",
-            " b2 ",
+            " dribull ",
             "--pick-date",
             "2026-04-01",
             "--runtime-root",
@@ -128,7 +141,7 @@ def test_screen_accepts_whitespace_padded_b2_method(monkeypatch: pytest.MonkeyPa
     assert result.stdout.strip() == str(expected_path)
 
 
-def test_screen_b2_phase_one_does_not_filter_on_daily_macd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_screen_dribull_phase_one_does_not_filter_on_daily_macd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
 
@@ -202,10 +215,10 @@ def test_screen_b2_phase_one_does_not_filter_on_daily_macd(monkeypatch: pytest.M
     )
     monkeypatch.setattr(
         cli,
-        "run_b2_screen_with_stats",
+        "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 999.0}],
-            _b2_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -214,7 +227,7 @@ def test_screen_b2_phase_one_does_not_filter_on_daily_macd(monkeypatch: pytest.M
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -763,7 +776,7 @@ def test_screen_rejects_pick_date_without_end_of_day_data(monkeypatch: pytest.Mo
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -786,19 +799,19 @@ def test_screen_rejects_pick_date_without_end_of_day_data(monkeypatch: pytest.Mo
     ]
 
 
-def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
+def test_screen_accepts_dribull_method_and_writes_dribull_candidate_payload(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json"
+    expected_path = runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'dribull')}.json"
 
     def fake_screen_impl(**kwargs: object) -> Path:
-        assert kwargs["method"] == "b2"
+        assert kwargs["method"] == "dribull"
         payload = {
             "pick_date": "2026-04-10",
-            "method": "b2",
+            "method": "dribull",
             "candidates": [
                 {
                     "code": "000001.SZ",
@@ -824,7 +837,7 @@ def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -837,7 +850,7 @@ def test_screen_accepts_b2_method_and_writes_b2_candidate_payload(
     assert result.exit_code == 0
     assert result.stdout.strip() == str(expected_path)
     payload = json.loads(expected_path.read_text(encoding="utf-8"))
-    assert payload["method"] == "b2"
+    assert payload["method"] == "dribull"
     assert payload["candidates"][0]["code"] == "000001.SZ"
 
 
@@ -1582,6 +1595,93 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
     assert "周线" in tasks["tasks"][0]["weekly_wave_context"]
     assert "日线" in tasks["tasks"][0]["daily_wave_context"]
     assert "b2" in tasks["tasks"][0]["wave_combo_context"]
+
+
+def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-01", "dribull")
+    review_dir = runtime_root / "reviews" / method_key
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b2",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    chart_dir = runtime_root / "charts" / method_key
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol, symbol, symbol],
+                "trade_date": pd.to_datetime(["2026-03-28", "2026-03-31", "2026-04-01"]),
+                "open": [10.0, 10.2, 10.4],
+                "high": [10.3, 10.6, 10.9],
+                "low": [9.9, 10.1, 10.3],
+                "close": [10.2, 10.5, 10.8],
+                "vol": [100.0, 120.0, 150.0],
+            }
+        ),
+    )
+
+    prompt_path = str(tmp_path / "prompt-b2-stub.md")
+    resolver_methods: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: resolver_methods.append(method)
+        or SimpleNamespace(
+            name="b2",
+            prompt_path=prompt_path,
+            review_history=lambda **kwargs: {
+                "review_type": "baseline",
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "resolver baseline",
+            },
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "dribull",
+            "--pick-date",
+            "2026-04-01",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert resolver_methods == ["dribull"]
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    assert tasks["prompt_path"] == prompt_path
+    assert tasks["method"] == "dribull"
+    assert summary["method"] == "dribull"
+    assert "dribull" in tasks["tasks"][0]["wave_combo_context"]
 
 
 def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -4073,7 +4173,7 @@ def test_prepared_cache_path_uses_shared_eod_file_for_b1_and_b2(tmp_path: Path) 
     runtime_root = tmp_path / "runtime"
 
     assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b1") == runtime_root / "prepared" / "2026-04-01.pkl"
-    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b2") == runtime_root / "prepared" / "2026-04-01.pkl"
+    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "dribull") == runtime_root / "prepared" / "2026-04-01.pkl"
     assert cli._prepared_cache_path(runtime_root, "2026-04-01", "hcr") == runtime_root / "prepared" / "2026-04-01.hcr.pkl"
 
 
@@ -4085,7 +4185,7 @@ def test_prepared_cache_path_uses_shared_intraday_file_for_b1_and_b2(tmp_path: P
         == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
     )
     assert (
-        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "b2")
+        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "dribull")
         == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
     )
     assert (
@@ -4215,7 +4315,7 @@ def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) ->
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
-def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_path: Path) -> None:
+def test_screen_uses_reference_dribull_defaults_shared_prep_and_liquidity_pool(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
 
@@ -4292,7 +4392,7 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
         assert sorted(prepared_by_symbol) == ["AAA.SZ", "BBB.SZ"]
         return {pd.Timestamp("2026-04-10"): ["BBB.SZ"]}
 
-    def fake_run_b2_screen_with_stats(
+    def fake_run_dribull_screen_with_stats(
         prepared_by_symbol: dict[str, pd.DataFrame],
         pick_date: pd.Timestamp,
         config: dict,
@@ -4302,22 +4402,22 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 11.6, "turnover_n": 200.0}],
-            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     original_connect = cli._connect
     original_fetch = cli.fetch_daily_window
     original_prepare = cli._prepare_screen_data
     original_pool = cli.build_top_turnover_pool
-    original_prefilter = cli.prefilter_b2_non_macd
-    original_run = cli.run_b2_screen_with_stats
+    original_prefilter = cli.prefilter_dribull_non_macd
+    original_run = cli.run_dribull_screen_with_stats
 
     cli._connect = fake_connect  # type: ignore[assignment]
     cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
     cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
     cli.build_top_turnover_pool = fake_pool  # type: ignore[assignment]
-    cli.prefilter_b2_non_macd = lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"]  # type: ignore[assignment]
-    cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
+    cli.prefilter_dribull_non_macd = lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"]  # type: ignore[assignment]
+    cli.run_dribull_screen_with_stats = fake_run_dribull_screen_with_stats  # type: ignore[assignment]
 
     try:
         result = runner.invoke(
@@ -4325,7 +4425,7 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
             [
                 "screen",
                 "--method",
-                "b2",
+                "dribull",
                 "--pick-date",
                 "2026-04-10",
                 "--runtime-root",
@@ -4339,26 +4439,26 @@ def test_screen_uses_reference_b2_defaults_shared_prep_and_liquidity_pool(tmp_pa
         cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
         cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
         cli.build_top_turnover_pool = original_pool  # type: ignore[assignment]
-        cli.prefilter_b2_non_macd = original_prefilter  # type: ignore[assignment]
-        cli.run_b2_screen_with_stats = original_run  # type: ignore[assignment]
+        cli.prefilter_dribull_non_macd = original_prefilter  # type: ignore[assignment]
+        cli.run_dribull_screen_with_stats = original_run  # type: ignore[assignment]
 
     assert result.exit_code == 0
-    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
-    assert payload["method"] == "b2"
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'dribull')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "dribull"
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
-def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
+def test_screen_dribull_real_flow_uses_shared_prep_and_liquidity_pool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
-    valid_b2_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
+    valid_dribull_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
     closes_by_code = {
         "AAA.SZ": [10.0 + 0.02 * idx for idx in range(len(trade_dates))],
-        "BBB.SZ": valid_b2_close,
+        "BBB.SZ": valid_dribull_close,
     }
 
     def fake_connect(_: str) -> object:
@@ -4388,51 +4488,49 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
                 )
         return pd.DataFrame(market_rows)
 
-    def fake_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
-        assert window == 43
-        base = 100.0 if df["ts_code"].iat[0] == "AAA.SZ" else 200.0
-        return pd.Series([base + idx for idx in range(len(df))], index=df.index)
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        prepared: dict[str, pd.DataFrame] = {}
+        for code, group in market.groupby("ts_code"):
+            group = group.sort_values("trade_date").reset_index(drop=True).copy()
+            group["turnover_n"] = 100.0 if code == "AAA.SZ" else 200.0
+            group["J"] = 10.0
+            group["zxdq"] = group["close"] + 0.3
+            group["zxdkx"] = group["close"] - 0.1
+            group["low"] = group["close"] - 0.2
+            group["volume"] = group["vol"]
+            group["ma25"] = group["close"]
+            group["ma60"] = group["close"]
+            group["ma144"] = group["close"]
+            prepared[code] = group
+        return prepared
 
-    def fake_kdj(df: pd.DataFrame) -> pd.DataFrame:
-        return pd.DataFrame(
-            {
-                "J": [45.0] * (len(df) - 15) + [28.0, 26.0, 24.0, 22.0, 20.0, 18.0, 16.0, 14.0, 19.0, 21.0, 23.0, 25.0, 24.0, 22.0, 20.0]
-            },
-            index=df.index,
-        )
-
-    def fake_zx_lines(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-        close = df["close"].astype(float)
-        return pd.Series(close + 0.3, index=df.index), pd.Series(close - 0.1, index=df.index)
-
-    def fake_macd(
-        frame: pd.DataFrame,
-        *,
-        fast: int = 12,
-        slow: int = 26,
-        signal: int = 9,
-    ) -> pd.DataFrame:
-        dif = pd.Series([0.04] * len(frame), index=frame.index)
-        dea = pd.Series([0.03] * len(frame), index=frame.index)
-        dif.iloc[-1] = 0.12
-        dea.iloc[-1] = 0.08
-        hist = dif - dea
-        return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": hist}, index=frame.index)
+    run_calls: list[list[str]] = []
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
-    monkeypatch.setattr(cli, "DEFAULT_TOP_M", 1)
-    monkeypatch.setattr(cli, "compute_turnover_n", fake_turnover_n)
-    monkeypatch.setattr(cli, "compute_kdj", fake_kdj)
-    monkeypatch.setattr(cli, "compute_zx_lines", fake_zx_lines)
-    monkeypatch.setattr(cli, "compute_macd", fake_macd)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+    )
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(
+        cli,
+        "run_dribull_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            run_calls.append(sorted(prepared_by_symbol))
+            or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.02, "turnover_n": 359.0}],
+            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+        ),
+    )
 
     result = runner.invoke(
         app,
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -4443,12 +4541,13 @@ def test_screen_b2_real_flow_uses_shared_prep_and_liquidity_pool(
     )
 
     assert result.exit_code == 0
-    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
-    assert payload["method"] == "b2"
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'dribull')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "dribull"
+    assert run_calls == [["BBB.SZ"]]
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
-def test_screen_b2_uses_longer_warmup_start_date_for_period_macd(
+def test_screen_dribull_uses_longer_warmup_start_date_for_period_macd(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -4488,13 +4587,40 @@ def test_screen_b2_uses_longer_warmup_start_date_for_period_macd(
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
-    monkeypatch.setattr(cli, "prefilter_b2_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
     monkeypatch.setattr(
         cli,
-        "run_b2_screen_with_stats",
+        "_prepare_screen_data",
+        lambda market, reporter=None: {
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-10"]),
+                    "close": [13.18],
+                    "J": [10.0],
+                    "zxdq": [13.4],
+                    "zxdkx": [13.0],
+                    "low": [13.0],
+                    "volume": [120.0],
+                    "vol": [120.0],
+                    "ma25": [13.0],
+                    "ma60": [12.8],
+                    "ma144": [12.6],
+                    "turnover_n": [200.0],
+                }
+            )
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+    )
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(
+        cli,
+        "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 200.0}],
-            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
         ),
     )
 
@@ -4503,7 +4629,7 @@ def test_screen_b2_uses_longer_warmup_start_date_for_period_macd(
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -4517,7 +4643,7 @@ def test_screen_b2_uses_longer_warmup_start_date_for_period_macd(
     assert fetch_calls[-1] == {"start_date": "2023-01-01", "end_date": "2026-04-10", "symbols": ["BBB.SZ"]}
 
 
-def test_screen_b2_uses_two_phase_fetch_and_only_warms_pool_symbols(
+def test_screen_dribull_uses_two_phase_fetch_and_only_warms_pool_symbols(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -4601,7 +4727,7 @@ def test_screen_b2_uses_two_phase_fetch_and_only_warms_pool_symbols(
         pool_calls.append(sorted(prepared_by_symbol))
         return {pd.Timestamp("2026-04-10"): ["BBB.SZ"]}
 
-    def fake_run_b2_screen_with_stats(
+    def fake_run_dribull_screen_with_stats(
         prepared_by_symbol: dict[str, pd.DataFrame],
         pick_date: pd.Timestamp,
         config: dict,
@@ -4609,21 +4735,21 @@ def test_screen_b2_uses_two_phase_fetch_and_only_warms_pool_symbols(
         run_inputs.update(prepared_by_symbol)
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
     monkeypatch.setattr(cli, "build_top_turnover_pool", fake_pool)
-    monkeypatch.setattr(cli, "run_b2_screen_with_stats", fake_run_b2_screen_with_stats)
+    monkeypatch.setattr(cli, "run_dribull_screen_with_stats", fake_run_dribull_screen_with_stats)
 
     result = runner.invoke(
         app,
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -4643,7 +4769,7 @@ def test_screen_b2_uses_two_phase_fetch_and_only_warms_pool_symbols(
     assert sorted(run_inputs) == ["BBB.SZ"]
 
 
-def test_screen_b2_phase_one_prefilters_non_macd_rules_before_warmup(
+def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -4728,10 +4854,10 @@ def test_screen_b2_phase_one_prefilters_non_macd_rules_before_warmup(
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
     monkeypatch.setattr(
         cli,
-        "run_b2_screen_with_stats",
+        "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             warmup_run_inputs.update(prepared_by_symbol) or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _b2_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -4740,7 +4866,7 @@ def test_screen_b2_phase_one_prefilters_non_macd_rules_before_warmup(
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -4758,14 +4884,14 @@ def test_screen_b2_phase_one_prefilters_non_macd_rules_before_warmup(
     assert sorted(warmup_run_inputs) == ["BBB.SZ"]
 
 
-def test_screen_b2_writes_prepared_cache_before_prefilter(
+def test_screen_dribull_writes_prepared_cache_before_prefilter(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
-    valid_b2_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
+    valid_dribull_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
 
     def fake_connect(_: str) -> object:
         return object()
@@ -4822,13 +4948,13 @@ def test_screen_b2_writes_prepared_cache_before_prefilter(
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
-    monkeypatch.setattr(cli, "prefilter_b2_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
     monkeypatch.setattr(
         cli,
-        "run_b2_screen_with_stats",
+        "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _b2_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -4837,7 +4963,7 @@ def test_screen_b2_writes_prepared_cache_before_prefilter(
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -4853,7 +4979,7 @@ def test_screen_b2_writes_prepared_cache_before_prefilter(
     assert sorted(cache_payload["prepared_by_symbol"]) == ["AAA.SZ", "BBB.SZ", "CCC.SZ"]
 
 
-def test_screen_b2_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path) -> None:
+def test_screen_dribull_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     shared_prepared = {
@@ -4892,23 +5018,23 @@ def test_screen_b2_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path)
     original_connect = cli._connect
     original_fetch = cli.fetch_daily_window
     original_prepare = cli._prepare_screen_data
-    original_prefilter = cli.prefilter_b2_non_macd
-    original_run = cli.run_b2_screen_with_stats
+    original_prefilter = cli.prefilter_dribull_non_macd
+    original_run = cli.run_dribull_screen_with_stats
 
     def fail_connect(_: str) -> object:
-        raise AssertionError("b2 should reuse shared b1 prepared cache before phase-two warmup")
+        raise AssertionError("dribull should reuse shared b1 prepared cache before phase-two warmup")
 
     def fail_fetch(*args, **kwargs):
-        raise AssertionError("b2 should not fetch market window when shared prepared cache is reusable")
+        raise AssertionError("dribull should not fetch market window when shared prepared cache is reusable")
 
     def fail_prepare(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
-        raise AssertionError("b2 should not recompute phase-one prepare when shared prepared cache is reusable")
+        raise AssertionError("dribull should not recompute phase-one prepare when shared prepared cache is reusable")
 
-    def fake_prefilter_b2_non_macd(prepared_by_symbol: dict[str, pd.DataFrame], pick_date: pd.Timestamp, config=None) -> list[str]:
+    def fake_prefilter_dribull_non_macd(prepared_by_symbol: dict[str, pd.DataFrame], pick_date: pd.Timestamp, config=None) -> list[str]:
         assert list(prepared_by_symbol) == ["BBB.SZ"]
         return []
 
-    def fake_run_b2_screen_with_stats(
+    def fake_run_dribull_screen_with_stats(
         prepared_by_symbol: dict[str, pd.DataFrame],
         pick_date: pd.Timestamp,
         config: dict,
@@ -4916,14 +5042,14 @@ def test_screen_b2_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path)
         assert prepared_by_symbol == {}
         return (
             [],
-            _b2_wave_stats(total_symbols=0, eligible=0, selected=0),
+            _dribull_wave_stats(total_symbols=0, eligible=0, selected=0),
         )
 
     cli._connect = fail_connect  # type: ignore[assignment]
     cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
     cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
-    cli.prefilter_b2_non_macd = fake_prefilter_b2_non_macd  # type: ignore[assignment]
-    cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
+    cli.prefilter_dribull_non_macd = fake_prefilter_dribull_non_macd  # type: ignore[assignment]
+    cli.run_dribull_screen_with_stats = fake_run_dribull_screen_with_stats  # type: ignore[assignment]
 
     try:
         result = runner.invoke(
@@ -4931,7 +5057,7 @@ def test_screen_b2_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path)
             [
                 "screen",
                 "--method",
-                "b2",
+                "dribull",
                 "--pick-date",
                 "2026-04-10",
                 "--runtime-root",
@@ -4944,8 +5070,8 @@ def test_screen_b2_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path)
         cli._connect = original_connect  # type: ignore[assignment]
         cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
         cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
-        cli.prefilter_b2_non_macd = original_prefilter  # type: ignore[assignment]
-        cli.run_b2_screen_with_stats = original_run  # type: ignore[assignment]
+        cli.prefilter_dribull_non_macd = original_prefilter  # type: ignore[assignment]
+        cli.run_dribull_screen_with_stats = original_run  # type: ignore[assignment]
 
     assert result.exit_code == 0
     assert "[screen] reuse prepared path=" in result.stderr
@@ -5816,7 +5942,7 @@ def test_screen_record_watch_rejects_empty_effective_pool_after_intersection(
     assert "2026-04-04" in result.stderr
 
 
-def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
+def test_screen_dribull_record_watch_drives_phase_one_and_warmup_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -5827,7 +5953,7 @@ def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
-                "b2,2026-04-08,BBB.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
+                "dribull,2026-04-08,BBB.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
             ]
         ),
         encoding="utf-8",
@@ -5902,9 +6028,9 @@ def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
         }
 
     def fail_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
-        raise AssertionError("turnover-top pool should not gate b2 record-watch screening")
+        raise AssertionError("turnover-top pool should not gate dribull record-watch screening")
 
-    def fake_prefilter_b2_non_macd(
+    def fake_prefilter_dribull_non_macd(
         prepared_by_symbol: dict[str, pd.DataFrame],
         pick_date: pd.Timestamp,
         config: dict,
@@ -5913,7 +6039,7 @@ def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
         assert pick_date == pd.Timestamp("2026-04-10")
         return ["BBB.SZ"]
 
-    def fake_run_b2_screen_with_stats(
+    def fake_run_dribull_screen_with_stats(
         prepared_by_symbol: dict[str, pd.DataFrame],
         pick_date: pd.Timestamp,
         config: dict,
@@ -5922,21 +6048,21 @@ def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
         assert pick_date == pd.Timestamp("2026-04-10")
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 20.2, "turnover_n": 200.0}],
-            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
     monkeypatch.setattr(cli, "build_top_turnover_pool", fail_pool)
-    monkeypatch.setattr(cli, "prefilter_b2_non_macd", fake_prefilter_b2_non_macd)
-    monkeypatch.setattr(cli, "run_b2_screen_with_stats", fake_run_b2_screen_with_stats)
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", fake_prefilter_dribull_non_macd)
+    monkeypatch.setattr(cli, "run_dribull_screen_with_stats", fake_run_dribull_screen_with_stats)
 
     result = runner.invoke(
         app,
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--pool-source",
@@ -5954,7 +6080,7 @@ def test_screen_b2_record_watch_drives_phase_one_and_warmup_selection(
         ("2023-01-01", ("BBB.SZ",)),
     ]
     assert prepare_calls == [["AAA.SZ", "BBB.SZ"], ["BBB.SZ"]]
-    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'dribull')}.json").read_text(encoding="utf-8"))
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
@@ -6254,7 +6380,7 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
     assert cache_payload["pick_date"] == "2026-04-04"
 
 
-def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates(
+def test_screen_dribull_record_watch_zero_phase_one_survivors_writes_empty_candidates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -6265,7 +6391,7 @@ def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates
         "\n".join(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
-                "b2,2026-04-08,BBB.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
+                "dribull,2026-04-08,BBB.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
             ]
         ),
         encoding="utf-8",
@@ -6321,9 +6447,9 @@ def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates
         }
 
     def fail_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
-        raise AssertionError("turnover-top pool should not gate b2 record-watch screening")
+        raise AssertionError("turnover-top pool should not gate dribull record-watch screening")
 
-    def fake_prefilter_b2_non_macd(
+    def fake_prefilter_dribull_non_macd(
         prepared_by_symbol: dict[str, pd.DataFrame],
         pick_date: pd.Timestamp,
         config: dict,
@@ -6331,7 +6457,7 @@ def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates
         assert list(prepared_by_symbol) == ["BBB.SZ"]
         return []
 
-    def fake_run_b2_screen_with_stats(
+    def fake_run_dribull_screen_with_stats(
         prepared_by_symbol: dict[str, pd.DataFrame],
         pick_date: pd.Timestamp,
         config: dict,
@@ -6339,21 +6465,21 @@ def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates
         assert prepared_by_symbol == {}
         return (
             [],
-            _b2_wave_stats(total_symbols=0, eligible=0, selected=0),
+            _dribull_wave_stats(total_symbols=0, eligible=0, selected=0),
         )
 
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
     monkeypatch.setattr(cli, "build_top_turnover_pool", fail_pool)
-    monkeypatch.setattr(cli, "prefilter_b2_non_macd", fake_prefilter_b2_non_macd)
-    monkeypatch.setattr(cli, "run_b2_screen_with_stats", fake_run_b2_screen_with_stats)
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", fake_prefilter_dribull_non_macd)
+    monkeypatch.setattr(cli, "run_dribull_screen_with_stats", fake_run_dribull_screen_with_stats)
 
     result = runner.invoke(
         app,
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--pool-source",
@@ -6368,7 +6494,7 @@ def test_screen_b2_record_watch_zero_phase_one_survivors_writes_empty_candidates
     assert result.exit_code == 0
     assert "effective watch pool" not in result.stderr.lower()
     assert fetch_calls == [("2025-04-09", None)]
-    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'dribull')}.json").read_text(encoding="utf-8"))
     assert payload["pool_source"] == "record-watch"
     assert payload["candidates"] == []
 
@@ -6488,7 +6614,7 @@ def test_screen_hcr_record_watch_uses_shared_watch_pool_subset(
             [
                 "method,pick_date,code,verdict,total_score,signal_type,comment,recorded_at",
                 "b1,2026-04-08,AAA.SZ,WATCH,1.0,signal,chosen,2026-04-08T10:00:00+08:00",
-                "b2,2026-04-08,CCC.SZ,WATCH,1.0,signal,missing,2026-04-08T10:00:00+08:00",
+                "dribull,2026-04-08,CCC.SZ,WATCH,1.0,signal,missing,2026-04-08T10:00:00+08:00",
             ]
         ),
         encoding="utf-8",
@@ -6591,14 +6717,14 @@ def test_screen_hcr_record_watch_uses_shared_watch_pool_subset(
     assert [item["code"] for item in payload["candidates"]] == ["AAA.SZ"]
 
 
-def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
+def test_screen_dribull_real_flow_skips_malformed_pool_rows_without_crashing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
-    valid_b2_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
+    valid_dribull_close = [12.0] * 146 + [11.8, 11.7, 11.9, 12.1, 12.4, 12.8, 13.1, 13.4, 13.2, 13.0, 12.9, 12.92, 12.97, 13.02]
 
     def fake_connect(_: str) -> object:
         return object()
@@ -6614,7 +6740,7 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
         for code, base_close in (("AAA.SZ", 10.0), ("BBB.SZ", 12.0)):
             for idx, trade_date in enumerate(trade_dates):
                 if code == "BBB.SZ":
-                    close = valid_b2_close[idx]
+                    close = valid_dribull_close[idx]
                 else:
                     close = base_close + idx * 0.1
                 market_rows.append(
@@ -6630,55 +6756,49 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
                 )
         return pd.DataFrame(market_rows)
 
-    def fake_turnover_n(df: pd.DataFrame, window: int) -> pd.Series:
-        assert window == 43
-        values = [100.0 + idx for idx in range(len(df))]
-        if df["ts_code"].iat[0] == "AAA.SZ":
-            values[3] = "boom"
-        else:
-            values = [200.0 + idx for idx in range(len(df))]
-        return pd.Series(values, index=df.index)
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        prepared: dict[str, pd.DataFrame] = {}
+        for code, group in market.groupby("ts_code"):
+            group = group.sort_values("trade_date").reset_index(drop=True).copy()
+            group["turnover_n"] = 100.0 if code == "AAA.SZ" else 200.0
+            group["J"] = 10.0
+            group["zxdq"] = group["close"] + 0.3
+            group["zxdkx"] = group["close"] - 0.1
+            group["low"] = group["close"] - 0.2
+            group["volume"] = group["vol"]
+            group["ma25"] = group["close"]
+            group["ma60"] = group["close"]
+            group["ma144"] = group["close"]
+            prepared[code] = group
+        return prepared
 
-    def fake_kdj(df: pd.DataFrame) -> pd.DataFrame:
-        return pd.DataFrame(
-            {
-                "J": [45.0] * (len(df) - 15) + [28.0, 26.0, 24.0, 22.0, 20.0, 18.0, 16.0, 14.0, 19.0, 21.0, 23.0, 25.0, 24.0, 22.0, 20.0]
-            },
-            index=df.index,
-        )
-
-    def fake_zx_lines(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-        close = df["close"].astype(float)
-        return pd.Series(close + 0.3, index=df.index), pd.Series(close - 0.1, index=df.index)
-
-    def fake_macd(
-        frame: pd.DataFrame,
-        *,
-        fast: int = 12,
-        slow: int = 26,
-        signal: int = 9,
-    ) -> pd.DataFrame:
-        dif = pd.Series([0.04] * len(frame), index=frame.index)
-        dea = pd.Series([0.03] * len(frame), index=frame.index)
-        dif.iloc[-1] = 0.12
-        dea.iloc[-1] = 0.08
-        hist = dif - dea
-        return pd.DataFrame({"dif": dif, "dea": dea, "macd_hist": hist}, index=frame.index)
+    run_calls: list[list[str]] = []
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
-    monkeypatch.setattr(cli, "DEFAULT_TOP_M", 1)
-    monkeypatch.setattr(cli, "compute_turnover_n", fake_turnover_n)
-    monkeypatch.setattr(cli, "compute_kdj", fake_kdj)
-    monkeypatch.setattr(cli, "compute_zx_lines", fake_zx_lines)
-    monkeypatch.setattr(cli, "compute_macd", fake_macd)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(
+        cli,
+        "build_top_turnover_pool",
+        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+    )
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(
+        cli,
+        "run_dribull_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: (
+            run_calls.append(sorted(prepared_by_symbol))
+            or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.02, "turnover_n": 359.0}],
+            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+        ),
+    )
 
     result = runner.invoke(
         app,
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",
@@ -6689,8 +6809,9 @@ def test_screen_b2_real_flow_skips_malformed_pool_rows_without_crashing(
     )
 
     assert result.exit_code == 0
-    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'b2')}.json").read_text(encoding="utf-8"))
-    assert payload["method"] == "b2"
+    payload = json.loads((runtime_root / "candidates" / f"{_eod_key('2026-04-10', 'dribull')}.json").read_text(encoding="utf-8"))
+    assert payload["method"] == "dribull"
+    assert run_calls == [["BBB.SZ"]]
     assert [item["code"] for item in payload["candidates"]] == ["BBB.SZ"]
 
 
@@ -7080,7 +7201,7 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
     prepared_path.parent.mkdir(parents=True, exist_ok=True)
     cli._write_prepared_cache(
         prepared_path,
-        method="b2",
+        method="dribull",
         pick_date="2026-04-10",
         start_date="2025-04-09",
         end_date="2026-04-10",
@@ -7155,10 +7276,10 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
     monkeypatch.setattr(cli, "build_top_turnover_pool", lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]})
     monkeypatch.setattr(
         cli,
-        "run_b2_screen_with_stats",
+        "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 10.6, "turnover_n": 1030.0}],
-            _b2_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
         ),
     )
 
@@ -7167,7 +7288,7 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
         [
             "screen",
             "--method",
-            "b2",
+            "dribull",
             "--pick-date",
             "2026-04-10",
             "--runtime-root",

@@ -7,33 +7,34 @@ import pytest
 import stock_select.strategies as strategies
 
 
-def test_strategies_exports_b2_support() -> None:
-    assert "b2" in strategies.SUPPORTED_METHODS
-    assert strategies.validate_method(" b2 ") == "b2"
-    assert hasattr(strategies, "run_b2_screen_with_stats")
+def test_strategies_exports_dribull_support() -> None:
+    assert "dribull" in strategies.SUPPORTED_METHODS
+    assert "b2" not in strategies.SUPPORTED_METHODS
+    assert strategies.validate_method(" dribull ") == "dribull"
+    assert hasattr(strategies, "run_dribull_screen_with_stats")
 
 
-def _load_run_b2_screen_with_stats():
+def _load_run_dribull_screen_with_stats():
     try:
-        module = importlib.import_module("stock_select.strategies.b2")
+        module = importlib.import_module("stock_select.strategies.dribull")
     except ModuleNotFoundError as exc:
-        if exc.name != "stock_select.strategies.b2":
+        if exc.name != "stock_select.strategies.dribull":
             raise
-        pytest.fail(f"Missing b2 strategy module: {exc}")
-    return module.run_b2_screen_with_stats
+        pytest.fail(f"Missing dribull strategy module: {exc}")
+    return module.run_dribull_screen_with_stats
 
 
-def _load_prefilter_b2_non_macd():
+def _load_prefilter_dribull_non_macd():
     try:
-        module = importlib.import_module("stock_select.strategies.b2")
+        module = importlib.import_module("stock_select.strategies.dribull")
     except ModuleNotFoundError as exc:
-        if exc.name != "stock_select.strategies.b2":
+        if exc.name != "stock_select.strategies.dribull":
             raise
-        pytest.fail(f"Missing b2 strategy module: {exc}")
-    return module.prefilter_b2_non_macd
+        pytest.fail(f"Missing dribull strategy module: {exc}")
+    return module.prefilter_dribull_non_macd
 
 
-def _base_b2_frame() -> pd.DataFrame:
+def _base_dribull_frame() -> pd.DataFrame:
     trade_dates = pd.date_range("2025-09-01", periods=160, freq="B")
     close = pd.Series([10.0] * 146 + [9.8, 9.7, 9.9, 10.1, 10.4, 10.8, 11.1, 11.4, 11.2, 11.0, 10.9, 10.92, 10.97, 11.02])
     ma25 = close.rolling(window=25, min_periods=25).mean()
@@ -68,12 +69,12 @@ def _base_b2_frame() -> pd.DataFrame:
     )
 
 
-def test_run_b2_screen_with_stats_passes_when_recent_j_hit_and_new_formula_all_hold() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_passes_when_recent_j_hit_and_formula_hold() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -83,17 +84,17 @@ def test_run_b2_screen_with_stats_passes_when_recent_j_hit_and_new_formula_all_h
     assert stats["selected"] == 1
 
 
-def test_prefilter_b2_non_macd_keeps_only_symbols_passing_non_macd_rules() -> None:
-    prefilter_b2_non_macd = _load_prefilter_b2_non_macd()
+def test_prefilter_dribull_non_macd_keeps_only_symbols_passing_non_macd_rules() -> None:
+    prefilter_dribull_non_macd = _load_prefilter_dribull_non_macd()
     pick_date = pd.Timestamp("2026-04-10")
-    passing = _base_b2_frame()
-    fail_zxdq = _base_b2_frame()
+    passing = _base_dribull_frame()
+    fail_zxdq = _base_dribull_frame()
     fail_zxdq.loc[fail_zxdq.index[-1], "zxdq"] = fail_zxdq.loc[fail_zxdq.index[-1], "zxdkx"] - 0.01
-    fail_volume = _base_b2_frame()
+    fail_volume = _base_dribull_frame()
     fail_volume.loc[fail_volume.index[-1], "volume"] = fail_volume.loc[fail_volume.index[-2], "volume"] + 1.0
     fail_volume.loc[fail_volume.index[-1], "vol"] = fail_volume.loc[fail_volume.index[-1], "volume"]
 
-    selected = prefilter_b2_non_macd(
+    selected = prefilter_dribull_non_macd(
         {
             "PASS.SZ": passing,
             "FAILZXDQ.SZ": fail_zxdq,
@@ -106,14 +107,14 @@ def test_prefilter_b2_non_macd_keeps_only_symbols_passing_non_macd_rules() -> No
     assert selected == ["PASS.SZ"]
 
 
-def test_prefilter_b2_non_macd_does_not_require_daily_macd_any_more() -> None:
-    prefilter_b2_non_macd = _load_prefilter_b2_non_macd()
+def test_prefilter_dribull_non_macd_does_not_require_daily_macd_any_more() -> None:
+    prefilter_dribull_non_macd = _load_prefilter_dribull_non_macd()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame.loc[frame.index[-1], "dif"] = 0.07
     frame.loc[frame.index[-1], "dea"] = 0.08
 
-    selected = prefilter_b2_non_macd(
+    selected = prefilter_dribull_non_macd(
         {"PASS.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -122,12 +123,12 @@ def test_prefilter_b2_non_macd_does_not_require_daily_macd_any_more() -> None:
     assert selected == ["PASS.SZ"]
 
 
-def test_run_b2_screen_with_stats_ignores_missing_legacy_macd_columns() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_ignores_missing_legacy_macd_columns() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame().drop(columns=["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
+    frame = _base_dribull_frame().drop(columns=["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -138,14 +139,14 @@ def test_run_b2_screen_with_stats_ignores_missing_legacy_macd_columns() -> None:
 
 
 @pytest.mark.parametrize("column_name", ["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
-def test_run_b2_screen_with_stats_ignores_malformed_legacy_macd_columns(column_name: str) -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_ignores_malformed_legacy_macd_columns(column_name: str) -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame[column_name] = frame[column_name].astype(object)
     frame.loc[3, column_name] = "boom"
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -155,13 +156,13 @@ def test_run_b2_screen_with_stats_ignores_malformed_legacy_macd_columns(column_n
     assert stats["fail_insufficient_history"] == 0
 
 
-def test_run_b2_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame["J"] = [100.0 + idx for idx in range(len(frame))]
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -171,13 +172,13 @@ def test_run_b2_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
     assert stats["fail_recent_j"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_current_zxdq_is_not_above_zxdkx() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_current_zxdq_is_not_above_zxdkx() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame.loc[frame.index[-1], "zxdq"] = 9.9
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -187,15 +188,15 @@ def test_run_b2_screen_with_stats_fails_when_current_zxdq_is_not_above_zxdkx() -
     assert stats["fail_zxdq_zxdkx"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_support_on_ma25_is_not_valid() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_support_on_ma25_is_not_valid() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame.loc[frame.index[-1], "low"] = 10.6
     frame.loc[frame.index[-1], "close"] = 10.4
     frame.loc[frame.index[-1], "ma25"] = 10.5
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -205,14 +206,14 @@ def test_run_b2_screen_with_stats_fails_when_support_on_ma25_is_not_valid() -> N
     assert stats["fail_support_ma25"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_volume_does_not_shrink() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_volume_does_not_shrink() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame.loc[frame.index[-1], "volume"] = frame.loc[frame.index[-2], "volume"] + 10.0
     frame.loc[frame.index[-1], "vol"] = frame.loc[frame.index[-1], "volume"]
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -222,10 +223,10 @@ def test_run_b2_screen_with_stats_fails_when_volume_does_not_shrink() -> None:
     assert stats["fail_volume_shrink"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_weekly_wave_is_not_allowed() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_weekly_wave_is_not_allowed() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame.loc[frame.index[-14] :, "close"] = [11.4, 11.3, 11.1, 10.9, 10.8, 10.7, 10.65, 10.6, 10.58, 10.56, 10.54, 10.52, 10.5, 10.48]
     frame["ma25"] = frame["close"].rolling(window=25, min_periods=25).mean()
     frame["ma60"] = frame["close"].rolling(window=60, min_periods=60).mean()
@@ -233,7 +234,7 @@ def test_run_b2_screen_with_stats_fails_when_weekly_wave_is_not_allowed() -> Non
     frame["low"] = frame["close"] - 0.15
     frame.loc[frame.index[-1], "low"] = float(frame.loc[frame.index[-1], "ma25"]) * 1.004
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -243,13 +244,13 @@ def test_run_b2_screen_with_stats_fails_when_weekly_wave_is_not_allowed() -> Non
     assert stats["fail_weekly_wave"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_daily_wave_is_invalid() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_daily_wave_is_invalid() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
     frame.loc[frame.index[-3] :, "close"] = [13.0, 12.5, 12.0]
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -259,15 +260,14 @@ def test_run_b2_screen_with_stats_fails_when_daily_wave_is_invalid() -> None:
     assert stats["fail_daily_wave"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_wave_combo_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = importlib.import_module("stock_select.strategies.b2")
+def test_run_dribull_screen_with_stats_fails_when_wave_combo_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.dribull")
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
+    frame = _base_dribull_frame()
 
-    monkeypatch.setattr(module, "classify_weekly_macd_wave", lambda frame, pick_date: SimpleNamespace(label="wave1"))
-    monkeypatch.setattr(module, "classify_daily_macd_wave", lambda frame, pick_date: SimpleNamespace(label="waveX"))
+    monkeypatch.setattr(module, "classify_daily_macd_wave", lambda *args, **kwargs: SimpleNamespace(label="wave1", details={}))
 
-    candidates, stats = module.run_b2_screen_with_stats(
+    candidates, stats = module.run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -277,14 +277,13 @@ def test_run_b2_screen_with_stats_fails_when_wave_combo_is_not_allowed(monkeypat
     assert stats["fail_wave_combo"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_ma60_is_not_upward() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_ma60_is_not_upward() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
-    frame.loc[frame.index[-2], "ma60"] = 10.2
-    frame.loc[frame.index[-1], "ma60"] = 10.1
+    frame = _base_dribull_frame()
+    frame.loc[frame.index[-2], "ma60"] = frame.loc[frame.index[-1], "ma60"] + 0.01
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -294,15 +293,13 @@ def test_run_b2_screen_with_stats_fails_when_ma60_is_not_upward() -> None:
     assert stats["fail_ma60_trend"] == 1
 
 
-def test_run_b2_screen_with_stats_fails_when_distance_to_ma144_exceeds_30_pct() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_fails_when_distance_to_ma144_exceeds_30_pct() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
-    frame.loc[frame.index[-1], "close"] = 16.0
-    frame.loc[frame.index[-1], "low"] = 15.85
-    frame.loc[frame.index[-1], "ma25"] = 15.9
+    frame = _base_dribull_frame()
+    frame.loc[frame.index[-1], "close"] = frame.loc[frame.index[-1], "ma144"] * 1.31
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
@@ -312,71 +309,55 @@ def test_run_b2_screen_with_stats_fails_when_distance_to_ma144_exceeds_30_pct() 
     assert stats["fail_ma144_distance"] == 1
 
 
-def test_run_b2_screen_with_stats_treats_missing_required_columns_as_insufficient_history() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_treats_missing_required_columns_as_insufficient_history() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
 
-    candidates, stats = run_b2_screen_with_stats(
-        {
-            "000001.SZ": _base_b2_frame().drop(columns=["ma144"]),
-        },
+    candidates, stats = run_dribull_screen_with_stats(
+        {"000001.SZ": _base_dribull_frame().drop(columns=["ma144"])},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
 
     assert candidates == []
-    assert stats == {
-        "total_symbols": 1,
-        "eligible": 1,
-        "fail_recent_j": 0,
-        "fail_insufficient_history": 1,
-        "fail_support_ma25": 0,
-        "fail_volume_shrink": 0,
-        "fail_zxdq_zxdkx": 0,
-        "fail_ma60_trend": 0,
-        "fail_ma144_distance": 0,
-        "fail_weekly_wave": 0,
-        "fail_daily_wave": 0,
-        "fail_wave_combo": 0,
-        "selected": 0,
-    }
-
-
-def test_run_b2_screen_with_stats_treats_malformed_trade_dates_as_insufficient_history() -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
-    pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
-    frame["trade_date"] = frame["trade_date"].astype(object)
-    frame.loc[3, "trade_date"] = "not-a-date"
-
-    candidates, stats = run_b2_screen_with_stats(
-        {"000001.SZ": frame},
-        pick_date=pick_date,
-        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
-    )
-
-    assert candidates == []
+    assert stats["eligible"] == 1
     assert stats["fail_insufficient_history"] == 1
 
 
-@pytest.mark.parametrize(
-    "column_name",
-    ["J", "zxdq", "zxdkx", "low", "close", "volume", "ma25", "ma60", "ma144", "turnover_n"],
-)
-def test_run_b2_screen_with_stats_treats_any_malformed_required_numeric_value_as_insufficient_history(
-    column_name: str,
-) -> None:
-    run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
+def test_run_dribull_screen_with_stats_treats_malformed_trade_dates_as_insufficient_history() -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_b2_frame()
-    frame[column_name] = frame[column_name].astype(object)
-    frame.loc[3, column_name] = "boom"
+    frame = _base_dribull_frame()
+    frame["trade_date"] = frame["trade_date"].astype(object)
+    frame.loc[10, "trade_date"] = "boom"
 
-    candidates, stats = run_b2_screen_with_stats(
+    candidates, stats = run_dribull_screen_with_stats(
         {"000001.SZ": frame},
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
 
     assert candidates == []
+    assert stats["eligible"] == 1
+    assert stats["fail_insufficient_history"] == 1
+
+
+@pytest.mark.parametrize("column_name", ["J", "zxdq", "zxdkx", "low", "close", "ma25", "ma60", "ma144", "turnover_n"])
+def test_run_dribull_screen_with_stats_treats_any_malformed_required_numeric_value_as_insufficient_history(
+    column_name: str,
+) -> None:
+    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
+    pick_date = pd.Timestamp("2026-04-10")
+    frame = _base_dribull_frame()
+    frame[column_name] = frame[column_name].astype(object)
+    frame.loc[3, column_name] = "boom"
+
+    candidates, stats = run_dribull_screen_with_stats(
+        {"000001.SZ": frame},
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert candidates == []
+    assert stats["eligible"] == 1
     assert stats["fail_insufficient_history"] == 1

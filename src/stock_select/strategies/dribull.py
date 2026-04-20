@@ -6,9 +6,9 @@ import pandas as pd
 from stock_select.analysis.macd_waves import classify_daily_macd_wave, classify_weekly_macd_wave
 from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, compute_expanding_j_quantile
 
-B2_RECENT_J_LOOKBACK = 15
-B2_MACD_TREND_DAYS = 5
-_B2_REQUIRED_COLUMNS = (
+DRIBULL_RECENT_J_LOOKBACK = 15
+DRIBULL_MACD_TREND_DAYS = 5
+_DRIBULL_REQUIRED_COLUMNS = (
     "trade_date",
     "J",
     "zxdq",
@@ -20,7 +20,7 @@ _B2_REQUIRED_COLUMNS = (
     "ma144",
     "turnover_n",
 )
-_B2_NUMERIC_COLUMNS = (
+_DRIBULL_NUMERIC_COLUMNS = (
     "J",
     "zxdq",
     "zxdkx",
@@ -33,16 +33,16 @@ _B2_NUMERIC_COLUMNS = (
 )
 
 
-def run_b2_screen(
+def run_dribull_screen(
     prepared_by_symbol: Mapping[str, pd.DataFrame],
     pick_date: pd.Timestamp,
     config: dict[str, float] | None = None,
 ) -> list[dict]:
-    results, _stats = run_b2_screen_with_stats(prepared_by_symbol, pick_date, config)
+    results, _stats = run_dribull_screen_with_stats(prepared_by_symbol, pick_date, config)
     return results
 
 
-def prefilter_b2_non_macd(
+def prefilter_dribull_non_macd(
     prepared_by_symbol: Mapping[str, pd.DataFrame],
     pick_date: pd.Timestamp,
     config: dict[str, float] | None = None,
@@ -55,7 +55,7 @@ def prefilter_b2_non_macd(
         if prepared.empty or _missing_required_columns(prepared):
             continue
 
-        frame = _normalize_b2_frame(prepared)
+        frame = _normalize_dribull_frame(prepared)
         if _has_invalid_required_inputs(prepared, frame):
             continue
 
@@ -85,7 +85,7 @@ def prefilter_b2_non_macd(
     return selected
 
 
-def run_b2_screen_with_stats(
+def run_dribull_screen_with_stats(
     prepared_by_symbol: Mapping[str, pd.DataFrame],
     pick_date: pd.Timestamp,
     config: dict[str, float] | None = None,
@@ -118,7 +118,7 @@ def run_b2_screen_with_stats(
             stats["fail_insufficient_history"] += 1
             continue
 
-        frame = _normalize_b2_frame(prepared)
+        frame = _normalize_dribull_frame(prepared)
         if _has_invalid_required_inputs(prepared, frame):
             stats["eligible"] += 1
             stats["fail_insufficient_history"] += 1
@@ -194,13 +194,13 @@ def run_b2_screen_with_stats(
 
 
 def _missing_required_columns(frame: pd.DataFrame) -> set[str]:
-    return set(_B2_REQUIRED_COLUMNS) - set(frame.columns)
+    return set(_DRIBULL_REQUIRED_COLUMNS) - set(frame.columns)
 
 
-def _normalize_b2_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def _normalize_dribull_frame(frame: pd.DataFrame) -> pd.DataFrame:
     normalized = frame.copy()
     normalized["trade_date"] = pd.to_datetime(normalized["trade_date"], errors="coerce", format="mixed")
-    for column in _B2_NUMERIC_COLUMNS:
+    for column in _DRIBULL_NUMERIC_COLUMNS:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
     if "volume" in normalized.columns:
         normalized["volume"] = pd.to_numeric(normalized["volume"], errors="coerce")
@@ -211,7 +211,7 @@ def _normalize_b2_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _coerced_numeric_columns(original: pd.DataFrame, normalized: pd.DataFrame) -> set[str]:
     invalid_columns: set[str] = set()
-    for column in _B2_NUMERIC_COLUMNS:
+    for column in _DRIBULL_NUMERIC_COLUMNS:
         original_series = original[column]
         normalized_series = normalized[column]
         invalid_mask = original_series.notna() & normalized_series.isna()
@@ -233,9 +233,9 @@ def _has_invalid_required_inputs(original: pd.DataFrame, normalized: pd.DataFram
 
 
 def _has_minimum_history(history: pd.DataFrame) -> bool:
-    if len(history) < max(B2_RECENT_J_LOOKBACK, 144):
+    if len(history) < max(DRIBULL_RECENT_J_LOOKBACK, 144):
         return False
-    if history["J"].tail(B2_RECENT_J_LOOKBACK).isna().any():
+    if history["J"].tail(DRIBULL_RECENT_J_LOOKBACK).isna().any():
         return False
     if len(history) < 2:
         return False
@@ -264,7 +264,7 @@ def _recent_j_rule_hit(history: pd.DataFrame, config: dict[str, float]) -> bool:
     q_threshold = float(config.get("j_q_threshold", DEFAULT_B1_CONFIG["j_q_threshold"]))
     j_series = history["J"].astype(float)
     j_quantile = compute_expanding_j_quantile(j_series, q_threshold)
-    recent = pd.DataFrame({"J": j_series, "j_quantile": j_quantile}).tail(B2_RECENT_J_LOOKBACK)
+    recent = pd.DataFrame({"J": j_series, "j_quantile": j_quantile}).tail(DRIBULL_RECENT_J_LOOKBACK)
     return bool(((recent["J"] < j_threshold) | (recent["J"] <= recent["j_quantile"])).any())
 
 
@@ -299,9 +299,9 @@ def _ma144_distance_ok(row: pd.Series) -> bool:
 
 
 __all__ = [
-    "B2_MACD_TREND_DAYS",
-    "B2_RECENT_J_LOOKBACK",
-    "prefilter_b2_non_macd",
-    "run_b2_screen",
-    "run_b2_screen_with_stats",
+    "DRIBULL_MACD_TREND_DAYS",
+    "DRIBULL_RECENT_J_LOOKBACK",
+    "prefilter_dribull_non_macd",
+    "run_dribull_screen",
+    "run_dribull_screen_with_stats",
 ]

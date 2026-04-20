@@ -16,15 +16,15 @@ from stock_select.strategies.b1 import (
     run_b1_screen,
     run_b1_screen_with_stats,
 )
-from stock_select.strategies.b2 import (
-    B2_MACD_TREND_DAYS,
-    B2_RECENT_J_LOOKBACK,
-    prefilter_b2_non_macd,
-    run_b2_screen,
-    run_b2_screen_with_stats,
+from stock_select.strategies.dribull import (
+    DRIBULL_MACD_TREND_DAYS,
+    DRIBULL_RECENT_J_LOOKBACK,
+    prefilter_dribull_non_macd,
+    run_dribull_screen,
+    run_dribull_screen_with_stats,
 )
 
-SUPPORTED_METHODS = ("b1", "b2", "hcr")
+SUPPORTED_METHODS = ("b1", "dribull", "hcr")
 
 
 def normalize_method(method: str) -> str:
@@ -40,9 +40,9 @@ def validate_method(method: str) -> str:
 
 
 __all__ = [
-    "B2_MACD_TREND_DAYS",
-    "B2_RECENT_J_LOOKBACK",
-    "prefilter_b2_non_macd",
+    "DRIBULL_MACD_TREND_DAYS",
+    "DRIBULL_RECENT_J_LOOKBACK",
+    "prefilter_dribull_non_macd",
     "DEFAULT_B1_CONFIG",
     "DEFAULT_MAX_VOL_LOOKBACK",
     "DEFAULT_TOP_M",
@@ -61,7 +61,7 @@ __all__ = [
     "normalize_method",
     "run_b1_screen",
     "run_b1_screen_with_stats",
-    "run_b2_screen",
-    "run_b2_screen_with_stats",
+    "run_dribull_screen",
+    "run_dribull_screen_with_stats",
     "validate_method",
 ]

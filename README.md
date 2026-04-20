@@ -5,11 +5,11 @@
 当前仓库的目标是提供一个可单独运行的 A 股初筛流程，包括：
 
 - 从 PostgreSQL 读取 `daily_market` 数据
-- 运行确定性的 `b1` / `b2` / `hcr` 初筛
+- 运行确定性的 `b1` / `dribull` / `hcr` 初筛
 - 为候选股票生成日线 PNG 图
 - 对候选股票执行本地 review 流程
 
-当前 `b2` 流程已经改为两阶段：
+当前 `dribull` 筛选流程已经改为两阶段：
 
 - 第一阶段只做非 `MACD` 结构预筛
 - 第二阶段只做日线 / 周线 `MACD` 浪型识别
@@ -65,19 +65,20 @@ mkdir -p ~/.agents/skills/stock-select && cp -R /home/pi/Documents/agents/stock-
 
 ```bash
 uv run stock-select screen --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
-uv run stock-select screen --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select screen --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select screen --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select chart --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
-uv run stock-select chart --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select chart --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select chart --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select review --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select record-watch --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
-uv run stock-select record-watch --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select record-watch --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select record-watch --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
-uv run stock-select run --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select run --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 ```
 
@@ -159,8 +160,8 @@ SZ002703 浙江世宝
 
 - `screen`
   - 从 PostgreSQL 的 `daily_market` 读取目标日前约 366 天窗口
-  - 在本地计算 `b1` / `b2` 或 `hcr` 所需指标
-  - `b1` 与 `b2` 共用同一天的基础 prepared cache
+  - 在本地计算 `b1` / `dribull` 或 `hcr` 所需指标
+  - `b1` 与 `dribull` 共用同一天的基础 prepared cache
   - 将候选结果写入 `~/.agents/skills/stock-select/runtime/candidates/`
 - `chart`
   - 读取 candidate 文件
@@ -173,9 +174,9 @@ SZ002703 浙江世宝
   - `llm_review_tasks.json` 顶层固定写入 `max_concurrency: 6`，作为 llm review 阶段的并发上限
   - 该结果结构已经预留 `llm_review` 字段，供后续基于 PNG + method-specific prompt 的子代理图评回填
   - `b1` 使用 `.agents/skills/stock-select/references/prompt-b1.md`
-  - `b2` 使用 `.agents/skills/stock-select/references/prompt-b2.md`
+  - `b2` 与 `dribull` 的 review 都使用 `.agents/skills/stock-select/references/prompt-b2.md`
   - `hcr` 继续使用 `.agents/skills/stock-select/references/prompt.md`
-  - `b1` 与 `b2` 都会在任务文件中额外写入周线 / 日线浪型和组合判定的文本上下文，供对应 prompt 使用
+  - `b1`、`b2` 与 `dribull` 都会在任务文件中额外写入周线 / 日线浪型和组合判定的文本上下文，供对应 prompt 使用
   - 将汇总结果写入 `~/.agents/skills/stock-select/runtime/reviews/<pick_date>.<method>/summary.json`
 - `record-watch`
   - 读取 `reviews/<pick_date>.<method>/summary.json`
@@ -249,7 +250,7 @@ SZ002703 浙江世宝
 
 ```text
 candidates/<pick_date>.<method>.json
-prepared/<pick_date>.pkl                 # b1 / b2 共享基础 prepare
+prepared/<pick_date>.pkl                 # b1 / dribull 共享基础 prepare
 prepared/<pick_date>.hcr.pkl             # hcr 独立 prepare
 charts/<pick_date>.<method>/<code>_day.png
 reviews/<pick_date>.<method>/llm_review_tasks.json
@@ -262,7 +263,7 @@ watch_pool.csv
 
 ```text
 candidates/<run_id>.<method>.json
-prepared/<trade_date>.intraday.pkl       # b1 / b2 共享基础 prepare
+prepared/<trade_date>.intraday.pkl       # b1 / dribull 共享基础 prepare
 prepared/<trade_date>.intraday.hcr.pkl   # hcr 独立 prepare
 charts/<run_id>.<method>/
 reviews/<run_id>.<method>/
@@ -270,13 +271,14 @@ reviews/<run_id>.<method>/
 
 其中：
 
-- `b1` 和 `b2` 在 EOD 与 intraday 下都共用基础 prepared cache
-- `b2` 的二阶段 MACD warmup 仍是按需现算，不单独落盘
+- `b1` 和 `dribull` 在 EOD 与 intraday 下都共用基础 prepared cache
+- `dribull` 的二阶段 MACD warmup 仍是按需现算，不单独落盘
 - intraday 只有在 `screen --intraday --recompute` 时才会重写当日共享 prepared cache
 
 ## 当前限制
 
-- 当前内置方法为 `b1`、`b2` 和 `hcr`
+- 当前筛选内置方法为 `b1`、`dribull` 和 `hcr`
+- `review` 命名空间仍保留 `b2`，且 `review --method dribull` 复用现有 `b2` reviewer 与 `prompt-b2.md`
 - `screen`、`chart`、`run` 都依赖可访问的 PostgreSQL
 - 当前 Python CLI 里的 `review` 仍以本地 baseline 打分为主
 - Python CLI 不直接调用子代理；多模态子代理图评在 CLI 返回后通过 skill workflow 驱动
