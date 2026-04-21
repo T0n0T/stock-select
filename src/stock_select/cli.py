@@ -1905,35 +1905,13 @@ def _analyze_symbol_impl(
     result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{symbol}"
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    start_date = (pd.Timestamp(resolved_pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
-    history = fetch_symbol_history(
-        connection,
-        symbol=symbol,
-        start_date=start_date,
-        end_date=resolved_pick_date,
-    )
-    chart_path = result_dir / f"{symbol}_day.png"
-    chart_data = _prepare_chart_data(history)
-    export_daily_chart(chart_data, symbol, chart_path)
-
-    evaluated = _build_b2_signal_frame(history, code=symbol)
-    latest_signal = _resolve_signal(evaluated.iloc[-1]) if not evaluated.empty else None
-    baseline_review = review_b2_symbol_history(
-        code=symbol,
-        pick_date=resolved_pick_date,
-        history=history,
-        chart_path=str(chart_path),
-    )
-    result = build_review_result(
-        code=symbol,
-        pick_date=resolved_pick_date,
-        chart_path=str(chart_path),
-        baseline_review=baseline_review,
-    )
-    result["method"] = method
-    result["signal"] = latest_signal
-
     result_path = result_dir / "result.json"
+    result = {
+        "method": method,
+        "symbol": symbol,
+        "pick_date": resolved_pick_date,
+        "runtime_dir": str(result_dir),
+    }
     result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     if reporter:
         reporter.emit("analyze-symbol", f"done write={result_path}")
