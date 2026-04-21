@@ -1945,6 +1945,7 @@ def _analyze_symbol_impl(
     )
     if history.empty:
         raise typer.BadParameter(f"No daily history found for symbol: {normalized_symbol}")
+    _validate_eod_pick_date_has_market_data(connection, market=history, pick_date=resolved_pick_date)
 
     frame = history.copy()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"])

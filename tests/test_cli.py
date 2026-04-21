@@ -695,6 +695,46 @@ def test_analyze_symbol_impl_validates_explicit_pick_date_before_dsn_resolution(
         )
 
 
+def test_analyze_symbol_impl_rejects_incomplete_target_date_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "fetch_nth_latest_trade_date", lambda connection, end_date, n: "2026-04-20")
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol, symbol],
+                "trade_date": ["2026-04-20", "2026-04-21"],
+                "open": [10.0, None],
+                "high": [10.2, None],
+                "low": [9.9, None],
+                "close": [10.1, None],
+                "vol": [100.0, None],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_build_b2_signal_frame", lambda *args, **kwargs: pytest.fail("signal frame should not run"))
+    monkeypatch.setattr(cli, "_prepare_chart_data", lambda *args, **kwargs: pytest.fail("chart prep should not run"))
+    monkeypatch.setattr(cli, "export_daily_chart", lambda *args, **kwargs: pytest.fail("chart export should not run"))
+    monkeypatch.setattr(
+        cli,
+        "review_b2_symbol_history",
+        lambda *args, **kwargs: pytest.fail("baseline review should not run"),
+    )
+
+    with pytest.raises(cli.typer.BadParameter, match="incomplete end-of-day rows"):
+        cli._analyze_symbol_impl(
+            method="b2",
+            symbol="002350.SZ",
+            pick_date="2026-04-21",
+            dsn=None,
+            runtime_root=tmp_path,
+        )
+
+
 def test_screen_accepts_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
