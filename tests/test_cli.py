@@ -735,6 +735,121 @@ def test_analyze_symbol_impl_rejects_incomplete_target_date_rows(
         )
 
 
+def test_analyze_symbol_impl_omitted_pick_date_falls_back_to_latest_complete_symbol_date(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "fetch_nth_latest_trade_date", lambda connection, end_date, n: "2026-04-21")
+    monkeypatch.setattr(
+        cli,
+        "fetch_previous_trade_date",
+        lambda connection, before_date: calls.append(before_date) or "2026-04-20",
+    )
+
+    def fake_history(connection, symbol, start_date, end_date):
+        if end_date == "2026-04-21":
+            return pd.DataFrame(
+                {
+                    "ts_code": [symbol, symbol],
+                    "trade_date": ["2026-04-20", "2026-04-21"],
+                    "open": [10.0, None],
+                    "high": [10.2, None],
+                    "low": [9.9, None],
+                    "close": [10.1, None],
+                    "vol": [100.0, None],
+                }
+            )
+        if end_date == "2026-04-20":
+            return pd.DataFrame(
+                {
+                    "ts_code": [symbol],
+                    "trade_date": ["2026-04-20"],
+                    "open": [10.0],
+                    "high": [10.2],
+                    "low": [9.9],
+                    "close": [10.1],
+                    "vol": [100.0],
+                }
+            )
+        pytest.fail(f"unexpected end_date {end_date}")
+
+    monkeypatch.setattr(cli, "fetch_symbol_history", fake_history)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_chart_data",
+        lambda history: pd.DataFrame({"date": [], "open": [], "high": [], "low": [], "close": [], "volume": []}),
+    )
+    monkeypatch.setattr(cli, "export_daily_chart", lambda df, code, out_path: out_path)
+    monkeypatch.setattr(
+        cli,
+        "_build_b2_signal_frame",
+        lambda history, code: pd.DataFrame(
+            [
+                {
+                    "trade_date": pd.Timestamp("2026-04-20"),
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 100.0,
+                    "pct": 1.0,
+                    "J": 20.0,
+                    "pre_ok": True,
+                    "pct_ok": False,
+                    "volume_ok": False,
+                    "k_shape": True,
+                    "j_up": True,
+                    "tr_ok": True,
+                    "above_lt": True,
+                    "raw_b2_unique": False,
+                    "cur_b2": False,
+                    "cur_b3": False,
+                    "cur_b3_plus": False,
+                    "cur_b4": False,
+                    "cur_b5": False,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(cli, "_resolve_signal", lambda row: None)
+    monkeypatch.setattr(
+        cli,
+        "review_b2_symbol_history",
+        lambda code, pick_date, history, chart_path: {
+            "code": code,
+            "pick_date": pick_date,
+            "chart_path": chart_path,
+            "review_type": "baseline",
+            "trend_structure": 3.0,
+            "price_position": 3.0,
+            "volume_behavior": 3.0,
+            "previous_abnormal_move": 3.0,
+            "macd_phase": 3.0,
+            "total_score": 3.0,
+            "signal_type": "rebound",
+            "verdict": "WATCH",
+            "comment": "baseline",
+        },
+    )
+
+    result_path = cli._analyze_symbol_impl(
+        method="b2",
+        symbol="002350.SZ",
+        pick_date=None,
+        dsn=None,
+        runtime_root=tmp_path,
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+
+    assert calls == ["2026-04-21"]
+    assert payload["pick_date"] == "2026-04-20"
+    assert result_path == tmp_path / "ad_hoc" / "2026-04-20.b2.002350.SZ" / "result.json"
+
+
 def test_screen_accepts_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"

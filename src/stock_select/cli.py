@@ -1932,20 +1932,39 @@ def _analyze_symbol_impl(
     connection = _connect(resolved_dsn)
 
     if resolved_pick_date is None:
-        resolved_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
-
-    start_date = (pd.Timestamp(resolved_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
-        "%Y-%m-%d"
-    )
-    history = fetch_symbol_history(
-        connection,
-        symbol=normalized_symbol,
-        start_date=start_date,
-        end_date=resolved_pick_date,
-    )
-    if history.empty:
-        raise typer.BadParameter(f"No daily history found for symbol: {normalized_symbol}")
-    _validate_eod_pick_date_has_market_data(connection, market=history, pick_date=resolved_pick_date)
+        candidate_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
+        while True:
+            start_date = (pd.Timestamp(candidate_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
+                "%Y-%m-%d"
+            )
+            history = fetch_symbol_history(
+                connection,
+                symbol=normalized_symbol,
+                start_date=start_date,
+                end_date=candidate_pick_date,
+            )
+            if history.empty:
+                raise typer.BadParameter(f"No daily history found for symbol: {normalized_symbol}")
+            try:
+                _validate_eod_pick_date_has_market_data(connection, market=history, pick_date=candidate_pick_date)
+            except typer.BadParameter:
+                candidate_pick_date = fetch_previous_trade_date(connection, before_date=candidate_pick_date)
+                continue
+            resolved_pick_date = candidate_pick_date
+            break
+    else:
+        start_date = (pd.Timestamp(resolved_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
+            "%Y-%m-%d"
+        )
+        history = fetch_symbol_history(
+            connection,
+            symbol=normalized_symbol,
+            start_date=start_date,
+            end_date=resolved_pick_date,
+        )
+        if history.empty:
+            raise typer.BadParameter(f"No daily history found for symbol: {normalized_symbol}")
+        _validate_eod_pick_date_has_market_data(connection, market=history, pick_date=resolved_pick_date)
 
     frame = history.copy()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"])
