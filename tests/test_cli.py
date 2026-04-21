@@ -618,6 +618,7 @@ def test_chart_requires_dsn_when_real_history_fetch_is_needed(monkeypatch: pytes
             {
                 "pick_date": "2026-04-01",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "candidates": [{"code": "000001.SZ"}],
             }
         ),
@@ -1027,6 +1028,7 @@ def test_chart_exports_png_for_candidates(tmp_path: Path) -> None:
             {
                 "pick_date": "2026-04-01",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "candidates": [{"code": "000001.SZ"}],
             }
         ),
@@ -1082,8 +1084,6 @@ def test_chart_exports_png_for_candidates(tmp_path: Path) -> None:
         out_path.write_bytes(b"png")
         return out_path
 
-    from stock_select import cli
-
     cli._connect = fake_connect  # type: ignore[assignment]
     cli.fetch_symbol_history = fake_fetch_symbol_history  # type: ignore[assignment]
     cli.export_daily_chart = fake_export_daily_chart  # type: ignore[assignment]
@@ -1106,6 +1106,43 @@ def test_chart_exports_png_for_candidates(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert (runtime_root / "charts" / _eod_key("2026-04-01") / "000001.SZ_day.png").exists()
     assert "[chart] candidate 1/1 code=000001.SZ" in result.stderr
+
+
+def test_chart_rejects_stale_b1_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / f"{_eod_key('2026-04-01')}.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("stale b1 candidate should be rejected before DB access"))
+
+    result = runner.invoke(
+        app,
+        [
+            "chart",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "stale b1 candidate file" in result.stderr.lower()
 
 
 def test_chart_accepts_hcr_candidate_file_shape(tmp_path: Path) -> None:
@@ -1216,6 +1253,7 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
             {
                 "mode": "intraday_snapshot",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T10-00-00+08-00",
                 "candidates": [{"code": "000002.SZ"}],
@@ -1228,6 +1266,7 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
             {
                 "mode": "intraday_snapshot",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "trade_date": "2026-04-09",
                 "fetched_at": "2026-04-09T11-31-08+08-00",
                 "run_id": "2026-04-09T11-31-08+08-00",
@@ -1337,6 +1376,7 @@ def test_chart_intraday_rejects_malformed_latest_candidate_payload(tmp_path: Pat
             {
                 "mode": "intraday_snapshot",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T10-00-00+08-00",
                 "candidates": [{"code": "000001.SZ"}],
@@ -1349,6 +1389,7 @@ def test_chart_intraday_rejects_malformed_latest_candidate_payload(tmp_path: Pat
             {
                 "mode": "intraday_snapshot",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T11-31-08+08-00",
                 "candidates": [{}],
@@ -1377,6 +1418,7 @@ def test_chart_intraday_rejects_prepared_cache_metadata_mismatch(
                 "mode": "intraday_snapshot",
                 "trade_date": "2026-04-09",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "run_id": "2026-04-09T11-31-08+08-00",
                 "candidates": [{"code": "000001.SZ"}],
             }
@@ -1401,6 +1443,7 @@ def test_chart_intraday_rejects_prepared_cache_metadata_mismatch(
                 "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
                 "weekly_ma_periods": cli.DEFAULT_WEEKLY_MA_PERIODS,
                 "max_vol_lookback": cli.DEFAULT_MAX_VOL_LOOKBACK,
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "mode": "intraday_snapshot",
                 "run_id": "2026-04-09T11-31-08+08-00",
             },
@@ -1411,6 +1454,50 @@ def test_chart_intraday_rejects_prepared_cache_metadata_mismatch(
 
     assert result.exit_code != 0
     assert "prepared intraday cache metadata mismatch" in result.stderr.lower()
+
+
+def test_chart_intraday_rejects_stale_b1_prepared_cache(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / f"{_intraday_key('2026-04-09T11-31-08+08-00')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "trade_date": "2026-04-09",
+                "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
+                "run_id": "2026-04-09T11-31-08+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
+        pick_date="2026-04-09",
+        start_date="2025-04-08",
+        end_date="2026-04-09",
+        prepared_by_symbol={
+            "000001.SZ": pd.DataFrame(
+                [
+                    {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                ]
+            )
+        },
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "run_id": "2026-04-09T11-31-08+08-00",
+            "previous_trade_date": "2026-04-08",
+        },
+    )
+
+    result = runner.invoke(app, ["chart", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code != 0
+    assert "stale intraday prepared cache" in result.stderr.lower()
 
 
 def test_review_writes_summary_json(tmp_path: Path) -> None:
@@ -1425,6 +1512,7 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
             {
                 "pick_date": "2026-04-01",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "candidates": [{"code": "000001.SZ"}],
             }
         ),
@@ -1458,8 +1546,6 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
                 "vol": [100.0, 120.0, 150.0],
             }
         )
-
-    from stock_select import cli
 
     cli._connect = fake_connect  # type: ignore[assignment]
     cli.fetch_symbol_history = fake_fetch_symbol_history  # type: ignore[assignment]
@@ -1498,6 +1584,47 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert "total_score" in review
     assert "[review] candidate 1/1 code=000001.SZ" in result.stderr
     assert "[review] done reviewed=1 failures=0" in result.stderr
+
+
+def test_review_rejects_stale_b1_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-01")
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    chart_dir = runtime_root / "charts" / method_key
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("stale b1 candidate should be rejected before DB access"))
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "stale b1 candidate file" in result.stderr.lower()
 
 
 def test_review_uses_method_specific_resolver_prompt_and_baseline(
@@ -1857,6 +1984,7 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
             {
                 "mode": "intraday_snapshot",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T10-00-00+08-00",
                 "candidates": [{"code": "000002.SZ"}],
@@ -1869,6 +1997,7 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
             {
                 "mode": "intraday_snapshot",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "trade_date": "2026-04-09",
                 "fetched_at": "2026-04-09T11-31-08+08-00",
                 "run_id": "2026-04-09T11-31-08+08-00",
@@ -1975,6 +2104,53 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
 
     assert result.exit_code == 0
     assert (runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08+08-00") / "summary.json").exists()
+
+
+def test_review_intraday_rejects_stale_b1_prepared_cache(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    chart_dir = runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08+08-00")
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (candidate_dir / f"{_intraday_key('2026-04-09T11-31-08+08-00')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
+                "trade_date": "2026-04-09",
+                "run_id": "2026-04-09T11-31-08+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
+        pick_date="2026-04-09",
+        start_date="2025-04-08",
+        end_date="2026-04-09",
+        prepared_by_symbol={
+            "000001.SZ": pd.DataFrame(
+                [
+                    {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                ]
+            )
+        },
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "run_id": "2026-04-09T11-31-08+08-00",
+            "previous_trade_date": "2026-04-08",
+        },
+    )
+
+    result = runner.invoke(app, ["review", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code != 0
+    assert "stale intraday prepared cache" in result.stderr.lower()
 
 
 def test_review_intraday_warns_outside_trading_hours(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2157,6 +2333,7 @@ def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytes
             {
                 "pick_date": "2026-04-01",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "candidates": [{"code": "000001.SZ"}],
             }
         ),
@@ -2290,6 +2467,7 @@ def test_review_default_resolver_method_uses_resolver_prompt_metadata(
             {
                 "pick_date": "2026-04-02",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "candidates": [{"code": "000002.SZ"}],
             }
         ),
@@ -2378,6 +2556,7 @@ def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
             {
                 "mode": "intraday_snapshot",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "trade_date": "2026-04-09",
                 "run_id": "2026-04-09T11-31-08+08-00",
                 "candidates": [{"code": "000001.SZ"}],
@@ -2403,6 +2582,7 @@ def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
                     "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
                     "weekly_ma_periods": cli.DEFAULT_WEEKLY_MA_PERIODS,
                     "max_vol_lookback": cli.DEFAULT_MAX_VOL_LOOKBACK,
+                    "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                     "mode": "not_intraday_snapshot",
                 },
             },
@@ -5808,6 +5988,7 @@ def test_screen_custom_pool_does_not_reuse_artifacts_from_different_pool_file(
             {
                 "pick_date": "2026-04-04",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "pool_source": "custom",
                 "pool_file": str(old_pool_file),
                 "candidates": [{"code": "000001.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}],
@@ -6354,6 +6535,7 @@ def test_screen_record_watch_bypasses_existing_candidate_and_prepared_reuse(
             {
                 "pick_date": "2026-04-04",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "candidates": [{"code": "OLD.SZ", "pick_date": "2026-04-04", "close": 9.9, "turnover_n": 90.0}],
             }
         ),
@@ -6493,6 +6675,7 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
             {
                 "pick_date": "2026-04-04",
                 "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
                 "pool_source": "record-watch",
                 "candidates": [{"code": "OLD.SZ", "pick_date": "2026-04-04", "close": 9.9, "turnover_n": 90.0}],
             }

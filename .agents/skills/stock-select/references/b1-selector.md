@@ -1,6 +1,8 @@
 # B1 Selector Reference
 
-Reproduce the current repository's B1 preselection behavior with deterministic Python logic.
+Reproduce the current repository's B1 predicate behavior after a symbol reaches the prepared-screen stage.
+
+This reference describes the deterministic selector predicates themselves. Runtime pool-source selection, candidate/cache reuse, and stale or malformed artifact handling are documented in `README.md` and the CLI implementation.
 
 Required conditions:
 

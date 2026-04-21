@@ -163,6 +163,19 @@ def _candidate_payload_matches_screen_version(payload: dict[str, object], *, met
     return payload.get("screen_version") == B1_ARTIFACT_VERSION
 
 
+def _require_current_candidate_payload(
+    candidate_path: Path,
+    payload: dict[str, object],
+    *,
+    method: str,
+) -> dict[str, object]:
+    if _candidate_payload_matches_screen_version(payload, method=method):
+        return payload
+    raise typer.BadParameter(
+        f"Stale b1 candidate file: {candidate_path}. Re-run `screen --method b1` to rebuild candidates."
+    )
+
+
 def _load_summary_payload(summary_path: Path) -> dict[str, object]:
     try:
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -287,6 +300,7 @@ def _resolve_latest_intraday_candidate(runtime_root: Path, method: str) -> tuple
     latest_path: Path | None = None
     latest_payload: dict[str, object] | None = None
     latest_run_id: str | None = None
+    stale_b1_candidate_path: Path | None = None
 
     for candidate_path in sorted(candidate_dir.glob("*.json")):
         try:
@@ -297,6 +311,9 @@ def _resolve_latest_intraday_candidate(runtime_root: Path, method: str) -> tuple
             continue
         if _candidate_payload_method(candidate_path, payload) != method:
             continue
+        if not _candidate_payload_matches_screen_version(payload, method=method):
+            stale_b1_candidate_path = candidate_path
+            continue
         payload_run_id = payload.get("run_id")
         run_id = payload_run_id.strip() if isinstance(payload_run_id, str) and payload_run_id.strip() else _fallback_run_id(candidate_path)
         if latest_run_id is None or run_id > latest_run_id:
@@ -305,6 +322,11 @@ def _resolve_latest_intraday_candidate(runtime_root: Path, method: str) -> tuple
             latest_run_id = run_id
 
     if latest_path is None or latest_payload is None:
+        if stale_b1_candidate_path is not None:
+            raise IntradayArtifactError(
+                f"Stale intraday b1 candidate file: {stale_b1_candidate_path}. "
+                "Re-run `screen --method b1 --intraday` to rebuild candidates."
+            )
         raise typer.BadParameter("No intraday candidate file found.")
     return latest_path, _validate_intraday_candidate_payload(latest_path, latest_payload)
 
@@ -374,6 +396,19 @@ def _prepared_cache_matches_screen_version(payload: dict[str, object], *, method
     return isinstance(metadata, dict) and metadata.get("screen_version") == B1_ARTIFACT_VERSION
 
 
+def _require_current_intraday_prepared_cache(
+    cache_path: Path,
+    payload: dict[str, object],
+    *,
+    method: str,
+) -> None:
+    if _prepared_cache_matches_screen_version(payload, method=method):
+        return
+    raise IntradayArtifactError(
+        f"Stale intraday prepared cache: {cache_path}. Re-run `screen --method b1 --intraday --recompute`."
+    )
+
+
 def _load_intraday_prepared_cache(
     runtime_root: Path,
     *,
@@ -381,7 +416,9 @@ def _load_intraday_prepared_cache(
     run_id: str,
     trade_date: str,
 ) -> dict[str, pd.DataFrame]:
-    payload = _load_prepared_cache(_prepared_cache_path(runtime_root, f"{trade_date}.intraday", method))
+    cache_path = _prepared_cache_path(runtime_root, f"{trade_date}.intraday", method)
+    payload = _load_prepared_cache(cache_path)
+    _require_current_intraday_prepared_cache(cache_path, payload, method=method)
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
@@ -1494,7 +1531,11 @@ def _chart_impl(
     candidate_path = _candidate_path(runtime_root, pick_date, method)
     if not candidate_path.exists():
         raise typer.BadParameter(f"Candidate file not found: {candidate_path}")
-    payload = _load_candidate_payload(candidate_path)
+    payload = _require_current_candidate_payload(
+        candidate_path,
+        _load_candidate_payload(candidate_path),
+        method=method,
+    )
     chart_dir = _chart_dir_path(runtime_root, pick_date, method)
     chart_dir.mkdir(parents=True, exist_ok=True)
     resolved_dsn = _resolve_cli_dsn(dsn)
@@ -1586,7 +1627,11 @@ def _review_impl(
         raise typer.BadParameter(f"Candidate file not found: {candidate_path}")
     review_dir = _review_dir_path(runtime_root, pick_date, method)
     review_dir.mkdir(parents=True, exist_ok=True)
-    payload = _load_candidate_payload(candidate_path)
+    payload = _require_current_candidate_payload(
+        candidate_path,
+        _load_candidate_payload(candidate_path),
+        method=method,
+    )
     resolved_dsn = _resolve_cli_dsn(dsn)
     connection = _connect(resolved_dsn)
     start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
