@@ -13,6 +13,7 @@ import psycopg
 import typer
 
 from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
+from stock_select.reviewers import review_b2_symbol_history
 from stock_select.strategies import (
     DEFAULT_B1_CONFIG,
     DRIBULL_MACD_TREND_DAYS,
@@ -36,6 +37,7 @@ from stock_select.strategies import (
     run_dribull_screen_with_stats,
     validate_method,
 )
+from stock_select.strategies.b2 import _build_b2_signal_frame, _resolve_signal
 from stock_select.strategies.hcr import (
     HCR_REQUIRED_TRADING_DAYS,
     prepare_hcr_frame,
@@ -1897,7 +1899,45 @@ def _analyze_symbol_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    raise NotImplementedError("analyze-symbol is not implemented yet")
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    connection = _connect(resolved_dsn)
+    resolved_pick_date = pick_date or fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
+    result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{symbol}"
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    start_date = (pd.Timestamp(resolved_pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
+    history = fetch_symbol_history(
+        connection,
+        symbol=symbol,
+        start_date=start_date,
+        end_date=resolved_pick_date,
+    )
+    chart_path = result_dir / f"{symbol}_day.png"
+    chart_data = _prepare_chart_data(history)
+    export_daily_chart(chart_data, symbol, chart_path)
+
+    evaluated = _build_b2_signal_frame(history, code=symbol)
+    latest_signal = _resolve_signal(evaluated.iloc[-1]) if not evaluated.empty else None
+    baseline_review = review_b2_symbol_history(
+        code=symbol,
+        pick_date=resolved_pick_date,
+        history=history,
+        chart_path=str(chart_path),
+    )
+    result = build_review_result(
+        code=symbol,
+        pick_date=resolved_pick_date,
+        chart_path=str(chart_path),
+        baseline_review=baseline_review,
+    )
+    result["method"] = method
+    result["signal"] = latest_signal
+
+    result_path = result_dir / "result.json"
+    result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    if reporter:
+        reporter.emit("analyze-symbol", f"done write={result_path}")
+    return result_path
 
 
 def _render_html_impl(
