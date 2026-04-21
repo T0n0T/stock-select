@@ -1888,6 +1888,18 @@ def _review_merge_impl(
     return summary_path
 
 
+def _analyze_symbol_impl(
+    *,
+    method: str,
+    symbol: str,
+    pick_date: str | None,
+    dsn: str | None,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    raise NotImplementedError("analyze-symbol is not implemented yet")
+
+
 def _render_html_impl(
     *,
     method: str,
@@ -2119,6 +2131,30 @@ def review(
             reporter=reporter,
         )
     typer.echo(str(summary_path))
+
+
+@app.command(name="analyze-symbol")
+def analyze_symbol(
+    method: str = typer.Option(..., "--method"),
+    symbol: str = typer.Option(..., "--symbol"),
+    pick_date: str | None = typer.Option(None, "--pick-date"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    normalized_method = _validate_review_method(method)
+    if normalized_method != "b2":
+        raise typer.BadParameter("analyze-symbol currently only supports method b2.")
+    reporter = ProgressReporter(enabled=progress)
+    result_path = _analyze_symbol_impl(
+        method=normalized_method,
+        symbol=symbol,
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        reporter=reporter,
+    )
+    typer.echo(str(result_path))
 
 
 @app.command(name="record-watch")

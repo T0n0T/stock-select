@@ -120,6 +120,35 @@ def test_screen_rejects_unknown_method() -> None:
     assert "dribull" in stderr
 
 
+def test_analyze_symbol_requires_symbol(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["analyze-symbol", "--method", "b2", "--runtime-root", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "--symbol" in result.stderr
+
+
+def test_analyze_symbol_rejects_non_b2_method(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "analyze-symbol",
+            "--method",
+            "b1",
+            "--symbol",
+            "002350.SZ",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "only supports method b2" in result.stderr.lower()
+
+
 def test_screen_accepts_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
