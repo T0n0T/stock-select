@@ -679,6 +679,22 @@ def test_analyze_symbol_impl_writes_baseline_review_even_when_signal_is_null(
     assert payload["baseline_review"]["total_score"] == 2.84
 
 
+def test_analyze_symbol_impl_validates_explicit_pick_date_before_dsn_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: pytest.fail("dsn should not be resolved"))
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("db should not be opened"))
+
+    with pytest.raises(cli.typer.BadParameter, match="YYYY-MM-DD"):
+        cli._analyze_symbol_impl(
+            method="b2",
+            symbol="002350.SZ",
+            pick_date="not-a-date",
+            dsn=None,
+            runtime_root=tmp_path,
+        )
+
+
 def test_screen_accepts_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"

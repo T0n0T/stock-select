@@ -1923,13 +1923,16 @@ def _analyze_symbol_impl(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    if pick_date is None:
+        resolved_pick_date: str | None = None
+    else:
+        resolved_pick_date = _validate_cli_pick_date(pick_date)
+
     resolved_dsn = _resolve_cli_dsn(dsn)
     connection = _connect(resolved_dsn)
 
-    if pick_date is None:
+    if resolved_pick_date is None:
         resolved_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
-    else:
-        resolved_pick_date = _validate_cli_pick_date(pick_date)
 
     start_date = (pd.Timestamp(resolved_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
         "%Y-%m-%d"
