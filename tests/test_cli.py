@@ -180,6 +180,72 @@ def test_analyze_symbol_defaults_to_latest_trade_date(monkeypatch: pytest.Monkey
     assert str(tmp_path / "result.json") in result.stdout
 
 
+def test_analyze_symbol_rejects_invalid_pick_date(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "analyze-symbol",
+            "--method",
+            "b2",
+            "--symbol",
+            "002350.SZ",
+            "--pick-date",
+            "not-a-date",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "yyyy-mm-dd" in result.stderr.lower()
+
+
+def test_analyze_symbol_rejects_path_like_pick_date(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "analyze-symbol",
+            "--method",
+            "b2",
+            "--symbol",
+            "002350.SZ",
+            "--pick-date",
+            "../../escape",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "yyyy-mm-dd" in result.stderr.lower()
+
+
+def test_analyze_symbol_rejects_invalid_symbol_cleanly(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "analyze-symbol",
+            "--method",
+            "b2",
+            "--symbol",
+            "ABC",
+            "--pick-date",
+            "2026-04-21",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "unsupported ts_code" in result.stderr.lower()
+
+
 def test_analyze_symbol_impl_writes_result_under_ad_hoc_runtime(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

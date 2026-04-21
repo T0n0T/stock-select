@@ -146,6 +146,13 @@ def _default_runtime_root() -> Path:
     return Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
 
 
+def _validate_cli_pick_date(pick_date: str) -> str:
+    try:
+        return pd.Timestamp(pick_date).strftime("%Y-%m-%d")
+    except (TypeError, ValueError) as exc:
+        raise typer.BadParameter("pick_date must be a valid date in YYYY-MM-DD format.") from exc
+
+
 def _connect(dsn: str):
     return psycopg.connect(dsn)
 
@@ -1899,13 +1906,16 @@ def _analyze_symbol_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    normalized_symbol = _normalize_ts_code(symbol.strip().upper())
+    try:
+        normalized_symbol = _normalize_ts_code(symbol.strip().upper())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     if pick_date is None:
         resolved_dsn = _resolve_cli_dsn(dsn)
         connection = _connect(resolved_dsn)
         resolved_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
     else:
-        resolved_pick_date = pick_date
+        resolved_pick_date = _validate_cli_pick_date(pick_date)
 
     result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{normalized_symbol}"
     result_dir.mkdir(parents=True, exist_ok=True)
