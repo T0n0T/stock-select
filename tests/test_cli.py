@@ -390,7 +390,7 @@ def test_analyze_symbol_impl_writes_result_under_ad_hoc_runtime(
     assert payload["screen_conditions"]["pre_ok"] is True
     assert payload["latest_metrics"]["trade_date"] == "2026-04-21"
     assert payload["baseline_review"]["verdict"] == "FAIL"
-    assert payload["chart_path"].endswith("002350.SZ_day.png")
+    assert payload["chart_path"] == str((tmp_path / "ad_hoc" / "2026-04-21.b2.002350.SZ" / "002350.SZ_day.png").resolve())
 
 
 def test_analyze_symbol_impl_uses_explicit_pick_date_and_fetches_history(
@@ -693,6 +693,119 @@ def test_analyze_symbol_impl_validates_explicit_pick_date_before_dsn_resolution(
             dsn=None,
             runtime_root=tmp_path,
         )
+
+
+def test_analyze_symbol_impl_surfaces_missing_dsn_as_bad_parameter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_resolve_cli_dsn",
+        lambda _dsn: (_ for _ in ()).throw(ValueError("A database DSN is required.")),
+    )
+
+    with pytest.raises(cli.typer.BadParameter, match="database DSN is required"):
+        cli._analyze_symbol_impl(
+            method="b2",
+            symbol="002350.SZ",
+            pick_date="2026-04-21",
+            dsn=None,
+            runtime_root=tmp_path,
+        )
+
+
+def test_analyze_symbol_impl_serializes_absolute_chart_path_for_relative_runtime_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol],
+                "trade_date": ["2026-04-21"],
+                "open": [10.0],
+                "high": [10.2],
+                "low": [9.9],
+                "close": [10.1],
+                "vol": [100.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_chart_data",
+        lambda history: pd.DataFrame({"date": [], "open": [], "high": [], "low": [], "close": [], "volume": []}),
+    )
+    monkeypatch.setattr(cli, "export_daily_chart", lambda df, code, out_path: out_path)
+    monkeypatch.setattr(
+        cli,
+        "_build_b2_signal_frame",
+        lambda history, code: pd.DataFrame(
+            [
+                {
+                    "trade_date": pd.Timestamp("2026-04-21"),
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 100.0,
+                    "pct": 1.0,
+                    "J": 20.0,
+                    "pre_ok": True,
+                    "pct_ok": False,
+                    "volume_ok": False,
+                    "k_shape": True,
+                    "j_up": True,
+                    "tr_ok": True,
+                    "above_lt": True,
+                    "raw_b2_unique": False,
+                    "cur_b2": False,
+                    "cur_b3": False,
+                    "cur_b3_plus": False,
+                    "cur_b4": False,
+                    "cur_b5": False,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(cli, "_resolve_signal", lambda row: None)
+    monkeypatch.setattr(
+        cli,
+        "review_b2_symbol_history",
+        lambda code, pick_date, history, chart_path: {
+            "code": code,
+            "pick_date": pick_date,
+            "chart_path": chart_path,
+            "review_type": "baseline",
+            "trend_structure": 3.0,
+            "price_position": 3.0,
+            "volume_behavior": 3.0,
+            "previous_abnormal_move": 3.0,
+            "macd_phase": 3.0,
+            "total_score": 3.0,
+            "signal_type": "rebound",
+            "verdict": "WATCH",
+            "comment": "baseline",
+        },
+    )
+
+    result_path = cli._analyze_symbol_impl(
+        method="b2",
+        symbol="002350.SZ",
+        pick_date="2026-04-21",
+        dsn=None,
+        runtime_root=Path("runtime"),
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+
+    assert payload["chart_path"] == str(
+        (tmp_path / "runtime" / "ad_hoc" / "2026-04-21.b2.002350.SZ" / "002350.SZ_day.png").resolve()
+    )
 
 
 def test_analyze_symbol_impl_rejects_incomplete_target_date_rows(

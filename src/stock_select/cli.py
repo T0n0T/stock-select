@@ -1928,11 +1928,17 @@ def _analyze_symbol_impl(
     else:
         resolved_pick_date = _validate_cli_pick_date(pick_date)
 
-    resolved_dsn = _resolve_cli_dsn(dsn)
-    connection = _connect(resolved_dsn)
+    try:
+        resolved_dsn = _resolve_cli_dsn(dsn)
+        connection = _connect(resolved_dsn)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     if resolved_pick_date is None:
-        candidate_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
+        try:
+            candidate_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         while True:
             start_date = (pd.Timestamp(candidate_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
                 "%Y-%m-%d"
@@ -1948,7 +1954,10 @@ def _analyze_symbol_impl(
             try:
                 _validate_eod_pick_date_has_market_data(connection, market=history, pick_date=candidate_pick_date)
             except typer.BadParameter:
-                candidate_pick_date = fetch_previous_trade_date(connection, before_date=candidate_pick_date)
+                try:
+                    candidate_pick_date = fetch_previous_trade_date(connection, before_date=candidate_pick_date)
+                except ValueError as exc:
+                    raise typer.BadParameter(str(exc)) from exc
                 continue
             resolved_pick_date = candidate_pick_date
             break
@@ -1994,7 +2003,7 @@ def _analyze_symbol_impl(
         _prepare_chart_data(history),
         normalized_symbol,
         result_dir / f"{normalized_symbol}_day.png",
-    )
+    ).resolve()
     baseline_review = review_b2_symbol_history(
         code=normalized_symbol,
         pick_date=resolved_pick_date,
