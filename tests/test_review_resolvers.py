@@ -23,12 +23,12 @@ def test_get_review_resolver_uses_b2_prompt_and_name() -> None:
     assert resolver.prompt_path.endswith(".agents/skills/stock-select/references/prompt-b2.md")
 
 
-def test_get_review_resolver_routes_dribull_to_b2_review_strategy() -> None:
+def test_get_review_resolver_routes_dribull_to_dedicated_review_strategy() -> None:
     resolver = get_review_resolver("dribull")
 
-    assert resolver.name == "b2"
+    assert resolver.name == "dribull"
     assert resolver.prompt_path.endswith(".agents/skills/stock-select/references/prompt-b2.md")
-    assert resolver.review_history.__module__ == "stock_select.reviewers.b2"
+    assert resolver.review_history.__module__ == "stock_select.reviewers.dribull"
 
 
 def test_get_review_resolver_returns_callable_review_history() -> None:

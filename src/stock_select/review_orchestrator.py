@@ -5,6 +5,7 @@ from typing import Any
 
 import pandas as pd
 
+from stock_select.analysis.macd_waves import DailyMacdState
 from stock_select.review_protocol import (
     BASELINE_SCORE_WEIGHTS,
     build_baseline_comment,
@@ -41,6 +42,118 @@ def compute_method_total_score(method: str, scores: dict[str, float]) -> float:
     if normalized == "hcr":
         return compute_weighted_total_without_macd(scores)
     return compute_weighted_total(scores)
+
+
+def map_macd_phase_score(
+    *,
+    method: str,
+    history_len: int,
+    daily_state: DailyMacdState,
+    weekly_wave: Any | None = None,
+) -> float:
+    normalized = str(method).strip().lower()
+    if normalized in {"b1", "b2", "dribull"} and history_len < 60:
+        return 3.0
+    if normalized not in {"b1", "b2", "dribull"} and history_len < 35:
+        return 3.0
+
+    state = daily_state.state
+    weekly_label = str(getattr(weekly_wave, "label", ""))
+    third_wave_gain = float(daily_state.metrics.get("third_wave_gain", 0.0))
+
+    if normalized == "b1":
+        if state in {"hard_invalid", "deteriorating", "overextended"}:
+            return 1.0
+        if weekly_label in {"wave1", "wave3"} and state == "wave2_end_valid":
+            return 5.0
+        if weekly_label in {"wave1", "wave3"} and state == "wave4_end_valid":
+            return 5.0 if third_wave_gain <= 0.15 else 4.0
+        if weekly_label in {"wave1", "wave3"} and state == "repair_candidate":
+            return 4.0
+        if weekly_label in {"wave1", "wave3"} and state == "early_recross":
+            return 3.0
+        if state in {"wave2_end_valid", "wave4_end_valid", "repair_candidate"}:
+            return 2.0
+        return 1.0
+
+    if normalized == "b2":
+        if state in {"hard_invalid", "deteriorating"}:
+            return 1.0
+        if weekly_label in {"wave1", "wave3"} and state in {"wave2_end_valid", "wave4_end_valid"}:
+            return 5.0
+        if weekly_label in {"wave1", "wave3"} and state in {"repair_candidate", "early_recross"}:
+            return 4.0
+        if weekly_label == "wave2" and state in {"wave2_end_valid", "wave4_end_valid", "repair_candidate"}:
+            return 3.0
+        if state == "overextended":
+            return 2.0
+        if state == "repair_candidate":
+            return 2.0
+        return 1.0
+
+    if normalized == "dribull":
+        if state in {"hard_invalid", "deteriorating"}:
+            return 1.0
+        if weekly_label == "wave3" and state == "wave4_end_valid":
+            return 5.0
+        if weekly_label == "wave1" and state == "wave2_end_valid":
+            return 5.0
+        if weekly_label == "wave3" and state == "repair_candidate":
+            return 4.0
+        if weekly_label in {"wave1", "wave3"} and state in {"wave2_end_valid", "wave4_end_valid"}:
+            return 4.0
+        if weekly_label in {"wave1", "wave3"} and state == "early_recross":
+            return 3.0
+        if weekly_label == "wave2" and state == "wave4_end_valid":
+            return 3.0
+        if state in {"repair_candidate", "overextended"}:
+            return 2.0
+        return 1.0
+
+    if state in {"hard_invalid", "deteriorating", "overextended"}:
+        return 1.0
+    if state == "repair_candidate":
+        return 2.0
+    if state in {"wave2_end_valid", "wave4_end_valid"}:
+        return 4.0
+    if state == "early_recross":
+        return 3.0
+    return 3.0
+
+
+def apply_macd_verdict_gate(
+    *,
+    method: str,
+    current_verdict: str,
+    daily_state: DailyMacdState,
+    weekly_wave: Any | None = None,
+) -> str:
+    normalized = str(method).strip().lower()
+    state = daily_state.state
+    weekly_label = str(getattr(weekly_wave, "label", ""))
+
+    if normalized == "b1":
+        if state in {"hard_invalid", "deteriorating", "overextended"}:
+            return "FAIL"
+        if weekly_label in {"wave1", "wave3"} and state in {"wave2_end_valid", "wave4_end_valid", "repair_candidate"}:
+            return current_verdict
+        return "WATCH" if current_verdict == "PASS" else current_verdict
+
+    if normalized == "b2":
+        if state == "hard_invalid":
+            return "FAIL"
+        if state in {"deteriorating", "overextended"} and current_verdict == "PASS":
+            return "WATCH"
+        return current_verdict
+
+    if normalized == "dribull":
+        if state in {"hard_invalid", "deteriorating"}:
+            return "FAIL"
+        if weekly_label not in {"wave1", "wave3"} and current_verdict == "PASS":
+            return "WATCH"
+        return current_verdict
+
+    return current_verdict
 
 
 def build_review_payload(

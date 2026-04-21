@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from stock_select.reviewers import review_b1_symbol_history, review_b2_symbol_history, review_symbol_history
+from stock_select.reviewers import (
+    review_b1_symbol_history,
+    review_b2_symbol_history,
+    review_dribull_symbol_history,
+    review_symbol_history,
+)
 
 ReviewHistoryFn = Callable[..., dict[str, Any]]
 
@@ -30,10 +35,11 @@ def get_review_resolver(method: str) -> ReviewResolver:
             review_history=review_b1_symbol_history,
         )
     if normalized in {"b2", "dribull"}:
+        review_history = review_b2_symbol_history if normalized == "b2" else review_dribull_symbol_history
         return ReviewResolver(
-            name="b2",
+            name=normalized,
             prompt_path=B2_PROMPT_PATH,
-            review_history=review_b2_symbol_history,
+            review_history=review_history,
         )
     return ReviewResolver(
         name="default",

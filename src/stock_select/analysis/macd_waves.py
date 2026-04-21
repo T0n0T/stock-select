@@ -17,6 +17,14 @@ class MacdWaveClassification:
     details: dict[str, float | int | bool | str]
 
 
+@dataclass(frozen=True)
+class DailyMacdState:
+    state: str
+    valid_for_pullback: bool
+    reason: str
+    metrics: dict[str, float | int | bool | str]
+
+
 def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveClassification:
     working = _slice_to_pick(frame, pick_date)
     weekly_close = working.set_index("trade_date")["close"].astype(float).resample("W-FRI").last().dropna()
@@ -66,6 +74,39 @@ def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCl
 
 
 def classify_daily_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveClassification:
+    state = classify_daily_macd_state(frame, pick_date)
+    third_wave_gain = float(state.metrics.get("third_wave_gain", 0.0))
+    if state.state == "wave2_end_valid":
+        return MacdWaveClassification(
+            "wave2_end",
+            True,
+            state.reason,
+            {"third_wave_gain": third_wave_gain, "needs_recross": False},
+        )
+    if state.state == "wave4_end_valid":
+        return MacdWaveClassification(
+            "wave4_end",
+            True,
+            state.reason,
+            {"third_wave_gain": third_wave_gain, "needs_recross": False},
+        )
+    if state.state == "hard_invalid":
+        reason = "daily MACD churn"
+    elif state.state == "early_recross":
+        reason = "daily pullback already re-crossed"
+    elif state.state == "overextended":
+        reason = "daily third-wave gain exceeded wave4 allowance"
+    else:
+        reason = "daily pullback still deteriorating"
+    return MacdWaveClassification(
+        "invalid",
+        False,
+        reason,
+        {"third_wave_gain": third_wave_gain, "needs_recross": False},
+    )
+
+
+def classify_daily_macd_state(frame: pd.DataFrame, pick_date: str) -> DailyMacdState:
     working = _slice_to_pick(frame, pick_date)
     macd = compute_macd(working[["close"]].astype(float))
     hist = macd["macd_hist"].reset_index(drop=True)
@@ -73,11 +114,21 @@ def classify_daily_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCla
     dea = macd["dea"].reset_index(drop=True)
 
     if len(hist) < 12 or _is_churn(hist.tail(10)):
-        return MacdWaveClassification(
-            "invalid",
+        return DailyMacdState(
+            "hard_invalid",
             False,
             "daily MACD churn",
-            {"third_wave_gain": 0.0, "needs_recross": False},
+            {
+                "third_wave_gain": 0.0,
+                "bullish_now": False,
+                "negative_hist_shrinking": False,
+                "positive_hist_shrinking": False,
+                "converging": False,
+                "recent_cross_up": False,
+                "recent_cross_down": False,
+                "bars_since_cross": -1,
+                "bars_since_hist_peak": -1,
+            },
         )
 
     third_wave_gain = _estimate_third_wave_gain(working["close"].astype(float))
@@ -91,60 +142,41 @@ def classify_daily_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveCla
     )
     converging = bool(abs(dif.iloc[-1] - dea.iloc[-1]) < abs(dif.iloc[-2] - dea.iloc[-2]))
     bullish_now = bool(dif.iloc[-1] > dea.iloc[-1])
+    recent_cross_up = bool(((dif.shift(1) <= dea.shift(1)) & (dif > dea)).tail(5).any())
+    recent_cross_down = bool(((dif.shift(1) >= dea.shift(1)) & (dif < dea)).tail(5).any())
+    bars_since_cross = _bars_since_last_cross(dif, dea)
+    bars_since_hist_peak = _bars_since_hist_peak(hist)
+    metrics: dict[str, float | int | bool | str] = {
+        "third_wave_gain": third_wave_gain,
+        "bullish_now": bullish_now,
+        "negative_hist_shrinking": shrinking_negative,
+        "positive_hist_shrinking": shrinking_positive,
+        "converging": converging,
+        "recent_cross_up": recent_cross_up,
+        "recent_cross_down": recent_cross_down,
+        "bars_since_cross": bars_since_cross,
+        "bars_since_hist_peak": bars_since_hist_peak,
+    }
 
     if bullish_now and shrinking_positive and converging:
         if third_wave_gain > 0.30:
-            return MacdWaveClassification(
-                "invalid",
-                False,
-                "daily third-wave gain exceeded wave4 allowance",
-                {"third_wave_gain": third_wave_gain, "needs_recross": False},
-            )
-        return MacdWaveClassification(
-            "wave2_end",
-            True,
-            "daily second-wave pullback nearing end",
-            {"third_wave_gain": third_wave_gain, "needs_recross": False},
-        )
+            return DailyMacdState("overextended", False, "daily third-wave gain exceeded wave4 allowance", metrics)
+        return DailyMacdState("wave2_end_valid", True, "daily second-wave pullback nearing end", metrics)
 
     if bullish_now:
-        return MacdWaveClassification(
-            "invalid",
-            False,
-            "daily pullback already re-crossed",
-            {"third_wave_gain": third_wave_gain, "needs_recross": False},
-        )
+        return DailyMacdState("early_recross", False, "daily pullback already re-crossed", metrics)
 
-    if third_wave_gain > 0.30 and (
-        (shrinking_positive and converging) or (shrinking_negative and converging)
-    ):
-        return MacdWaveClassification(
-            "invalid",
-            False,
-            "daily third-wave gain exceeded wave4 allowance",
-            {"third_wave_gain": third_wave_gain, "needs_recross": False},
-        )
-
-    if shrinking_negative and converging and third_wave_gain <= 0.30 and third_wave_gain > 0.0:
-        return MacdWaveClassification(
-            "wave4_end",
-            True,
-            "daily fourth-wave pullback nearing end",
-            {"third_wave_gain": third_wave_gain, "needs_recross": False},
-        )
     if shrinking_negative and converging:
-        return MacdWaveClassification(
-            "wave2_end",
-            True,
-            "daily second-wave pullback nearing end",
-            {"third_wave_gain": third_wave_gain, "needs_recross": False},
-        )
-    return MacdWaveClassification(
-        "invalid",
-        False,
-        "daily pullback still deteriorating",
-        {"third_wave_gain": third_wave_gain, "needs_recross": False},
-    )
+        if third_wave_gain > 0.30:
+            return DailyMacdState("overextended", False, "daily third-wave gain exceeded wave4 allowance", metrics)
+        if third_wave_gain > 0.0:
+            return DailyMacdState("wave4_end_valid", True, "daily fourth-wave pullback nearing end", metrics)
+        return DailyMacdState("wave2_end_valid", True, "daily second-wave pullback nearing end", metrics)
+
+    if shrinking_negative or converging:
+        return DailyMacdState("repair_candidate", False, "daily pullback is stabilizing but not complete", metrics)
+
+    return DailyMacdState("deteriorating", False, "daily pullback still deteriorating", metrics)
 
 
 def _slice_to_pick(frame: pd.DataFrame, pick_date: str) -> pd.DataFrame:
@@ -173,3 +205,18 @@ def _estimate_third_wave_gain(close: pd.Series) -> float:
     if second_wave_low <= 0.0:
         return 0.0
     return round(third_wave_high / second_wave_low - 1.0, 4)
+
+
+def _bars_since_last_cross(dif: pd.Series, dea: pd.Series) -> int:
+    cross_mask = ((dif.shift(1) <= dea.shift(1)) & (dif > dea)) | ((dif.shift(1) >= dea.shift(1)) & (dif < dea))
+    indices = cross_mask[cross_mask.fillna(False)].index.tolist()
+    if not indices:
+        return -1
+    return int(len(dif) - 1 - indices[-1])
+
+
+def _bars_since_hist_peak(hist: pd.Series) -> int:
+    if hist.empty:
+        return -1
+    peak_idx = int(hist.abs().idxmax())
+    return int(len(hist) - 1 - peak_idx)

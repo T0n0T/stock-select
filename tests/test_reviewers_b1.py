@@ -194,3 +194,16 @@ def test_b1_review_counts_macd_phase_in_total_score() -> None:
         2,
     )
     assert review["total_score"] != score_without_macd
+
+
+def test_b1_review_caps_invalid_daily_wave_below_pass_band() -> None:
+    review = review_b1_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b1_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert "日线invalid" in review["comment"]
+    assert review["macd_phase"] <= 2.0
+    assert review["verdict"] != "PASS"

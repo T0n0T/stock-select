@@ -4,13 +4,13 @@ from typing import Any
 
 import pandas as pd
 
+from stock_select.analysis import classify_daily_macd_state
 from stock_select.review_protocol import (
     build_baseline_comment,
     infer_signal_type,
     infer_verdict,
 )
-from stock_select.review_orchestrator import compute_method_total_score
-from stock_select.strategies import compute_macd
+from stock_select.review_orchestrator import apply_macd_verdict_gate, compute_method_total_score, map_macd_phase_score
 
 
 def review_symbol_history(
@@ -54,7 +54,8 @@ def review_symbol_history(
     price_position = _score_price_position(close)
     volume_behavior = _score_volume_behavior(recent_open, recent_close, recent_volume)
     previous_abnormal_move = _score_previous_abnormal_move(close, volume)
-    macd_phase = _score_macd_phase(close)
+    daily_state = classify_daily_macd_state(frame[["trade_date", "close"]], pick_date)
+    macd_phase = map_macd_phase_score(method=method, history_len=len(close), daily_state=daily_state)
 
     score_fields = {
         "trend_structure": trend_structure,
@@ -72,6 +73,7 @@ def review_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
+    verdict = apply_macd_verdict_gate(method=method, current_verdict=verdict, daily_state=daily_state)
 
     return {
         "code": code,
@@ -169,35 +171,3 @@ def _score_previous_abnormal_move(close: pd.Series, volume: pd.Series) -> float:
     if gain < 1.0:
         return 2.0
     return 1.0
-
-
-def _score_macd_phase(close: pd.Series) -> float:
-    if len(close) < 35:
-        return 3.0
-
-    macd = compute_macd(pd.DataFrame({"close": close}))
-    dif = macd["dif"].astype(float)
-    dea = macd["dea"].astype(float)
-    hist = macd["macd_hist"].astype(float)
-    recent_hist = hist.tail(5)
-
-    if len(recent_hist) < 5:
-        return 3.0
-
-    if hist.iloc[-1] < 0.0 and hist.iloc[-2] >= 0.0:
-        return 1.0
-    if dif.iloc[-1] < dea.iloc[-1]:
-        return 2.0
-
-    recent_cross = ((dif.shift(1) <= dea.shift(1)) & (dif > dea)).tail(5).any()
-    hist_increasing = bool((recent_hist.diff().iloc[1:] > 0.0).all())
-    hist_decreasing = bool((recent_hist.diff().iloc[1:] < 0.0).all())
-    lines_stretched = abs(float(dif.iloc[-1] - dea.iloc[-1])) > abs(float(hist.iloc[-1])) * 1.5
-
-    if recent_cross and hist_increasing and hist.iloc[-1] > 0.0:
-        return 5.0
-    if hist_increasing and lines_stretched and hist.iloc[-1] > 0.0:
-        return 4.0
-    if hist_decreasing and close.iloc[-1] >= close.tail(5).max():
-        return 3.0
-    return 3.0

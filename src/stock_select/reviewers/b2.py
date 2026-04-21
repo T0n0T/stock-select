@@ -4,9 +4,9 @@ from typing import Any
 
 import pandas as pd
 
-from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
+from stock_select.analysis import classify_daily_macd_state, classify_daily_macd_wave, classify_weekly_macd_wave
 from stock_select.review_protocol import infer_signal_type, infer_verdict
-from stock_select.review_orchestrator import compute_method_total_score
+from stock_select.review_orchestrator import apply_macd_verdict_gate, compute_method_total_score, map_macd_phase_score
 
 
 def review_b2_symbol_history(
@@ -42,7 +42,8 @@ def review_b2_symbol_history(
     previous_abnormal_move = _score_b2_previous_abnormal_move(close=close, volume=volume, ma25=ma25, ma60=ma60)
     weekly_wave = classify_weekly_macd_wave(frame[["trade_date", "close"]], pick_date)
     daily_wave = classify_daily_macd_wave(frame[["trade_date", "close"]], pick_date)
-    macd_phase = _score_b2_macd_phase(frame, weekly_wave=weekly_wave, daily_wave=daily_wave)
+    daily_state = classify_daily_macd_state(frame[["trade_date", "close"]], pick_date)
+    macd_phase = _score_b2_macd_phase(frame, weekly_wave=weekly_wave, daily_state=daily_state)
 
     total_score = compute_method_total_score(
         "b2",
@@ -62,6 +63,7 @@ def review_b2_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
+    verdict = apply_macd_verdict_gate(method="b2", current_verdict=verdict, daily_state=daily_state, weekly_wave=weekly_wave)
     comment = _build_b2_comment(weekly_wave=weekly_wave, daily_wave=daily_wave, verdict=verdict)
 
     return {
@@ -197,21 +199,9 @@ def _score_b2_macd_phase(
     frame: pd.DataFrame,
     *,
     weekly_wave: Any,
-    daily_wave: Any,
+    daily_state: Any,
 ) -> float:
-    if len(frame) < 60:
-        return 3.0
-
-    weekly_label = str(weekly_wave.label)
-    daily_label = str(daily_wave.label)
-
-    if weekly_label in {"wave1", "wave3"} and daily_label in {"wave2_end", "wave4_end"}:
-        return 5.0
-    if weekly_label in {"wave1", "wave3"}:
-        return 3.0
-    if daily_label in {"wave2_end", "wave4_end"}:
-        return 2.0
-    return 1.0
+    return map_macd_phase_score(method="b2", history_len=len(frame), weekly_wave=weekly_wave, daily_state=daily_state)
 
 
 def _is_b2_wave_combo_ok(*, weekly_wave: Any, daily_wave: Any) -> bool:

@@ -1,6 +1,7 @@
 import pandas as pd
 
 from stock_select.analysis.macd_waves import (
+    classify_daily_macd_state,
     classify_daily_macd_wave,
     classify_weekly_macd_wave,
 )
@@ -49,6 +50,42 @@ def test_classify_daily_macd_wave_returns_wave2_end_for_left_side_pullback() -> 
 
     assert result.label == "wave2_end"
     assert result.details["needs_recross"] is False
+
+
+def test_classify_daily_macd_state_returns_wave2_end_valid_for_left_side_pullback() -> None:
+    frame = _frame_with_close(
+        [10.0] * 40
+        + [9.8, 9.7, 9.9, 10.1, 10.4, 10.8, 11.1, 11.4, 11.2, 11.0, 10.9, 10.92, 10.97, 11.02]
+    )
+
+    result = classify_daily_macd_state(frame, pick_date="2026-03-31")
+
+    assert result.state == "wave2_end_valid"
+    assert result.valid_for_pullback is True
+
+
+def test_classify_daily_macd_state_returns_overextended_when_wave4_shape_exceeds_30_pct_gain() -> None:
+    frame = _frame_with_close(
+        [10.0] * 40
+        + [9.7, 9.5, 9.8, 10.2, 10.6, 11.0, 10.6, 10.3, 10.5, 11.0, 11.8, 12.9, 13.6, 13.2, 12.9, 12.7, 12.8]
+    )
+
+    result = classify_daily_macd_state(frame, pick_date="2026-03-31")
+
+    assert result.state == "overextended"
+    assert result.metrics["third_wave_gain"] > 0.30
+
+
+def test_classify_daily_macd_state_returns_deteriorating_when_pullback_keeps_worsening() -> None:
+    frame = _frame_with_close(
+        [10.0] * 40
+        + [9.8, 9.7, 9.9, 10.3, 10.8, 11.3, 11.9, 12.4, 12.8, 13.0, 12.8, 12.5, 12.0, 11.5, 11.0, 10.6, 10.1]
+    )
+
+    result = classify_daily_macd_state(frame, pick_date="2026-04-03")
+
+    assert result.state == "deteriorating"
+    assert result.valid_for_pullback is False
 
 
 def test_classify_daily_macd_wave_invalidates_wave4_when_third_wave_gain_exceeds_30_pct() -> None:
