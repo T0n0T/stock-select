@@ -20,3 +20,4 @@ Supporting calculations to preserve:
 - Volume input should map database `vol` to the internal volume field.
 - `zxdq` and `zxdkx` should be recomputed locally.
 - Weekly trend judgment should come from weekly close series and moving averages.
+- The exact formulas for `chg_d`, `v_shrink`, `safe_mode`, and `lt_filter` should follow `stock_select.strategies.b1.compute_b1_tightening_columns()` as the source of truth.

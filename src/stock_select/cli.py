@@ -81,6 +81,7 @@ DRIBULL_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
 SHARED_PREPARED_METHODS = frozenset({"b1", "b2", "dribull"})
+B1_ARTIFACT_VERSION = 1
 
 
 class IntradayUserError(ValueError):
@@ -154,6 +155,12 @@ def _resolve_cli_dsn(dsn: str | None) -> str:
 
 def _load_candidate_payload(candidate_path: Path) -> dict:
     return json.loads(candidate_path.read_text(encoding="utf-8"))
+
+
+def _candidate_payload_matches_screen_version(payload: dict[str, object], *, method: str) -> bool:
+    if method != "b1":
+        return True
+    return payload.get("screen_version") == B1_ARTIFACT_VERSION
 
 
 def _load_summary_payload(summary_path: Path) -> dict[str, object]:
@@ -321,6 +328,8 @@ def _write_prepared_cache(
     }
     if method:
         metadata["method"] = method
+    if method in SHARED_PREPARED_METHODS:
+        metadata["screen_version"] = B1_ARTIFACT_VERSION
     if metadata_overrides:
         metadata.update(metadata_overrides)
     payload = {
@@ -356,6 +365,13 @@ def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
         raise ValueError("Prepared cache prepared_by_symbol missing.")
     payload["prepared_by_symbol"] = prepared_by_symbol
     return payload
+
+
+def _prepared_cache_matches_screen_version(payload: dict[str, object], *, method: str) -> bool:
+    if method != "b1":
+        return True
+    metadata = payload.get("metadata")
+    return isinstance(metadata, dict) and metadata.get("screen_version") == B1_ARTIFACT_VERSION
 
 
 def _load_intraday_prepared_cache(
@@ -942,9 +958,12 @@ def _resolve_shared_base_prepared_payload(
     if not cache_path.exists():
         return cache_path, None
     try:
-        return cache_path, _load_prepared_cache(cache_path)
+        payload = _load_prepared_cache(cache_path)
     except (OSError, ValueError, pickle.PickleError):
         return cache_path, None
+    if not _prepared_cache_matches_screen_version(payload, method=method):
+        return cache_path, None
+    return cache_path, payload
 
 
 def _prepare_hcr_screen_data(
@@ -1091,14 +1110,18 @@ def _screen_impl(
             if reporter:
                 reporter.emit("screen", f"candidate reuse skipped path={out_path} reason={type(exc).__name__}")
         else:
-            if _candidate_payload_matches_pool_source(existing_payload, pool_source=pool_source, pool_file=pool_file):
+            if not _candidate_payload_matches_pool_source(existing_payload, pool_source=pool_source, pool_file=pool_file):
+                if reporter:
+                    reporter.emit("screen", f"candidate reuse skipped path={out_path} reason=pool_source_mismatch")
+            elif not _candidate_payload_matches_screen_version(existing_payload, method=method):
+                if reporter:
+                    reporter.emit("screen", f"candidate reuse skipped path={out_path} reason=stale_screen_version")
+            else:
                 existing_candidates = existing_payload.get("candidates", [])
                 if isinstance(existing_candidates, list) and existing_candidates:
                     if reporter:
                         reporter.emit("screen", f"reuse candidates path={out_path}")
                     return out_path
-            elif reporter:
-                reporter.emit("screen", f"candidate reuse skipped path={out_path} reason=pool_source_mismatch")
 
     prepared_cache_path = _prepared_cache_path(runtime_root, pick_date, method)
     prepared: dict[str, pd.DataFrame] | None = None
@@ -1115,7 +1138,13 @@ def _screen_impl(
             if reporter:
                 reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={type(exc).__name__}")
         else:
-            if _prepared_cache_matches_pool_source(cache_payload, pool_source=pool_source, pool_file=pool_file):
+            if not _prepared_cache_matches_pool_source(cache_payload, pool_source=pool_source, pool_file=pool_file):
+                if reporter:
+                    reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=pool_source_mismatch")
+            elif not _prepared_cache_matches_screen_version(cache_payload, method=method):
+                if reporter:
+                    reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=stale_screen_version")
+            else:
                 cached_pick_date = cache_payload.get("pick_date")
                 cached_start_date = cache_payload.get("start_date")
                 cached_end_date = cache_payload.get("end_date")
@@ -1140,8 +1169,6 @@ def _screen_impl(
                     )
                     if mismatch_reason:
                         reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={mismatch_reason}")
-            elif reporter:
-                reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason=pool_source_mismatch")
 
     if prepared is None:
         resolved_dsn = _resolve_cli_dsn(dsn)
@@ -1287,6 +1314,8 @@ def _screen_impl(
             reporter.emit("screen", "run hcr screen")
         candidates, stats = run_hcr_screen_with_stats(prepared, pd.Timestamp(pick_date))
     payload = {"pick_date": pick_date, "method": method, "pool_source": pool_source, "candidates": candidates}
+    if method == "b1":
+        payload["screen_version"] = B1_ARTIFACT_VERSION
     if pool_source == "custom":
         payload["pool_file"] = str(_resolve_custom_pool_file(pool_file))
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1443,6 +1472,8 @@ def _screen_intraday_impl(
         "pool_source": pool_source,
         "candidates": candidates,
     }
+    if method == "b1":
+        payload["screen_version"] = B1_ARTIFACT_VERSION
     if pool_source == "custom":
         payload["pool_file"] = str(_resolve_custom_pool_file(pool_file))
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

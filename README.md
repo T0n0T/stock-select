@@ -233,11 +233,11 @@ SZ002703 浙江世宝
 这会带来两个实际影响：
 
 - 即使 `screen` 默认会读取目标日前约 366 天窗口，如果缓存里的实际连续交易历史不足，`zxdkx` 仍然可能为空
-- 当目标日 `zxdkx` 为空时，该股票会计入 `fail_insufficient_history`
+- 当目标日 `zxdkx` 为空，或缓存里缺少当前 `b1` 所需的 tightening 字段时，该股票会计入 `fail_insufficient_history`
 
 这类股票不会再被误记为 `fail_close_zxdkx`。因此：
 
-- `fail_insufficient_history` 表示“历史长度不足，无法判断是否站上 `zxdkx`”
+- `fail_insufficient_history` 表示“历史长度或 prepared 数据完整性不足，无法继续执行当前 `b1` 判断”
 - `fail_close_zxdkx` 只表示“`zxdkx` 已算出，但收盘价没有站上去”
 
 ## HCR 筛选说明
