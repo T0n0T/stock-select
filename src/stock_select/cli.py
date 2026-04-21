@@ -156,6 +156,15 @@ def _validate_cli_pick_date(pick_date: str) -> str:
         raise typer.BadParameter("pick_date must be a valid date in YYYY-MM-DD format.") from exc
 
 
+def _validate_analyze_symbol(symbol: str) -> str:
+    normalized = symbol.strip().upper()
+    if not re.fullmatch(r"\d{6}(?:\.(?:SZ|SH|BJ))?", normalized):
+        raise typer.BadParameter(
+            "symbol must be a canonical stock code: NNNNNN, NNNNNN.SZ, NNNNNN.SH, or NNNNNN.BJ."
+        )
+    return normalized
+
+
 def _connect(dsn: str):
     return psycopg.connect(dsn)
 
@@ -1910,7 +1919,7 @@ def _analyze_symbol_impl(
     reporter: ProgressReporter | None = None,
 ) -> Path:
     try:
-        normalized_symbol = _normalize_ts_code(symbol.strip().upper())
+        normalized_symbol = _normalize_ts_code(_validate_analyze_symbol(symbol))
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     if pick_date is None:

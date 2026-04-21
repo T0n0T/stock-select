@@ -265,7 +265,29 @@ def test_analyze_symbol_rejects_invalid_symbol_cleanly(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "unsupported ts_code" in result.stderr.lower()
+    assert "canonical stock code" in result.stderr.lower()
+
+
+def test_analyze_symbol_rejects_path_like_symbol_cleanly(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "analyze-symbol",
+            "--method",
+            "b2",
+            "--symbol",
+            "../../escape.SZ",
+            "--pick-date",
+            "2026-04-21",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "symbol" in result.stderr.lower()
 
 
 def test_analyze_symbol_impl_writes_result_under_ad_hoc_runtime(
