@@ -59,6 +59,12 @@ uv tool install --reinstall .
 mkdir -p ~/.agents/skills/stock-select && cp -R /home/pi/Documents/agents/stock-select/.agents/skills/stock-select/. ~/.agents/skills/stock-select/
 ```
 
+安装仓库内置的单票分析 skill `stock-select-single-stock` 到 `~/.agents/skills/`：
+
+```bash
+mkdir -p ~/.agents/skills/stock-select-single-stock && cp -R /home/pi/Documents/agents/stock-select/.agents/skills/stock-select-single-stock/. ~/.agents/skills/stock-select-single-stock/
+```
+
 ## 基本用法
 
 常用命令：
