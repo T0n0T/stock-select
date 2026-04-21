@@ -848,6 +848,49 @@ def test_analyze_symbol_impl_rejects_incomplete_target_date_rows(
         )
 
 
+def test_analyze_symbol_impl_rejects_missing_explicit_pick_date_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol, symbol],
+                "trade_date": ["2026-04-18", "2026-04-20"],
+                "open": [10.0, 10.2],
+                "high": [10.3, 10.5],
+                "low": [9.9, 10.1],
+                "close": [10.1, 10.4],
+                "vol": [100.0, 120.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_build_b2_signal_frame", lambda *args, **kwargs: pytest.fail("signal frame should not run"))
+    monkeypatch.setattr(cli, "_prepare_chart_data", lambda *args, **kwargs: pytest.fail("chart prep should not run"))
+    monkeypatch.setattr(cli, "export_daily_chart", lambda *args, **kwargs: pytest.fail("chart export should not run"))
+    monkeypatch.setattr(
+        cli,
+        "review_b2_symbol_history",
+        lambda *args, **kwargs: pytest.fail("baseline review should not run"),
+    )
+
+    with pytest.raises(
+        cli.typer.BadParameter,
+        match=r"No end-of-day data found for symbol 002350\.SZ on pick_date 2026-04-21\.",
+    ):
+        cli._analyze_symbol_impl(
+            method="b2",
+            symbol="002350.SZ",
+            pick_date="2026-04-21",
+            dsn=None,
+            runtime_root=tmp_path,
+        )
+
+
 def test_analyze_symbol_impl_omitted_pick_date_falls_back_to_latest_complete_symbol_date(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
