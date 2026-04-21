@@ -270,6 +270,46 @@ def test_analyze_symbol_impl_writes_result_under_ad_hoc_runtime(
     assert result_path == tmp_path / "ad_hoc" / "2026-04-21.b2.002350.SZ" / "result.json"
 
 
+def test_analyze_symbol_impl_skips_db_when_pick_date_is_explicit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: pytest.fail("dsn should not be resolved"))
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: pytest.fail("db should not be opened"))
+    monkeypatch.setattr(
+        cli,
+        "fetch_nth_latest_trade_date",
+        lambda connection, end_date, n: pytest.fail("latest trade date should not be fetched"),
+    )
+
+    result_path = cli._analyze_symbol_impl(
+        method="b2",
+        symbol="002350.SZ",
+        pick_date="2026-04-21",
+        dsn=None,
+        runtime_root=tmp_path,
+    )
+
+    assert result_path == tmp_path / "ad_hoc" / "2026-04-21.b2.002350.SZ" / "result.json"
+
+
+def test_analyze_symbol_impl_normalizes_symbol_in_runtime_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "fetch_nth_latest_trade_date", lambda connection, end_date, n: "2026-04-21")
+
+    result_path = cli._analyze_symbol_impl(
+        method="b2",
+        symbol="002350",
+        pick_date=None,
+        dsn=None,
+        runtime_root=tmp_path,
+    )
+
+    assert result_path == tmp_path / "ad_hoc" / "2026-04-21.b2.002350.SZ" / "result.json"
+
+
 def test_screen_accepts_b2_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"

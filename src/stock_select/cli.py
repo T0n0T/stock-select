@@ -1899,16 +1899,21 @@ def _analyze_symbol_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    resolved_dsn = _resolve_cli_dsn(dsn)
-    connection = _connect(resolved_dsn)
-    resolved_pick_date = pick_date or fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
-    result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{symbol}"
+    normalized_symbol = _normalize_ts_code(symbol.strip().upper())
+    if pick_date is None:
+        resolved_dsn = _resolve_cli_dsn(dsn)
+        connection = _connect(resolved_dsn)
+        resolved_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
+    else:
+        resolved_pick_date = pick_date
+
+    result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{normalized_symbol}"
     result_dir.mkdir(parents=True, exist_ok=True)
 
     result_path = result_dir / "result.json"
     result = {
         "method": method,
-        "symbol": symbol,
+        "symbol": normalized_symbol,
         "pick_date": resolved_pick_date,
         "runtime_dir": str(result_dir),
     }
