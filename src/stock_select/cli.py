@@ -1922,24 +1922,100 @@ def _analyze_symbol_impl(
         normalized_symbol = _normalize_ts_code(_validate_analyze_symbol(symbol))
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    connection = _connect(resolved_dsn)
+
     if pick_date is None:
-        resolved_dsn = _resolve_cli_dsn(dsn)
-        connection = _connect(resolved_dsn)
         resolved_pick_date = fetch_nth_latest_trade_date(connection, end_date=_today_local_date(), n=1)
     else:
         resolved_pick_date = _validate_cli_pick_date(pick_date)
 
+    start_date = (pd.Timestamp(resolved_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
+        "%Y-%m-%d"
+    )
+    history = fetch_symbol_history(
+        connection,
+        symbol=normalized_symbol,
+        start_date=start_date,
+        end_date=resolved_pick_date,
+    )
+    if history.empty:
+        raise typer.BadParameter(f"No daily history found for symbol: {normalized_symbol}")
+
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp(resolved_pick_date)].sort_values("trade_date").reset_index(
+        drop=True
+    )
+    if "volume" not in frame.columns and "vol" in frame.columns:
+        frame["volume"] = frame["vol"]
+    if frame.empty or not bool((frame["trade_date"] == pd.Timestamp(resolved_pick_date)).any()):
+        raise typer.BadParameter(
+            f"No end-of-day data found for symbol {normalized_symbol} on pick_date {resolved_pick_date}."
+        )
+
+    signal_frame = _build_b2_signal_frame(frame, code=normalized_symbol)
+    row = signal_frame.iloc[-1]
+    signal = _resolve_signal(row)
+
     result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{normalized_symbol}"
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    result_path = result_dir / "result.json"
-    result = {
-        "method": method,
-        "symbol": normalized_symbol,
+    if reporter:
+        reporter.emit("analyze-symbol", f"symbol={normalized_symbol}")
+        reporter.emit("analyze-symbol", f"pick_date={resolved_pick_date}")
+        reporter.emit("analyze-symbol", "export chart")
+
+    chart_path = export_daily_chart(
+        _prepare_chart_data(history),
+        normalized_symbol,
+        result_dir / f"{normalized_symbol}_day.png",
+    )
+    baseline_review = review_b2_symbol_history(
+        code=normalized_symbol,
+        pick_date=resolved_pick_date,
+        history=history,
+        chart_path=str(chart_path),
+    )
+
+    payload = {
+        "code": normalized_symbol,
         "pick_date": resolved_pick_date,
-        "runtime_dir": str(result_dir),
+        "method": method,
+        "signal": signal,
+        "selected_as_candidate": signal is not None,
+        "screen_conditions": {
+            "pre_ok": bool(row["pre_ok"]),
+            "pct_ok": bool(row["pct_ok"]),
+            "volume_ok": bool(row["volume_ok"]),
+            "k_shape": bool(row["k_shape"]),
+            "j_up": bool(row["j_up"]),
+            "tr_ok": bool(row["tr_ok"]),
+            "above_lt": bool(row["above_lt"]),
+            "raw_b2_unique": bool(row["raw_b2_unique"]),
+            "cur_b2": bool(row["cur_b2"]),
+            "cur_b3": bool(row["cur_b3"]),
+            "cur_b3_plus": bool(row["cur_b3_plus"]),
+            "cur_b4": bool(row["cur_b4"]),
+            "cur_b5": bool(row["cur_b5"]),
+        },
+        "latest_metrics": {
+            "trade_date": str(pd.Timestamp(row["trade_date"]).date()),
+            "open": round(float(row["open"]), 3),
+            "high": round(float(row["high"]), 3),
+            "low": round(float(row["low"]), 3),
+            "close": round(float(row["close"]), 3),
+            "pct": round(float(row["pct"]), 3),
+            "volume": round(float(row["volume"]), 3),
+            "j": round(float(row["J"]), 3),
+        },
+        "baseline_review": baseline_review,
+        "chart_path": str(chart_path),
     }
-    result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    result_path = result_dir / "result.json"
+    result_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     if reporter:
         reporter.emit("analyze-symbol", f"done write={result_path}")
     return result_path
