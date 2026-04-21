@@ -147,8 +147,11 @@ def _default_runtime_root() -> Path:
 
 
 def _validate_cli_pick_date(pick_date: str) -> str:
+    normalized = pick_date.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+        raise typer.BadParameter("pick_date must be a valid date in YYYY-MM-DD format.")
     try:
-        return pd.Timestamp(pick_date).strftime("%Y-%m-%d")
+        return pd.Timestamp(normalized).strftime("%Y-%m-%d")
     except (TypeError, ValueError) as exc:
         raise typer.BadParameter("pick_date must be a valid date in YYYY-MM-DD format.") from exc
 
