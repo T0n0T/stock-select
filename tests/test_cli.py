@@ -4696,12 +4696,14 @@ def test_run_accepts_pool_source_and_passes_it_to_screen_step(
         pick_date: str,
         dsn: str | None,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
         assert method == "b1"
         assert pick_date == "2026-04-01"
         assert dsn == "postgresql://example"
         assert runtime_root == tmp_path / "runtime"
+        assert llm_min_baseline_score is None
         calls.append(("review", method))
         return runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json"
 
@@ -4850,10 +4852,12 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         *,
         method: str,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
         calls.append(("review", method))
         assert runtime_root == tmp_path / "runtime"
+        assert llm_min_baseline_score is None
         return runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"
 
     monkeypatch.setattr(cli, "_screen_intraday_impl", fake_screen_intraday_impl)
@@ -4968,10 +4972,12 @@ def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
         *,
         method: str,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
         assert method == "b1"
         assert runtime_root == tmp_path / "runtime"
+        assert llm_min_baseline_score is None
         calls.append(("review", method))
         return runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"
 
@@ -5042,8 +5048,10 @@ def test_run_accepts_custom_pool_file_and_passes_it_to_screen_step(
         pick_date: str,
         dsn: str | None,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
+        assert llm_min_baseline_score is None
         calls.append(("review", method))
         return runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json"
 
