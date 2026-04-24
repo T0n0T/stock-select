@@ -3227,6 +3227,29 @@ def test_review_filters_llm_tasks_by_min_baseline_score(
     assert "skipped_by_baseline_score=1" in result.stderr
 
 
+def test_review_rejects_non_finite_llm_min_baseline_score(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "nan",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "llm-min-baseline-score" in result.stderr
+
+
 def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

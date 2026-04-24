@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import pickle
 import re
@@ -170,7 +171,7 @@ def _validate_analyze_symbol(symbol: str) -> str:
 def _validate_llm_min_baseline_score(value: float | None) -> float | None:
     if value is None:
         return None
-    if value < 0.0:
+    if not math.isfinite(value) or value < 0.0:
         raise typer.BadParameter("--llm-min-baseline-score must be non-negative.")
     return float(value)
 
