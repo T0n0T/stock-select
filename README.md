@@ -90,6 +90,8 @@ uv run stock-select analyze-symbol --method b1 --symbol 002350.SZ --pick-date YY
 uv run stock-select analyze-symbol --method b2 --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select analyze-symbol --method dribull --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select analyze-symbol --method hcr --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select clean --pick-date YYYY-MM-DD
+uv run stock-select clean --intraday
 uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
@@ -289,6 +291,11 @@ reviews/<pick_date>.<method>/llm_review_results/<code>.json
 reviews/<pick_date>.<method>/summary.json
 watch_pool.csv
 ```
+
+清理命令：
+
+- `clean --pick-date YYYY-MM-DD` 删除该交易日的 EOD `candidates/`、`charts/`、`reviews/`、`prepared/` 产物
+- `clean --intraday` 删除除当天外的历史盘中产物，并保留当天的 intraday candidate/chart/review/prepared
 
 盘中 `--intraday` 运行保持候选、图表、review 目录按 `<run_id>.<method>` 隔离，但 prepared cache 改为按交易日共享：
 

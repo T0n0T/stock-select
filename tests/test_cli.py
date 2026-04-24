@@ -287,6 +287,230 @@ def test_analyze_symbol_rejects_invalid_symbol_cleanly(tmp_path: Path) -> None:
     assert "canonical stock code" in result.stderr.lower()
 
 
+def test_clean_requires_pick_date_or_intraday(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["clean", "--runtime-root", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "either --pick-date or --intraday is required" in result.stderr.lower()
+
+
+def test_clean_rejects_pick_date_with_intraday(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "clean",
+            "--pick-date",
+            "2026-04-10",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--pick-date and --intraday are mutually exclusive" in result.stderr.lower()
+
+
+def test_clean_pick_date_removes_eod_artifacts_only(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    charts_dir = runtime_root / "charts"
+    reviews_dir = runtime_root / "reviews"
+    prepared_dir = runtime_root / "prepared"
+
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+
+    (candidate_dir / f"{_eod_key('2026-04-10')}.json").write_text("{}", encoding="utf-8")
+    (candidate_dir / f"{_eod_key('2026-04-10', 'b2')}.json").write_text("{}", encoding="utf-8")
+    (candidate_dir / f"{_intraday_key('2026-04-10T10-00-00+08-00')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "trade_date": "2026-04-10",
+                "run_id": "2026-04-10T10-00-00+08-00",
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (charts_dir / _eod_key("2026-04-10")).mkdir(parents=True, exist_ok=True)
+    (charts_dir / _eod_key("2026-04-10", "hcr")).mkdir(parents=True, exist_ok=True)
+    (charts_dir / _intraday_key("2026-04-10T10-00-00+08-00")).mkdir(parents=True, exist_ok=True)
+    (reviews_dir / _eod_key("2026-04-10")).mkdir(parents=True, exist_ok=True)
+    (reviews_dir / _eod_key("2026-04-10", "dribull")).mkdir(parents=True, exist_ok=True)
+    (reviews_dir / _intraday_key("2026-04-10T10-00-00+08-00")).mkdir(parents=True, exist_ok=True)
+    cli._write_prepared_cache(
+        prepared_dir / "2026-04-10.pkl",
+        method="b1",
+        pick_date="2026-04-10",
+        start_date="2025-04-09",
+        end_date="2026-04-10",
+        prepared_by_symbol={},
+    )
+    cli._write_prepared_cache(
+        prepared_dir / "2026-04-10.hcr.pkl",
+        method="hcr",
+        pick_date="2026-04-10",
+        start_date="2025-04-09",
+        end_date="2026-04-10",
+        prepared_by_symbol={},
+    )
+    cli._write_prepared_cache(
+        prepared_dir / "2026-04-10.intraday.pkl",
+        method="b1",
+        pick_date="2026-04-10",
+        start_date="2025-04-09",
+        end_date="2026-04-10",
+        prepared_by_symbol={},
+        metadata_overrides={"mode": "intraday_snapshot"},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "clean",
+            "--pick-date",
+            "2026-04-10",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert not (candidate_dir / f"{_eod_key('2026-04-10')}.json").exists()
+    assert not (candidate_dir / f"{_eod_key('2026-04-10', 'b2')}.json").exists()
+    assert (candidate_dir / f"{_intraday_key('2026-04-10T10-00-00+08-00')}.json").exists()
+    assert not (charts_dir / _eod_key("2026-04-10")).exists()
+    assert not (charts_dir / _eod_key("2026-04-10", "hcr")).exists()
+    assert (charts_dir / _intraday_key("2026-04-10T10-00-00+08-00")).exists()
+    assert not (reviews_dir / _eod_key("2026-04-10")).exists()
+    assert not (reviews_dir / _eod_key("2026-04-10", "dribull")).exists()
+    assert (reviews_dir / _intraday_key("2026-04-10T10-00-00+08-00")).exists()
+    assert not (prepared_dir / "2026-04-10.pkl").exists()
+    assert not (prepared_dir / "2026-04-10.hcr.pkl").exists()
+    assert (prepared_dir / "2026-04-10.intraday.pkl").exists()
+
+
+def test_clean_intraday_removes_only_non_current_trade_date_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    charts_dir = runtime_root / "charts"
+    reviews_dir = runtime_root / "reviews"
+    prepared_dir = runtime_root / "prepared"
+
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+
+    old_run_id = "2026-04-21T14-30-00+08-00"
+    current_run_id = "2026-04-22T10-15-00+08-00"
+
+    (candidate_dir / f"{_intraday_key(old_run_id)}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "trade_date": "2026-04-21",
+                "run_id": old_run_id,
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (candidate_dir / f"{_intraday_key(current_run_id, 'b2')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b2",
+                "trade_date": "2026-04-22",
+                "run_id": current_run_id,
+                "candidates": [{"code": "000002.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (candidate_dir / f"{_eod_key('2026-04-21')}.json").write_text("{}", encoding="utf-8")
+    (charts_dir / _intraday_key(old_run_id)).mkdir(parents=True, exist_ok=True)
+    (charts_dir / _intraday_key(current_run_id, "b2")).mkdir(parents=True, exist_ok=True)
+    (charts_dir / _intraday_key("2026-04-20T09-35-00+08-00", "hcr")).mkdir(parents=True, exist_ok=True)
+    (reviews_dir / _intraday_key(old_run_id)).mkdir(parents=True, exist_ok=True)
+    (reviews_dir / _intraday_key(current_run_id, "b2")).mkdir(parents=True, exist_ok=True)
+    (reviews_dir / _intraday_key("2026-04-20T09-35-00+08-00", "hcr")).mkdir(parents=True, exist_ok=True)
+    cli._write_prepared_cache(
+        prepared_dir / "2026-04-21.intraday.pkl",
+        method="b1",
+        pick_date="2026-04-21",
+        start_date="2025-04-20",
+        end_date="2026-04-21",
+        prepared_by_symbol={},
+        metadata_overrides={"mode": "intraday_snapshot"},
+    )
+    cli._write_prepared_cache(
+        prepared_dir / "2026-04-21.intraday.hcr.pkl",
+        method="hcr",
+        pick_date="2026-04-21",
+        start_date="2025-04-20",
+        end_date="2026-04-21",
+        prepared_by_symbol={},
+        metadata_overrides={"mode": "intraday_snapshot"},
+    )
+    cli._write_prepared_cache(
+        prepared_dir / "2026-04-22.intraday.pkl",
+        method="b1",
+        pick_date="2026-04-22",
+        start_date="2025-04-21",
+        end_date="2026-04-22",
+        prepared_by_symbol={},
+        metadata_overrides={"mode": "intraday_snapshot"},
+    )
+    cli._write_prepared_cache(
+        prepared_dir / "2026-04-22.pkl",
+        method="b1",
+        pick_date="2026-04-22",
+        start_date="2025-04-21",
+        end_date="2026-04-22",
+        prepared_by_symbol={},
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_current_shanghai_timestamp",
+        lambda: pd.Timestamp("2026-04-22 10:30:00", tz="Asia/Shanghai"),
+        raising=False,
+    )
+
+    result = runner.invoke(app, ["clean", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code == 0
+    assert not (candidate_dir / f"{_intraday_key(old_run_id)}.json").exists()
+    assert (candidate_dir / f"{_intraday_key(current_run_id, 'b2')}.json").exists()
+    assert (candidate_dir / f"{_eod_key('2026-04-21')}.json").exists()
+    assert not (charts_dir / _intraday_key(old_run_id)).exists()
+    assert (charts_dir / _intraday_key(current_run_id, "b2")).exists()
+    assert not (charts_dir / _intraday_key("2026-04-20T09-35-00+08-00", "hcr")).exists()
+    assert not (reviews_dir / _intraday_key(old_run_id)).exists()
+    assert (reviews_dir / _intraday_key(current_run_id, "b2")).exists()
+    assert not (reviews_dir / _intraday_key("2026-04-20T09-35-00+08-00", "hcr")).exists()
+    assert not (prepared_dir / "2026-04-21.intraday.pkl").exists()
+    assert not (prepared_dir / "2026-04-21.intraday.hcr.pkl").exists()
+    assert (prepared_dir / "2026-04-22.intraday.pkl").exists()
+    assert (prepared_dir / "2026-04-22.pkl").exists()
+
+
 def test_analyze_symbol_rejects_path_like_symbol_cleanly(tmp_path: Path) -> None:
     runner = CliRunner()
 

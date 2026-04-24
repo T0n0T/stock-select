@@ -4,6 +4,7 @@ import json
 import os
 import pickle
 import re
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -83,6 +84,7 @@ DRIBULL_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
 SHARED_PREPARED_METHODS = frozenset({"b1", "b2", "dribull"})
+BATCH_METHODS = ("b1", "b2", "dribull", "hcr")
 B1_ARTIFACT_VERSION = 1
 
 
@@ -127,9 +129,9 @@ def _validate_cli_method(method: str) -> str:
 
 def _validate_review_method(method: str) -> str:
     normalized = method.strip().lower()
-    if normalized in {"b1", "b2", "dribull", "hcr"}:
+    if normalized in BATCH_METHODS:
         return normalized
-    supported = ", ".join(("b1", "b2", "dribull", "hcr"))
+    supported = ", ".join(BATCH_METHODS)
     raise typer.BadParameter(f"Supported methods: {supported}")
 
 
@@ -261,6 +263,130 @@ def _chart_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
 
 def _review_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
     return runtime_root / "reviews" / _artifact_key(base_key, method)
+
+
+def _split_artifact_name(name: str) -> tuple[str, str | None]:
+    if "." not in name:
+        return name, None
+    base_key, method = name.rsplit(".", 1)
+    normalized_method = method.strip().lower()
+    if normalized_method not in BATCH_METHODS:
+        return name, None
+    return base_key, normalized_method
+
+
+def _extract_intraday_trade_date_from_run_id(run_id: str) -> str | None:
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T.+", run_id):
+        return run_id[:10]
+    return None
+
+
+def _extract_intraday_trade_date_from_candidate(candidate_path: Path) -> str | None:
+    base_key, method = _split_artifact_name(candidate_path.stem)
+    if method is not None:
+        trade_date = _extract_intraday_trade_date_from_run_id(base_key)
+        if trade_date is not None:
+            return trade_date
+    try:
+        payload = _load_candidate_payload(candidate_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if payload.get("mode") != "intraday_snapshot":
+        return None
+    trade_date = payload.get("trade_date")
+    if isinstance(trade_date, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", trade_date.strip()):
+        return trade_date.strip()
+    return None
+
+
+def _extract_intraday_trade_date_from_prepared(prepared_path: Path) -> str | None:
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.intraday(?:\.[^.]+)?\.pkl", prepared_path.name)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _delete_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+        return
+    path.unlink(missing_ok=True)
+
+
+def _clean_eod_artifacts(runtime_root: Path, *, pick_date: str) -> dict[str, int]:
+    summary = {"candidates": 0, "charts": 0, "reviews": 0, "prepared": 0}
+
+    candidate_dir = runtime_root / "candidates"
+    if candidate_dir.exists():
+        for candidate_path in sorted(candidate_dir.glob(f"{pick_date}.*.json")):
+            base_key, method = _split_artifact_name(candidate_path.stem)
+            if base_key != pick_date or method is None:
+                continue
+            _delete_path(candidate_path)
+            summary["candidates"] += 1
+
+    for category in ("charts", "reviews"):
+        category_dir = runtime_root / category
+        if not category_dir.exists():
+            continue
+        for artifact_dir in sorted(category_dir.iterdir()):
+            if not artifact_dir.is_dir():
+                continue
+            base_key, method = _split_artifact_name(artifact_dir.name)
+            if base_key != pick_date or method is None:
+                continue
+            _delete_path(artifact_dir)
+            summary[category] += 1
+
+    prepared_paths = {
+        _prepared_cache_path(runtime_root, pick_date, method)
+        for method in BATCH_METHODS
+    }
+    for prepared_path in sorted(prepared_paths):
+        if not prepared_path.exists():
+            continue
+        _delete_path(prepared_path)
+        summary["prepared"] += 1
+    return summary
+
+
+def _clean_intraday_artifacts(runtime_root: Path, *, keep_trade_date: str) -> dict[str, int]:
+    summary = {"candidates": 0, "charts": 0, "reviews": 0, "prepared": 0}
+
+    candidate_dir = runtime_root / "candidates"
+    if candidate_dir.exists():
+        for candidate_path in sorted(candidate_dir.glob("*.json")):
+            trade_date = _extract_intraday_trade_date_from_candidate(candidate_path)
+            if trade_date is None or trade_date == keep_trade_date:
+                continue
+            _delete_path(candidate_path)
+            summary["candidates"] += 1
+
+    for category in ("charts", "reviews"):
+        category_dir = runtime_root / category
+        if not category_dir.exists():
+            continue
+        for artifact_dir in sorted(category_dir.iterdir()):
+            if not artifact_dir.is_dir():
+                continue
+            base_key, method = _split_artifact_name(artifact_dir.name)
+            if method is None:
+                continue
+            trade_date = _extract_intraday_trade_date_from_run_id(base_key)
+            if trade_date is None or trade_date == keep_trade_date:
+                continue
+            _delete_path(artifact_dir)
+            summary[category] += 1
+
+    prepared_dir = runtime_root / "prepared"
+    if prepared_dir.exists():
+        for prepared_path in sorted(prepared_dir.glob("*.pkl")):
+            trade_date = _extract_intraday_trade_date_from_prepared(prepared_path)
+            if trade_date is None or trade_date == keep_trade_date:
+                continue
+            _delete_path(prepared_path)
+            summary["prepared"] += 1
+    return summary
 
 
 def _watch_pool_path(runtime_root: Path, method: str) -> Path:
@@ -1988,14 +2114,19 @@ def _resolve_analyze_symbol_failed_condition(method: str, stats: dict[str, int])
 
 
 def _build_analyze_symbol_latest_metrics(row: pd.Series) -> dict[str, object]:
-    metrics: dict[str, object] = {"trade_date": str(pd.Timestamp(row["trade_date"]).date())}
+    metrics: dict[str, object] = {
+        "trade_date": str(pd.Timestamp(row["trade_date"]).date()),
+    }
     for column in ("open", "high", "low", "close", "pct", "J"):
         if column in row.index and not pd.isna(row[column]):
             metrics[column.lower()] = round(float(row[column]), 3)
+    volume_column = None
     if "volume" in row.index and not pd.isna(row["volume"]):
-        metrics["volume"] = round(float(row["volume"]), 3)
+        volume_column = "volume"
     elif "vol" in row.index and not pd.isna(row["vol"]):
-        metrics["volume"] = round(float(row["vol"]), 3)
+        volume_column = "vol"
+    if volume_column is not None:
+        metrics["volume"] = round(float(row[volume_column]), 3)
     return metrics
 
 
@@ -2006,31 +2137,51 @@ def _analyze_non_b2_symbol_screen(
     pick_date: str,
     history: pd.DataFrame,
 ) -> dict[str, object]:
-    prepared_by_symbol = _call_prepare_screen_data(history) if method in {"b1", "dribull"} else _call_prepare_hcr_screen_data(history)
+    if method in {"b1", "dribull"}:
+        prepared_by_symbol = _call_prepare_screen_data(history)
+    else:
+        prepared_by_symbol = _call_prepare_hcr_screen_data(history)
+
     prepared = prepared_by_symbol.get(symbol)
     if prepared is None or prepared.empty:
         raise typer.BadParameter(f"Prepared history not found for symbol: {symbol}")
 
     prepared_for_pick = {symbol: prepared}
     if method == "b1":
-        candidates, stats = run_b1_screen_with_stats(prepared_for_pick, pd.Timestamp(pick_date), DEFAULT_B1_CONFIG)
+        candidates, stats = run_b1_screen_with_stats(
+            prepared_for_pick,
+            pd.Timestamp(pick_date),
+            DEFAULT_B1_CONFIG,
+        )
     elif method == "dribull":
-        candidates, stats = run_dribull_screen_with_stats(prepared_for_pick, pd.Timestamp(pick_date), DEFAULT_B1_CONFIG)
+        candidates, stats = run_dribull_screen_with_stats(
+            prepared_for_pick,
+            pd.Timestamp(pick_date),
+            DEFAULT_B1_CONFIG,
+        )
     else:
-        candidates, stats = run_hcr_screen_with_stats(prepared_for_pick, pd.Timestamp(pick_date))
+        candidates, stats = run_hcr_screen_with_stats(
+            prepared_for_pick,
+            pd.Timestamp(pick_date),
+        )
 
     selected_candidate = next((item for item in candidates if item.get("code") == symbol), None)
     row_frame = prepared.loc[pd.to_datetime(prepared["trade_date"]) == pd.Timestamp(pick_date)]
     if row_frame.empty:
         raise typer.BadParameter(f"No prepared end-of-day data found for symbol {symbol} on pick_date {pick_date}.")
     row = row_frame.iloc[-1]
+
     return {
         "signal": selected_candidate.get("signal") if isinstance(selected_candidate, dict) else None,
         "selected_as_candidate": selected_candidate is not None,
         "screen_conditions": {
             "eligible": int(stats.get("eligible", 0)) > 0,
             "selected": selected_candidate is not None,
-            "first_failed_condition": None if selected_candidate is not None else _resolve_analyze_symbol_failed_condition(method, stats),
+            "first_failed_condition": (
+                None
+                if selected_candidate is not None
+                else _resolve_analyze_symbol_failed_condition(method, stats)
+            ),
         },
         "latest_metrics": _build_analyze_symbol_latest_metrics(row),
     }
@@ -2485,6 +2636,70 @@ def record_watch(
         reporter=reporter,
     )
     typer.echo(str(csv_path))
+
+
+@app.command()
+def clean(
+    pick_date: str | None = typer.Option(None, "--pick-date"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    reporter = ProgressReporter(enabled=progress)
+    if intraday and pick_date is not None:
+        raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
+    if not intraday and pick_date is None:
+        raise typer.BadParameter("Either --pick-date or --intraday is required.")
+
+    if intraday:
+        keep_trade_date = _current_shanghai_timestamp().strftime("%Y-%m-%d")
+        summary = _clean_intraday_artifacts(runtime_root, keep_trade_date=keep_trade_date)
+        if reporter:
+            reporter.emit(
+                "clean",
+                (
+                    f"mode=intraday keep_trade_date={keep_trade_date} "
+                    f"candidates={summary['candidates']} charts={summary['charts']} "
+                    f"reviews={summary['reviews']} prepared={summary['prepared']}"
+                ),
+            )
+        typer.echo(
+            " ".join(
+                [
+                    "mode=intraday",
+                    f"keep_trade_date={keep_trade_date}",
+                    f"candidates_deleted={summary['candidates']}",
+                    f"charts_deleted={summary['charts']}",
+                    f"reviews_deleted={summary['reviews']}",
+                    f"prepared_deleted={summary['prepared']}",
+                ]
+            )
+        )
+        return
+
+    normalized_pick_date = _validate_cli_pick_date(pick_date)
+    summary = _clean_eod_artifacts(runtime_root, pick_date=normalized_pick_date)
+    if reporter:
+        reporter.emit(
+            "clean",
+            (
+                f"mode=eod pick_date={normalized_pick_date} "
+                f"candidates={summary['candidates']} charts={summary['charts']} "
+                f"reviews={summary['reviews']} prepared={summary['prepared']}"
+            ),
+        )
+    typer.echo(
+        " ".join(
+            [
+                "mode=eod",
+                f"pick_date={normalized_pick_date}",
+                f"candidates_deleted={summary['candidates']}",
+                f"charts_deleted={summary['charts']}",
+                f"reviews_deleted={summary['reviews']}",
+                f"prepared_deleted={summary['prepared']}",
+            ]
+        )
+    )
 
 
 @app.command(name="review-merge")
