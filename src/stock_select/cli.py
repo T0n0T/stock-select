@@ -1893,6 +1893,7 @@ def _review_intraday_impl(
     *,
     method: str,
     runtime_root: Path,
+    llm_min_baseline_score: float | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     resolver = get_review_resolver(method)
@@ -1924,6 +1925,7 @@ def _review_intraday_impl(
     reviews: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
     llm_review_tasks: list[dict[str, object]] = []
+    skipped_by_baseline_score = 0
     for idx, candidate in enumerate(candidates, start=1):
         code = candidate["code"]
         if reporter:
@@ -1968,14 +1970,17 @@ def _review_intraday_impl(
                 else None
             ),
         )
-        llm_review_tasks.append(
-            {
-                **task,
-                "rank": idx,
-                "baseline_score": review["total_score"],
-                "baseline_verdict": review["verdict"],
-            }
-        )
+        if _should_include_llm_review_task(review, llm_min_baseline_score):
+            llm_review_tasks.append(
+                {
+                    **task,
+                    "rank": idx,
+                    "baseline_score": review["total_score"],
+                    "baseline_verdict": review["verdict"],
+                }
+            )
+        else:
+            skipped_by_baseline_score += 1
 
     summary = summarize_reviews(
         pick_date,
@@ -1996,7 +2001,13 @@ def _review_intraday_impl(
     tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if reporter:
-        reporter.emit("review", f"done reviewed={len(reviews)} failures={len(failures)} write={summary_path}")
+        reporter.emit(
+            "review",
+            "done "
+            f"reviewed={len(reviews)} failures={len(failures)} "
+            f"llm_tasks={len(llm_review_tasks)} skipped_by_baseline_score={skipped_by_baseline_score} "
+            f"write={summary_path}",
+        )
     return summary_path
 
 
@@ -2605,6 +2616,7 @@ def review(
         summary_path = _review_intraday_impl(
             method=normalized_method,
             runtime_root=runtime_root,
+            llm_min_baseline_score=validated_llm_min_baseline_score,
             reporter=reporter,
         )
     else:
