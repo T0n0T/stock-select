@@ -236,12 +236,16 @@ def build_top_turnover_pool(
             date_col = "date"
         else:
             continue
-        if "turnover_n" not in working.columns:
+        if "turnover_n" not in working.columns or "ma25" not in working.columns or "ma60" not in working.columns:
             continue
         working[date_col] = pd.to_datetime(working[date_col], errors="coerce", format="mixed")
         working["turnover_n"] = pd.to_numeric(working["turnover_n"], errors="coerce")
+        working["ma25"] = pd.to_numeric(working["ma25"], errors="coerce")
+        working["ma60"] = pd.to_numeric(working["ma60"], errors="coerce")
         for _, row in working.iterrows():
-            if pd.isna(row[date_col]) or pd.isna(row["turnover_n"]):
+            if pd.isna(row[date_col]) or pd.isna(row["turnover_n"]) or pd.isna(row["ma25"]) or pd.isna(row["ma60"]):
+                continue
+            if not float(row["ma25"]) > float(row["ma60"]):
                 continue
             trade_date = pd.Timestamp(row[date_col])
             pool.setdefault(trade_date, []).append((float(row["turnover_n"]), symbol))

@@ -220,6 +220,8 @@ SZ002703 浙江世宝
 
 若使用默认 `--pool-source turnover-top`，在进入这些条件前会先按目标日 `turnover_n` 构建流动性池，只保留成交额排名前 `5000` 的股票。
 
+默认 `turnover-top` 票池除成交额排序外，还要求目标日 `ma25 > ma60`。
+
 1. `J < 15` 或 `J <= 截至当日历史 J 的 10% expanding 分位`
 2. `zxdkx` 历史是否足够，目标日是否可计算
 3. `close > zxdkx`

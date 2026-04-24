@@ -372,18 +372,24 @@ def test_build_top_turnover_pool_keeps_only_top_codes_per_pick_date() -> None:
                 {
                     "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
                     "turnover_n": [100.0, 400.0],
+                    "ma25": [11.0, 11.0],
+                    "ma60": [10.0, 10.0],
                 }
             ),
             "BBB.SZ": pd.DataFrame(
                 {
                     "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
                     "turnover_n": [300.0, 200.0],
+                    "ma25": [11.0, 11.0],
+                    "ma60": [10.0, 10.0],
                 }
             ),
             "CCC.SZ": pd.DataFrame(
                 {
                     "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
                     "turnover_n": [200.0, 300.0],
+                    "ma25": [11.0, 11.0],
+                    "ma60": [10.0, 10.0],
                 }
             ),
         },
@@ -401,17 +407,23 @@ def test_build_top_turnover_pool_skips_malformed_rows() -> None:
                 {
                     "trade_date": ["not-a-date", "2026-04-03"],
                     "turnover_n": [100.0, "boom"],
+                    "ma25": [11.0, 11.0],
+                    "ma60": [10.0, 10.0],
                 }
             ),
             "AAB.SZ": pd.DataFrame(
                 {
                     "trade_date": pd.to_datetime(["2026-04-02"]),
+                    "ma25": [11.0],
+                    "ma60": [10.0],
                 }
             ),
             "BBB.SZ": pd.DataFrame(
                 {
                     "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
                     "turnover_n": [300.0, 200.0],
+                    "ma25": [11.0, 11.0],
+                    "ma60": [10.0, 10.0],
                 }
             ),
         },
@@ -422,6 +434,66 @@ def test_build_top_turnover_pool_skips_malformed_rows() -> None:
         pd.Timestamp("2026-04-02"): ["BBB.SZ"],
         pd.Timestamp("2026-04-03"): ["BBB.SZ"],
     }
+
+
+def test_build_top_turnover_pool_requires_ma25_above_ma60() -> None:
+    pool = build_top_turnover_pool(
+        {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": ["2026-04-24"],
+                    "turnover_n": [200.0],
+                    "ma25": [10.5],
+                    "ma60": [10.0],
+                }
+            ),
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": ["2026-04-24"],
+                    "turnover_n": [300.0],
+                    "ma25": [9.8],
+                    "ma60": [10.0],
+                }
+            ),
+        },
+        top_m=5,
+    )
+
+    assert pool == {pd.Timestamp("2026-04-24"): ["AAA.SZ"]}
+
+
+def test_build_top_turnover_pool_skips_rows_missing_ma25_or_ma60() -> None:
+    pool = build_top_turnover_pool(
+        {
+            "AAA.SZ": pd.DataFrame(
+                {
+                    "trade_date": ["2026-04-24"],
+                    "turnover_n": [200.0],
+                    "ma25": [None],
+                    "ma60": [10.0],
+                }
+            ),
+            "BBB.SZ": pd.DataFrame(
+                {
+                    "trade_date": ["2026-04-24"],
+                    "turnover_n": [180.0],
+                    "ma25": [10.2],
+                    "ma60": [None],
+                }
+            ),
+            "CCC.SZ": pd.DataFrame(
+                {
+                    "trade_date": ["2026-04-24"],
+                    "turnover_n": [160.0],
+                    "ma25": [10.3],
+                    "ma60": [10.0],
+                }
+            ),
+        },
+        top_m=5,
+    )
+
+    assert pool == {pd.Timestamp("2026-04-24"): ["CCC.SZ"]}
 
 
 def test_run_b1_screen_filters_symbols_on_pick_date() -> None:

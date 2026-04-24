@@ -8126,6 +8126,120 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
     assert cache_payload["pick_date"] == "2026-04-04"
 
 
+def test_screen_turnover_top_uses_ma25_above_ma60_pool_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    prepared_dir = runtime_root / "prepared"
+    captured: dict[str, object] = {}
+
+    def fake_connect(dsn: str):
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ", "BBB.SZ"],
+                "trade_date": ["2026-04-24", "2026-04-24"],
+                "open": [10.0, 10.0],
+                "high": [10.8, 10.8],
+                "low": [9.9, 9.9],
+                "close": [10.7, 10.7],
+                "vol": [100.0, 120.0],
+            }
+        )
+
+    prepared = {
+        "AAA.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-24"]),
+                "turnover_n": [200.0],
+                "ma25": [10.5],
+                "ma60": [10.0],
+                "J": [10.0],
+                "zxdq": [10.6],
+                "zxdkx": [10.1],
+                "close": [10.7],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+            }
+        ),
+        "BBB.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-24"]),
+                "turnover_n": [300.0],
+                "ma25": [9.8],
+                "ma60": [10.0],
+                "J": [10.0],
+                "zxdq": [10.6],
+                "zxdkx": [10.1],
+                "close": [10.7],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+            }
+        ),
+    }
+
+    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+        return prepared
+
+    def fake_run_b1_screen_with_stats(
+        prepared_by_symbol: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        captured["codes"] = sorted(prepared_by_symbol)
+        return ([], _b1_screen_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=0))
+
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "run_b1_screen_with_stats", fake_run_b1_screen_with_stats)
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-24",
+            "--pool-source",
+            "turnover-top",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["codes"] == ["AAA.SZ"]
+    payload = json.loads((candidate_dir / f"{_eod_key('2026-04-24')}.json").read_text(encoding="utf-8"))
+    assert payload["pool_source"] == "turnover-top"
+    assert payload["candidates"] == []
+    cache_payload = cli._load_prepared_cache(prepared_dir / "2026-04-24.pkl")
+    assert cache_payload["pick_date"] == "2026-04-24"
+
+
 def test_screen_dribull_record_watch_zero_phase_one_survivors_writes_empty_candidates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
