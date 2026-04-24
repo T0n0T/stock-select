@@ -1909,6 +1909,133 @@ def _review_merge_impl(
     return summary_path
 
 
+def _resolve_analyze_symbol_start_date(
+    connection,
+    *,
+    method: str,
+    pick_date: str,
+) -> str:
+    if method == "hcr":
+        return _resolve_hcr_start_date(
+            connection,
+            end_date=pick_date,
+            trading_days=HCR_SCREEN_TRADING_DAYS,
+        )
+    if method == "dribull":
+        return DRIBULL_PERIOD_MACD_WARMUP_START_DATE
+    return (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+
+
+def _resolve_b2_first_failed_condition(row: pd.Series, *, signal: str | None) -> str | None:
+    if signal is not None:
+        return None
+    ordered_checks = (
+        ("pre_ok", bool(row["pre_ok"])),
+        ("pct_ok", bool(row["pct_ok"])),
+        ("volume_ok", bool(row["volume_ok"])),
+        ("k_shape", bool(row["k_shape"])),
+        ("j_up", bool(row["j_up"])),
+        ("tr_ok", bool(row["tr_ok"])),
+        ("above_lt", bool(row["above_lt"])),
+    )
+    for name, passed in ordered_checks:
+        if not passed:
+            return name
+    if not bool(row["raw_b2_unique"]):
+        return "duplicate_b2"
+    return "no_signal"
+
+
+def _resolve_analyze_symbol_failed_condition(method: str, stats: dict[str, int]) -> str | None:
+    ordered_failures = {
+        "b1": (
+            "fail_insufficient_history",
+            "fail_j",
+            "fail_close_zxdkx",
+            "fail_zxdq_zxdkx",
+            "fail_weekly_ma",
+            "fail_max_vol",
+            "fail_chg_cap",
+            "fail_v_shrink",
+            "fail_safe_mode",
+            "fail_lt_filter",
+        ),
+        "dribull": (
+            "fail_insufficient_history",
+            "fail_recent_j",
+            "fail_zxdq_zxdkx",
+            "fail_support_ma25",
+            "fail_volume_shrink",
+            "fail_ma60_trend",
+            "fail_ma144_distance",
+            "fail_weekly_wave",
+            "fail_daily_wave",
+            "fail_wave_combo",
+        ),
+        "hcr": (
+            "fail_insufficient_history",
+            "fail_resonance",
+            "fail_close_floor",
+            "fail_breakout",
+        ),
+    }
+    for name in ordered_failures.get(method, ()):
+        if int(stats.get(name, 0)) > 0:
+            return name.removeprefix("fail_")
+    if int(stats.get("eligible", 0)) <= 0:
+        return "not_eligible"
+    return None
+
+
+def _build_analyze_symbol_latest_metrics(row: pd.Series) -> dict[str, object]:
+    metrics: dict[str, object] = {"trade_date": str(pd.Timestamp(row["trade_date"]).date())}
+    for column in ("open", "high", "low", "close", "pct", "J"):
+        if column in row.index and not pd.isna(row[column]):
+            metrics[column.lower()] = round(float(row[column]), 3)
+    if "volume" in row.index and not pd.isna(row["volume"]):
+        metrics["volume"] = round(float(row["volume"]), 3)
+    elif "vol" in row.index and not pd.isna(row["vol"]):
+        metrics["volume"] = round(float(row["vol"]), 3)
+    return metrics
+
+
+def _analyze_non_b2_symbol_screen(
+    *,
+    method: str,
+    symbol: str,
+    pick_date: str,
+    history: pd.DataFrame,
+) -> dict[str, object]:
+    prepared_by_symbol = _call_prepare_screen_data(history) if method in {"b1", "dribull"} else _call_prepare_hcr_screen_data(history)
+    prepared = prepared_by_symbol.get(symbol)
+    if prepared is None or prepared.empty:
+        raise typer.BadParameter(f"Prepared history not found for symbol: {symbol}")
+
+    prepared_for_pick = {symbol: prepared}
+    if method == "b1":
+        candidates, stats = run_b1_screen_with_stats(prepared_for_pick, pd.Timestamp(pick_date), DEFAULT_B1_CONFIG)
+    elif method == "dribull":
+        candidates, stats = run_dribull_screen_with_stats(prepared_for_pick, pd.Timestamp(pick_date), DEFAULT_B1_CONFIG)
+    else:
+        candidates, stats = run_hcr_screen_with_stats(prepared_for_pick, pd.Timestamp(pick_date))
+
+    selected_candidate = next((item for item in candidates if item.get("code") == symbol), None)
+    row_frame = prepared.loc[pd.to_datetime(prepared["trade_date"]) == pd.Timestamp(pick_date)]
+    if row_frame.empty:
+        raise typer.BadParameter(f"No prepared end-of-day data found for symbol {symbol} on pick_date {pick_date}.")
+    row = row_frame.iloc[-1]
+    return {
+        "signal": selected_candidate.get("signal") if isinstance(selected_candidate, dict) else None,
+        "selected_as_candidate": selected_candidate is not None,
+        "screen_conditions": {
+            "eligible": int(stats.get("eligible", 0)) > 0,
+            "selected": selected_candidate is not None,
+            "first_failed_condition": None if selected_candidate is not None else _resolve_analyze_symbol_failed_condition(method, stats),
+        },
+        "latest_metrics": _build_analyze_symbol_latest_metrics(row),
+    }
+
+
 def _analyze_symbol_impl(
     *,
     method: str,
@@ -1940,8 +2067,10 @@ def _analyze_symbol_impl(
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         while True:
-            start_date = (pd.Timestamp(candidate_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
-                "%Y-%m-%d"
+            start_date = _resolve_analyze_symbol_start_date(
+                connection,
+                method=method,
+                pick_date=candidate_pick_date,
             )
             history = fetch_symbol_history(
                 connection,
@@ -1962,8 +2091,10 @@ def _analyze_symbol_impl(
             resolved_pick_date = candidate_pick_date
             break
     else:
-        start_date = (pd.Timestamp(resolved_pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime(
-            "%Y-%m-%d"
+        start_date = _resolve_analyze_symbol_start_date(
+            connection,
+            method=method,
+            pick_date=resolved_pick_date,
         )
         history = fetch_symbol_history(
             connection,
@@ -1987,10 +2118,6 @@ def _analyze_symbol_impl(
             f"No end-of-day data found for symbol {normalized_symbol} on pick_date {resolved_pick_date}."
         )
 
-    signal_frame = _build_b2_signal_frame(frame, code=normalized_symbol)
-    row = signal_frame.iloc[-1]
-    signal = _resolve_signal(row)
-
     result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{normalized_symbol}"
     result_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2004,20 +2131,14 @@ def _analyze_symbol_impl(
         normalized_symbol,
         result_dir / f"{normalized_symbol}_day.png",
     ).resolve()
-    baseline_review = review_b2_symbol_history(
-        code=normalized_symbol,
-        pick_date=resolved_pick_date,
-        history=history,
-        chart_path=str(chart_path),
-    )
-
-    payload = {
-        "code": normalized_symbol,
-        "pick_date": resolved_pick_date,
-        "method": method,
-        "signal": signal,
-        "selected_as_candidate": signal is not None,
-        "screen_conditions": {
+    if method == "b2":
+        signal_frame = _build_b2_signal_frame(frame, code=normalized_symbol)
+        row = signal_frame.iloc[-1]
+        signal = _resolve_signal(row)
+        screen_conditions = {
+            "eligible": True,
+            "selected": signal is not None,
+            "first_failed_condition": _resolve_b2_first_failed_condition(row, signal=signal),
             "pre_ok": bool(row["pre_ok"]),
             "pct_ok": bool(row["pct_ok"]),
             "volume_ok": bool(row["volume_ok"]),
@@ -2031,8 +2152,8 @@ def _analyze_symbol_impl(
             "cur_b3_plus": bool(row["cur_b3_plus"]),
             "cur_b4": bool(row["cur_b4"]),
             "cur_b5": bool(row["cur_b5"]),
-        },
-        "latest_metrics": {
+        }
+        latest_metrics = {
             "trade_date": str(pd.Timestamp(row["trade_date"]).date()),
             "open": round(float(row["open"]), 3),
             "high": round(float(row["high"]), 3),
@@ -2041,7 +2162,41 @@ def _analyze_symbol_impl(
             "pct": round(float(row["pct"]), 3),
             "volume": round(float(row["volume"]), 3),
             "j": round(float(row["J"]), 3),
-        },
+        }
+        baseline_review = review_b2_symbol_history(
+            code=normalized_symbol,
+            pick_date=resolved_pick_date,
+            history=history,
+            chart_path=str(chart_path),
+        )
+        selected_as_candidate = signal is not None
+    else:
+        screen_result = _analyze_non_b2_symbol_screen(
+            method=method,
+            symbol=normalized_symbol,
+            pick_date=resolved_pick_date,
+            history=history,
+        )
+        signal = screen_result["signal"]
+        selected_as_candidate = bool(screen_result["selected_as_candidate"])
+        screen_conditions = screen_result["screen_conditions"]
+        latest_metrics = screen_result["latest_metrics"]
+        resolver = get_review_resolver(method)
+        baseline_review = resolver.review_history(
+            code=normalized_symbol,
+            pick_date=resolved_pick_date,
+            history=history,
+            chart_path=str(chart_path),
+        )
+
+    payload = {
+        "code": normalized_symbol,
+        "pick_date": resolved_pick_date,
+        "method": method,
+        "signal": signal,
+        "selected_as_candidate": selected_as_candidate,
+        "screen_conditions": screen_conditions,
+        "latest_metrics": latest_metrics,
         "baseline_review": baseline_review,
         "chart_path": str(chart_path),
     }
@@ -2296,8 +2451,6 @@ def analyze_symbol(
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_review_method(method)
-    if normalized_method != "b2":
-        raise typer.BadParameter("analyze-symbol currently only supports method b2.")
     reporter = ProgressReporter(enabled=progress)
     result_path = _analyze_symbol_impl(
         method=normalized_method,

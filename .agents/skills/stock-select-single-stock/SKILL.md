@@ -23,16 +23,19 @@ Use the existing `stock-select` skill instead when the task is pool-based screen
 
 ## Current Scope
 
-The current repository command for this workflow is:
+The current repository commands for this workflow are:
 
 ```bash
+uv run stock-select analyze-symbol --method b1 --symbol 002350.SZ
 uv run stock-select analyze-symbol --method b2 --symbol 002350.SZ
+uv run stock-select analyze-symbol --method dribull --symbol 002350.SZ
+uv run stock-select analyze-symbol --method hcr --symbol 002350.SZ
 ```
 
 Current supported scope:
 
 - single stock only
-- `b2` only
+- `b1` / `b2` / `dribull` / `hcr`
 - end-of-day only
 - deterministic local baseline review only
 
@@ -72,10 +75,13 @@ Never collapse these into one conclusion. “Not selected as candidate” and �
 
 ## Command Pattern
 
-Typical command:
+Typical commands:
 
 ```bash
+uv run stock-select analyze-symbol --method b1 --symbol 002350.SZ --pick-date 2026-04-21
 uv run stock-select analyze-symbol --method b2 --symbol 002350.SZ --pick-date 2026-04-21
+uv run stock-select analyze-symbol --method dribull --symbol 002350.SZ --pick-date 2026-04-21
+uv run stock-select analyze-symbol --method hcr --symbol 002350.SZ --pick-date 2026-04-21
 ```
 
 If quiet stdout-only output is useful for automation, use:
@@ -95,8 +101,8 @@ uv run stock-select analyze-symbol --method b2 --symbol 002350.SZ
 The command prints the `result.json` path. Current runtime layout:
 
 ```text
-~/.agents/skills/stock-select/runtime/ad_hoc/<pick_date>.b2.<code>/result.json
-~/.agents/skills/stock-select/runtime/ad_hoc/<pick_date>.b2.<code>/<code>_day.png
+~/.agents/skills/stock-select/runtime/ad_hoc/<pick_date>.<method>.<code>/result.json
+~/.agents/skills/stock-select/runtime/ad_hoc/<pick_date>.<method>.<code>/<code>_day.png
 ```
 
 Read `result.json` and prefer quoting these fields in your response:
@@ -125,6 +131,6 @@ The CLI already normalizes many of these into `BadParameter`-style failures. Sur
 
 ## Limits
 
-- Current single-stock command only supports `b2`.
+- Current single-stock command supports `b1`, `b2`, `dribull`, and `hcr`.
 - This skill does not perform multimodal chart-review subagent dispatch.
 - This skill does not replace the existing pool-based `stock-select` skill.

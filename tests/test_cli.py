@@ -129,15 +129,30 @@ def test_analyze_symbol_requires_symbol(tmp_path: Path) -> None:
     assert "--symbol" in result.stderr
 
 
-def test_analyze_symbol_rejects_non_b2_method(tmp_path: Path) -> None:
+@pytest.mark.parametrize("method", ["b1", "dribull", "hcr"])
+def test_analyze_symbol_accepts_supported_non_b2_methods(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    method: str,
+) -> None:
     runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_impl(*, method: str, symbol: str, pick_date: str | None, dsn: str | None, runtime_root: Path, reporter):
+        captured["method"] = method
+        captured["symbol"] = symbol
+        captured["pick_date"] = pick_date
+        captured["runtime_root"] = runtime_root
+        return tmp_path / f"{method}.json"
+
+    monkeypatch.setattr(cli, "_analyze_symbol_impl", fake_impl)
 
     result = runner.invoke(
         app,
         [
             "analyze-symbol",
             "--method",
-            "b1",
+            method,
             "--symbol",
             "002350.SZ",
             "--runtime-root",
@@ -145,8 +160,12 @@ def test_analyze_symbol_rejects_non_b2_method(tmp_path: Path) -> None:
         ],
     )
 
-    assert result.exit_code != 0
-    assert "only supports method b2" in result.stderr.lower()
+    assert result.exit_code == 0
+    assert captured["method"] == method
+    assert captured["symbol"] == "002350.SZ"
+    assert captured["pick_date"] is None
+    assert captured["runtime_root"] == tmp_path
+    assert str(tmp_path / f"{method}.json") in result.stdout
 
 
 def test_analyze_symbol_defaults_to_latest_trade_date(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -495,6 +514,208 @@ def test_analyze_symbol_impl_uses_explicit_pick_date_and_fetches_history(
         "start_date": "2025-04-20",
         "end_date": "2026-04-21",
     }
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_start_date", "prepare_kind"),
+    [
+        ("b1", "2025-04-20", "shared"),
+        ("dribull", cli.DRIBULL_PERIOD_MACD_WARMUP_START_DATE, "shared"),
+        ("hcr", "2025-01-02", "hcr"),
+    ],
+)
+def test_analyze_symbol_impl_dispatches_supported_methods(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    method: str,
+    expected_start_date: str,
+    prepare_kind: str,
+) -> None:
+    captured: dict[str, object] = {}
+    history = pd.DataFrame(
+        {
+            "ts_code": ["002350.SZ", "002350.SZ"],
+            "trade_date": ["2026-04-18", "2026-04-21"],
+            "open": [10.0, 10.2],
+            "high": [10.3, 10.5],
+            "low": [9.9, 10.1],
+            "close": [10.1, 10.4],
+            "vol": [100.0, 120.0],
+        }
+    )
+    prepared = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2026-04-18", "2026-04-21"]),
+            "open": [10.0, 10.2],
+            "high": [10.3, 10.5],
+            "low": [9.9, 10.1],
+            "close": [10.1, 10.4],
+            "volume": [100.0, 120.0],
+            "vol": [100.0, 120.0],
+            "turnover_n": [110.0, 125.0],
+        }
+    )
+
+    monkeypatch.setattr(cli, "_resolve_cli_dsn", lambda _dsn: "postgresql://example")
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, symbol, start_date, end_date: captured.update(
+            {"symbol": symbol, "start_date": start_date, "end_date": end_date}
+        )
+        or history,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_chart_data",
+        lambda frame: pd.DataFrame({"date": [], "open": [], "high": [], "low": [], "close": [], "volume": []}),
+    )
+    monkeypatch.setattr(cli, "export_daily_chart", lambda df, code, out_path: out_path)
+
+    if method == "hcr":
+        monkeypatch.setattr(
+            cli,
+            "_resolve_hcr_start_date",
+            lambda connection, *, end_date, trading_days: captured.update(
+                {"hcr_end_date": end_date, "hcr_trading_days": trading_days}
+            )
+            or expected_start_date,
+        )
+    else:
+        monkeypatch.setattr(
+            cli,
+            "_resolve_hcr_start_date",
+            lambda *args, **kwargs: pytest.fail("hcr history window should not be resolved"),
+        )
+
+    if prepare_kind == "shared":
+        monkeypatch.setattr(
+            cli,
+            "_call_prepare_screen_data",
+            lambda market, reporter=None: captured.update({"prepare_kind": "shared"}) or {"002350.SZ": prepared},
+        )
+        monkeypatch.setattr(
+            cli,
+            "_call_prepare_hcr_screen_data",
+            lambda *args, **kwargs: pytest.fail("hcr prepare path should not run"),
+        )
+    else:
+        monkeypatch.setattr(
+            cli,
+            "_call_prepare_hcr_screen_data",
+            lambda market, reporter=None: captured.update({"prepare_kind": "hcr"}) or {"002350.SZ": prepared},
+        )
+        monkeypatch.setattr(
+            cli,
+            "_call_prepare_screen_data",
+            lambda *args, **kwargs: pytest.fail("shared prepare path should not run"),
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: captured.update({"runner": "b1", "pick_ts": pick_date})
+        or ([{"code": "002350.SZ", "pick_date": "2026-04-21", "close": 10.4, "turnover_n": 125.0}], _b1_screen_stats(total_symbols=1, eligible=1, selected=1))
+        if method == "b1"
+        else pytest.fail("b1 runner should not run"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_dribull_screen_with_stats",
+        lambda prepared_by_symbol, pick_date, config: captured.update({"runner": "dribull", "pick_ts": pick_date})
+        or ([{"code": "002350.SZ", "pick_date": "2026-04-21", "close": 10.4, "turnover_n": 125.0}], _dribull_wave_stats(total_symbols=1, eligible=1, selected=1))
+        if method == "dribull"
+        else pytest.fail("dribull runner should not run"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_hcr_screen_with_stats",
+        lambda prepared_by_symbol, pick_date: captured.update({"runner": "hcr", "pick_ts": pick_date})
+        or (
+            [
+                {
+                    "code": "002350.SZ",
+                    "pick_date": "2026-04-21",
+                    "close": 10.4,
+                    "turnover_n": 125.0,
+                    "yx": 10.2,
+                    "p": 10.1,
+                    "resonance_gap_pct": 0.004,
+                }
+            ],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 0,
+                "selected": 1,
+            },
+        )
+        if method == "hcr"
+        else pytest.fail("hcr runner should not run"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_build_b2_signal_frame",
+        lambda *args, **kwargs: pytest.fail("b2 signal frame should not run for non-b2 methods"),
+    )
+    monkeypatch.setattr(cli, "_resolve_signal", lambda *args, **kwargs: pytest.fail("b2 signal resolver should not run"))
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda requested_method: SimpleNamespace(
+            name=requested_method,
+            prompt_path="unused",
+            review_history=lambda **kwargs: {
+                "code": kwargs["code"],
+                "pick_date": kwargs["pick_date"],
+                "chart_path": kwargs["chart_path"],
+                "review_type": "baseline",
+                "trend_structure": 3.0,
+                "price_position": 3.0,
+                "volume_behavior": 3.0,
+                "previous_abnormal_move": 3.0,
+                "macd_phase": 3.0,
+                "total_score": 3.0,
+                "signal_type": "rebound",
+                "verdict": "WATCH",
+                "comment": f"{requested_method} baseline",
+            },
+        ),
+    )
+
+    result_path = cli._analyze_symbol_impl(
+        method=method,
+        symbol="002350.SZ",
+        pick_date="2026-04-21",
+        dsn=None,
+        runtime_root=tmp_path,
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+
+    assert captured["symbol"] == "002350.SZ"
+    assert captured["start_date"] == expected_start_date
+    assert captured["end_date"] == "2026-04-21"
+    assert captured["prepare_kind"] == prepare_kind
+    assert captured["runner"] == method
+    assert str(captured["pick_ts"].date()) == "2026-04-21"
+    if method == "hcr":
+        assert captured["hcr_end_date"] == "2026-04-21"
+        assert captured["hcr_trading_days"] == cli.HCR_SCREEN_TRADING_DAYS
+
+    assert payload["method"] == method
+    assert payload["signal"] is None
+    assert payload["selected_as_candidate"] is True
+    assert payload["screen_conditions"]["eligible"] is True
+    assert payload["screen_conditions"]["selected"] is True
+    assert payload["screen_conditions"]["first_failed_condition"] is None
+    assert payload["latest_metrics"]["trade_date"] == "2026-04-21"
+    assert payload["baseline_review"]["comment"] == f"{method} baseline"
 
 
 def test_analyze_symbol_impl_normalizes_symbol_in_runtime_path(
