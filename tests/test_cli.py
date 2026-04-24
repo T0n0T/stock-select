@@ -3124,6 +3124,109 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
     assert "b2" in tasks["tasks"][0]["wave_combo_context"]
 
 
+def test_review_filters_llm_tasks_by_min_baseline_score(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-01", "b2")
+    review_dir = runtime_root / "reviews" / method_key
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b2",
+                "candidates": [{"code": "000001.SZ"}, {"code": "000002.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    chart_dir = runtime_root / "charts" / method_key
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (chart_dir / "000002.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol, symbol, symbol],
+                "trade_date": pd.to_datetime(["2026-03-28", "2026-03-31", "2026-04-01"]),
+                "open": [10.0, 10.2, 10.4],
+                "high": [10.3, 10.6, 10.9],
+                "low": [9.9, 10.1, 10.3],
+                "close": [10.2, 10.5, 10.8],
+                "vol": [100.0, 120.0, 150.0],
+            }
+        ),
+    )
+
+    baseline_scores = {"000001.SZ": 4.2, "000002.SZ": 3.9}
+
+    def fake_review_history(
+        *,
+        code: str,
+        pick_date: str,
+        history: pd.DataFrame,
+        chart_path: str,
+    ) -> dict[str, object]:
+        score = baseline_scores[code]
+        return {
+            "review_type": "baseline",
+            "total_score": score,
+            "signal_type": "trend_start" if score >= 4.0 else "rebound",
+            "verdict": "PASS" if score >= 4.0 else "WATCH",
+            "comment": f"{code} baseline",
+        }
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="b2",
+            prompt_path=str(tmp_path / "prompt-b2-stub.md"),
+            review_history=fake_review_history,
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-01",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "4.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    high_review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    low_review = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+
+    assert high_review["total_score"] == 4.2
+    assert low_review["total_score"] == 3.9
+    assert summary["reviewed_count"] == 2
+    assert [task["code"] for task in tasks["tasks"]] == ["000001.SZ"]
+    assert tasks["tasks"][0]["baseline_score"] == 4.2
+    assert "llm_tasks=1" in result.stderr
+    assert "skipped_by_baseline_score=1" in result.stderr
+
+
 def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
