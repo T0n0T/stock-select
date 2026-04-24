@@ -172,7 +172,7 @@ def _validate_llm_min_baseline_score(value: float | None) -> float | None:
     if value is None:
         return None
     if not math.isfinite(value) or value < 0.0:
-        raise typer.BadParameter("--llm-min-baseline-score must be non-negative.")
+        raise typer.BadParameter("--llm-min-baseline-score must be a finite, non-negative number.")
     return float(value)
 
 
@@ -2794,11 +2794,13 @@ def run_all(
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
+    llm_min_baseline_score: float | None = typer.Option(None, "--llm-min-baseline-score"),
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_cli_method(method)
     normalized_pool_source = _validate_pool_source(pool_source)
+    validated_llm_min_baseline_score = _validate_llm_min_baseline_score(llm_min_baseline_score)
     reporter = ProgressReporter(enabled=progress)
     if intraday and pick_date is not None:
         raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
@@ -2852,6 +2854,7 @@ def run_all(
         review_path = _review_intraday_impl(
             method=normalized_method,
             runtime_root=runtime_root,
+            llm_min_baseline_score=validated_llm_min_baseline_score,
             reporter=reporter,
         )
     else:
@@ -2860,6 +2863,7 @@ def run_all(
             pick_date=pick_date,
             dsn=dsn,
             runtime_root=runtime_root,
+            llm_min_baseline_score=validated_llm_min_baseline_score,
             reporter=reporter,
         )
     reporter.emit("run", f"step=review done path={review_path} elapsed={reporter.since(review_started_at):.1f}s")

@@ -3247,7 +3247,33 @@ def test_review_rejects_non_finite_llm_min_baseline_score(tmp_path: Path) -> Non
     )
 
     assert result.exit_code != 0
-    assert "llm-min-baseline-score" in result.stderr
+    assert "llm-min-baseline-score" in result.stderr.lower()
+    assert "finite" in result.stderr.lower()
+    assert "non-negative" in result.stderr.lower()
+
+
+def test_review_rejects_negative_llm_min_baseline_score(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(tmp_path),
+            "--llm-min-baseline-score",
+            "-0.1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "llm-min-baseline-score" in result.stderr.lower()
+    assert "finite" in result.stderr.lower()
+    assert "non-negative" in result.stderr.lower()
 
 
 def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
@@ -4706,6 +4732,60 @@ def test_run_accepts_pool_source_and_passes_it_to_screen_step(
         ("chart", "b1"),
         ("review", "b1"),
     ]
+
+
+def test_run_passes_llm_min_baseline_score_to_review_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    calls: list[tuple[str, object | None]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_screen_impl",
+        lambda **kwargs: runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_chart_impl",
+        lambda **kwargs: runtime_root / "charts" / _eod_key("2026-04-01"),
+    )
+
+    def fake_review_impl(
+        *,
+        method: str,
+        pick_date: str,
+        dsn: str | None,
+        runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
+        reporter: object | None = None,
+    ) -> Path:
+        calls.append(("review", llm_min_baseline_score))
+        return runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json"
+
+    monkeypatch.setattr(cli, "_review_impl", fake_review_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "4.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("review", 4.0)]
 
 
 def test_run_intraday_rejects_pick_date(tmp_path: Path) -> None:
