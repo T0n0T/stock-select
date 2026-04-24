@@ -3124,6 +3124,158 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
     assert "b2" in tasks["tasks"][0]["wave_combo_context"]
 
 
+def test_review_filters_llm_tasks_by_min_baseline_score(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    method_key = _eod_key("2026-04-01", "b2")
+    review_dir = runtime_root / "reviews" / method_key
+    candidate_path = runtime_root / "candidates" / f"{method_key}.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b2",
+                "candidates": [{"code": "000001.SZ"}, {"code": "000002.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    chart_dir = runtime_root / "charts" / method_key
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (chart_dir / "000002.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda connection, *, symbol, start_date, end_date: pd.DataFrame(
+            {
+                "ts_code": [symbol, symbol, symbol],
+                "trade_date": pd.to_datetime(["2026-03-28", "2026-03-31", "2026-04-01"]),
+                "open": [10.0, 10.2, 10.4],
+                "high": [10.3, 10.6, 10.9],
+                "low": [9.9, 10.1, 10.3],
+                "close": [10.2, 10.5, 10.8],
+                "vol": [100.0, 120.0, 150.0],
+            }
+        ),
+    )
+
+    baseline_scores = {"000001.SZ": 4.2, "000002.SZ": 3.9}
+
+    def fake_review_history(
+        *,
+        code: str,
+        pick_date: str,
+        history: pd.DataFrame,
+        chart_path: str,
+    ) -> dict[str, object]:
+        score = baseline_scores[code]
+        return {
+            "review_type": "baseline",
+            "total_score": score,
+            "signal_type": "trend_start" if score >= 4.0 else "rebound",
+            "verdict": "PASS" if score >= 4.0 else "WATCH",
+            "comment": f"{code} baseline",
+        }
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="b2",
+            prompt_path=str(tmp_path / "prompt-b2-stub.md"),
+            review_history=fake_review_history,
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b2",
+            "--pick-date",
+            "2026-04-01",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "4.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    high_review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    low_review = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+
+    assert high_review["total_score"] == 4.2
+    assert low_review["total_score"] == 3.9
+    assert summary["reviewed_count"] == 2
+    assert [task["code"] for task in tasks["tasks"]] == ["000001.SZ"]
+    assert tasks["tasks"][0]["baseline_score"] == 4.2
+    assert "llm_tasks=1" in result.stderr
+    assert "skipped_by_baseline_score=1" in result.stderr
+
+
+def test_review_rejects_non_finite_llm_min_baseline_score(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "nan",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "llm-min-baseline-score" in result.stderr.lower()
+    assert "finite" in result.stderr.lower()
+    assert "non-negative" in result.stderr.lower()
+
+
+def test_review_rejects_negative_llm_min_baseline_score(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(tmp_path),
+            "--llm-min-baseline-score",
+            "-0.1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "llm-min-baseline-score" in result.stderr.lower()
+    assert "finite" in result.stderr.lower()
+    assert "non-negative" in result.stderr.lower()
+
+
 def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3638,6 +3790,110 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
     assert "weekly_wave_context" in tasks["tasks"][0]
     assert "daily_wave_context" in tasks["tasks"][0]
     assert "wave_combo_context" in tasks["tasks"][0]
+
+
+def test_review_intraday_filters_llm_tasks_by_min_baseline_score(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    run_id = "2026-04-09T11-31-08+08-00"
+    candidate_dir = runtime_root / "candidates"
+    chart_dir = runtime_root / "charts" / _intraday_key(run_id, "b2")
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (chart_dir / "000002.SZ_day.png").write_bytes(b"png")
+    (candidate_dir / f"{_intraday_key(run_id, 'b2')}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b2",
+                "trade_date": "2026-04-09",
+                "run_id": run_id,
+                "candidates": [{"code": "000001.SZ"}, {"code": "000002.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_load_intraday_prepared_cache",
+        lambda current_runtime_root, *, method, run_id, trade_date: {
+            "000001.SZ": pd.DataFrame(
+                [
+                    {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                ]
+            ),
+            "000002.SZ": pd.DataFrame(
+                [
+                    {"trade_date": "2026-04-08", "open": 21.9, "high": 22.1, "low": 21.8, "close": 22.0, "vol": 220.0},
+                    {"trade_date": "2026-04-09", "open": 22.1, "high": 22.5, "low": 22.0, "close": 22.34, "vol": 250.0},
+                ]
+            ),
+        },
+    )
+
+    baseline_scores = {"000001.SZ": 4.1, "000002.SZ": 3.8}
+
+    def fake_review_history(
+        *,
+        code: str,
+        pick_date: str,
+        history: pd.DataFrame,
+        chart_path: str,
+    ) -> dict[str, object]:
+        score = baseline_scores[code]
+        return {
+            "review_type": "baseline",
+            "total_score": score,
+            "signal_type": "trend_start" if score >= 4.0 else "rebound",
+            "verdict": "PASS" if score >= 4.0 else "WATCH",
+            "comment": f"{code} intraday baseline",
+        }
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="b2",
+            prompt_path=str(tmp_path / "prompt-b2-stub.md"),
+            review_history=fake_review_history,
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b2",
+            "--intraday",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "4.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    review_dir = runtime_root / "reviews" / _intraday_key(run_id, "b2")
+    high_review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    low_review = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+
+    assert high_review["total_score"] == 4.1
+    assert low_review["total_score"] == 3.8
+    assert summary["reviewed_count"] == 2
+    assert [task["code"] for task in tasks["tasks"]] == ["000001.SZ"]
+    assert tasks["tasks"][0]["baseline_score"] == 4.1
+    assert "llm_tasks=1" in result.stderr
+    assert "skipped_by_baseline_score=1" in result.stderr
 
 
 def test_prompt_b2_requires_weekly_and_daily_wave_language() -> None:
@@ -4440,12 +4696,14 @@ def test_run_accepts_pool_source_and_passes_it_to_screen_step(
         pick_date: str,
         dsn: str | None,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
         assert method == "b1"
         assert pick_date == "2026-04-01"
         assert dsn == "postgresql://example"
         assert runtime_root == tmp_path / "runtime"
+        assert llm_min_baseline_score is None
         calls.append(("review", method))
         return runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json"
 
@@ -4478,6 +4736,84 @@ def test_run_accepts_pool_source_and_passes_it_to_screen_step(
     ]
 
 
+def test_run_passes_llm_min_baseline_score_to_review_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    calls: list[tuple[str, object | None]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_screen_impl",
+        lambda **kwargs: runtime_root / "candidates" / f"{_eod_key('2026-04-01')}.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_chart_impl",
+        lambda **kwargs: runtime_root / "charts" / _eod_key("2026-04-01"),
+    )
+
+    def fake_review_impl(
+        *,
+        method: str,
+        pick_date: str,
+        dsn: str | None,
+        runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
+        reporter: object | None = None,
+    ) -> Path:
+        calls.append(("review", llm_min_baseline_score))
+        return runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json"
+
+    monkeypatch.setattr(cli, "_review_impl", fake_review_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "4.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("review", 4.0)]
+
+
+def test_run_rejects_invalid_llm_min_baseline_score(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+            "--llm-min-baseline-score",
+            "nan",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "llm-min-baseline-score" in result.stderr.lower()
+    assert "finite" in result.stderr.lower()
+    assert "non-negative" in result.stderr.lower()
+
+
 def test_run_intraday_rejects_pick_date(tmp_path: Path) -> None:
     runner = CliRunner()
 
@@ -4497,6 +4833,57 @@ def test_run_intraday_rejects_pick_date(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "mutually exclusive" in result.stderr
+
+
+def test_run_intraday_passes_llm_min_baseline_score_to_review_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    run_id = "2026-04-09T11-31-08-123456+08-00"
+    calls: list[tuple[str, object | None]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_screen_intraday_impl",
+        lambda **kwargs: runtime_root / "candidates" / f"{_intraday_key(run_id)}.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_chart_intraday_impl",
+        lambda **kwargs: runtime_root / "charts" / _intraday_key(run_id),
+    )
+
+    def fake_review_intraday_impl(
+        *,
+        method: str,
+        runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
+        reporter: object | None = None,
+    ) -> Path:
+        assert method == "b1"
+        calls.append(("review", llm_min_baseline_score))
+        return runtime_root / "reviews" / _intraday_key(run_id) / "summary.json"
+
+    monkeypatch.setattr(cli, "_review_intraday_impl", fake_review_intraday_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "4.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("review", 4.0)]
 
 
 def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -4540,10 +4927,12 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         *,
         method: str,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
         calls.append(("review", method))
         assert runtime_root == tmp_path / "runtime"
+        assert llm_min_baseline_score is None
         return runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"
 
     monkeypatch.setattr(cli, "_screen_intraday_impl", fake_screen_intraday_impl)
@@ -4658,10 +5047,12 @@ def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
         *,
         method: str,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
         assert method == "b1"
         assert runtime_root == tmp_path / "runtime"
+        assert llm_min_baseline_score is None
         calls.append(("review", method))
         return runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08-123456+08-00") / "summary.json"
 
@@ -4732,8 +5123,10 @@ def test_run_accepts_custom_pool_file_and_passes_it_to_screen_step(
         pick_date: str,
         dsn: str | None,
         runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
         reporter: object | None = None,
     ) -> Path:
+        assert llm_min_baseline_score is None
         calls.append(("review", method))
         return runtime_root / "reviews" / _eod_key("2026-04-01") / "summary.json"
 

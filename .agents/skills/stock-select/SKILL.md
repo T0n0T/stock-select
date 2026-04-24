@@ -20,6 +20,8 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Run deterministic screening in Python first.
 - Generate daily charts before review.
 - Expect progress output on `stderr` by default; use `--no-progress` only when the caller needs quiet stdout-only path output.
+- `review` and `run` support optional `--llm-min-baseline-score SCORE` to limit `llm_review_tasks.json` to candidates whose baseline `total_score` is at least `SCORE`.
+- `--llm-min-baseline-score` filters only LLM dispatch tasks; baseline review files, `summary.json`, charts, and deterministic screening outputs still include every successfully baseline-reviewed candidate.
 - `custom` pool uses `--pool-source custom` plus optional `--pool-file`.
 - Custom pool path precedence is `--pool-file`, then `STOCK_SELECT_POOL_FILE`, then `~/.agents/skills/stock-select/runtime/custom-pool.txt`.
 - Custom pool files contain whitespace-separated stock codes such as `603138 300058`.
@@ -82,7 +84,7 @@ Review and merge instructions must follow the active mode's runtime key:
 3. For intraday runs, resolve the active trade date, fetch PostgreSQL confirmed history through the previous trade date, then overlay Tushare `rt_k`.
 4. Run deterministic `b1`, `b2`, `dribull`, or `hcr` screening and write candidate outputs.
 5. Render daily chart PNG files for each candidate.
-6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`.
+6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`; add `--llm-min-baseline-score SCORE` when the caller wants LLM review tasks filtered by baseline score.
 7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` uses `references/prompt-b1.md`; `hcr` uses `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
 8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>.<method>` for end-of-day and `<run_id>.<method>` for intraday.
 9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
@@ -95,6 +97,8 @@ When running chart review for quality-first selection:
 
 1. Run the Python CLI `review` command first.
 2. Load `runtime/reviews/<mode_key>/llm_review_tasks.json`.
+   - If `review` or `run` used `--llm-min-baseline-score`, this task list is an intentional subset of baseline-reviewed candidates.
+   - Do not dispatch subagents for symbols absent from `llm_review_tasks.json` unless the caller explicitly asks to override the threshold.
 3. Read `max_concurrency` from the task file and treat it as a hard cap for concurrent subagents.
 4. Keep the `llm review` dispatch stage capped at 6 concurrent subagents.
 5. Use only native subagent APIs such as `spawn_agent`, `send_input`, and `wait_agent` for dispatch and collection.
@@ -193,6 +197,7 @@ If any of the checks above fail:
 - `chart --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache and writes charts under `runtime/charts/<run_id>.<method>/` without fetching fresh realtime data.
 - `review --pick-date` writes a baseline local structured scoring result in a schema that also reserves `llm_review` for future subagent output.
 - `review --intraday` reuses the latest intraday candidate for the requested method plus the same-trade-date shared prepared cache, writes baseline reviews under `runtime/reviews/<run_id>.<method>/`, and does not fetch fresh realtime data.
+- `review --pick-date`, `review --intraday`, and `run` accept `--llm-min-baseline-score`; when provided, only candidates with baseline `total_score >= SCORE` are written to `llm_review_tasks.json`, while all successful baseline reviews still remain in per-stock files and `summary.json`.
 - The baseline review returns `trend_structure`, `price_position`, `volume_behavior`, `previous_abnormal_move`, `macd_phase`, `total_score`, `signal_type`, `verdict`, and a short Chinese comment.
 - `b1` deterministic screening remains unchanged; only the review layer is wave-aware.
 - `b1` review now uses a dedicated reviewer plus `references/prompt-b1.md`.
