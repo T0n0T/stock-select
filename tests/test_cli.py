@@ -4790,6 +4790,30 @@ def test_run_passes_llm_min_baseline_score_to_review_step(
     assert calls == [("review", 4.0)]
 
 
+def test_run_rejects_invalid_llm_min_baseline_score(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+            "--llm-min-baseline-score",
+            "nan",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "llm-min-baseline-score" in result.stderr.lower()
+    assert "finite" in result.stderr.lower()
+    assert "non-negative" in result.stderr.lower()
+
+
 def test_run_intraday_rejects_pick_date(tmp_path: Path) -> None:
     runner = CliRunner()
 
@@ -4809,6 +4833,57 @@ def test_run_intraday_rejects_pick_date(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "mutually exclusive" in result.stderr
+
+
+def test_run_intraday_passes_llm_min_baseline_score_to_review_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    run_id = "2026-04-09T11-31-08-123456+08-00"
+    calls: list[tuple[str, object | None]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_screen_intraday_impl",
+        lambda **kwargs: runtime_root / "candidates" / f"{_intraday_key(run_id)}.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_chart_intraday_impl",
+        lambda **kwargs: runtime_root / "charts" / _intraday_key(run_id),
+    )
+
+    def fake_review_intraday_impl(
+        *,
+        method: str,
+        runtime_root: Path,
+        llm_min_baseline_score: float | None = None,
+        reporter: object | None = None,
+    ) -> Path:
+        assert method == "b1"
+        calls.append(("review", llm_min_baseline_score))
+        return runtime_root / "reviews" / _intraday_key(run_id) / "summary.json"
+
+    monkeypatch.setattr(cli, "_review_intraday_impl", fake_review_intraday_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(runtime_root),
+            "--llm-min-baseline-score",
+            "4.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("review", 4.0)]
 
 
 def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
