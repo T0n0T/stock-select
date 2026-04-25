@@ -19,7 +19,7 @@ WATCH_POOL_COLUMNS = [
     "comment",
     "recorded_at",
 ]
-WATCH_POOL_KEY_COLUMNS = ["method", "pick_date", "code"]
+WATCH_POOL_KEY_COLUMNS = ["method", "code"]
 WATCH_POOL_ALLOWED_VERDICTS = {"PASS", "WATCH"}
 
 

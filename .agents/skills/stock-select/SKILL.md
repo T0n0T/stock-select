@@ -218,6 +218,7 @@ If any of the checks above fail:
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
 - `review-merge` must read and write within the review directory chosen by the active mode: `runtime/reviews/<pick_date>.<method>/` for end-of-day or `runtime/reviews/<run_id>.<method>/` for intraday.
 - `record-watch` is end-of-day only. It reads `runtime/reviews/<pick_date>.<method>/summary.json`, keeps rows with verdict `PASS` or `WATCH`, writes or overwrites `runtime/watch_pool.csv`, stamps `recorded_at`, sorts by trading-day distance from the command execution day, and trims rows older than the configured `--window-trading-days` window.
+- `record-watch` de-duplicates by `method + code`: when the same stock is selected again for the same method, replace the old row with the new summary row so `pick_date` and `recorded_at` reflect the latest selection.
 - `record-watch` keeps the `method` column in the CSV for traceability, but the runtime watch pool is shared across methods and is no longer split into per-method files.
 - `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file that includes `summary.html`, `summary.json`, and `charts/`.
 

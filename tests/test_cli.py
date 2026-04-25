@@ -4298,7 +4298,7 @@ def test_record_watch_rejects_duplicate_without_overwrite(
         [
             {
                 "method": "b1",
-                "pick_date": "2026-04-10",
+                "pick_date": "2026-04-09",
                 "code": "AAA.SZ",
                 "verdict": "PASS",
                 "total_score": 4.2,
@@ -4343,6 +4343,219 @@ def test_record_watch_rejects_duplicate_without_overwrite(
 
     assert result.exit_code != 0
     assert "duplicate" in result.stderr.lower()
+
+
+def test_record_watch_refreshes_existing_symbol_to_latest_pick_date(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-24")
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-24",
+                "method": "b1",
+                "recommendations": [
+                    {
+                        "code": "AAA.SZ",
+                        "verdict": "PASS",
+                        "total_score": 4.9,
+                        "signal_type": "trend_start",
+                        "comment": "selected again",
+                    }
+                ],
+                "excluded": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "method": "b1",
+                "pick_date": "2026-04-14",
+                "code": "AAA.SZ",
+                "verdict": "WATCH",
+                "total_score": 3.7,
+                "signal_type": "rebound",
+                "comment": "old selection",
+                "recorded_at": "2026-04-14T16:00:00+08:00",
+            }
+        ]
+    ).to_csv(runtime_root / "watch_pool.csv", index=False)
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "_today_local_date", lambda: "2026-04-28")
+    monkeypatch.setattr(cli, "_recorded_at_timestamp", lambda: "2026-04-28T16:21:22+08:00")
+    monkeypatch.setattr(
+        cli,
+        "fetch_nth_latest_trade_date",
+        lambda _connection, *, end_date, n: "2026-04-28" if n == 1 else "2026-04-15",
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_available_trade_dates",
+        lambda _connection: pd.DataFrame(
+            {
+                "trade_date": [
+                    "2026-04-28",
+                    "2026-04-27",
+                    "2026-04-24",
+                    "2026-04-23",
+                    "2026-04-22",
+                    "2026-04-21",
+                    "2026-04-20",
+                    "2026-04-17",
+                    "2026-04-16",
+                    "2026-04-15",
+                    "2026-04-14",
+                ]
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "record-watch",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-24",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+            "--window-trading-days",
+            "10",
+        ],
+    )
+
+    rows = pd.read_csv(runtime_root / "watch_pool.csv").to_dict(orient="records")
+    assert result.exit_code == 0
+    assert rows == [
+        {
+            "method": "b1",
+            "pick_date": "2026-04-24",
+            "code": "AAA.SZ",
+            "verdict": "PASS",
+            "total_score": 4.9,
+            "signal_type": "trend_start",
+            "comment": "selected again",
+            "recorded_at": "2026-04-28T16:21:22+08:00",
+        }
+    ]
+
+
+def test_record_watch_deduplicates_existing_symbol_by_method_and_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-24")
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-24",
+                "method": "b1",
+                "recommendations": [
+                    {
+                        "code": "AAA.SZ",
+                        "verdict": "PASS",
+                        "total_score": 4.9,
+                        "signal_type": "trend_start",
+                        "comment": "selected again",
+                    }
+                ],
+                "excluded": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "method": "b1",
+                "pick_date": "2026-04-23",
+                "code": "AAA.SZ",
+                "verdict": "WATCH",
+                "total_score": 3.7,
+                "signal_type": "rebound",
+                "comment": "old selection",
+                "recorded_at": "2026-04-23T16:00:00+08:00",
+            }
+        ]
+    ).to_csv(runtime_root / "watch_pool.csv", index=False)
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(cli, "_today_local_date", lambda: "2026-04-28")
+    monkeypatch.setattr(cli, "_recorded_at_timestamp", lambda: "2026-04-28T16:21:22+08:00")
+    monkeypatch.setattr(
+        cli,
+        "fetch_nth_latest_trade_date",
+        lambda _connection, *, end_date, n: "2026-04-28" if n == 1 else "2026-04-15",
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_available_trade_dates",
+        lambda _connection: pd.DataFrame(
+            {
+                "trade_date": [
+                    "2026-04-28",
+                    "2026-04-27",
+                    "2026-04-24",
+                    "2026-04-23",
+                    "2026-04-22",
+                    "2026-04-21",
+                    "2026-04-20",
+                    "2026-04-17",
+                    "2026-04-16",
+                    "2026-04-15",
+                ]
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "record-watch",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-24",
+            "--dsn",
+            "postgresql://example",
+            "--runtime-root",
+            str(runtime_root),
+            "--window-trading-days",
+            "10",
+        ],
+    )
+
+    rows = pd.read_csv(runtime_root / "watch_pool.csv").to_dict(orient="records")
+    assert result.exit_code == 0
+    assert rows == [
+        {
+            "method": "b1",
+            "pick_date": "2026-04-24",
+            "code": "AAA.SZ",
+            "verdict": "PASS",
+            "total_score": 4.9,
+            "signal_type": "trend_start",
+            "comment": "selected again",
+            "recorded_at": "2026-04-28T16:21:22+08:00",
+        }
+    ]
 
 
 def test_record_watch_overwrites_and_trims_old_rows(

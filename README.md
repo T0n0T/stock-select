@@ -197,6 +197,7 @@ SZ002703 浙江世宝
 - `record-watch`
   - 读取 `reviews/<pick_date>.<method>/summary.json`
   - 抽取 `PASS` / `WATCH` 股票，写入 `watch_pool.csv`
+  - 同一 `method + code` 再次入选时刷新为本次 `pick_date`，只保留最新一条
   - 每条记录写入命令执行时间 `recorded_at`
   - 按距离本次执行日的交易日间隔排序
   - 按 `--window-trading-days` 保留最近窗口内的记录，删除更老的票
