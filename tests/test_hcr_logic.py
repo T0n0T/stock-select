@@ -35,6 +35,24 @@ def test_compute_hcr_reference_price_uses_const_ref_hhv_180_shift_60_semantics()
     assert reference.nunique(dropna=True) == 1
 
 
+def test_prepare_hcr_frame_adds_pool_moving_averages() -> None:
+    close = [float(idx) for idx in range(1, 61)]
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range("2026-01-01", periods=60),
+            "high": [value + 0.5 for value in close],
+            "low": [value - 0.5 for value in close],
+            "close": close,
+        }
+    )
+
+    prepared = prepare_hcr_frame(frame)
+
+    assert "ma25" in prepared.columns
+    assert "ma60" in prepared.columns
+    assert float(prepared["ma25"].iloc[-1]) > float(prepared["ma60"].iloc[-1])
+
+
 def test_run_hcr_screen_with_stats_selects_symbol_when_resonance_and_breakout_pass() -> None:
     pick_date = pd.Timestamp("2026-04-01")
     frame = pd.DataFrame(

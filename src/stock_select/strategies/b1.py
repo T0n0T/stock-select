@@ -178,10 +178,7 @@ def compute_b1_tightening_columns(df: pd.DataFrame) -> pd.DataFrame:
     dump_day = _barslast(bad_dump)
     cool_off = pd.Series(5.0, index=df.index)
     cool_off = cool_off.mask(bad_dump.rolling(window=10, min_periods=1).sum() >= 2, 10.0)
-    in_rev = (dump_day >= cool_off) & (dump_day <= 15.0)
-    shape_ok = ((amp_d <= 10.0) & (chg_d >= -4.0) & (chg_d <= 4.0)).fillna(False)
-    cg_ok = ((close > m5) | (m5 >= m5.shift(1)) | (((close - m5).abs() / m5) * 100.0 < 1.5)).fillna(False)
-    safe_mode = ((dump_day >= cool_off) & (~in_rev | (shape_ok & cg_ok))).fillna(False)
+    safe_mode = (dump_day >= cool_off).fillna(False)
 
     st_t1 = close.ewm(span=10, adjust=False).mean().ewm(span=10, adjust=False).mean()
     lt_t1 = (

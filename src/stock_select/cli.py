@@ -87,6 +87,7 @@ RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
 SHARED_PREPARED_METHODS = frozenset({"b1", "b2", "dribull"})
 BATCH_METHODS = ("b1", "b2", "dribull", "hcr")
 B1_ARTIFACT_VERSION = 1
+HCR_ARTIFACT_VERSION = 1
 
 
 class IntradayUserError(ValueError):
@@ -514,6 +515,8 @@ def _write_prepared_cache(
         metadata["method"] = method
     if method in SHARED_PREPARED_METHODS:
         metadata["screen_version"] = B1_ARTIFACT_VERSION
+    elif method == "hcr":
+        metadata["screen_version"] = HCR_ARTIFACT_VERSION
     if metadata_overrides:
         metadata.update(metadata_overrides)
     payload = {
@@ -552,10 +555,14 @@ def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
 
 
 def _prepared_cache_matches_screen_version(payload: dict[str, object], *, method: str) -> bool:
-    if method != "b1":
+    if method not in {"b1", "hcr"}:
         return True
     metadata = payload.get("metadata")
-    return isinstance(metadata, dict) and metadata.get("screen_version") == B1_ARTIFACT_VERSION
+    if not isinstance(metadata, dict):
+        return False
+    if method == "b1":
+        return metadata.get("screen_version") == B1_ARTIFACT_VERSION
+    return metadata.get("screen_version") == HCR_ARTIFACT_VERSION
 
 
 def _require_current_intraday_prepared_cache(

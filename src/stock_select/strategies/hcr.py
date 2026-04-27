@@ -32,6 +32,9 @@ def compute_hcr_reference_price(frame: pd.DataFrame) -> pd.Series:
 def prepare_hcr_frame(frame: pd.DataFrame) -> pd.DataFrame:
     prepared = frame.copy()
     prepared["trade_date"] = pd.to_datetime(prepared["trade_date"])
+    close = prepared["close"].astype(float)
+    prepared["ma25"] = close.rolling(window=25, min_periods=25).mean()
+    prepared["ma60"] = close.rolling(window=60, min_periods=60).mean()
     prepared["yx"] = compute_hcr_yx(prepared)
     prepared["p"] = compute_hcr_reference_price(prepared)
     prepared["resonance_gap_pct"] = (prepared["yx"] - prepared["p"]).abs() / prepared["p"].abs()

@@ -9,6 +9,13 @@ BASELINE_SCORE_WEIGHTS = {
     "previous_abnormal_move": 0.20,
     "macd_phase": 0.20,
 }
+B1_BASELINE_SCORE_WEIGHTS = {
+    "trend_structure": 0.23,
+    "price_position": 0.20,
+    "volume_behavior": 0.22,
+    "previous_abnormal_move": 0.20,
+    "macd_phase": 0.15,
+}
 NO_MACD_SCORE_WEIGHTS = {
     "trend_structure": 0.225,
     "price_position": 0.225,
@@ -16,9 +23,24 @@ NO_MACD_SCORE_WEIGHTS = {
     "previous_abnormal_move": 0.25,
 }
 
+B1_LLM_NO_MACD_SCORE_WEIGHTS = {
+    "trend_structure": B1_BASELINE_SCORE_WEIGHTS["trend_structure"] / (1.0 - B1_BASELINE_SCORE_WEIGHTS["macd_phase"]),
+    "price_position": B1_BASELINE_SCORE_WEIGHTS["price_position"] / (1.0 - B1_BASELINE_SCORE_WEIGHTS["macd_phase"]),
+    "volume_behavior": B1_BASELINE_SCORE_WEIGHTS["volume_behavior"] / (1.0 - B1_BASELINE_SCORE_WEIGHTS["macd_phase"]),
+    "previous_abnormal_move": B1_BASELINE_SCORE_WEIGHTS["previous_abnormal_move"] / (1.0 - B1_BASELINE_SCORE_WEIGHTS["macd_phase"]),
+}
+
 
 def compute_weighted_total(scores: dict[str, float]) -> float:
     return round(sum(float(scores[field]) * weight for field, weight in BASELINE_SCORE_WEIGHTS.items()), 2)
+
+
+def compute_b1_weighted_total(scores: dict[str, float]) -> float:
+    return round(sum(float(scores[field]) * weight for field, weight in B1_BASELINE_SCORE_WEIGHTS.items()), 2)
+
+
+def compute_b1_llm_weighted_total_without_macd(scores: dict[str, float]) -> float:
+    return round(sum(float(scores[field]) * weight for field, weight in B1_LLM_NO_MACD_SCORE_WEIGHTS.items()), 2)
 
 
 def compute_weighted_total_without_macd(scores: dict[str, float]) -> float:

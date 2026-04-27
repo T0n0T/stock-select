@@ -9,6 +9,8 @@ from stock_select.analysis.macd_waves import DailyMacdState
 from stock_select.review_protocol import (
     BASELINE_SCORE_WEIGHTS,
     build_baseline_comment,
+    compute_b1_llm_weighted_total_without_macd,
+    compute_b1_weighted_total,
     compute_weighted_total,
     compute_weighted_total_without_macd,
     infer_final_verdict,
@@ -39,6 +41,8 @@ ALLOWED_VERDICTS = {"PASS", "WATCH", "FAIL"}
 
 def compute_method_total_score(method: str, scores: dict[str, float]) -> float:
     normalized = str(method).strip().lower()
+    if normalized == "b1":
+        return compute_b1_weighted_total(scores)
     if normalized == "hcr":
         return compute_weighted_total_without_macd(scores)
     return compute_weighted_total(scores)
@@ -48,8 +52,9 @@ def map_macd_phase_score(
     *,
     method: str,
     history_len: int,
-    daily_state: DailyMacdState,
+    daily_state: DailyMacdState | None = None,
     weekly_wave: Any | None = None,
+    daily_recent_death_cross: bool = False,
 ) -> float:
     normalized = str(method).strip().lower()
     if normalized in {"b1", "b2", "dribull"} and history_len < 60:
@@ -57,24 +62,20 @@ def map_macd_phase_score(
     if normalized not in {"b1", "b2", "dribull"} and history_len < 35:
         return 3.0
 
-    state = daily_state.state
     weekly_label = str(getattr(weekly_wave, "label", ""))
-    third_wave_gain = float(daily_state.metrics.get("third_wave_gain", 0.0))
 
     if normalized == "b1":
-        if state in {"hard_invalid", "deteriorating", "overextended"}:
+        if weekly_wave is not None and weekly_label not in {"wave1", "wave3"}:
             return 1.0
-        if weekly_label in {"wave1", "wave3"} and state == "wave2_end_valid":
-            return 5.0
-        if weekly_label in {"wave1", "wave3"} and state == "wave4_end_valid":
-            return 5.0 if third_wave_gain <= 0.15 else 4.0
-        if weekly_label in {"wave1", "wave3"} and state == "repair_candidate":
-            return 4.0
-        if weekly_label in {"wave1", "wave3"} and state == "early_recross":
-            return 3.0
-        if state in {"wave2_end_valid", "wave4_end_valid", "repair_candidate"}:
+        if daily_recent_death_cross:
             return 2.0
-        return 1.0
+        return 4.0
+
+    if daily_state is None:
+        return 3.0
+
+    state = daily_state.state
+    third_wave_gain = float(daily_state.metrics.get("third_wave_gain", 0.0))
 
     if normalized == "b2":
         if state in {"hard_invalid", "deteriorating"}:
@@ -125,19 +126,22 @@ def apply_macd_verdict_gate(
     *,
     method: str,
     current_verdict: str,
-    daily_state: DailyMacdState,
+    daily_state: DailyMacdState | None = None,
     weekly_wave: Any | None = None,
+    daily_recent_death_cross: bool = False,
 ) -> str:
     normalized = str(method).strip().lower()
-    state = daily_state.state
     weekly_label = str(getattr(weekly_wave, "label", ""))
 
     if normalized == "b1":
-        if state in {"hard_invalid", "deteriorating", "overextended"}:
-            return "FAIL"
-        if weekly_label in {"wave1", "wave3"} and state in {"wave2_end_valid", "wave4_end_valid", "repair_candidate"}:
-            return current_verdict
-        return "WATCH" if current_verdict == "PASS" else current_verdict
+        if daily_recent_death_cross and current_verdict == "PASS":
+            return "WATCH"
+        return current_verdict
+
+    if daily_state is None:
+        return current_verdict
+
+    state = daily_state.state
 
     if normalized == "b2":
         if state == "hard_invalid":
@@ -211,13 +215,14 @@ def merge_review_result(
     llm_weight: float = 0.6,
 ) -> dict[str, Any]:
     baseline_review = existing_review["baseline_review"]
+    normalized = str(method).strip().lower()
+    if normalized == "b1" and baseline_weight == 0.4 and llm_weight == 0.6:
+        baseline_weight = 0.6
+        llm_weight = 0.4
     baseline_score = float(baseline_review.get("total_score", 0.0))
     llm_score = float(llm_review.get("total_score", 0.0))
     final_score = round(baseline_score * baseline_weight + llm_score * llm_weight, 2)
-    if str(llm_review.get("signal_type", "")) == "distribution_risk" or str(llm_review.get("verdict", "")) == "FAIL":
-        verdict = "FAIL"
-    else:
-        verdict = infer_final_verdict(final_score)
+    verdict = infer_final_verdict(final_score)
 
     return {
         **existing_review,
@@ -259,7 +264,12 @@ def normalize_llm_review(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(comment, str) or not comment.strip():
         raise ValueError("Missing or empty required field: comment")
 
-    total_score = compute_method_total_score(str(payload.get("method", "default")), normalized_scores)
+    method = str(payload.get("method", "default"))
+    total_score = (
+        compute_b1_llm_weighted_total_without_macd(normalized_scores)
+        if method.strip().lower() == "b1"
+        else compute_method_total_score(method, normalized_scores)
+    )
 
     return {
         **{field: str(payload[field]).strip() for field in REQUIRED_REASONING_FIELDS},

@@ -5478,7 +5478,7 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "comment": "baseline",
     }
     assert merged["llm_review"]["verdict"] == "PASS"
-    assert merged["llm_review"]["total_score"] == 4.62
+    assert merged["llm_review"]["total_score"] == 4.53
     assert merged["llm_review"]["scores"] == {
         "trend_structure": 5.0,
         "price_position": 4.0,
@@ -5486,10 +5486,10 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "previous_abnormal_move": 4.0,
         "macd_phase": 5.0,
     }
-    assert merged["final_score"] == 4.13
-    assert merged["total_score"] == 4.13
-    assert merged["verdict"] == "PASS"
-    assert summary["recommendations"][0]["code"] == "000001.SZ"
+    assert merged["final_score"] == 3.85
+    assert merged["total_score"] == 3.85
+    assert merged["verdict"] == "WATCH"
+    assert summary["excluded"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr
 
 
@@ -5586,7 +5586,7 @@ def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:
     untouched = json.loads((review_dir / "000002.SZ.json").read_text(encoding="utf-8"))
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
     assert merged["review_mode"] == "merged"
-    assert merged["llm_review"]["total_score"] == 4.62
+    assert merged["llm_review"]["total_score"] == 4.53
     assert untouched["review_mode"] == "baseline_local"
     assert untouched["baseline_review"] == {
         "review_type": "baseline",
@@ -5902,6 +5902,8 @@ def test_screen_writes_candidate_records_from_market_data(monkeypatch, tmp_path:
                 {
                     "trade_date": pd.to_datetime(["2026-03-31", "2026-04-01"]),
                     "close": [10.4, 10.7],
+                    "ma25": [10.5, 10.8],
+                    "ma60": [10.0, 10.2],
                     "J": [11.0, 10.0],
                     "zxdq": [10.2, 10.5],
                     "zxdkx": [10.0, 10.2],
@@ -5924,6 +5926,8 @@ def test_screen_writes_candidate_records_from_market_data(monkeypatch, tmp_path:
                 {
                     "trade_date": pd.to_datetime(["2026-04-01"]),
                     "close": [9.3],
+                    "ma25": [9.0],
+                    "ma60": [9.5],
                     "J": [90.0],
                     "zxdq": [9.1],
                     "zxdkx": [9.4],
@@ -6883,8 +6887,8 @@ def test_screen_dribull_real_flow_uses_shared_prep_and_liquidity_pool(
             group["zxdkx"] = group["close"] - 0.1
             group["low"] = group["close"] - 0.2
             group["volume"] = group["vol"]
-            group["ma25"] = group["close"]
-            group["ma60"] = group["close"]
+            group["ma25"] = group["close"] - 0.10
+            group["ma60"] = group["close"] - 0.20
             group["ma144"] = group["close"]
             prepared[code] = group
         return prepared
@@ -7091,8 +7095,8 @@ def test_screen_dribull_uses_two_phase_fetch_and_only_warms_pool_symbols(
             group["zxdkx"] = group["close"] - 0.1
             group["low"] = group["close"] - 0.2
             group["volume"] = group["vol"]
-            group["ma25"] = group["close"]
-            group["ma60"] = group["close"]
+            group["ma25"] = group["close"] - 0.10
+            group["ma60"] = group["close"] - 0.20
             group["ma144"] = group["close"]
             group["dif"] = 0.12
             group["dea"] = 0.08
@@ -7214,8 +7218,8 @@ def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
             group["zxdkx"] = group["close"] - 0.1
             group["low"] = group["close"] - 0.2
             group["volume"] = group["vol"]
-            group["ma25"] = group["close"]
-            group["ma60"] = group["close"]
+            group["ma25"] = group["close"] - 0.10
+            group["ma60"] = group["close"] - 0.20
             group["ma144"] = group["close"]
             group["dif"] = 0.12
             group["dea"] = 0.08
@@ -7318,7 +7322,7 @@ def test_screen_dribull_writes_prepared_cache_before_prefilter(
             group["zxdkx"] = group["close"] - 0.1
             group["low"] = group["close"] - 0.2
             group["volume"] = group["vol"]
-            group["ma25"] = group["close"]
+            group["ma25"] = group["close"] + 0.10
             group["ma60"] = group["close"]
             group["ma144"] = group["close"]
             group["dif"] = 0.12
@@ -9567,6 +9571,8 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
                 "weekly_ma_bull": [True],
                 "max_vol_not_bearish": [True],
                 "close": [11.6],
+                "ma25": [11.7],
+                "ma60": [11.2],
                 "chg_d": [1.0],
                 "amp_d": [2.0],
                 "body_d": [-1.0],
@@ -9643,6 +9649,117 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
 
     assert result.exit_code == 0
     assert "[screen] reuse prepared path=" in result.stderr
+
+
+def test_screen_hcr_ignores_prepared_cache_missing_pool_moving_averages(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    stale_prepared = {
+        "OLD.SZ": pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [50.0],
+                "close": [10.6],
+                "yx": [10.4],
+                "p": [10.5],
+                "resonance_gap_pct": [0.003],
+            }
+        )
+    }
+    cli._write_prepared_cache(
+        runtime_root / "prepared" / "2026-04-01.hcr.pkl",
+        method="hcr",
+        pick_date="2026-04-01",
+        start_date="2025-04-29",
+        end_date="2026-04-01",
+        prepared_by_symbol=stale_prepared,
+        metadata_overrides={"screen_version": None},
+    )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_resolve_hcr_start = cli._resolve_hcr_start_date
+    original_prepare = cli._prepare_hcr_screen_data
+    original_run = cli.run_hcr_screen_with_stats
+
+    def fake_fetch_daily_window(*args, **kwargs) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "open": [10.0],
+                "high": [10.8],
+                "low": [9.8],
+                "close": [10.6],
+                "vol": [100.0],
+            }
+        )
+
+    def fake_prepare_hcr_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        return {
+            "NEW.SZ": pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-04-01"]),
+                    "turnover_n": [100.0],
+                    "ma25": [10.4],
+                    "ma60": [10.1],
+                    "close": [10.6],
+                    "yx": [10.4],
+                    "p": [10.5],
+                    "resonance_gap_pct": [0.003],
+                }
+            )
+        }
+
+    def fake_run_hcr_screen_with_stats(
+        prepared_subset: dict[str, pd.DataFrame],
+        pick_date: pd.Timestamp,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert list(prepared_subset) == ["NEW.SZ"]
+        return (
+            [{"code": "NEW.SZ", "pick_date": "2026-04-01", "close": 10.6, "turnover_n": 100.0}],
+            {
+                "total_symbols": 1,
+                "eligible": 1,
+                "fail_insufficient_history": 0,
+                "fail_resonance": 0,
+                "fail_close_floor": 0,
+                "fail_breakout": 0,
+                "selected": 1,
+            },
+        )
+
+    cli._connect = lambda _dsn: object()  # type: ignore[assignment]
+    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
+    cli._resolve_hcr_start_date = lambda connection, *, end_date, trading_days: "2025-04-29"  # type: ignore[assignment]
+    cli._prepare_hcr_screen_data = fake_prepare_hcr_screen_data  # type: ignore[assignment]
+    cli.run_hcr_screen_with_stats = fake_run_hcr_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "hcr",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._resolve_hcr_start_date = original_resolve_hcr_start  # type: ignore[assignment]
+        cli._prepare_hcr_screen_data = original_prepare  # type: ignore[assignment]
+        cli.run_hcr_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert "[screen] prepared reuse skipped" in result.stderr
+    assert "reason=stale_screen_version" in result.stderr
 
 
 def test_screen_ignores_stale_b1_prepared_cache_without_screen_version_and_recomputes(tmp_path: Path) -> None:
@@ -9778,6 +9895,8 @@ def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(tm
                 "high": [11.8],
                 "low": [11.0],
                 "close": [11.6],
+                "ma25": [11.7],
+                "ma60": [11.2],
                 "turnover_n": [200.0],
                 "volume": [120.0],
             }

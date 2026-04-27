@@ -244,7 +244,7 @@ SZ002703 浙江世宝
 
 - `fail_chg_cap`: 当日涨幅超过 4%
 - `fail_v_shrink`: 近 3 日均量未低于近 10 日均量
-- `fail_safe_mode`: 近期出现放量派发后，仍处于危险冷却区，或虽进入受控修复窗口但未满足 `shape_ok` / `cg_ok` 检查
+- `fail_safe_mode`: 近期出现放量派发后，仍处于危险冷却区；冷却期结束后即可重新纳入考虑
 - `fail_lt_filter`: 长趋势方向近 30 日翻向次数过多，且不满足近期上穿或强偏离的例外条件
 
 ### 关于 `fail_insufficient_history`

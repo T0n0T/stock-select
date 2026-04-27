@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from stock_select.review_orchestrator import (
+    apply_macd_verdict_gate,
     compute_method_total_score,
     build_review_payload,
     build_review_result,
@@ -122,6 +123,36 @@ def test_normalize_llm_review_validates_and_flattens_scores() -> None:
     assert normalized["signal_type"] == "trend_start"
 
 
+def test_normalize_llm_review_excludes_macd_from_b1_total_score() -> None:
+    payload = {
+        "trend_reasoning": "趋势向上",
+        "position_reasoning": "位置适中",
+        "volume_reasoning": "量价健康",
+        "abnormal_move_reasoning": "前期有异动",
+        "macd_reasoning": "MACD偏弱但仅作风险描述",
+        "signal_reasoning": "符合b1回调低点",
+        "scores": {
+            "trend_structure": 4,
+            "price_position": 3,
+            "volume_behavior": 2,
+            "previous_abnormal_move": 4,
+            "macd_phase": 1,
+        },
+        "signal_type": "rebound",
+        "verdict": "WATCH",
+        "comment": "MACD只参与描述，不参与LLM总分。",
+        "method": "b1",
+    }
+
+    low_macd = normalize_llm_review(payload)
+    high_macd = normalize_llm_review({**payload, "scores": {**payload["scores"], "macd_phase": 5}})
+
+    assert low_macd["total_score"] == pytest.approx(3.25)
+    assert high_macd["total_score"] == pytest.approx(low_macd["total_score"])
+    assert low_macd["macd_phase"] == 1.0
+    assert high_macd["macd_phase"] == 5.0
+
+
 def test_compute_method_total_score_includes_macd_for_b1() -> None:
     scores = {
         "trend_structure": 5.0,
@@ -131,7 +162,20 @@ def test_compute_method_total_score_includes_macd_for_b1() -> None:
         "macd_phase": 1.0,
     }
 
-    assert compute_method_total_score("b1", scores) == pytest.approx(3.82)
+    assert compute_method_total_score("b1", scores) == pytest.approx(4.0)
+
+
+def test_compute_method_total_score_reduces_macd_weight_for_b1() -> None:
+    low_macd = {
+        "trend_structure": 5.0,
+        "price_position": 5.0,
+        "volume_behavior": 5.0,
+        "previous_abnormal_move": 5.0,
+        "macd_phase": 1.0,
+    }
+    high_macd = {**low_macd, "macd_phase": 5.0}
+
+    assert compute_method_total_score("b1", high_macd) - compute_method_total_score("b1", low_macd) == pytest.approx(0.6)
 
 
 def test_compute_method_total_score_excludes_macd_for_hcr() -> None:
@@ -168,6 +212,32 @@ def test_compute_method_total_score_keeps_macd_for_default() -> None:
     }
 
     assert compute_method_total_score("default", scores) == pytest.approx(3.82)
+
+
+def test_b1_macd_gate_does_not_fail_non_wave1_wave3_weekly_labels() -> None:
+    weekly_wave = type("Wave", (), {"label": "wave2"})()
+
+    verdict = apply_macd_verdict_gate(
+        method="b1",
+        current_verdict="PASS",
+        weekly_wave=weekly_wave,
+        daily_recent_death_cross=False,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_b1_macd_gate_downgrades_recent_daily_death_cross_pass_to_watch() -> None:
+    weekly_wave = type("Wave", (), {"label": "wave2"})()
+
+    verdict = apply_macd_verdict_gate(
+        method="b1",
+        current_verdict="PASS",
+        weekly_wave=weekly_wave,
+        daily_recent_death_cross=True,
+    )
+
+    assert verdict == "WATCH"
 
 
 def test_normalize_llm_review_rejects_missing_reasoning() -> None:
@@ -280,14 +350,14 @@ def test_default_review_symbol_history_returns_watch_for_constructive_trend() ->
     assert review["price_position"] == 3.0
     assert review["volume_behavior"] == 5.0
     assert review["previous_abnormal_move"] == 3.0
-    assert review["macd_phase"] == 3.0
-    assert review["total_score"] == 3.84
+    assert review["macd_phase"] == 4.0
+    assert review["total_score"] == 4.04
     assert review["signal_type"] == "trend_start"
-    assert review["verdict"] == "WATCH"
-    assert review["comment"] == "结构有修复迹象，但量价与位置优势一般，暂时更适合继续观察。"
+    assert review["verdict"] == "PASS"
+    assert review["comment"] == "趋势结构顺畅，量价配合正常，前期异动仍有承接，当前具备继续走强条件。"
 
 
-def test_default_review_symbol_history_includes_macd_in_total_score_for_b1() -> None:
+def test_default_review_symbol_history_uses_b1_total_weight_when_method_is_b1() -> None:
     history = pd.DataFrame(
         {
             "trade_date": pd.date_range("2026-01-01", periods=160, freq="B"),
@@ -311,9 +381,9 @@ def test_default_review_symbol_history_includes_macd_in_total_score_for_b1() -> 
     assert review["price_position"] == 3.0
     assert review["volume_behavior"] == 5.0
     assert review["previous_abnormal_move"] == 3.0
-    assert review["macd_phase"] == 3.0
-    assert review["total_score"] == pytest.approx(3.84)
-    assert review["verdict"] == "WATCH"
+    assert review["macd_phase"] == 4.0
+    assert review["total_score"] == pytest.approx(4.05)
+    assert review["verdict"] == "PASS"
 
 
 def test_default_review_symbol_history_ignores_future_rows_after_pick_date() -> None:
@@ -413,7 +483,7 @@ def test_normalize_llm_review_rejects_non_finite_and_out_of_range_scores(invalid
         )
 
 
-def test_merge_review_result_preserves_distribution_risk_failures() -> None:
+def test_merge_review_result_does_not_let_distribution_risk_veto_weighted_score() -> None:
     merged = merge_review_result(
         existing_review={
             "code": "000001.SZ",
@@ -442,11 +512,12 @@ def test_merge_review_result_preserves_distribution_risk_failures() -> None:
 
     assert merged["review_mode"] == "merged"
     assert merged["signal_type"] == "distribution_risk"
-    assert merged["verdict"] == "FAIL"
+    assert merged["final_score"] == 4.16
+    assert merged["verdict"] == "PASS"
     assert merged["comment"] == "llm hard fail"
 
 
-def test_merge_review_result_preserves_explicit_fail_verdicts() -> None:
+def test_merge_review_result_does_not_let_explicit_llm_fail_veto_weighted_score() -> None:
     merged = merge_review_result(
         existing_review={
             "code": "000001.SZ",
@@ -474,8 +545,39 @@ def test_merge_review_result_preserves_explicit_fail_verdicts() -> None:
     )
 
     assert merged["signal_type"] == "rebound"
-    assert merged["verdict"] == "FAIL"
+    assert merged["final_score"] == 4.08
+    assert merged["verdict"] == "PASS"
     assert merged["comment"] == "llm explicit fail"
+
+
+def test_merge_review_result_uses_lower_llm_weight_for_b1() -> None:
+    existing_review = {
+        "code": "000001.SZ",
+        "pick_date": "2026-04-01",
+        "chart_path": "/tmp/000001_day.png",
+        "review_mode": "baseline_local",
+        "baseline_review": {
+            "total_score": 4.6,
+            "signal_type": "rebound",
+            "verdict": "PASS",
+            "comment": "baseline",
+        },
+        "llm_review": None,
+        "total_score": 4.6,
+        "signal_type": "rebound",
+        "verdict": "PASS",
+        "comment": "baseline",
+    }
+    llm_review = {
+        "total_score": 3.0,
+        "signal_type": "rebound",
+        "verdict": "WATCH",
+        "comment": "llm watch",
+    }
+
+    merged = merge_review_result(method="b1", existing_review=existing_review, llm_review=llm_review)
+
+    assert merged["final_score"] == pytest.approx(3.96)
 
 
 def test_normalize_llm_review_validates_macd_phase_score() -> None:

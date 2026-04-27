@@ -277,13 +277,13 @@ def test_compute_b1_tightening_columns_keeps_lt_waiver_after_pre114_crossover() 
     assert bool(out.loc[131, "lt_filter"]) is True
 
 
-def test_compute_b1_tightening_columns_disables_safe_mode_after_recent_bad_dump() -> None:
-    close = [10.0 + idx * 0.12 for idx in range(20)] + [12.0, 12.05, 12.08, 12.1, 12.12]
+def test_compute_b1_tightening_columns_reenables_safe_mode_after_cool_off() -> None:
+    close = [10.0 + idx * 0.12 for idx in range(20)] + [12.0, 11.7, 11.5, 11.3, 11.1, 10.9]
     open_ = [value - 0.05 for value in close]
     open_[20] = 13.4
     high = [max(open_price, close_price) + 0.1 for open_price, close_price in zip(open_, close)]
     low = [min(open_price, close_price) - 0.1 for open_price, close_price in zip(open_, close)]
-    volume = [1000.0] * 20 + [4000.0, 1100.0, 1050.0, 1000.0, 950.0]
+    volume = [1000.0] * 20 + [4000.0, 1100.0, 1050.0, 1000.0, 950.0, 900.0]
     df = pd.DataFrame(
         {
             "open": open_,
@@ -298,6 +298,7 @@ def test_compute_b1_tightening_columns_disables_safe_mode_after_recent_bad_dump(
 
     assert bool(out.loc[20, "safe_mode"]) is False
     assert bool(out.loc[24, "safe_mode"]) is False
+    assert bool(out.loc[25, "safe_mode"]) is True
 
 
 def test_compute_weekly_close_uses_last_actual_trade_day_in_iso_week() -> None:
