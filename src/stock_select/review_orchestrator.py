@@ -11,6 +11,7 @@ from stock_select.review_protocol import (
     build_baseline_comment,
     compute_b1_llm_weighted_total_without_macd,
     compute_b1_weighted_total,
+    compute_b2_weighted_total,
     compute_weighted_total,
     compute_weighted_total_without_macd,
     infer_final_verdict,
@@ -39,10 +40,12 @@ ALLOWED_SIGNAL_TYPES = {"trend_start", "rebound", "distribution_risk"}
 ALLOWED_VERDICTS = {"PASS", "WATCH", "FAIL"}
 
 
-def compute_method_total_score(method: str, scores: dict[str, float]) -> float:
+def compute_method_total_score(method: str, scores: dict[str, float], *, signal: str | None = None) -> float:
     normalized = str(method).strip().lower()
     if normalized == "b1":
         return compute_b1_weighted_total(scores)
+    if normalized == "b2":
+        return compute_b2_weighted_total(scores, signal=signal)
     if normalized == "hcr":
         return compute_weighted_total_without_macd(scores)
     return compute_weighted_total(scores)
@@ -258,7 +261,7 @@ def merge_review_result(
 ) -> dict[str, Any]:
     baseline_review = existing_review["baseline_review"]
     normalized = str(method).strip().lower()
-    if normalized == "b1" and baseline_weight == 0.4 and llm_weight == 0.6:
+    if normalized in {"b1", "b2"} and baseline_weight == 0.4 and llm_weight == 0.6:
         baseline_weight = 0.6
         llm_weight = 0.4
     baseline_score = float(baseline_review.get("total_score", 0.0))
@@ -351,18 +354,20 @@ def summarize_reviews(
     min_score: float,
     failures: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    normalized_method = method.strip().lower()
+    sort_key = lambda item: float(item.get("total_score", 0.0))
     recommendations = sorted(
         [
             review
             for review in reviews
             if review.get("verdict") == "PASS" and float(review.get("total_score", 0.0)) >= min_score
         ],
-        key=lambda item: float(item.get("total_score", 0.0)),
+        key=sort_key,
         reverse=True,
     )
     excluded = sorted(
         [review for review in reviews if review not in recommendations],
-        key=lambda item: float(item.get("total_score", 0.0)),
+        key=sort_key,
         reverse=True,
     )
     return {

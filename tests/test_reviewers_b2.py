@@ -1,6 +1,12 @@
 import pandas as pd
 
-from stock_select.reviewers.b2 import review_b2_symbol_history
+from stock_select.reviewers.b2 import (
+    _score_b2_previous_abnormal_move,
+    _score_b2_price_position,
+    _score_b2_trend_structure,
+    _score_b2_volume_behavior,
+    review_b2_symbol_history,
+)
 
 
 _MULTI_TIMEFRAME_CONFIRMATION_POINTS = 40
@@ -166,6 +172,99 @@ def _damaged_b2_history() -> pd.DataFrame:
     )
 
 
+def _series(values: list[float]) -> pd.Series:
+    return pd.Series(values, index=range(len(values)), dtype="float64")
+
+
+def test_b2_price_position_rewards_healthy_pullback_near_ma25_support() -> None:
+    low_box = _series([10.0, 11.0, 12.0, 13.0, 14.0, 12.0, 11.5, 11.0])
+    high = low_box + 1.0
+    close = _series([10.5, 11.5, 12.5, 13.5, 14.5, 12.5, 11.8, 11.2])
+    ma25 = _series([12.0] * len(close))
+    zxdq = _series([11.6] * len(close))
+
+    assert _score_b2_price_position(close=close, high=high, low=low_box, ma25=ma25, zxdq=zxdq) == 5.0
+
+
+def test_b2_trend_structure_uses_zxdkx_as_medium_support_line() -> None:
+    close = _series([10.0] * 60 + [10.2, 10.4, 10.6, 10.8, 11.0])
+    low = close * 0.99
+    ma25 = _series([9.8] * 60 + [10.0, 10.1, 10.2, 10.3, 10.4])
+    zxdkx = _series([9.4] * 60 + [9.6, 9.7, 9.8, 9.9, 10.0])
+
+    assert _score_b2_trend_structure(close=close, low=low, ma25=ma25, zxdkx=zxdkx) == 4.0
+
+
+def test_b2_price_position_keeps_high_position_observable_when_ma25_holds_zxdq() -> None:
+    low = _series([10.0, 11.0, 12.0, 13.0, 14.0])
+    high = _series([11.0, 12.0, 13.0, 14.0, 15.0])
+    close = _series([10.5, 11.5, 12.5, 13.5, 14.2])
+    ma25 = _series([13.0] * len(close))
+    zxdq = _series([12.7] * len(close))
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 3.0
+
+
+def test_b2_previous_abnormal_move_scores_pullback_above_high_volume_body_price() -> None:
+    open_ = _series([10.0] * 92 + [100.0, 230.0, 232.0, 234.0])
+    close = _series([10.0] * 92 + [150.0, 231.0, 233.0, 235.0])
+    low = _series([9.8] * 92 + [99.0, 226.0, 228.0, 230.0])
+    volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
+
+    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 5.0
+
+
+def test_b2_previous_abnormal_move_uses_redundant_price_and_body_low() -> None:
+    open_ = _series([10.0] * 92 + [100.0, 96.0, 95.0, 94.0])
+    close = _series([10.0] * 92 + [100.0, 96.0, 95.0, 94.0])
+    low = _series([9.8] * 92 + [100.0, 70.0, 70.0, 70.0])
+    volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
+
+    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 4.0
+
+
+def test_b2_previous_abnormal_move_uses_bearish_body_high_as_abnormal_price() -> None:
+    open_ = _series([10.0] * 92 + [120.0, 160.0, 159.0, 158.0])
+    close = _series([10.0] * 92 + [100.0, 159.0, 158.0, 157.0])
+    low = _series([9.8] * 92 + [99.0, 157.0, 158.0, 159.0])
+    volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
+
+    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 5.0
+
+
+def test_b2_price_position_penalizes_passive_ma25_touch_after_high_consolidation() -> None:
+    close = _series([10.0] * 40 + [12.0, 14.0, 15.5, 16.0, 15.8, 15.9, 15.7, 15.6, 15.4, 15.2])
+    high = close * 1.01
+    low = close * 0.99
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    zxdq = ma25 * 1.20
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 1.0
+
+
+def test_b2_volume_behavior_rewards_breakout_volume_then_shrinking_retest() -> None:
+    close = _series([10.0] * 40 + [10.3, 10.7, 11.2, 11.0, 10.9, 10.8, 10.95, 11.05, 11.15, 11.25])
+    volume = _series([900.0] * 40 + [1200.0, 1800.0, 3200.0, 1500.0, 1100.0, 980.0, 940.0, 960.0, 1000.0, 1040.0])
+
+    assert _score_b2_volume_behavior(close=close, volume=volume) == 5.0
+
+
+def test_b2_volume_behavior_penalizes_retest_without_volume_contraction() -> None:
+    close = _series([10.0] * 40 + [10.3, 10.7, 11.2, 11.0, 10.9, 10.8, 10.95, 11.05, 11.15, 11.25])
+    volume = _series([900.0] * 40 + [1200.0, 1800.0, 3200.0, 3000.0, 2900.0, 3100.0, 3050.0, 2950.0, 3000.0, 3150.0])
+
+    assert _score_b2_volume_behavior(close=close, volume=volume) == 2.0
+
+
+def test_b2_previous_abnormal_move_scores_one_when_high_volume_price_is_lost() -> None:
+    open_ = _series([10.0] * 92 + [100.0, 42.0, 40.0, 38.0])
+    close = _series([10.0] * 92 + [110.0, 41.0, 39.0, 37.0])
+    low = _series([9.8] * 92 + [99.0, 40.0, 38.0, 36.0])
+    volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
+
+    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 1.0
+
+
 def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> None:
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -179,16 +278,42 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
     assert review["chart_path"] == "/tmp/000001.SZ_day.png"
     assert review["review_type"] == "baseline"
     assert review["trend_structure"] == 4.0
-    assert review["price_position"] == 5.0
+    assert review["price_position"] == 3.0
     assert review["volume_behavior"] == 5.0
-    assert review["previous_abnormal_move"] == 5.0
+    assert review["previous_abnormal_move"] == 4.0
     assert review["macd_phase"] == 2.0
-    assert review["total_score"] == 4.22
+    assert review["total_score"] == 3.25
+    assert review["signal"] is None
+    assert "ranking_score" not in review
+    assert "rank_features" not in review
     assert review["signal_type"] == "trend_start"
-    assert review["verdict"] == "PASS"
-    assert "周线MACD等待启动" in review["comment"]
-    assert "日线MACD等待启动" in review["comment"]
+    assert review["verdict"] == "WATCH"
+    assert "周线MACD" in review["comment"]
+    assert "日线MACD" in review["comment"]
     assert "wave" not in review["comment"]
+    assert "三浪" not in review["comment"]
+
+
+def test_b2_review_includes_candidate_signal_in_total_score() -> None:
+    neutral_review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+    b3_review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B3",
+    )
+
+    assert b3_review["signal"] == "B3"
+    assert b3_review["total_score"] > neutral_review["total_score"]
+    assert round(b3_review["total_score"] - neutral_review["total_score"], 2) == 0.31
+    assert "ranking_score" not in b3_review
+    assert "rank_features" not in b3_review
 
 
 def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
@@ -200,16 +325,23 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
     )
 
     assert review["code"] == "000002.SZ"
+    assert review["pick_date"] == "2026-04-30"
+    assert review["chart_path"] == "/tmp/000002.SZ_day.png"
+    assert review["review_type"] == "baseline"
     assert review["trend_structure"] == 1.0
-    assert review["price_position"] == 2.0
+    assert review["price_position"] == 5.0
     assert review["volume_behavior"] == 1.0
-    assert review["previous_abnormal_move"] == 2.0
+    assert review["previous_abnormal_move"] == 5.0
     assert review["macd_phase"] == 2.0
-    assert review["total_score"] == 1.58
+    assert review["total_score"] == 2.75
+    assert review["signal"] is None
+    assert "ranking_score" not in review
+    assert "rank_features" not in review
     assert review["signal_type"] == "distribution_risk"
     assert review["verdict"] == "FAIL"
-    assert "周线MACD等待启动" in review["comment"]
-    assert "日线MACD等待启动" in review["comment"]
+    assert "周线MACD" in review["comment"]
+    assert "日线MACD" in review["comment"]
+    assert "wave" not in review["comment"]
     assert "三浪" not in review["comment"]
 
 

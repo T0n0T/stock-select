@@ -14,6 +14,8 @@ from stock_select.review_orchestrator import (
 )
 from stock_select.review_protocol import infer_signal_type, infer_verdict
 from stock_select.reviewers.b2 import (
+    _resolve_zx_lines,
+    _resolve_zxdkx,
     _score_b2_previous_abnormal_move,
     _score_b2_price_position,
     _score_b2_trend_structure,
@@ -44,7 +46,7 @@ def review_dribull_symbol_history(
     low = frame["low"].astype(float)
     volume = frame["vol"].astype(float) if "vol" in frame.columns else frame["volume"].astype(float)
     ma25 = close.rolling(window=25, min_periods=25).mean()
-    ma60 = close.rolling(window=60, min_periods=60).mean()
+    zxdq, zxdkx = _resolve_zx_lines(frame)
 
     weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
     daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], pick_date)
@@ -53,13 +55,13 @@ def review_dribull_symbol_history(
         close=close,
         low=low,
         ma25=ma25,
-        ma60=ma60,
+        zxdkx=zxdkx,
         weekly_trend=weekly_trend,
         daily_trend=daily_trend,
     )
-    price_position = _score_b2_price_position(close=close, high=high, ma25=ma25)
+    price_position = _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq)
     volume_behavior = _score_b2_volume_behavior(close=close, volume=volume)
-    previous_abnormal_move = _score_b2_previous_abnormal_move(close=close, volume=volume, ma25=ma25, ma60=ma60)
+    previous_abnormal_move = _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume)
     macd_phase = map_macd_phase_score(
         method="dribull",
         history_len=len(frame),

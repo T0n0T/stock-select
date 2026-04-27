@@ -205,7 +205,39 @@ def test_compute_method_total_score_keeps_macd_for_b2() -> None:
         "macd_phase": 1.0,
     }
 
-    assert compute_method_total_score("b2", scores) == pytest.approx(3.82)
+    assert compute_method_total_score("b2", scores) == pytest.approx(3.38)
+
+
+def test_compute_method_total_score_weights_b2_macd_and_position_as_core() -> None:
+    low_macd = {
+        "trend_structure": 4.0,
+        "price_position": 3.0,
+        "volume_behavior": 4.0,
+        "previous_abnormal_move": 5.0,
+        "macd_phase": 1.0,
+    }
+    high_macd = {**low_macd, "macd_phase": 5.0}
+    high_abnormal = {**low_macd, "previous_abnormal_move": 1.0, "macd_phase": 5.0}
+
+    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", low_macd) == pytest.approx(1.02)
+    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", high_abnormal) == pytest.approx(0.34)
+
+
+def test_compute_b2_total_score_includes_candidate_signal_weight() -> None:
+    scores = {
+        "trend_structure": 4.0,
+        "price_position": 3.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 3.0,
+        "macd_phase": 5.0,
+    }
+
+    b3_score = compute_method_total_score("b2", scores, signal="B3")
+    b2_score = compute_method_total_score("b2", scores, signal="B2")
+    neutral_score = compute_method_total_score("b2", scores)
+
+    assert b3_score > b2_score > neutral_score
+    assert b3_score - b2_score == pytest.approx(0.15)
 
 
 def test_compute_method_total_score_keeps_macd_for_default() -> None:
@@ -351,6 +383,33 @@ def test_summarize_reviews_sorts_recommendations() -> None:
 
     assert summary["recommendations"][0]["code"] == "B"
     assert summary["excluded"][0]["code"] == "A"
+
+
+def test_summarize_reviews_sorts_b2_recommendations_by_total_score() -> None:
+    lower_total_b3 = {
+        "code": "B3",
+        "review_mode": "baseline_local",
+        "total_score": 4.1,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 4.1, "verdict": "PASS", "signal": "B3"},
+    }
+    higher_total_b2 = {
+        "code": "B2",
+        "review_mode": "baseline_local",
+        "total_score": 4.6,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 4.6, "verdict": "PASS", "signal": "B2"},
+    }
+
+    summary = summarize_reviews(
+        "2026-04-01",
+        "b2",
+        [higher_total_b2, lower_total_b3],
+        min_score=4.0,
+        failures=[],
+    )
+
+    assert [review["code"] for review in summary["recommendations"]] == ["B2", "B3"]
 
 
 def test_summarize_reviews_keeps_method_value_for_hcr() -> None:
@@ -618,6 +677,36 @@ def test_merge_review_result_uses_lower_llm_weight_for_b1() -> None:
     }
 
     merged = merge_review_result(method="b1", existing_review=existing_review, llm_review=llm_review)
+
+    assert merged["final_score"] == pytest.approx(3.96)
+
+
+def test_merge_review_result_uses_lower_llm_weight_for_b2() -> None:
+    existing_review = {
+        "code": "000001.SZ",
+        "pick_date": "2026-04-01",
+        "chart_path": "/tmp/000001_day.png",
+        "review_mode": "baseline_local",
+        "baseline_review": {
+            "total_score": 4.6,
+            "signal_type": "trend_start",
+            "verdict": "PASS",
+            "comment": "baseline",
+        },
+        "llm_review": None,
+        "total_score": 4.6,
+        "signal_type": "trend_start",
+        "verdict": "PASS",
+        "comment": "baseline",
+    }
+    llm_review = {
+        "total_score": 3.0,
+        "signal_type": "rebound",
+        "verdict": "WATCH",
+        "comment": "llm watch",
+    }
+
+    merged = merge_review_result(method="b2", existing_review=existing_review, llm_review=llm_review)
 
     assert merged["final_score"] == pytest.approx(3.96)
 

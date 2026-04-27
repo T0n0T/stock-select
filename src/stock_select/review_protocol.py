@@ -9,6 +9,21 @@ BASELINE_SCORE_WEIGHTS = {
     "previous_abnormal_move": 0.20,
     "macd_phase": 0.20,
 }
+B2_BASELINE_SCORE_WEIGHTS = {
+    "trend_structure": 0.17,
+    "price_position": 0.2125,
+    "volume_behavior": 0.1275,
+    "previous_abnormal_move": 0.085,
+    "macd_phase": 0.255,
+    "signal": 0.15,
+}
+B2_SIGNAL_SCORE = {
+    "B3": 5.0,
+    "B3+": 5.0,
+    "B2": 4.0,
+    "B4": 3.0,
+    "B5": 1.0,
+}
 B1_BASELINE_SCORE_WEIGHTS = {
     "trend_structure": 0.23,
     "price_position": 0.20,
@@ -33,6 +48,17 @@ B1_LLM_NO_MACD_SCORE_WEIGHTS = {
 
 def compute_weighted_total(scores: dict[str, float]) -> float:
     return round(sum(float(scores[field]) * weight for field, weight in BASELINE_SCORE_WEIGHTS.items()), 2)
+
+
+def b2_signal_score(signal: str | None) -> float:
+    signal_label = str(signal or "").strip().upper()
+    return B2_SIGNAL_SCORE.get(signal_label, 3.0)
+
+
+def compute_b2_weighted_total(scores: dict[str, float], *, signal: str | None = None) -> float:
+    total = sum(float(scores[field]) * weight for field, weight in B2_BASELINE_SCORE_WEIGHTS.items() if field != "signal")
+    total += b2_signal_score(signal) * B2_BASELINE_SCORE_WEIGHTS["signal"]
+    return round(total, 2)
 
 
 def compute_b1_weighted_total(scores: dict[str, float]) -> float:

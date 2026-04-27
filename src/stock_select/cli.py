@@ -1821,6 +1821,7 @@ def _review_impl(
             pick_date=pick_date,
             history=history,
             chart_path=str(chart_path),
+            **({"signal": candidate.get("signal")} if method.lower() == "b2" else {}),
         )
         review = build_review_result(
             code=code,
@@ -1943,6 +1944,7 @@ def _review_intraday_impl(
             pick_date=pick_date,
             history=history,
             chart_path=str(chart_path),
+            **({"signal": candidate.get("signal")} if method.lower() == "b2" else {}),
         )
         review = build_review_result(
             code=code,
@@ -2350,6 +2352,7 @@ def _analyze_symbol_impl(
             pick_date=resolved_pick_date,
             history=history,
             chart_path=str(chart_path),
+            signal=signal,
         )
         selected_as_candidate = signal is not None
     else:

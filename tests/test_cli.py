@@ -595,7 +595,7 @@ def test_analyze_symbol_impl_writes_result_under_ad_hoc_runtime(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path: {
+        lambda code, pick_date, history, chart_path, signal=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -707,7 +707,7 @@ def test_analyze_symbol_impl_uses_explicit_pick_date_and_fetches_history(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path: {
+        lambda code, pick_date, history, chart_path, signal=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -1004,7 +1004,7 @@ def test_analyze_symbol_impl_normalizes_symbol_in_runtime_path(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path: {
+        lambda code, pick_date, history, chart_path, signal=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -1091,7 +1091,7 @@ def test_analyze_symbol_impl_writes_baseline_review_even_when_signal_is_null(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path: {
+        lambda code, pick_date, history, chart_path, signal=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -1221,7 +1221,7 @@ def test_analyze_symbol_impl_serializes_absolute_chart_path_for_relative_runtime
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path: {
+        lambda code, pick_date, history, chart_path, signal=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -1419,7 +1419,7 @@ def test_analyze_symbol_impl_omitted_pick_date_falls_back_to_latest_complete_sym
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path: {
+        lambda code, pick_date, history, chart_path, signal=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -2973,7 +2973,7 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
             {
                 "pick_date": "2026-04-01",
                 "method": "b2",
-                "candidates": [{"code": "000001.SZ"}],
+                "candidates": [{"code": "000001.SZ", "signal": "B3"}],
             }
         ),
         encoding="utf-8",
@@ -3038,12 +3038,14 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
         pick_date: str,
         history: pd.DataFrame,
         chart_path: str,
+        signal: str | None = None,
     ) -> dict[str, object]:
         resolver_calls.append(
             {
                 "code": code,
                 "pick_date": pick_date,
                 "chart_path": chart_path,
+                "signal": signal,
                 "rows": history.to_dict(orient="records"),
             }
         )
@@ -3088,6 +3090,7 @@ def test_review_uses_method_specific_resolver_prompt_and_baseline(
     assert resolver_calls[0]["code"] == "000001.SZ"
     assert resolver_calls[0]["pick_date"] == "2026-04-01"
     assert resolver_calls[0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert resolver_calls[0]["signal"] == "B3"
     assert resolver_calls[0]["rows"] == expected_rows
     review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
     summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
@@ -3174,7 +3177,9 @@ def test_review_filters_llm_tasks_by_min_baseline_score(
         pick_date: str,
         history: pd.DataFrame,
         chart_path: str,
+        signal: str | None = None,
     ) -> dict[str, object]:
+        _ = signal
         score = baseline_scores[code]
         return {
             "review_type": "baseline",
@@ -3721,12 +3726,14 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
         pick_date: str,
         history: pd.DataFrame,
         chart_path: str,
+        signal: str | None = None,
     ) -> dict[str, object]:
         resolver_calls.append(
             {
                 "code": code,
                 "pick_date": pick_date,
                 "chart_path": chart_path,
+                "signal": signal,
                 "rows": history.to_dict(orient="records"),
             }
         )
@@ -3758,6 +3765,7 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
     assert resolver_calls[0]["code"] == "000001.SZ"
     assert resolver_calls[0]["pick_date"] == "2026-04-09"
     assert resolver_calls[0]["chart_path"] == str(chart_dir / "000001.SZ_day.png")
+    assert resolver_calls[0]["signal"] is None
     assert resolver_calls[0]["rows"] == expected_rows
     review_dir = runtime_root / "reviews" / _intraday_key(run_id, "b2")
     review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
@@ -3845,7 +3853,9 @@ def test_review_intraday_filters_llm_tasks_by_min_baseline_score(
         pick_date: str,
         history: pd.DataFrame,
         chart_path: str,
+        signal: str | None = None,
     ) -> dict[str, object]:
+        _ = signal
         score = baseline_scores[code]
         return {
             "review_type": "baseline",
@@ -3908,6 +3918,17 @@ def test_prompt_b2_requires_weekly_and_daily_trend_language() -> None:
     assert "MACD 波段状态" in content
     assert "wave1" not in content
     assert "wave4_end" not in content
+
+
+def test_prompt_b2_volume_behavior_prioritizes_blastoff_risk_reward() -> None:
+    prompt_path = Path(".agents/skills/stock-select/references/prompt-b2.md")
+    content = prompt_path.read_text(encoding="utf-8")
+
+    assert "起爆点右侧买点" in content
+    assert "当日是放量阳线" in content
+    assert "赔率" in content
+    assert "左侧回调过程中的放量" in content
+    assert "加分项" in content
 
 
 def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
