@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -12,6 +14,10 @@ from stock_select.review_orchestrator import (
     summarize_reviews,
 )
 from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
+
+
+def _trend(phase: str, *, initial: bool = False, divergence: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(phase=phase, is_rising_initial=initial, is_top_divergence=divergence)
 
 
 def test_build_review_payload_includes_chart_and_rubric() -> None:
@@ -36,10 +42,10 @@ def test_build_review_payload_merges_extra_context() -> None:
         pick_date="2026-04-01",
         chart_path="/tmp/000001_day.png",
         rubric_path="references/review-rubric.md",
-        extra_context={"weekly_wave_context": "周线 wave1"},
+        extra_context={"weekly_wave_context": "周线MACD上升浪"},
     )
 
-    assert payload["weekly_wave_context"] == "周线 wave1"
+    assert payload["weekly_wave_context"] == "周线MACD上升浪"
 
 
 def test_build_review_result_prefers_llm_review_when_present() -> None:
@@ -214,30 +220,66 @@ def test_compute_method_total_score_keeps_macd_for_default() -> None:
     assert compute_method_total_score("default", scores) == pytest.approx(3.82)
 
 
-def test_b1_macd_gate_does_not_fail_non_wave1_wave3_weekly_labels() -> None:
-    weekly_wave = type("Wave", (), {"label": "wave2"})()
-
+def test_b1_macd_gate_keeps_clean_rising_trend_pass() -> None:
     verdict = apply_macd_verdict_gate(
         method="b1",
         current_verdict="PASS",
-        weekly_wave=weekly_wave,
-        daily_recent_death_cross=False,
+        weekly_trend=_trend("rising"),
+        daily_trend=_trend("rising", initial=True),
     )
 
     assert verdict == "PASS"
 
 
-def test_b1_macd_gate_downgrades_recent_daily_death_cross_pass_to_watch() -> None:
-    weekly_wave = type("Wave", (), {"label": "wave2"})()
-
+def test_b1_macd_gate_downgrades_top_divergence_pass_to_watch() -> None:
     verdict = apply_macd_verdict_gate(
         method="b1",
         current_verdict="PASS",
-        weekly_wave=weekly_wave,
-        daily_recent_death_cross=True,
+        weekly_trend=_trend("rising"),
+        daily_trend=_trend("rising", initial=True, divergence=True),
     )
 
     assert verdict == "WATCH"
+
+
+def test_map_macd_phase_scores_rising_initial_without_divergence_as_five() -> None:
+    from stock_select.review_orchestrator import map_macd_phase_score
+
+    assert (
+        map_macd_phase_score(
+            method="b2",
+            history_len=120,
+            weekly_trend=_trend("rising"),
+            daily_trend=_trend("rising", initial=True),
+        )
+        == 5.0
+    )
+
+
+def test_map_macd_phase_scores_top_divergence_as_two() -> None:
+    from stock_select.review_orchestrator import map_macd_phase_score
+
+    assert (
+        map_macd_phase_score(
+            method="b2",
+            history_len=120,
+            weekly_trend=_trend("rising", divergence=True),
+            daily_trend=_trend("rising", initial=True),
+        )
+        == 2.0
+    )
+
+
+def test_apply_macd_verdict_gate_fails_invalid_or_ended_trend() -> None:
+    assert (
+        apply_macd_verdict_gate(
+            method="dribull",
+            current_verdict="PASS",
+            weekly_trend=_trend("rising"),
+            daily_trend=_trend("ended"),
+        )
+        == "FAIL"
+    )
 
 
 def test_normalize_llm_review_rejects_missing_reasoning() -> None:
@@ -381,9 +423,9 @@ def test_default_review_symbol_history_uses_b1_total_weight_when_method_is_b1() 
     assert review["price_position"] == 3.0
     assert review["volume_behavior"] == 5.0
     assert review["previous_abnormal_move"] == 3.0
-    assert review["macd_phase"] == 4.0
-    assert review["total_score"] == pytest.approx(4.05)
-    assert review["verdict"] == "PASS"
+    assert review["macd_phase"] == 3.0
+    assert review["total_score"] == pytest.approx(3.9)
+    assert review["verdict"] == "WATCH"
 
 
 def test_default_review_symbol_history_ignores_future_rows_after_pick_date() -> None:

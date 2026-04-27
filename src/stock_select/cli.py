@@ -14,7 +14,7 @@ import pandas as pd
 import psycopg
 import typer
 
-from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
+from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.reviewers import review_b2_symbol_history
 from stock_select.strategies import (
     DEFAULT_B1_CONFIG,
@@ -61,6 +61,8 @@ from stock_select.intraday import _normalize_ts_code, build_intraday_market_fram
 from stock_select.review_orchestrator import (
     build_review_payload,
     build_review_result,
+    describe_macd_trend_state,
+    is_constructive_macd_trend_combo,
     merge_review_result,
     normalize_llm_review,
     summarize_reviews,
@@ -226,20 +228,13 @@ def _load_summary_payload(summary_path: Path) -> dict[str, object]:
 
 
 def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: str) -> dict[str, str]:
-    wave_input = history[["trade_date", "close"]].copy()
-    weekly_wave = classify_weekly_macd_wave(wave_input, pick_date)
-    daily_wave = classify_daily_macd_wave(wave_input, pick_date)
-    combo_ok = _is_review_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave)
-    weekly_context = f"确定性识别结果：周线 {weekly_wave.label}；原因：{weekly_wave.reason}。"
-    daily_context = f"确定性识别结果：日线 {daily_wave.label}；原因：{daily_wave.reason}。"
-    if daily_wave.label == "wave4_end":
-        third_wave_gain = float(daily_wave.details.get('third_wave_gain', 0.0)) * 100.0
-        combo_context = (
-            f"组合判定：{'符合' if combo_ok else '不符合'} {method.lower()} 候选要求；"
-            f"日线三浪涨幅约 {third_wave_gain:.1f}%，需不超过 30%。"
-        )
-    else:
-        combo_context = f"组合判定：{'符合' if combo_ok else '不符合'} {method.lower()} 候选要求。"
+    trend_input = history[["trade_date", "close"]].copy()
+    weekly_trend = classify_weekly_macd_trend(trend_input, pick_date)
+    daily_trend = classify_daily_macd_trend(trend_input, pick_date)
+    combo_ok = _is_review_trend_combo_ok(weekly_trend=weekly_trend, daily_trend=daily_trend)
+    weekly_context = f"确定性识别结果：{describe_macd_trend_state('周线', weekly_trend)}；原因：{weekly_trend.reason}。"
+    daily_context = f"确定性识别结果：{describe_macd_trend_state('日线', daily_trend)}；原因：{daily_trend.reason}。"
+    combo_context = f"组合判定：{'符合' if combo_ok else '不符合'} {method.lower()} 候选要求。"
     return {
         "weekly_wave_context": weekly_context,
         "daily_wave_context": daily_context,
@@ -247,16 +242,8 @@ def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: s
     }
 
 
-def _is_review_wave_combo_ok(*, weekly_wave: object, daily_wave: object) -> bool:
-    weekly_label = str(getattr(weekly_wave, "label", ""))
-    daily_label = str(getattr(daily_wave, "label", ""))
-    combo_ok = weekly_label in {"wave1", "wave3"} and daily_label in {"wave2_end", "wave4_end"}
-    if not combo_ok:
-        return False
-    if daily_label != "wave4_end":
-        return True
-    details = getattr(daily_wave, "details", {}) or {}
-    return float(details.get("third_wave_gain", 0.0)) <= 0.30
+def _is_review_trend_combo_ok(*, weekly_trend: object, daily_trend: object) -> bool:
+    return is_constructive_macd_trend_combo(weekly_trend=weekly_trend, daily_trend=daily_trend)
 
 
 def _artifact_key(base_key: str, method: str) -> str:
@@ -1252,9 +1239,9 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"fail_zxdq_zxdkx={stats['fail_zxdq_zxdkx']} "
             f"fail_ma60_trend={stats['fail_ma60_trend']} "
             f"fail_ma144_distance={stats['fail_ma144_distance']} "
-            f"fail_weekly_wave={stats['fail_weekly_wave']} "
-            f"fail_daily_wave={stats['fail_daily_wave']} "
-            f"fail_wave_combo={stats['fail_wave_combo']} "
+            f"fail_weekly_trend={stats['fail_weekly_trend']} "
+            f"fail_daily_trend={stats['fail_daily_trend']} "
+            f"fail_trend_combo={stats['fail_trend_combo']} "
             f"selected={stats['selected']}",
         )
         return
@@ -2138,9 +2125,9 @@ def _resolve_analyze_symbol_failed_condition(method: str, stats: dict[str, int])
             "fail_volume_shrink",
             "fail_ma60_trend",
             "fail_ma144_distance",
-            "fail_weekly_wave",
-            "fail_daily_wave",
-            "fail_wave_combo",
+            "fail_weekly_trend",
+            "fail_daily_trend",
+            "fail_trend_combo",
         ),
         "hcr": (
             "fail_insufficient_history",

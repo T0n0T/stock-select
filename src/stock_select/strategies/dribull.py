@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import pandas as pd
-from stock_select.analysis.macd_waves import classify_daily_macd_wave, classify_weekly_macd_wave
+from stock_select.analysis.macd_waves import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, compute_expanding_j_quantile
 
 DRIBULL_RECENT_J_LOOKBACK = 15
@@ -103,9 +103,9 @@ def run_dribull_screen_with_stats(
         "fail_zxdq_zxdkx": 0,
         "fail_ma60_trend": 0,
         "fail_ma144_distance": 0,
-        "fail_weekly_wave": 0,
-        "fail_daily_wave": 0,
-        "fail_wave_combo": 0,
+        "fail_weekly_trend": 0,
+        "fail_daily_trend": 0,
+        "fail_trend_combo": 0,
         "selected": 0,
     }
 
@@ -160,24 +160,24 @@ def run_dribull_screen_with_stats(
             stats["fail_ma144_distance"] += 1
             continue
 
-        weekly_wave = classify_weekly_macd_wave(
+        weekly_trend = classify_weekly_macd_trend(
             history[["trade_date", "close"]],
             target_date.strftime("%Y-%m-%d"),
         )
-        if weekly_wave.label not in {"wave1", "wave3"}:
-            stats["fail_weekly_wave"] += 1
+        if weekly_trend.phase in {"invalid", "ended"}:
+            stats["fail_weekly_trend"] += 1
             continue
 
-        daily_wave = classify_daily_macd_wave(
+        daily_trend = classify_daily_macd_trend(
             history[["trade_date", "close"]],
             target_date.strftime("%Y-%m-%d"),
         )
-        if daily_wave.label == "invalid":
-            stats["fail_daily_wave"] += 1
+        if daily_trend.phase in {"invalid", "ended"}:
+            stats["fail_daily_trend"] += 1
             continue
 
-        if daily_wave.label not in {"wave2_end", "wave4_end"}:
-            stats["fail_wave_combo"] += 1
+        if not _is_dribull_trend_combo_ok(weekly_trend=weekly_trend, daily_trend=daily_trend):
+            stats["fail_trend_combo"] += 1
             continue
 
         candidates.append(
@@ -191,6 +191,18 @@ def run_dribull_screen_with_stats(
         stats["selected"] += 1
 
     return candidates, stats
+
+
+def _is_dribull_trend_combo_ok(*, weekly_trend: object, daily_trend: object) -> bool:
+    weekly_phase = str(getattr(weekly_trend, "phase", ""))
+    daily_phase = str(getattr(daily_trend, "phase", ""))
+    if weekly_phase in {"invalid", "ended"} or daily_phase in {"invalid", "ended"}:
+        return False
+    if bool(getattr(weekly_trend, "is_top_divergence", False)) or bool(getattr(daily_trend, "is_top_divergence", False)):
+        return False
+    if weekly_phase == "rising" and daily_phase == "rising" and bool(getattr(daily_trend, "is_rising_initial", False)):
+        return True
+    return weekly_phase == "rising" and daily_phase == "falling"
 
 
 def _missing_required_columns(frame: pd.DataFrame) -> set[str]:

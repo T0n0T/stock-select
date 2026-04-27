@@ -14,7 +14,7 @@ from stock_select import cli
 from stock_select.cli import app
 
 
-def _dribull_wave_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
+def _dribull_trend_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
     return {
         "total_symbols": total_symbols,
         "eligible": eligible,
@@ -25,9 +25,9 @@ def _dribull_wave_stats(*, total_symbols: int, eligible: int, selected: int) -> 
         "fail_zxdq_zxdkx": 0,
         "fail_ma60_trend": 0,
         "fail_ma144_distance": 0,
-        "fail_weekly_wave": 0,
-        "fail_daily_wave": 0,
-        "fail_wave_combo": 0,
+        "fail_weekly_trend": 0,
+        "fail_daily_trend": 0,
+        "fail_trend_combo": 0,
         "selected": selected,
     }
 
@@ -849,7 +849,7 @@ def test_analyze_symbol_impl_dispatches_supported_methods(
         cli,
         "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: captured.update({"runner": "dribull", "pick_ts": pick_date})
-        or ([{"code": "002350.SZ", "pick_date": "2026-04-21", "close": 10.4, "turnover_n": 125.0}], _dribull_wave_stats(total_symbols=1, eligible=1, selected=1))
+        or ([{"code": "002350.SZ", "pick_date": "2026-04-21", "close": 10.4, "turnover_n": 125.0}], _dribull_trend_stats(total_symbols=1, eligible=1, selected=1))
         if method == "dribull"
         else pytest.fail("dribull runner should not run"),
     )
@@ -1588,7 +1588,7 @@ def test_screen_dribull_phase_one_does_not_filter_on_daily_macd(monkeypatch: pyt
         "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 999.0}],
-            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -1610,7 +1610,7 @@ def test_screen_dribull_phase_one_does_not_filter_on_daily_macd(monkeypatch: pyt
 
     assert result.exit_code == 0
     assert "mode=macd_warmup" in result.stderr
-    assert "fail_weekly_wave=" in result.stderr
+    assert "fail_weekly_trend=" in result.stderr
 
 
 def test_screen_accepts_whitespace_padded_b1_method(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -3896,7 +3896,7 @@ def test_review_intraday_filters_llm_tasks_by_min_baseline_score(
     assert "skipped_by_baseline_score=1" in result.stderr
 
 
-def test_prompt_b2_requires_weekly_and_daily_wave_language() -> None:
+def test_prompt_b2_requires_weekly_and_daily_trend_language() -> None:
     prompt_path = Path(".agents/skills/stock-select/references/prompt-b2.md")
     content = prompt_path.read_text(encoding="utf-8")
 
@@ -3905,7 +3905,9 @@ def test_prompt_b2_requires_weekly_and_daily_wave_language() -> None:
     assert "wave_combo_context" in content
     assert "周线" in content
     assert "日线" in content
-    assert "浪" in content
+    assert "MACD 波段状态" in content
+    assert "wave1" not in content
+    assert "wave4_end" not in content
 
 
 def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3995,7 +3997,7 @@ def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytes
 
 
 @pytest.mark.parametrize("method", ["b1", "b2"])
-def test_build_wave_task_context_rejects_wave4_when_third_wave_gain_exceeds_limit(
+def test_build_wave_task_context_uses_macd_trend_language(
     method: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4007,26 +4009,38 @@ def test_build_wave_task_context_rejects_wave4_when_third_wave_gain_exceeds_limi
     )
     monkeypatch.setattr(
         cli,
-        "classify_weekly_macd_wave",
-        lambda _history, _pick_date: SimpleNamespace(label="wave3", reason="weekly ok", details={}),
+        "classify_weekly_macd_trend",
+        lambda _history, _pick_date: SimpleNamespace(
+            phase="rising",
+            is_rising_initial=False,
+            is_top_divergence=False,
+            reason="weekly rising",
+        ),
     )
     monkeypatch.setattr(
         cli,
-        "classify_daily_macd_wave",
+        "classify_daily_macd_trend",
         lambda _history, _pick_date: SimpleNamespace(
-            label="wave4_end",
-            reason="daily wave4",
-            details={"third_wave_gain": 0.35},
+            phase="rising",
+            is_rising_initial=True,
+            is_top_divergence=False,
+            reason="daily rising initial",
         ),
     )
 
     context = cli._build_wave_task_context(history, "2026-04-01", method=method)
 
-    assert f"不符合 {method} 候选要求" in context["wave_combo_context"]
-    assert "35.0%" in context["wave_combo_context"]
+    assert "周线MACD上升浪" in context["weekly_wave_context"]
+    assert "日线MACD上升浪" in context["daily_wave_context"]
+    assert "上升初期" in context["daily_wave_context"]
+    assert f"符合 {method} 候选要求" in context["wave_combo_context"]
+    combined = " ".join(context.values())
+    assert "wave1" not in combined
+    assert "wave4_end" not in combined
+    assert "三浪" not in combined
 
 
-def test_prompt_b1_requires_weekly_and_daily_wave_language() -> None:
+def test_prompt_b1_requires_weekly_and_daily_trend_language() -> None:
     content = Path(".agents/skills/stock-select/references/prompt-b1.md").read_text(encoding="utf-8")
 
     assert "weekly_wave_context" in content
@@ -4034,6 +4048,7 @@ def test_prompt_b1_requires_weekly_and_daily_wave_language() -> None:
     assert "wave_combo_context" in content
     assert "周线" in content
     assert "日线" in content
+    assert "MACD 波段状态" in content
     assert "signal_reasoning" in content
     assert "符合 `b1`" in content or "符合 b1" in content
     assert "Output JSON format must remain identical to the default prompt contract" in content
@@ -6791,7 +6806,7 @@ def test_screen_uses_reference_dribull_defaults_shared_prep_and_liquidity_pool(t
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 11.6, "turnover_n": 200.0}],
-            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     original_connect = cli._connect
@@ -6910,7 +6925,7 @@ def test_screen_dribull_real_flow_uses_shared_prep_and_liquidity_pool(
         lambda prepared_by_symbol, pick_date, config: (
             run_calls.append(sorted(prepared_by_symbol))
             or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.02, "turnover_n": 359.0}],
-            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -7009,7 +7024,7 @@ def test_screen_dribull_uses_longer_warmup_start_date_for_period_macd(
         "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 200.0}],
-            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
         ),
     )
 
@@ -7124,7 +7139,7 @@ def test_screen_dribull_uses_two_phase_fetch_and_only_warms_pool_symbols(
         run_inputs.update(prepared_by_symbol)
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
@@ -7246,7 +7261,7 @@ def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
         "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             warmup_run_inputs.update(prepared_by_symbol) or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -7343,7 +7358,7 @@ def test_screen_dribull_writes_prepared_cache_before_prefilter(
         "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -7431,7 +7446,7 @@ def test_screen_dribull_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: 
         assert prepared_by_symbol == {}
         return (
             [],
-            _dribull_wave_stats(total_symbols=0, eligible=0, selected=0),
+            _dribull_trend_stats(total_symbols=0, eligible=0, selected=0),
         )
 
     cli._connect = fail_connect  # type: ignore[assignment]
@@ -8422,7 +8437,7 @@ def test_screen_dribull_record_watch_drives_phase_one_and_warmup_selection(
         assert pick_date == pd.Timestamp("2026-04-10")
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 20.2, "turnover_n": 200.0}],
-            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
         )
 
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -8935,7 +8950,7 @@ def test_screen_dribull_record_watch_zero_phase_one_survivors_writes_empty_candi
         assert prepared_by_symbol == {}
         return (
             [],
-            _dribull_wave_stats(total_symbols=0, eligible=0, selected=0),
+            _dribull_trend_stats(total_symbols=0, eligible=0, selected=0),
         )
 
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -9259,7 +9274,7 @@ def test_screen_dribull_real_flow_skips_malformed_pool_rows_without_crashing(
         lambda prepared_by_symbol, pick_date, config: (
             run_calls.append(sorted(prepared_by_symbol))
             or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.02, "turnover_n": 359.0}],
-            _dribull_wave_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
         ),
     )
 
@@ -10181,7 +10196,7 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
         "run_dribull_screen_with_stats",
         lambda prepared_by_symbol, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 10.6, "turnover_n": 1030.0}],
-            _dribull_wave_stats(total_symbols=1, eligible=1, selected=1),
+            _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
         ),
     )
 

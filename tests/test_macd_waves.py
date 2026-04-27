@@ -1,6 +1,7 @@
 import pandas as pd
 
 from stock_select.analysis.macd_waves import (
+    _classify_macd_trend_from_lines,
     classify_daily_macd_state,
     classify_daily_macd_wave,
     classify_weekly_macd_wave,
@@ -15,6 +16,104 @@ def _frame_with_close(close: list[float], *, start: str = "2026-01-05") -> pd.Da
 def _frame_from_weekly_close(weekly_close: list[float], *, start: str = "2025-01-03") -> pd.DataFrame:
     dates = pd.date_range(start=start, periods=len(weekly_close), freq="W-FRI")
     return pd.DataFrame({"trade_date": dates, "close": weekly_close})
+
+
+def _line_frame(dif: list[float], dea: list[float]) -> pd.DataFrame:
+    return pd.DataFrame({"dif": dif, "dea": dea})
+
+
+def test_macd_trend_waits_for_both_lines_above_zero_after_underwater_cross() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, -0.12, -0.04],
+            dea=[-0.28, -0.24, -0.16, -0.08],
+        )
+    )
+
+    assert result.phase == "idle"
+    assert result.direction == "neutral"
+    assert result.reason == "waiting for both MACD lines above zero"
+
+
+def test_macd_trend_enters_rising_after_underwater_cross_and_both_lines_above_zero() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, -0.12, 0.03, 0.08],
+            dea=[-0.28, -0.24, -0.16, 0.01, 0.04],
+        )
+    )
+
+    assert result.phase == "rising"
+    assert result.direction == "rising"
+    assert result.phase_index == 1
+    assert result.bars_in_phase == 2
+    assert result.is_rising_initial is True
+
+
+def test_macd_trend_alternates_between_rising_and_falling_above_water() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.08, 0.06, 0.05, 0.07],
+            dea=[-0.28, -0.24, 0.01, 0.04, 0.07, 0.06, 0.055],
+        )
+    )
+
+    assert result.phase == "rising"
+    assert result.direction == "rising"
+    assert result.phase_index == 3
+    assert result.bars_in_phase == 1
+
+
+def test_macd_trend_marks_ended_when_dif_crosses_below_zero() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.08, 0.02, -0.01],
+            dea=[-0.28, -0.24, 0.01, 0.04, 0.01, 0.005],
+        )
+    )
+
+    assert result.phase == "ended"
+    assert result.direction == "neutral"
+    assert result.reason == "DIF crossed below zero"
+
+
+def test_macd_trend_uses_latest_cycle_after_prior_cycle_ended() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, -0.01, -0.20, -0.12, 0.02, 0.06],
+            dea=[-0.28, -0.24, 0.01, 0.00, -0.18, -0.14, 0.01, 0.03],
+        )
+    )
+
+    assert result.phase == "rising"
+    assert result.phase_index == 1
+    assert result.bars_in_phase == 2
+
+
+def test_macd_trend_stays_ended_when_next_startup_has_not_reached_zero_axis() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, -0.01, -0.20, -0.12, -0.08],
+            dea=[-0.28, -0.24, 0.01, 0.00, -0.18, -0.14, -0.10],
+        )
+    )
+
+    assert result.phase == "ended"
+    assert result.reason == "DIF crossed below zero"
+
+
+def test_macd_trend_flags_top_divergence_when_rising_spread_shrinks() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.09, 0.10],
+            dea=[-0.28, -0.24, 0.01, 0.04, 0.07],
+        )
+    )
+
+    assert result.phase == "rising"
+    assert result.metrics["spread"] == 0.03
+    assert result.metrics["previous_spread"] == 0.05
+    assert result.is_top_divergence is True
 
 
 def test_classify_weekly_macd_wave_returns_wave1_for_first_constructive_advance() -> None:

@@ -7,6 +7,8 @@ import pandas as pd
 from stock_select.indicators import compute_macd
 
 _WEEKLY_CHURN_LOOKBACK_DAYS = 182
+RISING_INITIAL_BARS = 3
+_MIN_TREND_PERIODS = 4
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,158 @@ class DailyMacdState:
     valid_for_pullback: bool
     reason: str
     metrics: dict[str, float | int | bool | str]
+
+
+@dataclass(frozen=True)
+class MacdTrendState:
+    phase: str
+    direction: str
+    is_rising_initial: bool
+    is_top_divergence: bool
+    bars_in_phase: int
+    phase_index: int
+    reason: str
+    metrics: dict[str, float | int | bool | str]
+
+
+def classify_daily_macd_trend(frame: pd.DataFrame, pick_date: str) -> MacdTrendState:
+    working = _slice_to_pick(frame, pick_date)
+    if working.empty or "close" not in working.columns:
+        return _invalid_trend_state("missing daily close history", len(working))
+    macd = compute_macd(working[["close"]].astype(float))
+    return _classify_macd_trend_from_lines(macd[["dif", "dea"]])
+
+
+def classify_weekly_macd_trend(frame: pd.DataFrame, pick_date: str) -> MacdTrendState:
+    working = _slice_to_pick(frame, pick_date)
+    if working.empty or "close" not in working.columns:
+        return _invalid_trend_state("missing weekly close history", len(working))
+    weekly_close = working.set_index("trade_date")["close"].astype(float).resample("W-FRI").last().dropna()
+    macd = compute_macd(pd.DataFrame({"close": weekly_close.to_numpy()}))
+    return _classify_macd_trend_from_lines(macd[["dif", "dea"]])
+
+
+def _classify_macd_trend_from_lines(lines: pd.DataFrame) -> MacdTrendState:
+    working = lines.copy().reset_index(drop=True)
+    if not {"dif", "dea"}.issubset(working.columns):
+        return _invalid_trend_state("missing MACD line columns", 0)
+
+    working["dif"] = pd.to_numeric(working["dif"], errors="coerce")
+    working["dea"] = pd.to_numeric(working["dea"], errors="coerce")
+    working = working.dropna(subset=["dif", "dea"]).reset_index(drop=True)
+    if len(working) < _MIN_TREND_PERIODS:
+        return _invalid_trend_state("insufficient MACD history", len(working))
+    if len(working) >= 10 and _is_churn((working["dif"] - working["dea"]).tail(10)):
+        return _invalid_trend_state("MACD trend churn", len(working))
+
+    machine = "waiting_underwater_cross"
+    phase = "idle"
+    reason = "waiting for underwater golden cross"
+    bars_in_phase = 0
+    phase_index = 0
+    last_completed_phase = "idle"
+    last_completed_reason = reason
+
+    for idx in range(1, len(working)):
+        previous = working.iloc[idx - 1]
+        current = working.iloc[idx]
+        prev_dif = float(previous["dif"])
+        prev_dea = float(previous["dea"])
+        dif = float(current["dif"])
+        dea = float(current["dea"])
+        above_water = dif > 0.0 and dea > 0.0
+        underwater_golden_cross = prev_dif <= prev_dea and dif > dea and dif < 0.0 and dea < 0.0
+        above_dead_cross = prev_dif >= prev_dea and dif < dea and above_water
+        above_golden_cross = prev_dif <= prev_dea and dif > dea and above_water
+
+        if phase in {"rising", "falling"} and dif < 0.0:
+            phase = "ended"
+            last_completed_phase = "ended"
+            last_completed_reason = "DIF crossed below zero"
+            machine = "waiting_underwater_cross"
+            bars_in_phase = 0
+            phase_index = 0
+            reason = "DIF crossed below zero"
+            continue
+
+        if machine == "waiting_underwater_cross":
+            if underwater_golden_cross:
+                machine = "waiting_above_zero"
+                phase = last_completed_phase
+                reason = (
+                    "waiting for both MACD lines above zero"
+                    if last_completed_phase == "idle"
+                    else last_completed_reason
+                )
+            continue
+
+        if machine == "waiting_above_zero":
+            if dif < dea:
+                machine = "waiting_underwater_cross"
+                phase = last_completed_phase
+                reason = last_completed_reason
+                continue
+            if above_water:
+                machine = "running"
+                phase = "rising"
+                reason = "upward MACD segment after zero-axis confirmation"
+                bars_in_phase = 1
+                phase_index = 1
+                continue
+            reason = (
+                "waiting for both MACD lines above zero"
+                if last_completed_phase == "idle"
+                else last_completed_reason
+            )
+            continue
+
+        if machine == "running":
+            bars_in_phase += 1
+            if phase == "rising" and above_dead_cross:
+                phase = "falling"
+                reason = "above-water MACD dead cross"
+                bars_in_phase = 1
+                phase_index += 1
+            elif phase == "falling" and above_golden_cross:
+                phase = "rising"
+                reason = "above-water MACD golden cross"
+                bars_in_phase = 1
+                phase_index += 1
+
+    latest_dif = float(working["dif"].iloc[-1])
+    latest_dea = float(working["dea"].iloc[-1])
+    spread = latest_dif - latest_dea
+    previous_spread = float(working["dif"].iloc[-2] - working["dea"].iloc[-2])
+    direction = phase if phase in {"rising", "falling"} else "neutral"
+    return MacdTrendState(
+        phase=phase,
+        direction=direction,
+        is_rising_initial=phase == "rising" and 1 <= bars_in_phase <= RISING_INITIAL_BARS,
+        is_top_divergence=phase == "rising" and spread < previous_spread,
+        bars_in_phase=bars_in_phase,
+        phase_index=phase_index,
+        reason=reason,
+        metrics={
+            "periods": len(working),
+            "dif": latest_dif,
+            "dea": latest_dea,
+            "spread": round(spread, 6),
+            "previous_spread": round(previous_spread, 6),
+        },
+    )
+
+
+def _invalid_trend_state(reason: str, periods: int) -> MacdTrendState:
+    return MacdTrendState(
+        phase="invalid",
+        direction="neutral",
+        is_rising_initial=False,
+        is_top_divergence=False,
+        bars_in_phase=0,
+        phase_index=0,
+        reason=reason,
+        metrics={"periods": periods},
+    )
 
 
 def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveClassification:

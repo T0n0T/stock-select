@@ -5,9 +5,15 @@ from typing import Any
 
 import pandas as pd
 
-from stock_select.analysis import classify_daily_macd_wave, classify_weekly_macd_wave
+from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.indicators import compute_macd
-from stock_select.review_orchestrator import apply_macd_verdict_gate, compute_method_total_score
+from stock_select.review_orchestrator import (
+    apply_macd_verdict_gate,
+    compute_method_total_score,
+    describe_macd_trend_state,
+    is_constructive_macd_trend_combo,
+    map_macd_phase_score,
+)
 from stock_select.review_protocol import infer_signal_type, infer_verdict
 from stock_select.reviewers.default import (
     _score_previous_abnormal_move,
@@ -66,14 +72,15 @@ def review_b1_symbol_history(
     price_position = _score_b1_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq)
     volume_behavior = _score_b1_volume_behavior(recent_open, recent_close, recent_volume)
     previous_abnormal_move = _score_previous_abnormal_move(close, volume)
-    weekly_wave = classify_weekly_macd_wave(frame[["trade_date", "close"]], pick_date)
-    daily_wave = classify_daily_macd_wave(frame[["trade_date", "close"]], pick_date)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], pick_date)
     weekly_macd = _classify_b1_weekly_macd_context(frame)
     daily_recent_death_cross = _has_recent_daily_macd_death_cross(frame)
-    macd_phase = _score_b1_macd_phase(
+    macd_phase = map_macd_phase_score(
+        method="b1",
         history_len=len(close),
-        weekly_macd=weekly_macd,
-        daily_recent_death_cross=daily_recent_death_cross,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
     )
     total_score = compute_method_total_score(
         "b1",
@@ -96,9 +103,8 @@ def review_b1_symbol_history(
     verdict = apply_macd_verdict_gate(
         method="b1",
         current_verdict=verdict,
-        daily_state=None,
-        weekly_wave=weekly_wave,
-        daily_recent_death_cross=daily_recent_death_cross,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
     )
 
     return {
@@ -115,8 +121,8 @@ def review_b1_symbol_history(
         "signal_type": signal_type,
         "verdict": verdict,
         "comment": _build_b1_comment(
-            weekly_wave=weekly_wave,
-            daily_wave=daily_wave,
+            weekly_trend=weekly_trend,
+            daily_trend=daily_trend,
             weekly_macd=weekly_macd,
             verdict=verdict,
             daily_recent_death_cross=daily_recent_death_cross,
@@ -352,24 +358,15 @@ def _has_recent_daily_macd_death_cross(frame: pd.DataFrame) -> bool:
     return bool(death_cross.tail(3).fillna(False).any())
 
 
-def _is_b1_wave_combo_ok(*, weekly_wave: Any, daily_wave: Any) -> bool:
-    combo_ok = weekly_wave.label in {"wave1", "wave3"} and daily_wave.label in {"wave2_end", "wave4_end"}
-    if not combo_ok:
-        return False
-    if daily_wave.label != "wave4_end":
-        return True
-    return float(daily_wave.details.get("third_wave_gain", 0.0)) <= 0.30
-
-
 def _build_b1_comment(
     *,
-    weekly_wave: Any,
-    daily_wave: Any,
+    weekly_trend: Any,
+    daily_trend: Any,
     weekly_macd: B1WeeklyMacdContext,
     verdict: str,
     daily_recent_death_cross: bool,
 ) -> str:
-    combo_ok = _is_b1_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave)
+    combo_ok = is_constructive_macd_trend_combo(weekly_trend=weekly_trend, daily_trend=daily_trend)
     combo_text = "符合" if combo_ok else "不符合"
     death_cross_text = "近3日出现MACD死叉" if daily_recent_death_cross else "近3日未见MACD死叉"
     weekly_macd_text = (
@@ -377,13 +374,9 @@ def _build_b1_comment(
         f"{'水上' if weekly_macd.above_water else '未完全水上'}、"
         f"{'有背离' if weekly_macd.diverging else '无明显背离'}"
     )
-    if daily_wave.label == "wave4_end":
-        gain = float(daily_wave.details.get("third_wave_gain", 0.0)) * 100.0
-        return (
-            f"周线{weekly_wave.label}、日线{daily_wave.label}，三浪涨幅约{gain:.1f}%且该组合{combo_text}b1，"
-            f"{weekly_macd_text}，{death_cross_text}，按N型回调的超卖低点观察，当前结论为{verdict}。"
-        )
+    weekly_text = describe_macd_trend_state("周线", weekly_trend)
+    daily_text = describe_macd_trend_state("日线", daily_trend)
     return (
-        f"周线{weekly_wave.label}、日线{daily_wave.label}，该组合{combo_text}b1，{weekly_macd_text}，{death_cross_text}，"
+        f"{weekly_text}、{daily_text}，该MACD组合{combo_text}b1，{weekly_macd_text}，{death_cross_text}，"
         f"按N型回调的超卖低点观察，当前结论为{verdict}。"
     )

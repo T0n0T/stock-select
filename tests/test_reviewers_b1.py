@@ -206,7 +206,7 @@ def test_b1_review_caps_invalid_daily_wave_below_pass_band() -> None:
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert "日线invalid" in review["comment"]
+    assert "日线MACD等待启动" in review["comment"]
     assert review["macd_phase"] <= 2.0
     assert review["verdict"] != "PASS"
 
@@ -352,8 +352,16 @@ def test_b1_review_uses_precomputed_zx_fields_when_present(monkeypatch: pytest.M
     history["zxdkx"] = 13.7
     history["bbi"] = 14.8
 
-    monkeypatch.setattr(b1_reviewer, "classify_weekly_macd_wave", lambda frame, pick_date: type("Wave", (), {"label": "wave1", "details": {}})())
-    monkeypatch.setattr(b1_reviewer, "classify_daily_macd_wave", lambda frame, pick_date: type("Wave", (), {"label": "wave2_end", "details": {}})())
+    monkeypatch.setattr(
+        b1_reviewer,
+        "classify_weekly_macd_trend",
+        lambda frame, pick_date: type("Trend", (), {"phase": "rising", "is_rising_initial": False, "is_top_divergence": False})(),
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "classify_daily_macd_trend",
+        lambda frame, pick_date: type("Trend", (), {"phase": "rising", "is_rising_initial": True, "is_top_divergence": False})(),
+    )
 
     review = review_b1_symbol_history(
         code="000001.SZ",

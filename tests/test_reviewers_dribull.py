@@ -20,32 +20,17 @@ def _history() -> pd.DataFrame:
     )
 
 
-@pytest.mark.parametrize(
-    ("weekly_label", "daily_state_name", "expected_b2", "expected_dribull"),
-    [
-        ("wave3", "wave2_end_valid", 5.0, 4.0),
-        ("wave3", "wave4_end_valid", 5.0, 5.0),
-    ],
-)
-def test_dribull_review_uses_distinct_macd_mapping_from_b2(
-    monkeypatch: pytest.MonkeyPatch,
-    weekly_label: str,
-    daily_state_name: str,
-    expected_b2: float,
-    expected_dribull: float,
-) -> None:
-    fake_weekly = SimpleNamespace(label=weekly_label, details={})
-    fake_daily_wave = SimpleNamespace(label="wave2_end" if daily_state_name == "wave2_end_valid" else "wave4_end", details={"third_wave_gain": 0.10})
-    fake_daily_state = SimpleNamespace(state=daily_state_name, metrics={"third_wave_gain": 0.10})
+def test_dribull_review_uses_trend_state_macd_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    weekly_trend = SimpleNamespace(phase="rising", is_rising_initial=False, is_top_divergence=False)
+    daily_trend = SimpleNamespace(phase="rising", is_rising_initial=True, is_top_divergence=False)
 
     for module in (b2_reviewer, dribull_reviewer):
         monkeypatch.setattr(module, "_score_b2_trend_structure", lambda **kwargs: 4.0, raising=False)
         monkeypatch.setattr(module, "_score_b2_price_position", lambda **kwargs: 4.0, raising=False)
         monkeypatch.setattr(module, "_score_b2_volume_behavior", lambda **kwargs: 4.0, raising=False)
         monkeypatch.setattr(module, "_score_b2_previous_abnormal_move", lambda **kwargs: 4.0, raising=False)
-        monkeypatch.setattr(module, "classify_weekly_macd_wave", lambda *args, **kwargs: fake_weekly, raising=False)
-        monkeypatch.setattr(module, "classify_daily_macd_wave", lambda *args, **kwargs: fake_daily_wave, raising=False)
-        monkeypatch.setattr(module, "classify_daily_macd_state", lambda *args, **kwargs: fake_daily_state, raising=False)
+        monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: weekly_trend, raising=False)
+        monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: daily_trend, raising=False)
 
     history = _history()
     b2_review = b2_reviewer.review_b2_symbol_history(
@@ -61,5 +46,7 @@ def test_dribull_review_uses_distinct_macd_mapping_from_b2(
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert b2_review["macd_phase"] == expected_b2
-    assert dribull_review["macd_phase"] == expected_dribull
+    assert b2_review["macd_phase"] == 5.0
+    assert dribull_review["macd_phase"] == 5.0
+    assert "日线MACD上升浪（上升初期）" in dribull_review["comment"]
+    assert "wave" not in dribull_review["comment"]

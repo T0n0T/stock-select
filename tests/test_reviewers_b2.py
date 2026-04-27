@@ -174,21 +174,21 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert review == {
-        "code": "000001.SZ",
-        "pick_date": "2026-04-30",
-        "chart_path": "/tmp/000001.SZ_day.png",
-        "review_type": "baseline",
-        "trend_structure": 4.0,
-        "price_position": 5.0,
-        "volume_behavior": 5.0,
-        "previous_abnormal_move": 5.0,
-        "macd_phase": 1.0,
-        "total_score": 4.02,
-        "signal_type": "trend_start",
-        "verdict": "WATCH",
-        "comment": "周线wave1、日线invalid，该组合不符合b2，当前结论为WATCH。",
-    }
+    assert review["code"] == "000001.SZ"
+    assert review["pick_date"] == "2026-04-30"
+    assert review["chart_path"] == "/tmp/000001.SZ_day.png"
+    assert review["review_type"] == "baseline"
+    assert review["trend_structure"] == 4.0
+    assert review["price_position"] == 5.0
+    assert review["volume_behavior"] == 5.0
+    assert review["previous_abnormal_move"] == 5.0
+    assert review["macd_phase"] == 2.0
+    assert review["total_score"] == 4.22
+    assert review["signal_type"] == "trend_start"
+    assert review["verdict"] == "PASS"
+    assert "周线MACD等待启动" in review["comment"]
+    assert "日线MACD等待启动" in review["comment"]
+    assert "wave" not in review["comment"]
 
 
 def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
@@ -199,21 +199,18 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
         chart_path="/tmp/000002.SZ_day.png",
     )
 
-    assert review == {
-        "code": "000002.SZ",
-        "pick_date": "2026-04-30",
-        "chart_path": "/tmp/000002.SZ_day.png",
-        "review_type": "baseline",
-        "trend_structure": 1.0,
-        "price_position": 2.0,
-        "volume_behavior": 1.0,
-        "previous_abnormal_move": 2.0,
-        "macd_phase": 3.0,
-        "total_score": 1.78,
-        "signal_type": "distribution_risk",
-        "verdict": "FAIL",
-        "comment": "周线wave2、日线wave4_end，三浪涨幅约1.4%且该组合不符合b2，当前结论为FAIL。",
-    }
+    assert review["code"] == "000002.SZ"
+    assert review["trend_structure"] == 1.0
+    assert review["price_position"] == 2.0
+    assert review["volume_behavior"] == 1.0
+    assert review["previous_abnormal_move"] == 2.0
+    assert review["macd_phase"] == 2.0
+    assert review["total_score"] == 1.58
+    assert review["signal_type"] == "distribution_risk"
+    assert review["verdict"] == "FAIL"
+    assert "周线MACD等待启动" in review["comment"]
+    assert "日线MACD等待启动" in review["comment"]
+    assert "三浪" not in review["comment"]
 
 
 def test_b2_review_keeps_schema_stable_without_extra_reasoning_fields() -> None:
@@ -241,7 +238,7 @@ def test_b2_review_comment_mentions_weekly_and_daily_waves() -> None:
     assert "b2" in review["comment"]
 
 
-def test_b2_review_comment_mentions_wave4_gain_constraint_when_applicable() -> None:
+def test_b2_review_comment_uses_trend_state_not_wave_labels() -> None:
     review = review_b2_symbol_history(
         code="000002.SZ",
         pick_date="2026-04-30",
@@ -249,8 +246,9 @@ def test_b2_review_comment_mentions_wave4_gain_constraint_when_applicable() -> N
         chart_path="/tmp/000002.SZ_day.png",
     )
 
-    assert "wave4_end" in review["comment"]
-    assert "三浪涨幅约" in review["comment"]
+    assert "MACD" in review["comment"]
+    assert "wave4_end" not in review["comment"]
+    assert "三浪涨幅约" not in review["comment"]
 
 
 def test_b2_review_ignores_future_rows_after_pick_date() -> None:
@@ -445,7 +443,7 @@ def test_b2_review_scores_invalid_daily_state_low_even_with_constructive_weekly_
     assert len(monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS
     assert len(previous_monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS - 1
     assert len(previous_weekly_closes) >= _MULTI_TIMEFRAME_CONFIRMATION_POINTS
-    assert review["macd_phase"] == 1.0
+    assert review["macd_phase"] == 2.0
 
 
 def test_b2_review_uses_neutral_wave_score_one_step_before_boundary_when_daily_wave_is_invalid() -> None:

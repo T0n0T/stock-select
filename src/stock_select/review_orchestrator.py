@@ -52,6 +52,8 @@ def map_macd_phase_score(
     *,
     method: str,
     history_len: int,
+    weekly_trend: Any | None = None,
+    daily_trend: Any | None = None,
     daily_state: DailyMacdState | None = None,
     weekly_wave: Any | None = None,
     daily_recent_death_cross: bool = False,
@@ -62,55 +64,18 @@ def map_macd_phase_score(
     if normalized not in {"b1", "b2", "dribull"} and history_len < 35:
         return 3.0
 
-    weekly_label = str(getattr(weekly_wave, "label", ""))
+    if weekly_trend is not None and daily_trend is not None:
+        return _map_macd_trend_phase_score(weekly_trend=weekly_trend, daily_trend=daily_trend)
 
     if normalized == "b1":
-        if weekly_wave is not None and weekly_label not in {"wave1", "wave3"}:
-            return 1.0
         if daily_recent_death_cross:
             return 2.0
-        return 4.0
+        return 3.0
 
     if daily_state is None:
         return 3.0
 
     state = daily_state.state
-    third_wave_gain = float(daily_state.metrics.get("third_wave_gain", 0.0))
-
-    if normalized == "b2":
-        if state in {"hard_invalid", "deteriorating"}:
-            return 1.0
-        if weekly_label in {"wave1", "wave3"} and state in {"wave2_end_valid", "wave4_end_valid"}:
-            return 5.0
-        if weekly_label in {"wave1", "wave3"} and state in {"repair_candidate", "early_recross"}:
-            return 4.0
-        if weekly_label == "wave2" and state in {"wave2_end_valid", "wave4_end_valid", "repair_candidate"}:
-            return 3.0
-        if state == "overextended":
-            return 2.0
-        if state == "repair_candidate":
-            return 2.0
-        return 1.0
-
-    if normalized == "dribull":
-        if state in {"hard_invalid", "deteriorating"}:
-            return 1.0
-        if weekly_label == "wave3" and state == "wave4_end_valid":
-            return 5.0
-        if weekly_label == "wave1" and state == "wave2_end_valid":
-            return 5.0
-        if weekly_label == "wave3" and state == "repair_candidate":
-            return 4.0
-        if weekly_label in {"wave1", "wave3"} and state in {"wave2_end_valid", "wave4_end_valid"}:
-            return 4.0
-        if weekly_label in {"wave1", "wave3"} and state == "early_recross":
-            return 3.0
-        if weekly_label == "wave2" and state == "wave4_end_valid":
-            return 3.0
-        if state in {"repair_candidate", "overextended"}:
-            return 2.0
-        return 1.0
-
     if state in {"hard_invalid", "deteriorating", "overextended"}:
         return 1.0
     if state == "repair_candidate":
@@ -126,11 +91,21 @@ def apply_macd_verdict_gate(
     *,
     method: str,
     current_verdict: str,
+    weekly_trend: Any | None = None,
+    daily_trend: Any | None = None,
     daily_state: DailyMacdState | None = None,
     weekly_wave: Any | None = None,
     daily_recent_death_cross: bool = False,
 ) -> str:
     normalized = str(method).strip().lower()
+
+    if weekly_trend is not None and daily_trend is not None:
+        return _apply_macd_trend_verdict_gate(
+            current_verdict=current_verdict,
+            weekly_trend=weekly_trend,
+            daily_trend=daily_trend,
+        )
+
     weekly_label = str(getattr(weekly_wave, "label", ""))
 
     if normalized == "b1":
@@ -153,11 +128,78 @@ def apply_macd_verdict_gate(
     if normalized == "dribull":
         if state in {"hard_invalid", "deteriorating"}:
             return "FAIL"
-        if weekly_label not in {"wave1", "wave3"} and current_verdict == "PASS":
-            return "WATCH"
         return current_verdict
 
     return current_verdict
+
+
+def _map_macd_trend_phase_score(*, weekly_trend: Any, daily_trend: Any) -> float:
+    weekly_phase = str(getattr(weekly_trend, "phase", ""))
+    daily_phase = str(getattr(daily_trend, "phase", ""))
+    has_divergence = bool(getattr(weekly_trend, "is_top_divergence", False)) or bool(
+        getattr(daily_trend, "is_top_divergence", False)
+    )
+    daily_initial = bool(getattr(daily_trend, "is_rising_initial", False))
+
+    if weekly_phase in {"invalid", "ended"} or daily_phase in {"invalid", "ended"}:
+        return 1.0
+    if weekly_phase == "falling" and daily_phase == "falling":
+        return 1.0
+    if has_divergence or (weekly_phase == "falling" and daily_phase == "rising"):
+        return 2.0
+    if weekly_phase == "rising" and daily_phase == "rising" and daily_initial:
+        return 5.0
+    if weekly_phase == "rising" and daily_phase == "rising":
+        return 4.0
+    if weekly_phase == "rising" and daily_phase == "falling":
+        return 3.0
+    return 2.0
+
+
+def _apply_macd_trend_verdict_gate(*, current_verdict: str, weekly_trend: Any, daily_trend: Any) -> str:
+    weekly_phase = str(getattr(weekly_trend, "phase", ""))
+    daily_phase = str(getattr(daily_trend, "phase", ""))
+    has_divergence = bool(getattr(weekly_trend, "is_top_divergence", False)) or bool(
+        getattr(daily_trend, "is_top_divergence", False)
+    )
+
+    if weekly_phase in {"invalid", "ended"} or daily_phase in {"invalid", "ended"}:
+        return "FAIL"
+    if weekly_phase == "falling" and daily_phase == "falling":
+        return "FAIL"
+    if has_divergence and current_verdict == "PASS":
+        return "WATCH"
+    return current_verdict
+
+
+def describe_macd_trend_state(label: str, trend: Any) -> str:
+    phase = str(getattr(trend, "phase", "invalid"))
+    phase_text = {
+        "rising": "上升浪",
+        "falling": "下跌浪",
+        "idle": "等待启动",
+        "ended": "波段结束",
+        "invalid": "状态无效",
+    }.get(phase, "状态无效")
+    extras: list[str] = []
+    if bool(getattr(trend, "is_rising_initial", False)):
+        extras.append("上升初期")
+    if bool(getattr(trend, "is_top_divergence", False)):
+        extras.append("顶背离风险")
+    suffix = f"（{'、'.join(extras)}）" if extras else ""
+    return f"{label}MACD{phase_text}{suffix}"
+
+
+def is_constructive_macd_trend_combo(*, weekly_trend: Any, daily_trend: Any) -> bool:
+    weekly_phase = str(getattr(weekly_trend, "phase", ""))
+    daily_phase = str(getattr(daily_trend, "phase", ""))
+    if weekly_phase in {"invalid", "ended"} or daily_phase in {"invalid", "ended"}:
+        return False
+    if bool(getattr(weekly_trend, "is_top_divergence", False)) or bool(getattr(daily_trend, "is_top_divergence", False)):
+        return False
+    if weekly_phase == "rising" and daily_phase == "rising" and bool(getattr(daily_trend, "is_rising_initial", False)):
+        return True
+    return weekly_phase == "rising" and daily_phase == "falling"
 
 
 def build_review_payload(

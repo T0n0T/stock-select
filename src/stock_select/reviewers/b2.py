@@ -4,9 +4,15 @@ from typing import Any
 
 import pandas as pd
 
-from stock_select.analysis import classify_daily_macd_state, classify_daily_macd_wave, classify_weekly_macd_wave
+from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.review_protocol import infer_signal_type, infer_verdict
-from stock_select.review_orchestrator import apply_macd_verdict_gate, compute_method_total_score, map_macd_phase_score
+from stock_select.review_orchestrator import (
+    apply_macd_verdict_gate,
+    compute_method_total_score,
+    describe_macd_trend_state,
+    is_constructive_macd_trend_combo,
+    map_macd_phase_score,
+)
 
 
 def review_b2_symbol_history(
@@ -36,14 +42,21 @@ def review_b2_symbol_history(
     ma25 = close.rolling(window=25, min_periods=25).mean()
     ma60 = close.rolling(window=60, min_periods=60).mean()
 
-    trend_structure = _score_b2_trend_structure(close=close, low=low, ma25=ma25, ma60=ma60)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], pick_date)
+
+    trend_structure = _score_b2_trend_structure(
+        close=close,
+        low=low,
+        ma25=ma25,
+        ma60=ma60,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+    )
     price_position = _score_b2_price_position(close=close, high=high, ma25=ma25)
     volume_behavior = _score_b2_volume_behavior(close=close, volume=volume)
     previous_abnormal_move = _score_b2_previous_abnormal_move(close=close, volume=volume, ma25=ma25, ma60=ma60)
-    weekly_wave = classify_weekly_macd_wave(frame[["trade_date", "close"]], pick_date)
-    daily_wave = classify_daily_macd_wave(frame[["trade_date", "close"]], pick_date)
-    daily_state = classify_daily_macd_state(frame[["trade_date", "close"]], pick_date)
-    macd_phase = _score_b2_macd_phase(frame, weekly_wave=weekly_wave, daily_state=daily_state)
+    macd_phase = _score_b2_macd_phase(frame, weekly_trend=weekly_trend, daily_trend=daily_trend)
 
     total_score = compute_method_total_score(
         "b2",
@@ -63,8 +76,13 @@ def review_b2_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
-    verdict = apply_macd_verdict_gate(method="b2", current_verdict=verdict, daily_state=daily_state, weekly_wave=weekly_wave)
-    comment = _build_b2_comment(weekly_wave=weekly_wave, daily_wave=daily_wave, verdict=verdict)
+    verdict = apply_macd_verdict_gate(
+        method="b2",
+        current_verdict=verdict,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+    )
+    comment = _build_b2_comment(weekly_trend=weekly_trend, daily_trend=daily_trend, verdict=verdict)
 
     return {
         "code": code,
@@ -89,6 +107,8 @@ def _score_b2_trend_structure(
     low: pd.Series,
     ma25: pd.Series,
     ma60: pd.Series,
+    weekly_trend: Any | None = None,
+    daily_trend: Any | None = None,
 ) -> float:
     if len(close) < 60 or pd.isna(ma25.iloc[-1]) or pd.isna(ma60.iloc[-1]) or pd.isna(ma60.iloc[-2]):
         return 3.0
@@ -99,9 +119,16 @@ def _score_b2_trend_structure(
     latest_ma60 = float(ma60.iloc[-1])
     previous_ma60 = float(ma60.iloc[-2])
     near_ma25_support = latest_low <= latest_ma25 * 1.03
+    trend_window = (
+        str(getattr(weekly_trend, "phase", "")) == "rising"
+        and str(getattr(daily_trend, "phase", "")) == "rising"
+        and bool(getattr(daily_trend, "is_rising_initial", False))
+    )
 
-    if latest_close >= latest_ma25 and latest_ma25 >= latest_ma60 and latest_ma60 >= previous_ma60 and near_ma25_support:
+    if trend_window and latest_close >= latest_ma25 and latest_ma25 >= latest_ma60 and latest_ma60 >= previous_ma60 and near_ma25_support:
         return 5.0
+    if str(getattr(weekly_trend, "phase", "")) == "rising" and latest_close >= latest_ma25 and latest_ma25 >= latest_ma60:
+        return 4.0
     if latest_close >= latest_ma25 and latest_ma25 >= latest_ma60:
         return 4.0
     if latest_close >= latest_ma60:
@@ -198,25 +225,15 @@ def _score_b2_previous_abnormal_move(
 def _score_b2_macd_phase(
     frame: pd.DataFrame,
     *,
-    weekly_wave: Any,
-    daily_state: Any,
+    weekly_trend: Any,
+    daily_trend: Any,
 ) -> float:
-    return map_macd_phase_score(method="b2", history_len=len(frame), weekly_wave=weekly_wave, daily_state=daily_state)
+    return map_macd_phase_score(method="b2", history_len=len(frame), weekly_trend=weekly_trend, daily_trend=daily_trend)
 
 
-def _is_b2_wave_combo_ok(*, weekly_wave: Any, daily_wave: Any) -> bool:
-    combo_ok = weekly_wave.label in {"wave1", "wave3"} and daily_wave.label in {"wave2_end", "wave4_end"}
-    if not combo_ok:
-        return False
-    if daily_wave.label != "wave4_end":
-        return True
-    return float(daily_wave.details.get("third_wave_gain", 0.0)) <= 0.30
-
-
-def _build_b2_comment(*, weekly_wave: Any, daily_wave: Any, verdict: str) -> str:
-    combo_ok = _is_b2_wave_combo_ok(weekly_wave=weekly_wave, daily_wave=daily_wave)
+def _build_b2_comment(*, weekly_trend: Any, daily_trend: Any, verdict: str) -> str:
+    combo_ok = is_constructive_macd_trend_combo(weekly_trend=weekly_trend, daily_trend=daily_trend)
     combo_text = "符合" if combo_ok else "不符合"
-    if daily_wave.label == "wave4_end":
-        gain = float(daily_wave.details.get("third_wave_gain", 0.0)) * 100.0
-        return f"周线{weekly_wave.label}、日线{daily_wave.label}，三浪涨幅约{gain:.1f}%且该组合{combo_text}b2，当前结论为{verdict}。"
-    return f"周线{weekly_wave.label}、日线{daily_wave.label}，该组合{combo_text}b2，当前结论为{verdict}。"
+    weekly_text = describe_macd_trend_state("周线", weekly_trend)
+    daily_text = describe_macd_trend_state("日线", daily_trend)
+    return f"{weekly_text}、{daily_text}，该MACD组合{combo_text}b2，当前结论为{verdict}。"
