@@ -21,8 +21,24 @@ def _history() -> pd.DataFrame:
 
 
 def test_dribull_review_uses_trend_state_macd_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    weekly_trend = SimpleNamespace(phase="rising", is_rising_initial=False, is_top_divergence=False)
-    daily_trend = SimpleNamespace(phase="rising", is_rising_initial=True, is_top_divergence=False)
+    weekly_trend = SimpleNamespace(
+        phase="rising",
+        is_rising_initial=False,
+        is_top_divergence=False,
+        phase_index=1,
+        wave_stage="强势",
+        metrics={"dif": 0.5, "dea": 0.3, "spread": 0.2, "previous_spread": 0.1},
+        transition_warnings=(),
+    )
+    daily_trend = SimpleNamespace(
+        phase="rising",
+        is_rising_initial=True,
+        is_top_divergence=False,
+        phase_index=1,
+        wave_stage="强势",
+        metrics={"dif": 0.3, "dea": 0.1, "spread": 0.2, "previous_spread": 0.1},
+        transition_warnings=(),
+    )
 
     for module in (b2_reviewer, dribull_reviewer):
         monkeypatch.setattr(module, "_score_b2_trend_structure", lambda **kwargs: 4.0, raising=False)

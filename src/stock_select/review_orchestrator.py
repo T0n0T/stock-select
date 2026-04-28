@@ -137,26 +137,265 @@ def apply_macd_verdict_gate(
 
 
 def _map_macd_trend_phase_score(*, weekly_trend: Any, daily_trend: Any) -> float:
-    weekly_phase = str(getattr(weekly_trend, "phase", ""))
-    daily_phase = str(getattr(daily_trend, "phase", ""))
-    has_divergence = bool(getattr(weekly_trend, "is_top_divergence", False)) or bool(
-        getattr(daily_trend, "is_top_divergence", False)
-    )
-    daily_initial = bool(getattr(daily_trend, "is_rising_initial", False))
+    percent_score = calculate_dual_period_macd_score(weekly_trend=weekly_trend, daily_trend=daily_trend)["total"]
+    return round(1.0 + max(0.0, min(100.0, percent_score)) / 25.0, 2)
 
-    if weekly_phase in {"invalid", "ended"} or daily_phase in {"invalid", "ended"}:
-        return 1.0
-    if weekly_phase == "falling" and daily_phase == "falling":
-        return 1.0
-    if has_divergence or (weekly_phase == "falling" and daily_phase == "rising"):
+
+def calculate_dual_period_macd_score(*, weekly_trend: Any, daily_trend: Any) -> dict[str, Any]:
+    weekly_wave = _trend_wave_number(weekly_trend)
+    daily_wave = _trend_wave_number(daily_trend)
+    weekly_dir = _wave_direction(weekly_wave)
+    daily_dir = _wave_direction(daily_wave)
+    weekly_stage = _normalized_wave_stage(weekly_trend)
+    daily_stage = _normalized_wave_stage(daily_trend)
+
+    weekly_wave_score = _weekly_wave_score(weekly_trend, weekly_wave)
+    weekly_stage_score = _stage_score(direction=weekly_dir, stage=weekly_stage, weekly=True)
+    weekly_zero_score = _weekly_zero_axis_score(weekly_trend)
+    weekly_total = weekly_wave_score + weekly_stage_score + weekly_zero_score
+
+    daily_wave_score = _daily_wave_score(daily_trend, daily_wave)
+    daily_stage_score = _stage_score(direction=daily_dir, stage=daily_stage, weekly=False)
+    daily_aux_score = 6.0
+    daily_total = daily_wave_score + daily_stage_score + daily_aux_score
+
+    direction_resonance = _direction_resonance(weekly_dir=weekly_dir, daily_dir=daily_dir)
+    phase_resonance = _phase_resonance(
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        weekly_dir=weekly_dir,
+        daily_dir=daily_dir,
+        weekly_stage=weekly_stage,
+        daily_stage=daily_stage,
+    )
+    zero_resonance = _zero_resonance(weekly_trend=weekly_trend, daily_trend=daily_trend)
+    resonance_total = direction_resonance + phase_resonance + zero_resonance
+    total = weekly_total + daily_total + resonance_total
+    setup_bonus = 0.0
+    if weekly_dir == "上升" and weekly_stage == "背离" and daily_dir == "下跌" and daily_stage in {"强势", "强势转分歧"}:
+        if _trend_metric(weekly_trend, "hist_change_rate") >= 1.0 and _trend_metric(daily_trend, "hist_change_rate") >= 0.5:
+            setup_bonus = 14.0
+        else:
+            setup_bonus = 6.0
+        total += setup_bonus
+    total = round(min(100.0, total), 2)
+
+    return {
+        "total": total,
+        "grade": _macd_percent_grade(total),
+        "weekly_total": weekly_total,
+        "daily_total": daily_total,
+        "resonance_total": resonance_total,
+        "details": {
+            "weekly_wave": weekly_wave_score,
+            "weekly_stage": weekly_stage_score,
+            "weekly_zero": weekly_zero_score,
+            "daily_wave": daily_wave_score,
+            "daily_stage": daily_stage_score,
+            "daily_aux": daily_aux_score,
+            "resonance_direction": direction_resonance,
+            "resonance_stage": phase_resonance,
+            "resonance_zero": zero_resonance,
+            "setup_bonus": setup_bonus,
+        },
+    }
+
+
+def _trend_wave_number(trend: Any) -> int:
+    phase = str(getattr(trend, "phase", ""))
+    if phase == "ended":
+        return -1
+    if phase in {"idle", "invalid"}:
+        return 0
+    idx = int(getattr(trend, "phase_index", 0) or 0)
+    if idx <= 0:
+        if phase == "rising":
+            return 1
+        if phase == "falling":
+            return 2
+        return 0
+    return idx
+
+
+def _wave_direction(wave: int) -> str:
+    if wave in {1, 3, 5, 7} or wave > 7 and wave % 2 == 1:
+        return "上升"
+    if wave in {2, 4, 6} or wave > 7 and wave % 2 == 0:
+        return "下跌"
+    return "初始"
+
+
+def _normalized_wave_stage(trend: Any) -> str:
+    stage = str(getattr(trend, "wave_stage", "") or "")
+    warnings = tuple(getattr(trend, "transition_warnings", ()) or ())
+    if stage == "强势" and any("强势→分歧" in item for item in warnings):
+        return "强势转分歧"
+    if stage == "分歧" and bool(getattr(trend, "is_top_divergence", False)):
+        return "分歧转背离"
+    return stage or "初始"
+
+
+def _weekly_wave_score(trend: Any, wave: int) -> float:
+    phase = str(getattr(trend, "phase", ""))
+    if phase == "ended" or wave < 0:
+        return 0.0
+    if wave == 0:
         return 2.0
-    if weekly_phase == "rising" and daily_phase == "rising" and daily_initial:
+    if wave in {1, 3}:
+        return 20.0
+    if wave == 5:
+        return 15.0
+    if wave >= 7:
+        return 8.0
+    if wave == 2:
+        return 16.0
+    if wave == 4:
+        return 14.0
+    if wave == 6:
+        return 6.0
+    return 0.0
+
+
+def _daily_wave_score(trend: Any, wave: int) -> float:
+    if str(getattr(trend, "phase", "")) == "ended" or wave <= 0:
+        return 0.0
+    if wave in {1, 3}:
+        return 12.0
+    if wave == 5:
+        return 9.0
+    if wave >= 7:
         return 5.0
-    if weekly_phase == "rising" and daily_phase == "rising":
+    if wave == 2:
+        return 8.0
+    if wave == 4:
+        return 7.0
+    if wave == 6:
         return 4.0
-    if weekly_phase == "rising" and daily_phase == "falling":
+    return 0.0
+
+
+def _stage_score(*, direction: str, stage: str, weekly: bool) -> float:
+    if weekly:
+        scores = {
+            ("上升", "强势"): 20.0,
+            ("上升", "强势转分歧"): 15.0,
+            ("上升", "分歧"): 12.0,
+            ("上升", "分歧转背离"): 8.0,
+            ("上升", "背离"): 4.0,
+            ("下跌", "背离"): 18.0,
+            ("下跌", "分歧转背离"): 14.0,
+            ("下跌", "分歧"): 10.0,
+            ("下跌", "强势转分歧"): 6.0,
+            ("下跌", "强势"): 2.0,
+        }
+    else:
+        scores = {
+            ("上升", "强势"): 12.0,
+            ("上升", "强势转分歧"): 9.0,
+            ("上升", "分歧"): 7.0,
+            ("上升", "分歧转背离"): 5.0,
+            ("上升", "背离"): 3.0,
+            ("下跌", "背离"): 11.0,
+            ("下跌", "分歧转背离"): 9.0,
+            ("下跌", "分歧"): 6.0,
+            ("下跌", "强势转分歧"): 6.0,
+            ("下跌", "强势"): 2.0,
+        }
+    return scores.get((direction, stage), 0.0)
+
+
+def _trend_metric(trend: Any, key: str) -> float:
+    metrics = getattr(trend, "metrics", {}) or {}
+    try:
+        return float(metrics.get(key, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _weekly_zero_axis_score(trend: Any) -> float:
+    dif = _trend_metric(trend, "dif")
+    dea = _trend_metric(trend, "dea")
+    spread = dif - dea
+    previous_spread = _trend_metric(trend, "previous_spread")
+    if dif > 0 and dea > 0 and dif > dea:
+        if spread > previous_spread:
+            return 10.0
+        return 8.0
+    if dif > 0 and dea > 0:
+        return 5.0
+    if dif > 0 or dea > 0:
+        return 4.0 if dif > dea else 3.0
+    return 3.0 if dif > dea else 0.0
+
+
+def _direction_resonance(*, weekly_dir: str, daily_dir: str) -> float:
+    if weekly_dir == "上升" and daily_dir == "上升":
+        return 8.0
+    if weekly_dir == "上升" and daily_dir == "下跌":
+        return 6.0
+    if weekly_dir == "下跌" and daily_dir == "上升":
+        return 4.0
+    return 0.0
+
+
+def _phase_resonance(
+    *,
+    weekly_trend: Any,
+    daily_trend: Any,
+    weekly_dir: str,
+    daily_dir: str,
+    weekly_stage: str,
+    daily_stage: str,
+) -> float:
+    if weekly_stage == "强势" and daily_stage == "背离" and _trend_metric(weekly_trend, "hist_change_rate") >= 1.0:
+        return -2.0
+    if weekly_dir == "下跌" and weekly_stage == "背离" and daily_dir == "上升" and daily_stage == "背离":
+        return 5.0
+    scores = {
+        ("强势", "强势"): 7.0,
+        ("强势", "分歧"): 6.0,
+        ("强势", "强势转分歧"): 6.0,
+        ("分歧", "强势"): 6.0,
+        ("强势", "背离"): 1.0,
+        ("强势", "分歧转背离"): 4.0,
+        ("分歧", "分歧"): 4.0,
+        ("分歧", "背离"): 2.0,
+        ("分歧", "分歧转背离"): 2.0,
+        ("背离", "强势"): 8.0,
+        ("背离", "强势转分歧"): 8.0,
+        ("背离", "分歧"): 6.0,
+        ("背离", "分歧转背离"): 4.0,
+        ("背离", "背离"): 1.0,
+    }
+    return scores.get((weekly_stage, daily_stage), 3.0)
+
+
+def _zero_resonance(*, weekly_trend: Any, daily_trend: Any) -> float:
+    week_dif = _trend_metric(weekly_trend, "dif")
+    week_dea = _trend_metric(weekly_trend, "dea")
+    day_dif = _trend_metric(daily_trend, "dif")
+    day_dea = _trend_metric(daily_trend, "dea")
+    if week_dif > 0 and week_dea > 0:
+        if day_dif > 0 and day_dea > 0:
+            return 5.0
+        if abs(day_dif) < max(abs(_trend_metric(daily_trend, "dif_max_20")), abs(day_dif), 1e-12) * 0.2:
+            return 4.0
         return 3.0
-    return 2.0
+    if week_dif > 0 or week_dea > 0:
+        return 2.0 if day_dif > 0 else 1.0
+    return 0.0
+
+
+def _macd_percent_grade(total: float) -> str:
+    if total >= 85:
+        return "S"
+    if total >= 70:
+        return "A"
+    if total >= 55:
+        return "B"
+    if total >= 40:
+        return "C"
+    return "D"
 
 
 def _apply_macd_trend_verdict_gate(*, current_verdict: str, weekly_trend: Any, daily_trend: Any) -> str:
@@ -378,3 +617,4 @@ def summarize_reviews(
         "excluded": excluded,
         "failures": failures,
     }
+

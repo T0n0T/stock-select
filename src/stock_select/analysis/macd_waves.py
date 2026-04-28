@@ -37,6 +37,10 @@ class MacdTrendState:
     phase_index: int
     reason: str
     metrics: dict[str, float | int | bool | str]
+    wave_label: str = ""
+    wave_direction: str = "neutral"
+    wave_stage: str = ""
+    transition_warnings: tuple[str, ...] = ()
 
 
 def classify_daily_macd_trend(frame: pd.DataFrame, pick_date: str) -> MacdTrendState:
@@ -52,6 +56,7 @@ def classify_weekly_macd_trend(frame: pd.DataFrame, pick_date: str) -> MacdTrend
     if working.empty or "close" not in working.columns:
         return _invalid_trend_state("missing weekly close history", len(working))
     weekly_close = working.set_index("trade_date")["close"].astype(float).resample("W-FRI").last().dropna()
+    weekly_close = weekly_close.loc[weekly_close.index <= pd.Timestamp(pick_date)]
     macd = compute_macd(pd.DataFrame({"close": weekly_close.to_numpy()}))
     return _classify_macd_trend_from_lines(macd[["dif", "dea"]])
 
@@ -67,7 +72,9 @@ def _classify_macd_trend_from_lines(lines: pd.DataFrame) -> MacdTrendState:
     if len(working) < _MIN_TREND_PERIODS:
         return _invalid_trend_state("insufficient MACD history", len(working))
     if len(working) >= 10 and _is_churn((working["dif"] - working["dea"]).tail(10)):
-        return _invalid_trend_state("MACD trend churn", len(working))
+        has_recent_above_zero_run = bool(((working["dif"] > 0.0) & (working["dea"] > 0.0)).tail(10).sum() >= 5)
+        if not has_recent_above_zero_run:
+            return _invalid_trend_state("MACD trend churn", len(working))
 
     machine = "waiting_underwater_cross"
     phase = "idle"
@@ -100,6 +107,18 @@ def _classify_macd_trend_from_lines(lines: pd.DataFrame) -> MacdTrendState:
             continue
 
         if machine == "waiting_underwater_cross":
+            if phase in {"ended", "idle"} and above_water:
+                machine = "running"
+                if dif > dea:
+                    phase = "rising"
+                    reason = "above-zero recovery into MACD rising segment"
+                    phase_index = 1
+                else:
+                    phase = "falling"
+                    reason = "above-zero recovery into MACD falling segment"
+                    phase_index = 2
+                bars_in_phase = 1
+                continue
             if underwater_golden_cross:
                 machine = "waiting_above_zero"
                 phase = last_completed_phase
@@ -148,23 +167,148 @@ def _classify_macd_trend_from_lines(lines: pd.DataFrame) -> MacdTrendState:
     spread = latest_dif - latest_dea
     previous_spread = float(working["dif"].iloc[-2] - working["dea"].iloc[-2])
     direction = phase if phase in {"rising", "falling"} else "neutral"
+    wave_label = _wave_label(phase_index) if phase in {"rising", "falling"} else ""
+    wave_direction = "rising" if phase_index % 2 == 1 and phase_index > 0 else "falling" if phase_index > 0 else "neutral"
+    wave_stage, stage_metrics = _judge_wave_stage(working, phase=phase, bars_in_phase=bars_in_phase)
+    transition_warnings = _detect_stage_transition(working, current_stage=wave_stage, phase=phase)
+    is_top_divergence = phase == "rising" and (spread < previous_spread or wave_stage == "背离")
+    metrics = {
+        "periods": len(working),
+        "dif": latest_dif,
+        "dea": latest_dea,
+        "spread": round(spread, 6),
+        "previous_spread": round(previous_spread, 6),
+    }
+    metrics.update(stage_metrics)
     return MacdTrendState(
         phase=phase,
         direction=direction,
         is_rising_initial=phase == "rising" and 1 <= bars_in_phase <= RISING_INITIAL_BARS,
-        is_top_divergence=phase == "rising" and spread < previous_spread,
+        is_top_divergence=is_top_divergence,
         bars_in_phase=bars_in_phase,
         phase_index=phase_index,
         reason=reason,
-        metrics={
-            "periods": len(working),
-            "dif": latest_dif,
-            "dea": latest_dea,
-            "spread": round(spread, 6),
-            "previous_spread": round(previous_spread, 6),
-        },
+        metrics=metrics,
+        wave_label=wave_label,
+        wave_direction=wave_direction,
+        wave_stage=wave_stage,
+        transition_warnings=tuple(transition_warnings),
     )
 
+
+def _wave_label(phase_index: int) -> str:
+    labels = {
+        1: "一浪",
+        2: "二浪",
+        3: "三浪",
+        4: "四浪",
+        5: "五浪",
+        6: "六浪",
+        7: "七浪",
+    }
+    return labels.get(phase_index, f"第{phase_index}浪" if phase_index > 0 else "")
+
+
+def _judge_wave_stage(lines: pd.DataFrame, *, phase: str, bars_in_phase: int = 0) -> tuple[str, dict[str, float]]:
+    if phase not in {"rising", "falling"}:
+        return "", {}
+
+    working = lines.copy().reset_index(drop=True)
+    dif = pd.to_numeric(working["dif"], errors="coerce")
+    dea = pd.to_numeric(working["dea"], errors="coerce")
+    hist_abs = ((dif - dea) * 2.0).abs()
+    if len(working) < 10:
+        return "分歧", {
+            "hist_change_rate": 0.0,
+            "dif_slope_5": 0.0,
+            "dif_zero_distance_ratio": 0.0,
+        }
+
+    recent_avg = float(hist_abs.tail(5).mean())
+    prior_avg = float(hist_abs.iloc[-10:-5].mean())
+    latest_hist_abs = float(hist_abs.iloc[-1])
+    previous_hist_abs = float(hist_abs.iloc[-2])
+    if abs(prior_avg) <= 1e-12:
+        hist_change_rate = 0.0 if abs(recent_avg) <= 1e-12 else 1.0
+    else:
+        hist_change_rate = (recent_avg - prior_avg) / abs(prior_avg)
+
+    latest_dif = float(dif.iloc[-1])
+    dif_slope_5 = (latest_dif - float(dif.iloc[-6])) / 5.0
+    max_abs_dif_20 = float(dif.tail(20).abs().max())
+    dif_zero_distance_ratio = abs(latest_dif) / max_abs_dif_20 if max_abs_dif_20 > 1e-12 else 0.0
+
+    if phase == "rising":
+        is_new_hist_peak = latest_hist_abs >= float(hist_abs.tail(10).max()) * 0.98
+        if hist_change_rate > 0.05 and latest_hist_abs < previous_hist_abs and not is_new_hist_peak:
+            stage = "背离"
+        elif bars_in_phase > 5 and _is_recent_hist_flattening(hist_abs):
+            stage = "强势转分歧" if hist_change_rate > 0.05 else "分歧"
+        elif hist_change_rate > 0.05 and dif_slope_5 > 0.001 and dif_zero_distance_ratio > 0.6:
+            stage = "强势"
+        elif hist_change_rate < -0.05:
+            stage = "背离"
+        else:
+            stage = "分歧"
+    else:
+        if bars_in_phase > 5 and _is_recent_hist_flattening(hist_abs):
+            stage = "强势转分歧" if hist_change_rate > 0.05 else "分歧"
+        elif hist_change_rate > 0.05 and dif_slope_5 < -0.001:
+            stage = "强势"
+        elif hist_change_rate < -0.05:
+            stage = "背离"
+        else:
+            stage = "分歧"
+
+    return stage, {
+        "hist_change_rate": round(hist_change_rate, 6),
+        "dif_slope_5": round(dif_slope_5, 6),
+        "dif_zero_distance_ratio": round(dif_zero_distance_ratio, 6),
+        "recent_hist_abs_avg": round(recent_avg, 6),
+        "prior_hist_abs_avg": round(prior_avg, 6),
+    }
+
+
+def _is_recent_hist_flattening(hist_abs: pd.Series) -> bool:
+    if len(hist_abs) < 4:
+        return False
+    values = [float(value) for value in hist_abs.tail(4).to_list()]
+    latest = values[-1]
+    peak = max(values)
+    if peak <= 1e-12:
+        return False
+    last_delta = abs(values[-1] - values[-2]) / peak
+    prev_delta = abs(values[-2] - values[-3]) / peak
+    return last_delta <= 0.08 or (last_delta <= 0.12 and prev_delta <= 0.12)
+
+
+def _detect_stage_transition(lines: pd.DataFrame, *, current_stage: str, phase: str) -> list[str]:
+    if phase not in {"rising", "falling"}:
+        return []
+
+    dif = pd.to_numeric(lines["dif"], errors="coerce").reset_index(drop=True)
+    dea = pd.to_numeric(lines["dea"], errors="coerce").reset_index(drop=True)
+    hist_abs = ((dif - dea) * 2.0).abs()
+    warnings: list[str] = []
+    if len(hist_abs) >= 4:
+        last4 = hist_abs.tail(4).to_list()
+        deltas = [last4[i] - last4[i - 1] for i in range(1, len(last4))]
+        max_hist = max(float(hist_abs.tail(10).max()), 1e-12)
+        flat_threshold = max_hist * 0.05
+        if current_stage == "强势" and (all(delta < 0 for delta in deltas) or all(abs(delta) <= flat_threshold for delta in deltas)):
+            warnings.append("强势→分歧预警")
+        if current_stage == "背离" and all(delta > 0 for delta in deltas):
+            warnings.append("背离→分歧预警（反弹）")
+        if current_stage in {"分歧", "背离"} and all(delta < 0 for delta in deltas):
+            warnings.append("强势→分歧预警")
+
+    if len(hist_abs) >= 5:
+        mean_hist = float(hist_abs.tail(5).mean())
+        latest_gap = abs(float(dif.iloc[-1] - dea.iloc[-1]))
+        if mean_hist > 1e-12 and latest_gap < 0.25 * mean_hist:
+            warnings.append("金叉/死叉临近，浪型可能切换")
+
+    return warnings
 
 def _invalid_trend_state(reason: str, periods: int) -> MacdTrendState:
     return MacdTrendState(
@@ -374,3 +518,5 @@ def _bars_since_hist_peak(hist: pd.Series) -> int:
         return -1
     peak_idx = int(hist.abs().idxmax())
     return int(len(hist) - 1 - peak_idx)
+
+

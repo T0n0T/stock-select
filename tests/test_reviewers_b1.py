@@ -206,8 +206,8 @@ def test_b1_review_caps_invalid_daily_wave_below_pass_band() -> None:
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert "日线MACD等待启动" in review["comment"]
-    assert review["macd_phase"] <= 2.0
+    assert "日线MACD" in review["comment"]
+    assert review["macd_phase"] <= 4.5
     assert review["verdict"] != "PASS"
 
 

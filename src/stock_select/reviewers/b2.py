@@ -6,7 +6,6 @@ import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.review_orchestrator import (
-    apply_macd_verdict_gate,
     compute_method_total_score,
     describe_macd_trend_state,
     is_constructive_macd_trend_combo,
@@ -80,12 +79,6 @@ def review_b2_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
-    verdict = apply_macd_verdict_gate(
-        method="b2",
-        current_verdict=verdict,
-        weekly_trend=weekly_trend,
-        daily_trend=daily_trend,
-    )
     comment = _build_b2_comment(weekly_trend=weekly_trend, daily_trend=daily_trend, verdict=verdict)
 
     return {
@@ -172,7 +165,8 @@ def _score_b2_price_position(
 ) -> float:
     recent_high = high.tail(120).dropna()
     recent_low = low.tail(120).dropna()
-    if recent_high.empty or recent_low.empty or pd.isna(close.iloc[-1]):
+    recent_close = close.tail(120).dropna()
+    if recent_high.empty or recent_low.empty or recent_close.empty or pd.isna(close.iloc[-1]):
         return 3.0
 
     box_high = float(recent_high.max())
@@ -180,7 +174,13 @@ def _score_b2_price_position(
     if box_high <= box_low:
         return 3.0
 
-    position = (float(close.iloc[-1]) - box_low) / (box_high - box_low)
+    high_idx = recent_high.idxmax()
+    high_to_pick_close = close.loc[high_idx : close.index[-1]].dropna()
+    if high_to_pick_close.empty:
+        position_price = float(close.iloc[-1])
+    else:
+        position_price = float(high_to_pick_close.min())
+    position = (position_price - box_low) / (box_high - box_low)
     latest_ma25 = float(ma25.iloc[-1]) if not pd.isna(ma25.iloc[-1]) else float("nan")
     latest_zxdq = float(zxdq.iloc[-1]) if not pd.isna(zxdq.iloc[-1]) else float("nan")
     ma25_holds_zxdq = bool(

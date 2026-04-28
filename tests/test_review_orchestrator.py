@@ -8,6 +8,7 @@ from stock_select.review_orchestrator import (
     compute_method_total_score,
     build_review_payload,
     build_review_result,
+    map_macd_phase_score,
     merge_review_result,
     normalize_llm_review,
     review_symbol_history as orchestrator_review_symbol_history,
@@ -16,9 +17,60 @@ from stock_select.review_orchestrator import (
 from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
 
 
-def _trend(phase: str, *, initial: bool = False, divergence: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(phase=phase, is_rising_initial=initial, is_top_divergence=divergence)
+def _trend(
+    phase: str,
+    *,
+    initial: bool = False,
+    divergence: bool = False,
+    wave_index: int = 0,
+    stage: str = "",
+    dif: float = 0.2,
+    dea: float = 0.1,
+    spread: float | None = None,
+    previous_spread: float | None = None,
+) -> SimpleNamespace:
+    metrics = {
+        "dif": dif,
+        "dea": dea,
+        "spread": spread if spread is not None else dif - dea,
+        "previous_spread": previous_spread if previous_spread is not None else dif - dea,
+    }
+    return SimpleNamespace(
+        phase=phase,
+        is_rising_initial=initial,
+        is_top_divergence=divergence,
+        phase_index=wave_index,
+        wave_stage=stage,
+        metrics=metrics,
+        transition_warnings=(),
+    )
 
+
+def test_b2_macd_phase_uses_dual_period_percent_score_for_main_uptrend() -> None:
+    weekly = _trend("rising", wave_index=3, stage="强势", dif=1.2, dea=0.8, spread=0.4, previous_spread=0.3)
+    daily = _trend("rising", wave_index=3, stage="强势", dif=0.7, dea=0.45, spread=0.25, previous_spread=0.2)
+
+    score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
+
+    assert score == pytest.approx(5.0)
+
+
+def test_b2_macd_phase_rewards_weekly_uptrend_daily_pullback_exhaustion() -> None:
+    weekly = _trend("rising", wave_index=3, stage="强势", dif=1.2, dea=0.8, spread=0.4, previous_spread=0.3)
+    daily = _trend("falling", wave_index=2, stage="背离", dif=0.05, dea=0.08, spread=-0.03, previous_spread=-0.08)
+
+    score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
+
+    assert score == pytest.approx(4.48)
+
+
+def test_b2_macd_phase_penalizes_ended_weekly_segment() -> None:
+    weekly = _trend("ended", wave_index=0, stage="", dif=-0.1, dea=0.02, spread=-0.12, previous_spread=-0.08)
+    daily = _trend("rising", wave_index=1, stage="强势", dif=0.3, dea=0.1, spread=0.2, previous_spread=0.1)
+
+    score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
+
+    assert score < 3.0
 
 def test_build_review_payload_includes_chart_and_rubric() -> None:
     payload = build_review_payload(
@@ -277,29 +329,24 @@ def test_b1_macd_gate_downgrades_top_divergence_pass_to_watch() -> None:
 def test_map_macd_phase_scores_rising_initial_without_divergence_as_five() -> None:
     from stock_select.review_orchestrator import map_macd_phase_score
 
-    assert (
-        map_macd_phase_score(
-            method="b2",
-            history_len=120,
-            weekly_trend=_trend("rising"),
-            daily_trend=_trend("rising", initial=True),
-        )
-        == 5.0
-    )
+    assert map_macd_phase_score(
+        method="b2",
+        history_len=120,
+        weekly_trend=_trend("rising", wave_index=1, stage="强势", dif=0.5, dea=0.3, spread=0.2, previous_spread=0.1),
+        daily_trend=_trend("rising", initial=True, wave_index=1, stage="强势", dif=0.3, dea=0.1, spread=0.2, previous_spread=0.1),
+    ) == pytest.approx(5.0)
 
 
 def test_map_macd_phase_scores_top_divergence_as_two() -> None:
     from stock_select.review_orchestrator import map_macd_phase_score
 
-    assert (
-        map_macd_phase_score(
-            method="b2",
-            history_len=120,
-            weekly_trend=_trend("rising", divergence=True),
-            daily_trend=_trend("rising", initial=True),
-        )
-        == 2.0
+    score = map_macd_phase_score(
+        method="b2",
+        history_len=120,
+        weekly_trend=_trend("rising", divergence=True, wave_index=5, stage="背离", dif=0.5, dea=0.45, spread=0.05, previous_spread=0.12),
+        daily_trend=_trend("rising", initial=True, wave_index=5, stage="背离", dif=0.3, dea=0.25, spread=0.05, previous_spread=0.1),
     )
+    assert 2.0 <= score <= 3.5
 
 
 def test_apply_macd_verdict_gate_fails_invalid_or_ended_trend() -> None:

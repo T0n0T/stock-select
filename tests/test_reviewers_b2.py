@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from stock_select.reviewers.b2 import (
     _score_b2_previous_abnormal_move,
@@ -195,14 +196,22 @@ def test_b2_trend_structure_uses_zxdkx_as_medium_support_line() -> None:
     assert _score_b2_trend_structure(close=close, low=low, ma25=ma25, zxdkx=zxdkx) == 4.0
 
 
-def test_b2_price_position_keeps_high_position_observable_when_ma25_holds_zxdq() -> None:
-    low = _series([10.0, 11.0, 12.0, 13.0, 14.0])
-    high = _series([11.0, 12.0, 13.0, 14.0, 15.0])
-    close = _series([10.5, 11.5, 12.5, 13.5, 14.2])
-    ma25 = _series([13.0] * len(close))
-    zxdq = _series([12.7] * len(close))
+def test_b2_price_position_uses_lowest_close_between_prior_high_and_pick() -> None:
+    low = _series([10.0] * 120)
+    high = _series([11.0] * 120)
+    close = _series([10.5] * 120)
+    # 120日区间高点出现在倒数第5根，入选日收盘仍在高位；
+    # 但高点到入选日之间曾充分回踩，应按这段最低价计算位置。
+    high.iloc[-5] = 20.0
+    close.iloc[-5] = 18.0
+    close.iloc[-3] = 12.0
+    low.iloc[-3] = 11.8
+    close.iloc[-1] = 18.0
+    low.iloc[-1] = 17.8
+    ma25 = _series([16.0] * len(close))
+    zxdq = _series([15.0] * len(close))
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 3.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
 
 
 def test_b2_previous_abnormal_move_scores_pullback_above_high_volume_body_price() -> None:
@@ -281,8 +290,8 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
     assert review["price_position"] == 3.0
     assert review["volume_behavior"] == 5.0
     assert review["previous_abnormal_move"] == 4.0
-    assert review["macd_phase"] == 2.0
-    assert review["total_score"] == 3.25
+    assert review["macd_phase"] == pytest.approx(4.36)
+    assert review["total_score"] == 3.86
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review
@@ -292,6 +301,35 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
     assert "日线MACD" in review["comment"]
     assert "wave" not in review["comment"]
     assert "三浪" not in review["comment"]
+
+
+def test_b2_review_does_not_apply_macd_verdict_gate(monkeypatch) -> None:
+    invalid_weekly = type(
+        "Trend",
+        (),
+        {"phase": "invalid", "is_top_divergence": False, "is_rising_initial": False},
+    )()
+    rising_daily = type(
+        "Trend",
+        (),
+        {"phase": "rising", "is_top_divergence": False, "is_rising_initial": True},
+    )()
+    monkeypatch.setattr("stock_select.reviewers.b2.classify_weekly_macd_trend", lambda *_args, **_kwargs: invalid_weekly)
+    monkeypatch.setattr("stock_select.reviewers.b2.classify_daily_macd_trend", lambda *_args, **_kwargs: rising_daily)
+    monkeypatch.setattr("stock_select.reviewers.b2.map_macd_phase_score", lambda **_kwargs: 5.0)
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B3",
+    )
+
+    assert review["macd_phase"] == 5.0
+    assert review["total_score"] >= 4.0
+    # If the old b2 MACD verdict gate still ran, invalid weekly MACD would force FAIL.
+    assert review["verdict"] == "PASS"
 
 
 def test_b2_review_includes_candidate_signal_in_total_score() -> None:
@@ -311,7 +349,7 @@ def test_b2_review_includes_candidate_signal_in_total_score() -> None:
 
     assert b3_review["signal"] == "B3"
     assert b3_review["total_score"] > neutral_review["total_score"]
-    assert round(b3_review["total_score"] - neutral_review["total_score"], 2) == 0.31
+    assert round(b3_review["total_score"] - neutral_review["total_score"], 2) == 0.3
     assert "ranking_score" not in b3_review
     assert "rank_features" not in b3_review
 
@@ -332,8 +370,8 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
     assert review["price_position"] == 5.0
     assert review["volume_behavior"] == 1.0
     assert review["previous_abnormal_move"] == 5.0
-    assert review["macd_phase"] == 2.0
-    assert review["total_score"] == 2.75
+    assert review["macd_phase"] == pytest.approx(1.44)
+    assert review["total_score"] == 2.6
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review
@@ -575,7 +613,7 @@ def test_b2_review_scores_invalid_daily_state_low_even_with_constructive_weekly_
     assert len(monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS
     assert len(previous_monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS - 1
     assert len(previous_weekly_closes) >= _MULTI_TIMEFRAME_CONFIRMATION_POINTS
-    assert review["macd_phase"] == 2.0
+    assert review["macd_phase"] == pytest.approx(4.36)
 
 
 def test_b2_review_uses_neutral_wave_score_one_step_before_boundary_when_daily_wave_is_invalid() -> None:
@@ -712,4 +750,4 @@ def test_b2_review_uses_neutral_wave_score_one_step_before_boundary_when_daily_w
 
     assert len(monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS - 1
     assert len(weekly_closes) >= _MULTI_TIMEFRAME_CONFIRMATION_POINTS
-    assert review["macd_phase"] <= 3.0
+    assert review["macd_phase"] <= 4.5

@@ -4,6 +4,7 @@ from stock_select.analysis.macd_waves import (
     _classify_macd_trend_from_lines,
     classify_daily_macd_state,
     classify_daily_macd_wave,
+    classify_weekly_macd_trend,
     classify_weekly_macd_wave,
 )
 
@@ -102,6 +103,53 @@ def test_macd_trend_stays_ended_when_next_startup_has_not_reached_zero_axis() ->
     assert result.reason == "DIF crossed below zero"
 
 
+def test_macd_trend_recovers_running_above_zero_after_prior_ended_state() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.04, 0.035, 0.033, 0.032, 0.031, 0.0305, -0.01, 0.20, 0.40, 0.60, 0.80, 0.90, 0.75, 0.60],
+            dea=[-0.28, -0.24, 0.01, 0.02, 0.025, 0.028, 0.029, 0.03, 0.0302, 0.00, 0.05, 0.20, 0.40, 0.60, 0.70, 0.78, 0.75],
+        )
+    )
+
+    assert result.phase == "falling"
+    assert result.direction == "falling"
+    assert result.reason in {
+        "above-zero recovery into MACD falling segment",
+        "above-water MACD dead cross",
+    }
+    assert result.phase_index == 2
+    assert result.wave_label == "二浪"
+    assert result.wave_stage in {"分歧", "背离"}
+
+
+def test_macd_trend_recovers_idle_above_zero_as_rising_divergence() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[0.3747, 0.3506, 0.3436, 0.3869, 0.5465, 0.7762, 1.1100, 1.5216, 1.8547, 2.2963, 2.4726, 2.4389],
+            dea=[0.3479, 0.3484, 0.3475, 0.3554, 0.3936, 0.4701, 0.5981, 0.7828, 0.9972, 1.2570, 1.5001, 1.6879],
+        )
+    )
+
+    assert result.phase == "rising"
+    assert result.direction == "rising"
+    assert result.wave_label in {"一浪", "三浪"}
+    assert result.wave_stage == "背离"
+    assert result.is_top_divergence is True
+
+
+def test_macd_trend_treats_flattening_falling_histogram_as_divergence_warning() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.08, 0.12, 0.16, 0.20, 1.9431, 1.9714, 2.0988, 2.0358, 1.9569, 1.7468, 1.4777, 1.1662, 0.9616, 0.7608, 0.5963],
+            dea=[-0.28, -0.24, 0.01, 0.04, 0.08, 0.11, 0.14, 1.7970, 1.8319, 1.8853, 1.9154, 1.9237, 1.8883, 1.8062, 1.6782, 1.5349, 1.3800, 1.2233],
+        )
+    )
+
+    assert result.phase == "falling"
+    assert result.wave_label == "二浪"
+    assert result.wave_stage in {"强势转分歧", "分歧"}
+
+
 def test_macd_trend_flags_top_divergence_when_rising_spread_shrinks() -> None:
     result = _classify_macd_trend_from_lines(
         _line_frame(
@@ -114,6 +162,79 @@ def test_macd_trend_flags_top_divergence_when_rising_spread_shrinks() -> None:
     assert result.metrics["spread"] == 0.03
     assert result.metrics["previous_spread"] == 0.05
     assert result.is_top_divergence is True
+
+
+def test_macd_trend_tracks_wave_number_and_odd_even_wave_names() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.08, 0.06, 0.05, 0.07, 0.11, 0.09],
+            dea=[-0.28, -0.24, 0.01, 0.04, 0.07, 0.06, 0.055, 0.08, 0.10],
+        )
+    )
+
+    assert result.phase == "falling"
+    assert result.direction == "falling"
+    assert result.phase_index == 4
+    assert result.wave_label == "四浪"
+    assert result.wave_direction == "falling"
+
+
+def test_macd_trend_quantifies_rising_wave_strength_stage() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.06, 0.09, 0.13, 0.18, 0.24, 0.31, 0.39, 0.48, 0.58],
+            dea=[-0.28, -0.24, 0.01, 0.025, 0.04, 0.06, 0.085, 0.115, 0.15, 0.19, 0.235, 0.285],
+        )
+    )
+
+    assert result.phase == "rising"
+    assert result.wave_label == "一浪"
+    assert result.wave_stage == "强势"
+    assert result.metrics["hist_change_rate"] > 0.05
+    assert result.metrics["dif_slope_5"] > 0.001
+    assert result.metrics["dif_zero_distance_ratio"] > 0.6
+
+
+def test_macd_trend_quantifies_rising_wave_divergence_stage() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.08, 0.15, 0.23, 0.32, 0.42, 0.50, 0.55, 0.58, 0.60, 0.61],
+            dea=[-0.28, -0.24, 0.01, 0.03, 0.06, 0.10, 0.16, 0.24, 0.34, 0.43, 0.50, 0.56, 0.59],
+        )
+    )
+
+    assert result.phase == "rising"
+    assert result.wave_stage == "背离"
+    assert result.is_top_divergence is True
+    assert result.metrics["hist_change_rate"] < -0.05
+
+
+def test_macd_trend_quantifies_falling_wave_strength_stage() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.10, 0.16, 0.22, 0.18, 0.14, 0.10, 0.07, 0.04],
+            dea=[-0.28, -0.24, 0.01, 0.05, 0.09, 0.13, 0.20, 0.21, 0.22, 0.23, 0.24],
+        )
+    )
+
+    assert result.phase == "falling"
+    assert result.wave_label == "二浪"
+    assert result.wave_stage == "强势"
+    assert result.metrics["hist_change_rate"] > 0.05
+    assert result.metrics["dif_slope_5"] < -0.001
+
+
+def test_macd_trend_emits_stage_transition_warnings() -> None:
+    result = _classify_macd_trend_from_lines(
+        _line_frame(
+            dif=[-0.30, -0.22, 0.03, 0.09, 0.16, 0.22, 0.27, 0.31, 0.34, 0.36, 0.37],
+            dea=[-0.28, -0.24, 0.01, 0.04, 0.08, 0.12, 0.17, 0.22, 0.27, 0.315, 0.355],
+        )
+    )
+
+    assert result.wave_stage == "背离"
+    assert "强势→分歧预警" in result.transition_warnings
+    assert "金叉/死叉临近，浪型可能切换" in result.transition_warnings
 
 
 def test_classify_weekly_macd_wave_returns_wave1_for_first_constructive_advance() -> None:
@@ -252,3 +373,4 @@ def test_classify_weekly_macd_wave_defaults_to_wave1_when_recent_window_has_no_u
     result = classify_weekly_macd_wave(frame, pick_date="2026-03-31")
 
     assert result.label == "wave1"
+
