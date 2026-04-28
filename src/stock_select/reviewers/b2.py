@@ -233,68 +233,21 @@ def _score_b2_price_position(
 
     latest_high = float(high.iloc[-1]) if not pd.isna(high.iloc[-1]) else float("nan")
     latest_low = float(low.iloc[-1]) if not pd.isna(low.iloc[-1]) else float("nan")
-    latest_close = float(close.iloc[-1]) if not pd.isna(close.iloc[-1]) else float("nan")
-    if not pd.notna(latest_high) or not pd.notna(latest_low) or not pd.notna(latest_close):
+    if not pd.notna(latest_high) or not pd.notna(latest_low):
         return 3.0
 
     current_mid_price = (latest_high + latest_low) / 2.0
     box_range = box_high - box_low
     box_position = (current_mid_price - box_low) / box_range
 
-    ma25_series = ma25.dropna()
-    zxdq_series = zxdq.dropna()
-    latest_ma25 = float(ma25.iloc[-1]) if not pd.isna(ma25.iloc[-1]) else float("nan")
-    latest_zxdq = float(zxdq.iloc[-1]) if not pd.isna(zxdq.iloc[-1]) else float("nan")
-    ma25_slope5 = _tail_slope(ma25_series, periods=5)
-    zxdq_slope5 = _tail_slope(zxdq_series, periods=5)
-    has_trend_support = bool(
-        pd.notna(latest_ma25)
-        and pd.notna(latest_zxdq)
-        and latest_ma25 > 0.0
-        and latest_zxdq > 0.0
-        and latest_close >= latest_ma25 * 1.03
-        and latest_ma25 >= latest_zxdq * 0.98
-        and ma25_slope5 >= -0.002
-        and zxdq_slope5 >= -0.002
-    )
-
-    if box_position < 0.35:
-        return 1.0
-    if box_position < 0.50:
-        return 2.0
-    if box_position < 0.60:
+    if 0.70 <= box_position < 0.85:
+        return 5.0
+    if 0.60 <= box_position < 0.70 or 0.85 <= box_position < 0.92:
+        return 4.0
+    if 0.50 <= box_position < 0.60 or 0.92 <= box_position < 1.00:
         return 3.0
-    if box_position < 0.68:
-        return 4.0
-
-    if box_position < 0.75:
-        if has_trend_support:
-            return 4.0
-        if pd.notna(latest_ma25) and latest_close >= latest_ma25:
-            return 3.0
+    if 0.40 <= box_position < 0.50 or 1.00 <= box_position < 1.08:
         return 2.0
-
-    if box_position < 0.85:
-        if has_trend_support:
-            return 4.0
-        if (
-            pd.notna(latest_ma25)
-            and pd.notna(latest_zxdq)
-            and latest_close >= latest_ma25
-            and latest_ma25 >= latest_zxdq * 0.98
-        ):
-            return 3.0
-        return 2.0
-
-    if box_position < 0.95:
-        if has_trend_support:
-            return 5.0
-        if pd.notna(latest_ma25) and latest_close >= latest_ma25 and ma25_slope5 >= -0.002 and zxdq_slope5 >= -0.002:
-            return 2.0
-        return 1.0
-
-    if has_trend_support:
-        return 4.0
     return 1.0
 
 
@@ -313,42 +266,29 @@ def _score_b2_volume_behavior(*, close: pd.Series, volume: pd.Series) -> float:
     if len(close) < 20:
         return 3.0
 
-    recent_close = close.tail(20)
-    recent_volume = volume.tail(20)
-    peak_volume = float(recent_volume.max())
-    peak_idx = int(recent_volume.idxmax())
-    peak_close = float(close.loc[peak_idx])
+    recent_close = close.tail(20).astype(float)
+    recent_volume = volume.tail(20).astype(float)
     latest_close = float(close.iloc[-1])
+    previous_close = float(close.iloc[-2])
     latest_volume = float(volume.iloc[-1])
-    average_last5 = float(recent_volume.tail(5).mean())
-    retest_floor = float(close.loc[peak_idx : close.index[-1]].min())
-    pre_peak_close = float(close.shift(1).loc[peak_idx]) if peak_idx in close.index and peak_idx > close.index.min() else peak_close
-    peak_breakout = peak_close >= pre_peak_close * 1.02
+    average_close_5 = float(recent_close.tail(5).mean())
+    average_volume_5 = float(recent_volume.tail(5).mean())
+    average_volume_20 = float(recent_volume.mean())
+    high_close_20 = float(recent_close.max())
 
+    if latest_close < average_close_5 and latest_volume >= average_volume_5:
+        return 1.0
+    if latest_close < average_close_5:
+        return 2.0
     if (
-        peak_breakout
-        and peak_idx <= recent_volume.index[-6]
-        and latest_volume <= peak_volume * 0.60
-        and average_last5 <= peak_volume * 0.60
-        and retest_floor >= peak_close * 0.96
-        and latest_close >= peak_close
+        latest_close >= high_close_20 * 0.98
+        and latest_close >= previous_close
+        and latest_volume >= average_volume_5 * 0.80
     ):
         return 5.0
-    if (
-        peak_breakout
-        and peak_idx <= recent_volume.index[-4]
-        and latest_volume <= peak_volume * 0.75
-        and average_last5 <= peak_volume * 0.75
-        and retest_floor >= peak_close * 0.94
-    ):
+    if latest_close >= high_close_20 * 0.95 and latest_volume <= average_volume_20 * 1.80:
         return 4.0
-    if peak_idx <= recent_volume.index[-4] and average_last5 >= peak_volume * 0.85 and latest_close >= peak_close * 0.96:
-        return 2.0
-    if latest_volume <= peak_volume * 0.90 and latest_close >= float(recent_close.iloc[-2]):
-        return 3.0
-    if latest_close >= float(recent_close.tail(5).mean()) and latest_volume <= peak_volume:
-        return 2.0
-    return 1.0
+    return 3.0
 
 
 def _score_b2_previous_abnormal_move(

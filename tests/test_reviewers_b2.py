@@ -274,50 +274,46 @@ def test_b2_verdict_fails_low_score_without_elasticity() -> None:
     )
 
 
-def test_b2_price_position_scores_mid_box_as_base_not_center_deviation_bonus() -> None:
+def test_b2_price_position_scores_from_box_position_only() -> None:
     low = _series([10.0] * 120)
     high = _series([20.0] * 120)
     close = _series([15.0] * 120)
-    high.iloc[-1] = 15.5
-    low.iloc[-1] = 14.5
-    close.iloc[-1] = 15.2
+    high.iloc[-1] = 17.7
+    low.iloc[-1] = 16.3
+    close.iloc[-1] = 17.0
     ma25 = _series([14.0] * len(close))
     zxdq = _series([13.8] * len(close))
-
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 3.0
-
-
-def test_b2_price_position_rewards_upper_box_breakout_with_trend_support() -> None:
-    low = _series([10.0] * 120)
-    high = _series([20.0] * 120)
-    close = _series([15.0] * 120)
-    high.iloc[-1] = 19.2
-    low.iloc[-1] = 18.4
-    close.iloc[-1] = 18.9
-    ma25 = _series([15.0] * 114 + [16.0, 16.1, 16.2, 16.3, 16.5, 16.8])
-    zxdq = _series([14.0] * 114 + [15.0, 15.1, 15.2, 15.3, 15.4, 15.5])
 
     assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
 
 
-def test_b2_price_position_penalizes_upper_box_extension_without_trend_support() -> None:
+def test_b2_price_position_scores_high_middle_box_position_as_strongest_band() -> None:
     low = _series([10.0] * 120)
     high = _series([20.0] * 120)
     close = _series([15.0] * 120)
-    # 高位接近箱体上沿，但均线/中线支撑没有跟上，应视作高位虚浮而非突破延续。
-    high.iloc[-10] = 20.0
-    low.iloc[-10] = 10.0
-    close.iloc[-8] = 12.0
-    high.iloc[-1] = 19.8
-    low.iloc[-1] = 18.8
-    close.iloc[-1] = 19.4
+    high.iloc[-1] = 18.3
+    low.iloc[-1] = 17.7
+    close.iloc[-1] = 18.0
+    ma25 = _series([12.0] * len(close))
+    zxdq = _series([18.0] * len(close))
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
+
+
+def test_b2_price_position_scores_upper_box_extension_as_second_band_without_trend_support() -> None:
+    low = _series([10.0] * 120)
+    high = _series([20.0] * 120)
+    close = _series([15.0] * 120)
+    high.iloc[-1] = 19.0
+    low.iloc[-1] = 18.0
+    close.iloc[-1] = 18.5
     ma25 = _series([15.0] * 114 + [16.2, 16.15, 16.1, 16.05, 16.0, 15.95])
     zxdq = _series([15.8] * len(close))
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 1.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 4.0
 
 
-def test_b2_price_position_scores_low_box_as_weak_even_when_close_to_lower_center_distance() -> None:
+def test_b2_price_position_scores_lower_box_position_as_weak_band() -> None:
     low = _series([10.0] * 120)
     high = _series([20.0] * 120)
     close = _series([15.0] * 120)
@@ -330,6 +326,19 @@ def test_b2_price_position_scores_low_box_as_weak_even_when_close_to_lower_cente
     assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 1.0
 
 
+def test_b2_price_position_scores_extreme_upper_box_position_as_neutral_band() -> None:
+    low = _series([10.0] * 120)
+    high = _series([20.0] * 120)
+    close = _series([15.0] * 120)
+    high.iloc[-1] = 20.0
+    low.iloc[-1] = 19.0
+    close.iloc[-1] = 19.5
+    ma25 = _series([19.0] * len(close))
+    zxdq = _series([18.8] * len(close))
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 3.0
+
+
 def test_b2_trend_structure_uses_zxdkx_as_medium_support_line() -> None:
     close = _series([10.0] * 60 + [10.2, 10.4, 10.6, 10.8, 11.0])
     low = close * 0.99
@@ -339,11 +348,11 @@ def test_b2_trend_structure_uses_zxdkx_as_medium_support_line() -> None:
     assert _score_b2_trend_structure(close=close, low=low, ma25=ma25, zxdkx=zxdkx) == 4.0
 
 
-def test_b2_price_position_uses_current_mid_price_and_recognizes_breakout_extension() -> None:
+def test_b2_price_position_uses_current_mid_price_for_box_position() -> None:
     low = _series([10.0] * 120)
     high = _series([11.0] * 120)
     close = _series([10.5] * 120)
-    # 入选日中位价相对箱体中点偏高，但价格沿均线支撑突破延续，应按突破型给高分。
+    # 入选日中位价相对箱体位置约 80%，应落在最高非线性分档。
     high.iloc[-5] = 20.0
     close.iloc[-5] = 18.0
     close.iloc[-3] = 12.0
@@ -354,7 +363,7 @@ def test_b2_price_position_uses_current_mid_price_and_recognizes_breakout_extens
     ma25 = _series([16.0] * len(close))
     zxdq = _series([15.0] * len(close))
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 4.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
 
 
 def test_b2_previous_abnormal_move_scores_pullback_above_high_volume_body_price() -> None:
@@ -393,26 +402,50 @@ def test_b2_previous_abnormal_move_uses_bearish_body_high_as_abnormal_price() ->
     assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 3.0
 
 
-def test_b2_price_position_penalizes_passive_ma25_touch_after_high_consolidation() -> None:
+def test_b2_price_position_ignores_ma25_zxdq_support_exception() -> None:
     close = _series([10.0] * 40 + [12.0, 14.0, 15.5, 16.0, 15.8, 15.9, 15.7, 15.6, 15.4, 15.2])
     high = close * 1.01
     low = close * 0.99
     ma25 = close.rolling(window=25, min_periods=25).mean()
     zxdq = ma25 * 1.20
+    weak_ma25 = ma25 * 0.50
+    weak_zxdq = zxdq * 2.00
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 2.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=weak_ma25, zxdq=weak_zxdq) == 5.0
 
 
-def test_b2_volume_behavior_rewards_breakout_volume_then_shrinking_retest() -> None:
+def test_b2_volume_behavior_rewards_right_side_confirmation() -> None:
     close = _series([10.0] * 40 + [10.3, 10.7, 11.2, 11.0, 10.9, 10.8, 10.95, 11.05, 11.15, 11.25])
-    volume = _series([900.0] * 40 + [1200.0, 1800.0, 3200.0, 1500.0, 1100.0, 980.0, 940.0, 960.0, 1000.0, 1040.0])
+    volume = _series([900.0] * 40 + [1200.0, 1400.0, 1800.0, 1500.0, 1300.0, 1200.0, 1180.0, 1160.0, 1150.0, 1500.0])
 
     assert _score_b2_volume_behavior(close=close, volume=volume) == 5.0
 
 
-def test_b2_volume_behavior_penalizes_retest_without_volume_contraction() -> None:
+def test_b2_volume_behavior_scores_high_hold_without_confirmation_as_four() -> None:
     close = _series([10.0] * 40 + [10.3, 10.7, 11.2, 11.0, 10.9, 10.8, 10.95, 11.05, 11.15, 11.25])
-    volume = _series([900.0] * 40 + [1200.0, 1800.0, 3200.0, 3000.0, 2900.0, 3100.0, 3050.0, 2950.0, 3000.0, 3150.0])
+    volume = _series([900.0] * 40 + [1200.0, 1400.0, 1800.0, 1500.0, 1300.0, 1200.0, 1180.0, 1160.0, 1150.0, 800.0])
+
+    assert _score_b2_volume_behavior(close=close, volume=volume) == 4.0
+
+
+def test_b2_volume_behavior_scores_above_five_day_average_as_neutral() -> None:
+    close = _series([10.0] * 40 + [10.2, 12.0, 10.5, 10.4, 10.45, 10.5, 10.55, 10.6, 10.65, 10.68])
+    volume = _series([900.0] * 40 + [1200.0, 1400.0, 1800.0, 1500.0, 1300.0, 1200.0, 1180.0, 1160.0, 1150.0, 1100.0])
+
+    assert _score_b2_volume_behavior(close=close, volume=volume) == 3.0
+
+
+def test_b2_volume_behavior_penalizes_below_average_with_volume() -> None:
+    close = _series([10.0] * 40 + [10.3, 10.7, 11.2, 11.0, 10.9, 10.8, 10.7, 10.6, 10.5, 10.4])
+    volume = _series([900.0] * 40 + [1200.0, 1400.0, 1800.0, 1500.0, 1300.0, 1200.0, 1180.0, 1160.0, 1150.0, 1300.0])
+
+    assert _score_b2_volume_behavior(close=close, volume=volume) == 1.0
+
+
+def test_b2_volume_behavior_scores_below_average_without_volume_as_two() -> None:
+    close = _series([10.0] * 40 + [10.3, 10.7, 11.2, 11.0, 10.9, 10.8, 10.7, 10.6, 10.5, 10.4])
+    volume = _series([900.0] * 40 + [1200.0, 1400.0, 1800.0, 1500.0, 1300.0, 1200.0, 1180.0, 1160.0, 1150.0, 900.0])
 
     assert _score_b2_volume_behavior(close=close, volume=volume) == 2.0
 
@@ -439,16 +472,16 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
     assert review["chart_path"] == "/tmp/000001.SZ_day.png"
     assert review["review_type"] == "baseline"
     assert review["trend_structure"] == 4.0
-    assert review["price_position"] == 1.0
+    assert review["price_position"] == 3.0
     assert review["volume_behavior"] == 5.0
     assert review["previous_abnormal_move"] == 5.0
     assert review["macd_phase"] == pytest.approx(4.5)
-    assert review["total_score"] == 3.78
+    assert review["total_score"] == 3.95
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review
-    assert review["signal_type"] == "rebound"
-    assert review["verdict"] == "WATCH"
+    assert review["signal_type"] == "trend_start"
+    assert review["verdict"] == "PASS"
     assert "周线MACD" in review["comment"]
     assert "日线MACD" in review["comment"]
     assert "wave" not in review["comment"]
@@ -523,7 +556,7 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
     assert review["volume_behavior"] == 1.0
     assert review["previous_abnormal_move"] == 3.0
     assert review["macd_phase"] == pytest.approx(1.0)
-    assert review["total_score"] == 1.5
+    assert review["total_score"] == 1.58
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review

@@ -10,11 +10,11 @@ BASELINE_SCORE_WEIGHTS = {
     "macd_phase": 0.20,
 }
 B2_BASELINE_SCORE_WEIGHTS = {
-    "trend_structure": 0.18,
-    "price_position": 0.15,
-    "volume_behavior": 0.14,
-    "previous_abnormal_move": 0.10,
-    "macd_phase": 0.28,
+    "trend_structure": 0.14,
+    "price_position": 0.22,
+    "volume_behavior": 0.00,
+    "previous_abnormal_move": 0.14,
+    "macd_phase": 0.35,
     "signal": 0.15,
 }
 B2_SIGNAL_SCORE = {
@@ -81,7 +81,9 @@ def infer_signal_type(
     volume_behavior: float,
     price_position: float,
 ) -> str:
-    if trend_structure <= 2.0 or volume_behavior <= 2.0:
+    if trend_structure <= 2.0 or volume_behavior <= 1.0:
+        return "distribution_risk"
+    if volume_behavior <= 2.0 and trend_structure < 4.0:
         return "distribution_risk"
     if latest_close >= latest_open and trend_structure >= 4.0 and price_position >= 3.0:
         return "trend_start"

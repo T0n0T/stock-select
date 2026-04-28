@@ -14,7 +14,7 @@ from stock_select.review_orchestrator import (
     review_symbol_history as orchestrator_review_symbol_history,
     summarize_reviews,
 )
-from stock_select.review_protocol import compute_b2_weighted_total
+from stock_select.review_protocol import compute_b2_weighted_total, infer_signal_type
 from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
 
 
@@ -28,7 +28,44 @@ def test_b2_weighted_total_reduces_price_position_weight() -> None:
     }
     high_position_scores = {**base_scores, "price_position": 5.0}
 
-    assert compute_b2_weighted_total(high_position_scores, signal="B3") - compute_b2_weighted_total(base_scores, signal="B3") == pytest.approx(0.3)
+    assert compute_b2_weighted_total(high_position_scores, signal="B3") - compute_b2_weighted_total(base_scores, signal="B3") == pytest.approx(0.44)
+
+
+def test_infer_signal_type_keeps_strong_low_volume_setup_as_trend_start() -> None:
+    signal_type = infer_signal_type(
+        latest_close=10.8,
+        latest_open=10.2,
+        trend_structure=4.0,
+        volume_behavior=2.0,
+        price_position=4.0,
+    )
+
+    assert signal_type == "trend_start"
+
+
+def test_infer_signal_type_keeps_low_volume_without_strong_trend_as_distribution_risk() -> None:
+    signal_type = infer_signal_type(
+        latest_close=10.8,
+        latest_open=10.2,
+        trend_structure=3.0,
+        volume_behavior=2.0,
+        price_position=4.0,
+    )
+
+    assert signal_type == "distribution_risk"
+
+
+def test_b2_weighted_total_uses_lower_volume_behavior_weight() -> None:
+    base_scores = {
+        "trend_structure": 4.0,
+        "price_position": 3.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 3.4,
+    }
+    high_volume_scores = {**base_scores, "volume_behavior": 5.0}
+
+    assert compute_b2_weighted_total(high_volume_scores, signal="B3") - compute_b2_weighted_total(base_scores, signal="B3") == pytest.approx(0.0)
 
 
 def _trend(
@@ -289,7 +326,7 @@ def test_compute_method_total_score_keeps_macd_for_b2() -> None:
         "macd_phase": 1.0,
     }
 
-    assert compute_method_total_score("b2", scores) == pytest.approx(3.33)
+    assert compute_method_total_score("b2", scores) == pytest.approx(2.94)
 
 
 def test_compute_method_total_score_weights_b2_macd_and_position_as_core() -> None:
@@ -303,8 +340,8 @@ def test_compute_method_total_score_weights_b2_macd_and_position_as_core() -> No
     high_macd = {**low_macd, "macd_phase": 5.0}
     high_abnormal = {**low_macd, "previous_abnormal_move": 1.0, "macd_phase": 5.0}
 
-    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", low_macd) == pytest.approx(1.12)
-    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", high_abnormal) == pytest.approx(0.4)
+    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", low_macd) == pytest.approx(1.4)
+    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", high_abnormal) == pytest.approx(0.56)
 
 
 def test_compute_b2_total_score_includes_candidate_signal_weight() -> None:
