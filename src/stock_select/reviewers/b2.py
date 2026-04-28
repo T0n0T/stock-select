@@ -239,11 +239,6 @@ def _score_b2_price_position(
 
     current_mid_price = (latest_high + latest_low) / 2.0
     box_range = box_high - box_low
-    box_mid_price = (box_high + box_low) / 2.0
-    half_box_range = box_range / 2.0
-    if half_box_range <= 0.0:
-        return 3.0
-    midpoint_deviation = abs(current_mid_price - box_mid_price) / half_box_range
     box_position = (current_mid_price - box_low) / box_range
 
     ma25_series = ma25.dropna()
@@ -263,27 +258,43 @@ def _score_b2_price_position(
         and zxdq_slope5 >= -0.002
     )
 
-    # 突破延续型：价格已靠近箱体上沿，但均线/中线跟上，不能按“偏离中位”简单扣死。
-    if box_position >= 0.68:
+    if box_position < 0.35:
+        return 1.0
+    if box_position < 0.50:
+        return 2.0
+    if box_position < 0.60:
+        return 3.0
+    if box_position < 0.68:
+        return 4.0
+
+    if box_position < 0.75:
         if has_trend_support:
-            if box_position <= 0.92:
-                return 5.0
             return 4.0
-        if box_position <= 0.80 and pd.notna(latest_ma25) and latest_close >= latest_ma25:
+        if pd.notna(latest_ma25) and latest_close >= latest_ma25:
             return 3.0
-        if box_position <= 0.92 and pd.notna(latest_ma25) and latest_close >= latest_ma25:
+        return 2.0
+
+    if box_position < 0.85:
+        if has_trend_support:
+            return 4.0
+        if (
+            pd.notna(latest_ma25)
+            and pd.notna(latest_zxdq)
+            and latest_close >= latest_ma25
+            and latest_ma25 >= latest_zxdq * 0.98
+        ):
+            return 3.0
+        return 2.0
+
+    if box_position < 0.95:
+        if has_trend_support:
+            return 5.0
+        if pd.notna(latest_ma25) and latest_close >= latest_ma25 and ma25_slope5 >= -0.002 and zxdq_slope5 >= -0.002:
             return 2.0
         return 1.0
 
-    # 回踩承接型：继续奖励贴近箱体中枢的结构。
-    if midpoint_deviation <= 0.10:
-        return 5.0
-    if midpoint_deviation <= 0.25:
+    if has_trend_support:
         return 4.0
-    if midpoint_deviation <= 0.45:
-        return 3.0
-    if midpoint_deviation <= 0.70:
-        return 2.0
     return 1.0
 
 

@@ -274,18 +274,17 @@ def test_b2_verdict_fails_low_score_without_elasticity() -> None:
     )
 
 
-def test_b2_price_position_rewards_current_mid_price_near_box_midpoint() -> None:
+def test_b2_price_position_scores_mid_box_as_base_not_center_deviation_bonus() -> None:
     low = _series([10.0] * 120)
     high = _series([20.0] * 120)
     close = _series([15.0] * 120)
-    # 入选日当天中位价 = (high + low) / 2 = 15，正好贴近箱体中点。
     high.iloc[-1] = 15.5
     low.iloc[-1] = 14.5
     close.iloc[-1] = 15.2
     ma25 = _series([14.0] * len(close))
     zxdq = _series([13.8] * len(close))
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 3.0
 
 
 def test_b2_price_position_rewards_upper_box_breakout_with_trend_support() -> None:
@@ -318,17 +317,17 @@ def test_b2_price_position_penalizes_upper_box_extension_without_trend_support()
     assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 1.0
 
 
-def test_b2_price_position_penalizes_current_mid_price_far_below_box_midpoint() -> None:
+def test_b2_price_position_scores_low_box_as_weak_even_when_close_to_lower_center_distance() -> None:
     low = _series([10.0] * 120)
     high = _series([20.0] * 120)
     close = _series([15.0] * 120)
-    high.iloc[-1] = 12.2
-    low.iloc[-1] = 11.2
-    close.iloc[-1] = 11.7
+    high.iloc[-1] = 13.5
+    low.iloc[-1] = 12.5
+    close.iloc[-1] = 13.0
     ma25 = _series([12.0] * len(close))
     zxdq = _series([11.8] * len(close))
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 2.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 1.0
 
 
 def test_b2_trend_structure_uses_zxdkx_as_medium_support_line() -> None:
@@ -355,7 +354,7 @@ def test_b2_price_position_uses_current_mid_price_and_recognizes_breakout_extens
     ma25 = _series([16.0] * len(close))
     zxdq = _series([15.0] * len(close))
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 4.0
 
 
 def test_b2_previous_abnormal_move_scores_pullback_above_high_volume_body_price() -> None:
