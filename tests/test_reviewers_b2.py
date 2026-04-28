@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from stock_select.reviewers.b2 import (
+    infer_b2_verdict,
     _score_b2_previous_abnormal_move,
     _score_b2_price_position,
     _score_b2_trend_structure,
@@ -177,14 +178,157 @@ def _series(values: list[float]) -> pd.Series:
     return pd.Series(values, index=range(len(values)), dtype="float64")
 
 
-def test_b2_price_position_rewards_healthy_pullback_near_ma25_support() -> None:
-    low_box = _series([10.0, 11.0, 12.0, 13.0, 14.0, 12.0, 11.5, 11.0])
-    high = low_box + 1.0
-    close = _series([10.5, 11.5, 12.5, 13.5, 14.5, 12.5, 11.8, 11.2])
-    ma25 = _series([12.0] * len(close))
-    zxdq = _series([11.6] * len(close))
+def test_b2_verdict_passes_strong_macd_and_constructive_wash() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.72,
+            trend_structure=3.0,
+            price_position=2.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.5,
+            signal="B2",
+            signal_type="rebound",
+        )
+        == "PASS"
+    )
 
-    assert _score_b2_price_position(close=close, high=high, low=low_box, ma25=ma25, zxdq=zxdq) == 5.0
+
+def test_b2_verdict_passes_strong_structure_with_good_macd() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.7,
+            trend_structure=4.0,
+            price_position=3.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=3.8,
+            signal="B2",
+            signal_type="trend_start",
+        )
+        == "PASS"
+    )
+
+
+def test_b2_verdict_keeps_distribution_risk_as_watch_only_when_strongly_elastic() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.66,
+            trend_structure=3.0,
+            price_position=3.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.5,
+            signal="B3",
+            signal_type="distribution_risk",
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_does_not_pass_loose_macd_setup() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.39,
+            trend_structure=3.0,
+            price_position=4.0,
+            volume_behavior=3.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.0,
+            signal="B5",
+            signal_type="rebound",
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_fails_distribution_risk_without_elasticity() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.2,
+            trend_structure=2.0,
+            price_position=2.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=3.0,
+            macd_phase=3.2,
+            signal="B2",
+            signal_type="distribution_risk",
+        )
+        == "FAIL"
+    )
+
+
+def test_b2_verdict_fails_low_score_without_elasticity() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.1,
+            trend_structure=3.0,
+            price_position=2.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=3.0,
+            macd_phase=3.2,
+            signal="B5",
+            signal_type="rebound",
+        )
+        == "FAIL"
+    )
+
+
+def test_b2_price_position_rewards_current_mid_price_near_box_midpoint() -> None:
+    low = _series([10.0] * 120)
+    high = _series([20.0] * 120)
+    close = _series([15.0] * 120)
+    # 入选日当天中位价 = (high + low) / 2 = 15，正好贴近箱体中点。
+    high.iloc[-1] = 15.5
+    low.iloc[-1] = 14.5
+    close.iloc[-1] = 15.2
+    ma25 = _series([14.0] * len(close))
+    zxdq = _series([13.8] * len(close))
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
+
+
+def test_b2_price_position_rewards_upper_box_breakout_with_trend_support() -> None:
+    low = _series([10.0] * 120)
+    high = _series([20.0] * 120)
+    close = _series([15.0] * 120)
+    high.iloc[-1] = 19.2
+    low.iloc[-1] = 18.4
+    close.iloc[-1] = 18.9
+    ma25 = _series([15.0] * 114 + [16.0, 16.1, 16.2, 16.3, 16.5, 16.8])
+    zxdq = _series([14.0] * 114 + [15.0, 15.1, 15.2, 15.3, 15.4, 15.5])
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 5.0
+
+
+def test_b2_price_position_penalizes_upper_box_extension_without_trend_support() -> None:
+    low = _series([10.0] * 120)
+    high = _series([20.0] * 120)
+    close = _series([15.0] * 120)
+    # 高位接近箱体上沿，但均线/中线支撑没有跟上，应视作高位虚浮而非突破延续。
+    high.iloc[-10] = 20.0
+    low.iloc[-10] = 10.0
+    close.iloc[-8] = 12.0
+    high.iloc[-1] = 19.8
+    low.iloc[-1] = 18.8
+    close.iloc[-1] = 19.4
+    ma25 = _series([15.0] * 114 + [16.2, 16.15, 16.1, 16.05, 16.0, 15.95])
+    zxdq = _series([15.8] * len(close))
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 1.0
+
+
+def test_b2_price_position_penalizes_current_mid_price_far_below_box_midpoint() -> None:
+    low = _series([10.0] * 120)
+    high = _series([20.0] * 120)
+    close = _series([15.0] * 120)
+    high.iloc[-1] = 12.2
+    low.iloc[-1] = 11.2
+    close.iloc[-1] = 11.7
+    ma25 = _series([12.0] * len(close))
+    zxdq = _series([11.8] * len(close))
+
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 2.0
 
 
 def test_b2_trend_structure_uses_zxdkx_as_medium_support_line() -> None:
@@ -196,16 +340,16 @@ def test_b2_trend_structure_uses_zxdkx_as_medium_support_line() -> None:
     assert _score_b2_trend_structure(close=close, low=low, ma25=ma25, zxdkx=zxdkx) == 4.0
 
 
-def test_b2_price_position_uses_lowest_close_between_prior_high_and_pick() -> None:
+def test_b2_price_position_uses_current_mid_price_and_recognizes_breakout_extension() -> None:
     low = _series([10.0] * 120)
     high = _series([11.0] * 120)
     close = _series([10.5] * 120)
-    # 120日区间高点出现在倒数第5根，入选日收盘仍在高位；
-    # 但高点到入选日之间曾充分回踩，应按这段最低价计算位置。
+    # 入选日中位价相对箱体中点偏高，但价格沿均线支撑突破延续，应按突破型给高分。
     high.iloc[-5] = 20.0
     close.iloc[-5] = 18.0
     close.iloc[-3] = 12.0
     low.iloc[-3] = 11.8
+    high.iloc[-1] = 18.3
     close.iloc[-1] = 18.0
     low.iloc[-1] = 17.8
     ma25 = _series([16.0] * len(close))
@@ -220,6 +364,15 @@ def test_b2_previous_abnormal_move_scores_pullback_above_high_volume_body_price(
     low = _series([9.8] * 92 + [99.0, 226.0, 228.0, 230.0])
     volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
 
+    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 3.0
+
+
+def test_b2_previous_abnormal_move_rewards_constructive_wash_without_damage() -> None:
+    open_ = _series([10.0] * 92 + [100.0, 92.0, 94.0, 96.0])
+    close = _series([10.0] * 92 + [100.0, 92.0, 94.0, 96.0])
+    low = _series([9.8] * 92 + [100.0, 91.0, 93.0, 95.0])
+    volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
+
     assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 5.0
 
 
@@ -229,7 +382,7 @@ def test_b2_previous_abnormal_move_uses_redundant_price_and_body_low() -> None:
     low = _series([9.8] * 92 + [100.0, 70.0, 70.0, 70.0])
     volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
 
-    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 4.0
+    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 5.0
 
 
 def test_b2_previous_abnormal_move_uses_bearish_body_high_as_abnormal_price() -> None:
@@ -238,7 +391,7 @@ def test_b2_previous_abnormal_move_uses_bearish_body_high_as_abnormal_price() ->
     low = _series([9.8] * 92 + [99.0, 157.0, 158.0, 159.0])
     volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
 
-    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 5.0
+    assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 3.0
 
 
 def test_b2_price_position_penalizes_passive_ma25_touch_after_high_consolidation() -> None:
@@ -248,7 +401,7 @@ def test_b2_price_position_penalizes_passive_ma25_touch_after_high_consolidation
     ma25 = close.rolling(window=25, min_periods=25).mean()
     zxdq = ma25 * 1.20
 
-    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 1.0
+    assert _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq) == 2.0
 
 
 def test_b2_volume_behavior_rewards_breakout_volume_then_shrinking_retest() -> None:
@@ -287,15 +440,15 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
     assert review["chart_path"] == "/tmp/000001.SZ_day.png"
     assert review["review_type"] == "baseline"
     assert review["trend_structure"] == 4.0
-    assert review["price_position"] == 3.0
+    assert review["price_position"] == 1.0
     assert review["volume_behavior"] == 5.0
-    assert review["previous_abnormal_move"] == 4.0
-    assert review["macd_phase"] == pytest.approx(4.36)
-    assert review["total_score"] == 3.86
+    assert review["previous_abnormal_move"] == 5.0
+    assert review["macd_phase"] == pytest.approx(4.5)
+    assert review["total_score"] == 3.78
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review
-    assert review["signal_type"] == "trend_start"
+    assert review["signal_type"] == "rebound"
     assert review["verdict"] == "WATCH"
     assert "周线MACD" in review["comment"]
     assert "日线MACD" in review["comment"]
@@ -329,7 +482,7 @@ def test_b2_review_does_not_apply_macd_verdict_gate(monkeypatch) -> None:
     assert review["macd_phase"] == 5.0
     assert review["total_score"] >= 4.0
     # If the old b2 MACD verdict gate still ran, invalid weekly MACD would force FAIL.
-    assert review["verdict"] == "PASS"
+    assert review["verdict"] != "FAIL"
 
 
 def test_b2_review_includes_candidate_signal_in_total_score() -> None:
@@ -367,11 +520,11 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
     assert review["chart_path"] == "/tmp/000002.SZ_day.png"
     assert review["review_type"] == "baseline"
     assert review["trend_structure"] == 1.0
-    assert review["price_position"] == 5.0
+    assert review["price_position"] == 1.0
     assert review["volume_behavior"] == 1.0
-    assert review["previous_abnormal_move"] == 5.0
-    assert review["macd_phase"] == pytest.approx(1.44)
-    assert review["total_score"] == 2.6
+    assert review["previous_abnormal_move"] == 3.0
+    assert review["macd_phase"] == pytest.approx(1.0)
+    assert review["total_score"] == 1.5
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review
@@ -613,7 +766,7 @@ def test_b2_review_scores_invalid_daily_state_low_even_with_constructive_weekly_
     assert len(monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS
     assert len(previous_monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS - 1
     assert len(previous_weekly_closes) >= _MULTI_TIMEFRAME_CONFIRMATION_POINTS
-    assert review["macd_phase"] == pytest.approx(4.36)
+    assert review["macd_phase"] == pytest.approx(4.5)
 
 
 def test_b2_review_uses_neutral_wave_score_one_step_before_boundary_when_daily_wave_is_invalid() -> None:

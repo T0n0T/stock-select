@@ -11,7 +11,7 @@ from stock_select.review_orchestrator import (
     is_constructive_macd_trend_combo,
     map_macd_phase_score,
 )
-from stock_select.review_protocol import infer_signal_type, infer_verdict
+from stock_select.review_protocol import infer_signal_type
 from stock_select.strategies.b1 import compute_zx_lines
 
 
@@ -78,7 +78,16 @@ def review_b2_symbol_history(
         volume_behavior=volume_behavior,
         price_position=price_position,
     )
-    verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
+    verdict = infer_b2_verdict(
+        total_score=total_score,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+        signal=signal,
+        signal_type=signal_type,
+    )
     comment = _build_b2_comment(weekly_trend=weekly_trend, daily_trend=daily_trend, verdict=verdict)
 
     return {
@@ -97,6 +106,54 @@ def review_b2_symbol_history(
         "verdict": verdict,
         "comment": comment,
     }
+
+
+def infer_b2_verdict(
+    *,
+    total_score: float,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+    signal: str | None,
+    signal_type: str,
+) -> str:
+    if signal_type == "distribution_risk":
+        if (
+            macd_phase >= 4.5
+            and previous_abnormal_move >= 5.0
+            and trend_structure >= 3.0
+            and price_position >= 3.0
+            and volume_behavior >= 2.0
+            and total_score >= 3.6
+        ):
+            return "WATCH"
+        return "FAIL"
+
+    strong_macd_setup = (
+        macd_phase >= 4.5
+        and previous_abnormal_move >= 5.0
+        and trend_structure >= 3.0
+        and price_position >= 2.0
+        and volume_behavior >= 2.0
+        and total_score >= 3.6
+    )
+    strong_structure_setup = (
+        trend_structure >= 4.0
+        and macd_phase >= 3.8
+        and previous_abnormal_move >= 5.0
+        and price_position >= 3.0
+        and volume_behavior >= 2.0
+        and total_score >= 3.7
+    )
+
+    if strong_macd_setup or strong_structure_setup:
+        return "PASS"
+
+    if total_score >= 3.3:
+        return "WATCH"
+    return "FAIL"
 
 
 def _resolve_zx_lines(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
@@ -174,31 +231,71 @@ def _score_b2_price_position(
     if box_high <= box_low:
         return 3.0
 
-    high_idx = recent_high.idxmax()
-    high_to_pick_close = close.loc[high_idx : close.index[-1]].dropna()
-    if high_to_pick_close.empty:
-        position_price = float(close.iloc[-1])
-    else:
-        position_price = float(high_to_pick_close.min())
-    position = (position_price - box_low) / (box_high - box_low)
+    latest_high = float(high.iloc[-1]) if not pd.isna(high.iloc[-1]) else float("nan")
+    latest_low = float(low.iloc[-1]) if not pd.isna(low.iloc[-1]) else float("nan")
+    latest_close = float(close.iloc[-1]) if not pd.isna(close.iloc[-1]) else float("nan")
+    if not pd.notna(latest_high) or not pd.notna(latest_low) or not pd.notna(latest_close):
+        return 3.0
+
+    current_mid_price = (latest_high + latest_low) / 2.0
+    box_range = box_high - box_low
+    box_mid_price = (box_high + box_low) / 2.0
+    half_box_range = box_range / 2.0
+    if half_box_range <= 0.0:
+        return 3.0
+    midpoint_deviation = abs(current_mid_price - box_mid_price) / half_box_range
+    box_position = (current_mid_price - box_low) / box_range
+
+    ma25_series = ma25.dropna()
+    zxdq_series = zxdq.dropna()
     latest_ma25 = float(ma25.iloc[-1]) if not pd.isna(ma25.iloc[-1]) else float("nan")
     latest_zxdq = float(zxdq.iloc[-1]) if not pd.isna(zxdq.iloc[-1]) else float("nan")
-    ma25_holds_zxdq = bool(
+    ma25_slope5 = _tail_slope(ma25_series, periods=5)
+    zxdq_slope5 = _tail_slope(zxdq_series, periods=5)
+    has_trend_support = bool(
         pd.notna(latest_ma25)
         and pd.notna(latest_zxdq)
+        and latest_ma25 > 0.0
         and latest_zxdq > 0.0
-        and latest_ma25 >= latest_zxdq * 0.95
+        and latest_close >= latest_ma25 * 1.03
+        and latest_ma25 >= latest_zxdq * 0.98
+        and ma25_slope5 >= -0.002
+        and zxdq_slope5 >= -0.002
     )
 
-    if position <= 0.45:
+    # 突破延续型：价格已靠近箱体上沿，但均线/中线跟上，不能按“偏离中位”简单扣死。
+    if box_position >= 0.68:
+        if has_trend_support:
+            if box_position <= 0.92:
+                return 5.0
+            return 4.0
+        if box_position <= 0.80 and pd.notna(latest_ma25) and latest_close >= latest_ma25:
+            return 3.0
+        if box_position <= 0.92 and pd.notna(latest_ma25) and latest_close >= latest_ma25:
+            return 2.0
+        return 1.0
+
+    # 回踩承接型：继续奖励贴近箱体中枢的结构。
+    if midpoint_deviation <= 0.10:
         return 5.0
-    if position <= 0.55:
+    if midpoint_deviation <= 0.25:
         return 4.0
-    if position <= 0.65 or (position > 0.75 and ma25_holds_zxdq):
+    if midpoint_deviation <= 0.45:
         return 3.0
-    if position <= 0.75:
+    if midpoint_deviation <= 0.70:
         return 2.0
     return 1.0
+
+
+def _tail_slope(series: pd.Series, *, periods: int) -> float:
+    values = series.dropna()
+    if len(values) <= periods:
+        return 0.0
+    previous = float(values.iloc[-periods - 1])
+    latest = float(values.iloc[-1])
+    if previous == 0.0:
+        return 0.0
+    return latest / previous - 1.0
 
 
 def _score_b2_volume_behavior(*, close: pd.Series, volume: pd.Series) -> float:
@@ -276,9 +373,9 @@ def _score_b2_previous_abnormal_move(
     position_pct = (min_low_after_event / redundant_price - 1.0) * 100.0
 
     if position_pct > 10.0:
-        return 5.0
+        return 3.0
     if position_pct > -25.0:
-        return 4.0
+        return 5.0
     if position_pct > -40.0:
         return 3.0
     if position_pct > -55.0:

@@ -68,7 +68,7 @@ def map_macd_phase_score(
         return 3.0
 
     if weekly_trend is not None and daily_trend is not None:
-        return _map_macd_trend_phase_score(weekly_trend=weekly_trend, daily_trend=daily_trend)
+        return _map_macd_trend_phase_score(method=normalized, weekly_trend=weekly_trend, daily_trend=daily_trend)
 
     if normalized == "b1":
         if daily_recent_death_cross:
@@ -136,9 +136,31 @@ def apply_macd_verdict_gate(
     return current_verdict
 
 
-def _map_macd_trend_phase_score(*, weekly_trend: Any, daily_trend: Any) -> float:
+def _map_macd_trend_phase_score(*, method: str, weekly_trend: Any, daily_trend: Any) -> float:
     percent_score = calculate_dual_period_macd_score(weekly_trend=weekly_trend, daily_trend=daily_trend)["total"]
-    return round(1.0 + max(0.0, min(100.0, percent_score)) / 25.0, 2)
+    linear_score = 1.0 + max(0.0, min(100.0, percent_score)) / 25.0
+    if method == "b2":
+        return _nonlinear_b2_macd_phase_score(linear_score)
+    return round(linear_score, 2)
+
+
+def _nonlinear_b2_macd_phase_score(linear_score: float) -> float:
+    score = max(1.0, min(5.0, float(linear_score)))
+    if score < 2.2:
+        return round(max(1.0, score - 0.6), 2)
+    if score < 3.0:
+        return round(max(1.0, score - 0.88), 2)
+    if score < 3.8:
+        return round(score, 2)
+    if score < 4.0:
+        return round(min(5.0, score + 0.54), 2)
+    if score < 4.2:
+        return round(min(5.0, score + 0.3), 2)
+    if score < 4.5:
+        return round(min(4.5, score + 0.3), 2)
+    if score < 4.8:
+        return round(min(5.0, score + 0.15), 2)
+    return round(score, 2)
 
 
 def calculate_dual_period_macd_score(*, weekly_trend: Any, daily_trend: Any) -> dict[str, Any]:

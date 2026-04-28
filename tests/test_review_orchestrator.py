@@ -14,7 +14,21 @@ from stock_select.review_orchestrator import (
     review_symbol_history as orchestrator_review_symbol_history,
     summarize_reviews,
 )
+from stock_select.review_protocol import compute_b2_weighted_total
 from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
+
+
+def test_b2_weighted_total_reduces_price_position_weight() -> None:
+    base_scores = {
+        "trend_structure": 4.0,
+        "price_position": 3.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 3.4,
+    }
+    high_position_scores = {**base_scores, "price_position": 5.0}
+
+    assert compute_b2_weighted_total(high_position_scores, signal="B3") - compute_b2_weighted_total(base_scores, signal="B3") == pytest.approx(0.3)
 
 
 def _trend(
@@ -61,7 +75,25 @@ def test_b2_macd_phase_rewards_weekly_uptrend_daily_pullback_exhaustion() -> Non
 
     score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
 
-    assert score == pytest.approx(4.48)
+    assert score == pytest.approx(4.5)
+
+
+def test_b2_macd_phase_non_linearly_boosts_empirical_breakout_threshold() -> None:
+    weekly = _trend("falling", wave_index=4, stage="分歧", dif=0.4, dea=0.5, spread=-0.1, previous_spread=-0.2)
+    daily = _trend("rising", wave_index=3, stage="强势", dif=0.7, dea=0.45, spread=0.25, previous_spread=0.2)
+
+    score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
+
+    assert score == pytest.approx(4.5)
+
+
+def test_b2_macd_phase_non_linearly_penalizes_very_weak_zone() -> None:
+    weekly = _trend("falling", wave_index=2, stage="背离", dif=-0.1, dea=0.1, spread=-0.2, previous_spread=-0.1)
+    daily = _trend("ended", wave_index=0, stage="", dif=-0.2, dea=0.0, spread=-0.2, previous_spread=-0.1)
+
+    score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
+
+    assert score <= 2.0
 
 
 def test_b2_macd_phase_penalizes_ended_weekly_segment() -> None:
@@ -257,7 +289,7 @@ def test_compute_method_total_score_keeps_macd_for_b2() -> None:
         "macd_phase": 1.0,
     }
 
-    assert compute_method_total_score("b2", scores) == pytest.approx(3.38)
+    assert compute_method_total_score("b2", scores) == pytest.approx(3.33)
 
 
 def test_compute_method_total_score_weights_b2_macd_and_position_as_core() -> None:
@@ -271,8 +303,8 @@ def test_compute_method_total_score_weights_b2_macd_and_position_as_core() -> No
     high_macd = {**low_macd, "macd_phase": 5.0}
     high_abnormal = {**low_macd, "previous_abnormal_move": 1.0, "macd_phase": 5.0}
 
-    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", low_macd) == pytest.approx(1.02)
-    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", high_abnormal) == pytest.approx(0.34)
+    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", low_macd) == pytest.approx(1.12)
+    assert compute_method_total_score("b2", high_macd) - compute_method_total_score("b2", high_abnormal) == pytest.approx(0.4)
 
 
 def test_compute_b2_total_score_includes_candidate_signal_weight() -> None:

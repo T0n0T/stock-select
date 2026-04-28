@@ -10,11 +10,11 @@ BASELINE_SCORE_WEIGHTS = {
     "macd_phase": 0.20,
 }
 B2_BASELINE_SCORE_WEIGHTS = {
-    "trend_structure": 0.17,
-    "price_position": 0.2125,
-    "volume_behavior": 0.1275,
-    "previous_abnormal_move": 0.085,
-    "macd_phase": 0.255,
+    "trend_structure": 0.18,
+    "price_position": 0.15,
+    "volume_behavior": 0.14,
+    "previous_abnormal_move": 0.10,
+    "macd_phase": 0.28,
     "signal": 0.15,
 }
 B2_SIGNAL_SCORE = {
