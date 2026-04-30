@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from stock_select.reviewers.b2 import (
+    infer_b2_elastic_watch,
     infer_b2_verdict,
     _score_b2_previous_abnormal_move,
     _score_b2_price_position,
@@ -178,6 +179,86 @@ def _series(values: list[float]) -> pd.Series:
     return pd.Series(values, index=range(len(values)), dtype="float64")
 
 
+def test_b2_verdict_passes_strong_trend_start_watch_when_mid_high_macd_and_structure_are_strong() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.08,
+            trend_structure=4.0,
+            price_position=3.0,
+            volume_behavior=3.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.3,
+            signal="B2",
+            signal_type="trend_start",
+        )
+        == "PASS"
+    )
+
+
+def test_b2_verdict_keeps_rebound_mid_high_macd_as_watch_without_stricter_macd_pass() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.08,
+            trend_structure=4.0,
+            price_position=3.0,
+            volume_behavior=3.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.3,
+            signal="B2",
+            signal_type="rebound",
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_keeps_trend_start_mid_high_macd_watch_when_volume_too_weak() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.48,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.34,
+            signal="B2",
+            signal_type="trend_start",
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_passes_trend_start_mid_macd_when_volume_and_structure_support() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.22,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=3.0,
+            previous_abnormal_move=5.0,
+            macd_phase=3.6,
+            signal="B2",
+            signal_type="trend_start",
+        )
+        == "PASS"
+    )
+
+
+def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_total_score_below_relaxed_boundary() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.99,
+            trend_structure=4.0,
+            price_position=3.0,
+            volume_behavior=3.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.3,
+            signal="B2",
+            signal_type="trend_start",
+        )
+        == "WATCH"
+    )
+
+
 def test_b2_verdict_passes_strong_macd_and_constructive_wash() -> None:
     assert (
         infer_b2_verdict(
@@ -194,7 +275,7 @@ def test_b2_verdict_passes_strong_macd_and_constructive_wash() -> None:
     )
 
 
-def test_b2_verdict_passes_strong_structure_with_good_macd() -> None:
+def test_b2_verdict_keeps_strong_structure_with_good_mid_macd_as_watch() -> None:
     assert (
         infer_b2_verdict(
             total_score=3.7,
@@ -206,7 +287,103 @@ def test_b2_verdict_passes_strong_structure_with_good_macd() -> None:
             signal="B2",
             signal_type="trend_start",
         )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_upgrades_b3_trend_start_watch_to_pass_when_structure_is_strong() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.16,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=3.85,
+            signal="B3",
+            signal_type="trend_start",
+        )
         == "PASS"
+    )
+
+
+def test_b2_verdict_upgrades_b3_rebound_watch_to_pass_when_mid_macd_and_price_are_strong() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.16,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.2,
+            signal="B3",
+            signal_type="rebound",
+        )
+        == "PASS"
+    )
+
+
+def test_b2_verdict_does_not_upgrade_b3_without_enough_structure_confirmation() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.16,
+            trend_structure=3.0,
+            price_position=5.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.2,
+            signal="B3",
+            signal_type="rebound",
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_does_not_upgrade_b3_rebound_below_macd_boundary() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.16,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.19,
+            signal="B3",
+            signal_type="rebound",
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_does_not_upgrade_b3_trend_start_below_score_boundary() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.14,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=2.0,
+            previous_abnormal_move=5.0,
+            macd_phase=3.85,
+            signal="B3",
+            signal_type="trend_start",
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_keeps_distribution_risk_out_of_b3_upgrade_even_with_strong_scores() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.3,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=1.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.6,
+            signal="B3",
+            signal_type="distribution_risk",
+        )
+        == "WATCH"
     )
 
 
@@ -226,6 +403,22 @@ def test_b2_verdict_keeps_distribution_risk_as_watch_only_when_strongly_elastic(
     )
 
 
+def test_b2_verdict_does_not_fail_when_only_volume_is_weak() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=3.6,
+            trend_structure=4.0,
+            price_position=3.0,
+            volume_behavior=1.0,
+            previous_abnormal_move=5.0,
+            macd_phase=4.5,
+            signal="B2",
+            signal_type="distribution_risk",
+        )
+        == "WATCH"
+    )
+
+
 def test_b2_verdict_does_not_pass_loose_macd_setup() -> None:
     assert (
         infer_b2_verdict(
@@ -235,7 +428,7 @@ def test_b2_verdict_does_not_pass_loose_macd_setup() -> None:
             volume_behavior=3.0,
             previous_abnormal_move=5.0,
             macd_phase=4.0,
-            signal="B5",
+            signal=None,
             signal_type="rebound",
         )
         == "WATCH"
@@ -267,7 +460,7 @@ def test_b2_verdict_fails_low_score_without_elasticity() -> None:
             volume_behavior=2.0,
             previous_abnormal_move=3.0,
             macd_phase=3.2,
-            signal="B5",
+            signal=None,
             signal_type="rebound",
         )
         == "FAIL"
@@ -537,6 +730,80 @@ def test_b2_review_includes_candidate_signal_in_total_score() -> None:
     assert round(b3_review["total_score"] - neutral_review["total_score"], 2) == 0.3
     assert "ranking_score" not in b3_review
     assert "rank_features" not in b3_review
+
+
+def test_b2_review_marks_mid_macd_elastic_watch_for_non_upgrade_path(monkeypatch) -> None:
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.3)
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+    )
+
+    assert review["signal_type"] == "trend_start"
+    assert review["verdict"] == "PASS"
+    assert review["elastic_watch"] is False
+    assert review["elastic_watch_reason"] is None
+
+
+def test_b2_review_marks_low_volume_elastic_watch(monkeypatch) -> None:
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda *, close, volume: 1.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.7)
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+    )
+
+    assert review["verdict"] == "WATCH"
+    assert review["elastic_watch"] is True
+    assert review["elastic_watch_reason"] == "low_volume_elastic_watch"
+
+
+def test_b2_review_keeps_pass_out_of_elastic_watch() -> None:
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B3",
+    )
+
+    assert review["verdict"] == "PASS"
+    assert review["elastic_watch"] is False
+    assert review["elastic_watch_reason"] is None
+
+
+def test_b2_elastic_watch_matches_c_rule() -> None:
+    assert infer_b2_elastic_watch(
+        verdict="WATCH",
+        total_score=4.1,
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.3,
+    ) == (True, "mid_macd_elastic_watch")
+
+
+def test_b2_elastic_watch_matches_e_rule() -> None:
+    assert infer_b2_elastic_watch(
+        verdict="WATCH",
+        total_score=4.05,
+        trend_structure=4.0,
+        price_position=4.0,
+        volume_behavior=1.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.7,
+    ) == (True, "low_volume_elastic_watch")
 
 
 def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:

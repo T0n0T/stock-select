@@ -77,6 +77,7 @@ def review_b2_symbol_history(
         trend_structure=trend_structure,
         volume_behavior=volume_behavior,
         price_position=price_position,
+        ignore_volume_risk=True,
     )
     verdict = infer_b2_verdict(
         total_score=total_score,
@@ -87,6 +88,15 @@ def review_b2_symbol_history(
         macd_phase=macd_phase,
         signal=signal,
         signal_type=signal_type,
+    )
+    elastic_watch, elastic_watch_reason = infer_b2_elastic_watch(
+        verdict=verdict,
+        total_score=total_score,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
     )
     comment = _build_b2_comment(weekly_trend=weekly_trend, daily_trend=daily_trend, verdict=verdict)
 
@@ -104,6 +114,8 @@ def review_b2_symbol_history(
         "signal": signal,
         "signal_type": signal_type,
         "verdict": verdict,
+        "elastic_watch": elastic_watch,
+        "elastic_watch_reason": elastic_watch_reason,
         "comment": comment,
     }
 
@@ -125,7 +137,6 @@ def infer_b2_verdict(
             and previous_abnormal_move >= 5.0
             and trend_structure >= 3.0
             and price_position >= 3.0
-            and volume_behavior >= 2.0
             and total_score >= 3.6
         ):
             return "WATCH"
@@ -139,21 +150,80 @@ def infer_b2_verdict(
         and volume_behavior >= 2.0
         and total_score >= 3.6
     )
-    strong_structure_setup = (
-        trend_structure >= 4.0
-        and macd_phase >= 3.8
-        and previous_abnormal_move >= 5.0
-        and price_position >= 3.0
-        and volume_behavior >= 2.0
-        and total_score >= 3.7
-    )
+    if strong_macd_setup:
+        return "PASS"
 
-    if strong_macd_setup or strong_structure_setup:
+    strong_trend_start_mid_macd_setup = (
+        signal_type == "trend_start"
+        and previous_abnormal_move >= 5.0
+        and trend_structure >= 4.0
+        and price_position >= 3.0
+        and volume_behavior >= 3.0
+        and total_score >= 4.0
+        and (
+            macd_phase >= 4.2
+            or (
+                macd_phase >= 3.5
+                and price_position >= 5.0
+                and total_score >= 4.2
+            )
+        )
+    )
+    if strong_trend_start_mid_macd_setup:
+        return "PASS"
+
+    b3_upgrade_signal = signal in {"B3", "B3+"}
+    b3_upgrade_setup = (
+        b3_upgrade_signal
+        and signal_type in {"rebound", "trend_start"}
+        and trend_structure >= 4.0
+        and price_position >= 5.0
+        and previous_abnormal_move >= 5.0
+        and total_score >= 4.15
+        and (
+            macd_phase >= 4.2
+            or (signal_type == "trend_start" and macd_phase >= 3.8)
+        )
+    )
+    if b3_upgrade_setup:
         return "PASS"
 
     if total_score >= 3.3:
         return "WATCH"
     return "FAIL"
+
+
+def infer_b2_elastic_watch(
+    *,
+    verdict: str,
+    total_score: float,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+) -> tuple[bool, str | None]:
+    if verdict != "WATCH":
+        return False, None
+
+    if (
+        4.2 <= macd_phase < 4.5
+        and price_position >= 4.0
+        and previous_abnormal_move >= 5.0
+        and total_score >= 4.0
+    ):
+        return True, "mid_macd_elastic_watch"
+
+    if (
+        volume_behavior < 2.0
+        and trend_structure >= 4.0
+        and price_position >= 4.0
+        and previous_abnormal_move >= 5.0
+        and total_score >= 4.0
+    ):
+        return True, "low_volume_elastic_watch"
+
+    return False, None
 
 
 def _resolve_zx_lines(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
