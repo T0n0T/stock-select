@@ -55,8 +55,6 @@ def run_b2_screen_with_stats(
         "selected_b2": 0,
         "selected_b3": 0,
         "selected_b3_plus": 0,
-        "selected_b4": 0,
-        "selected_b5": 0,
     }
 
     for code, prepared in prepared_by_symbol.items():
@@ -269,10 +267,6 @@ def _resolve_signal(row: pd.Series) -> str | None:
         return "B3+"
     if bool(row["cur_b3"]):
         return "B3"
-    if bool(row["cur_b4"]):
-        return "B4"
-    if bool(row["cur_b5"]):
-        return "B5"
     return None
 
 

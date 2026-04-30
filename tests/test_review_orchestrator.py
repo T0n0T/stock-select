@@ -36,23 +36,25 @@ def test_infer_signal_type_keeps_strong_low_volume_setup_as_trend_start() -> Non
         latest_close=10.8,
         latest_open=10.2,
         trend_structure=4.0,
-        volume_behavior=2.0,
+        volume_behavior=1.0,
         price_position=4.0,
+        ignore_volume_risk=True,
     )
 
     assert signal_type == "trend_start"
 
 
-def test_infer_signal_type_keeps_low_volume_without_strong_trend_as_distribution_risk() -> None:
+def test_infer_signal_type_keeps_low_volume_without_strong_trend_as_rebound() -> None:
     signal_type = infer_signal_type(
         latest_close=10.8,
         latest_open=10.2,
         trend_structure=3.0,
-        volume_behavior=2.0,
+        volume_behavior=1.0,
         price_position=4.0,
+        ignore_volume_risk=True,
     )
 
-    assert signal_type == "distribution_risk"
+    assert signal_type == "rebound"
 
 
 def test_b2_weighted_total_uses_lower_volume_behavior_weight() -> None:
@@ -140,6 +142,27 @@ def test_b2_macd_phase_penalizes_ended_weekly_segment() -> None:
     score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
 
     assert score < 3.0
+
+
+def test_b1_macd_phase_non_linearly_lifts_weak_bottoming_zone() -> None:
+    weekly = _trend("falling", wave_index=2, stage="背离", dif=-0.1, dea=0.1, spread=-0.2, previous_spread=-0.1)
+    daily = _trend("ended", wave_index=0, stage="", dif=-0.2, dea=0.0, spread=-0.2, previous_spread=-0.1)
+
+    score = map_macd_phase_score(method="b1", history_len=120, weekly_trend=weekly, daily_trend=daily)
+
+    assert score == pytest.approx(2.88)
+
+
+def test_b1_macd_phase_penalizes_crowded_high_zone() -> None:
+    weekly = _trend("rising", wave_index=3, stage="背离", dif=1.2, dea=0.8, spread=0.4, previous_spread=0.3)
+    daily = _trend("falling", wave_index=4, stage="强势", dif=0.2, dea=0.35, spread=-0.15, previous_spread=-0.2)
+    daily.metrics["hist_change_rate"] = 0.6
+    weekly.metrics["hist_change_rate"] = 1.2
+
+    score = map_macd_phase_score(method="b1", history_len=120, weekly_trend=weekly, daily_trend=daily)
+
+    assert score == pytest.approx(3.88)
+
 
 def test_build_review_payload_includes_chart_and_rubric() -> None:
     payload = build_review_payload(

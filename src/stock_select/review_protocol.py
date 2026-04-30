@@ -21,8 +21,6 @@ B2_SIGNAL_SCORE = {
     "B3": 5.0,
     "B3+": 5.0,
     "B2": 4.0,
-    "B4": 3.0,
-    "B5": 1.0,
 }
 B1_BASELINE_SCORE_WEIGHTS = {
     "trend_structure": 0.23,
@@ -80,11 +78,15 @@ def infer_signal_type(
     trend_structure: float,
     volume_behavior: float,
     price_position: float,
+    ignore_volume_risk: bool = False,
 ) -> str:
-    if trend_structure <= 2.0 or volume_behavior <= 1.0:
+    if trend_structure <= 2.0:
         return "distribution_risk"
-    if volume_behavior <= 2.0 and trend_structure < 4.0:
-        return "distribution_risk"
+    if not ignore_volume_risk:
+        if volume_behavior <= 1.0:
+            return "distribution_risk"
+        if volume_behavior <= 2.0 and trend_structure < 4.0:
+            return "distribution_risk"
     if latest_close >= latest_open and trend_structure >= 4.0 and price_position >= 3.0:
         return "trend_start"
     return "rebound"

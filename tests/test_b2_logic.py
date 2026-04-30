@@ -127,7 +127,7 @@ def test_run_b2_screen_with_stats_selects_cur_b3_plus_signal() -> None:
     assert stats["selected_b3_plus"] == 1
 
 
-def test_run_b2_screen_with_stats_selects_cur_b4_signal() -> None:
+def test_run_b2_screen_with_stats_ignores_cur_b4_signal() -> None:
     run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-11")
     frame = _base_b2_frame()
@@ -146,12 +146,10 @@ def test_run_b2_screen_with_stats_selects_cur_b4_signal() -> None:
 
     candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
 
-    assert [item["code"] for item in candidates] == ["000001.SZ"]
-    assert candidates[0]["signal"] == "B4"
-    assert stats["selected_b4"] == 1
+    assert candidates == []
 
 
-def test_run_b2_screen_with_stats_selects_cur_b5_signal() -> None:
+def test_run_b2_screen_with_stats_ignores_cur_b5_signal() -> None:
     run_b2_screen_with_stats = _load_run_b2_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-14")
     frame = _base_b2_frame()
@@ -181,6 +179,4 @@ def test_run_b2_screen_with_stats_selects_cur_b5_signal() -> None:
 
     candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
 
-    assert [item["code"] for item in candidates] == ["000001.SZ"]
-    assert candidates[0]["signal"] == "B5"
-    assert stats["selected_b5"] == 1
+    assert candidates == []

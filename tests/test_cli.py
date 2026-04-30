@@ -9984,8 +9984,6 @@ def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(tm
                 "selected_b2": 1,
                 "selected_b3": 0,
                 "selected_b3_plus": 0,
-                "selected_b4": 0,
-                "selected_b5": 0,
             },
         )
 
@@ -10851,8 +10849,6 @@ def test_screen_intraday_b2_reuses_shared_prepared_cache_without_recompute(monke
                 "selected_b2": 1,
                 "selected_b3": 0,
                 "selected_b3_plus": 0,
-                "selected_b4": 0,
-                "selected_b5": 0,
             },
         ),
         raising=False,

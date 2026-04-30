@@ -1264,9 +1264,7 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"selected={stats['selected']} "
             f"selected_b2={stats['selected_b2']} "
             f"selected_b3={stats['selected_b3']} "
-            f"selected_b3_plus={stats['selected_b3_plus']} "
-            f"selected_b4={stats['selected_b4']} "
-            f"selected_b5={stats['selected_b5']}",
+            f"selected_b3_plus={stats['selected_b3_plus']}",
         )
         return
     reporter.emit(
