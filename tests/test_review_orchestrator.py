@@ -233,6 +233,26 @@ def test_build_review_result_prefers_llm_review_when_present() -> None:
     assert result["baseline_review"]["comment"] == "baseline"
 
 
+def test_build_review_result_preserves_baseline_watch_tier_fields() -> None:
+    result = build_review_result(
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        chart_path="/tmp/000001_day.png",
+        baseline_review={
+            "total_score": 3.8,
+            "signal_type": "trend_start",
+            "verdict": "WATCH",
+            "comment": "baseline",
+            "watch_score": 68.0,
+            "watch_tier": "WATCH-A",
+        },
+    )
+
+    assert result["review_mode"] == "baseline_local"
+    assert result["watch_score"] == 68.0
+    assert result["watch_tier"] == "WATCH-A"
+
+
 def test_normalize_llm_review_validates_and_flattens_scores() -> None:
     normalized = normalize_llm_review(
         {

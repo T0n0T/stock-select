@@ -401,3 +401,131 @@ def test_b1_review_uses_precomputed_zx_fields_when_present(monkeypatch: pytest.M
     assert review["trend_structure"] == 5.0
     assert "N型回调" in review["comment"]
     assert "超卖" in review["comment"]
+
+
+def test_infer_b1_verdict_caps_generic_trend_start_pass_to_watch() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=4.2,
+        volume_behavior=4.0,
+        signal_type="trend_start",
+        trend_structure=4.0,
+        price_position=4.0,
+        macd_phase=4.0,
+        close_above_ma25_pct=-1.0,
+        ma25_above_zxdkx_pct=4.5,
+        close_above_zxdq_pct=-3.0,
+        day_pct=1.3,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_infer_b1_verdict_lifts_elastic_distribution_risk_to_watch() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=3.2,
+        volume_behavior=4.0,
+        signal_type="distribution_risk",
+        trend_structure=1.0,
+        price_position=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.5,
+        close_above_ma25_pct=-4.0,
+        day_pct=-3.0,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_infer_b1_verdict_keeps_non_elastic_distribution_risk_failed() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=3.2,
+        volume_behavior=4.0,
+        signal_type="distribution_risk",
+        trend_structure=1.0,
+        price_position=5.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.5,
+        close_above_ma25_pct=1.0,
+        day_pct=1.0,
+    )
+
+    assert verdict == "FAIL"
+
+
+def test_infer_b1_verdict_lifts_elastic_rebound_fail_to_watch() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=3.1,
+        volume_behavior=4.0,
+        signal_type="rebound",
+        trend_structure=3.0,
+        price_position=2.0,
+        previous_abnormal_move=3.0,
+        macd_phase=3.2,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_infer_b1_verdict_keeps_weak_rebound_failed() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=3.1,
+        volume_behavior=4.0,
+        signal_type="rebound",
+        trend_structure=2.0,
+        price_position=2.0,
+        previous_abnormal_move=3.0,
+        macd_phase=3.2,
+    )
+
+    assert verdict == "FAIL"
+
+
+def test_infer_b1_verdict_allows_repair_style_trend_start_pass() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=3.85,
+        volume_behavior=4.0,
+        signal_type="trend_start",
+        trend_structure=4.0,
+        price_position=3.0,
+        macd_phase=3.8,
+        close_above_ma25_pct=-2.0,
+        ma25_above_zxdkx_pct=4.0,
+        close_above_zxdq_pct=-6.5,
+        day_pct=0.5,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_infer_b1_verdict_keeps_repair_style_rebound_pass() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=4.05,
+        volume_behavior=4.0,
+        signal_type="rebound",
+        trend_structure=4.0,
+        price_position=4.0,
+        macd_phase=3.9,
+        close_above_ma25_pct=-4.0,
+        ma25_above_zxdkx_pct=8.0,
+        close_above_zxdq_pct=-6.0,
+        day_pct=-1.0,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_infer_b1_verdict_caps_overextended_rebound_pass_to_watch() -> None:
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=4.2,
+        volume_behavior=5.0,
+        signal_type="rebound",
+        trend_structure=3.0,
+        price_position=5.0,
+        macd_phase=3.8,
+        close_above_ma25_pct=1.5,
+        ma25_above_zxdkx_pct=9.0,
+        close_above_zxdq_pct=-4.0,
+        day_pct=-1.0,
+    )
+
+    assert verdict == "WATCH"

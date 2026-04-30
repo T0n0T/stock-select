@@ -99,6 +99,7 @@ def apply_macd_verdict_gate(
     daily_state: DailyMacdState | None = None,
     weekly_wave: Any | None = None,
     daily_recent_death_cross: bool = False,
+    allow_divergence_pass: bool = False,
 ) -> str:
     normalized = str(method).strip().lower()
 
@@ -107,6 +108,7 @@ def apply_macd_verdict_gate(
             current_verdict=current_verdict,
             weekly_trend=weekly_trend,
             daily_trend=daily_trend,
+            allow_divergence_pass=allow_divergence_pass,
         )
 
     weekly_label = str(getattr(weekly_wave, "label", ""))
@@ -437,7 +439,13 @@ def _macd_percent_grade(total: float) -> str:
     return "D"
 
 
-def _apply_macd_trend_verdict_gate(*, current_verdict: str, weekly_trend: Any, daily_trend: Any) -> str:
+def _apply_macd_trend_verdict_gate(
+    *,
+    current_verdict: str,
+    weekly_trend: Any,
+    daily_trend: Any,
+    allow_divergence_pass: bool = False,
+) -> str:
     weekly_phase = str(getattr(weekly_trend, "phase", ""))
     daily_phase = str(getattr(daily_trend, "phase", ""))
     has_divergence = bool(getattr(weekly_trend, "is_top_divergence", False)) or bool(
@@ -448,7 +456,7 @@ def _apply_macd_trend_verdict_gate(*, current_verdict: str, weekly_trend: Any, d
         return "FAIL"
     if weekly_phase == "falling" and daily_phase == "falling":
         return "FAIL"
-    if has_divergence and current_verdict == "PASS":
+    if has_divergence and current_verdict == "PASS" and not allow_divergence_pass:
         return "WATCH"
     return current_verdict
 
@@ -515,6 +523,11 @@ def build_review_result(
     llm_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     primary = llm_review if llm_review is not None else baseline_review
+    watch_fields = {
+        "watch_reason": primary.get("watch_reason"),
+        "watch_score": primary.get("watch_score"),
+        "watch_tier": primary.get("watch_tier"),
+    }
     return {
         "code": code,
         "pick_date": pick_date,
@@ -526,6 +539,7 @@ def build_review_result(
         "signal_type": str(primary.get("signal_type", "")),
         "verdict": str(primary.get("verdict", "")),
         "comment": str(primary.get("comment", "")),
+        **watch_fields,
     }
 
 

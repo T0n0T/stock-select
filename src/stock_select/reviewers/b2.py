@@ -104,6 +104,24 @@ def review_b2_symbol_history(
         previous_abnormal_move=previous_abnormal_move,
         macd_phase=macd_phase,
     )
+    watch_score = score_b2_watch(
+        verdict=verdict,
+        total_score=total_score,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+        elastic_watch_reason=elastic_watch_reason,
+        signal=signal,
+        signal_type=signal_type,
+    )
+    watch_tier = infer_b2_watch_tier(
+        verdict=verdict,
+        watch_score=watch_score,
+        elastic_watch_reason=elastic_watch_reason,
+        signal=signal,
+    )
     comment = _build_b2_comment(weekly_trend=weekly_trend, daily_trend=daily_trend, verdict=verdict)
 
     return {
@@ -122,6 +140,8 @@ def review_b2_symbol_history(
         "verdict": verdict,
         "elastic_watch": elastic_watch,
         "elastic_watch_reason": elastic_watch_reason,
+        "watch_score": watch_score,
+        "watch_tier": watch_tier,
         "comment": comment,
     }
 
@@ -241,6 +261,74 @@ def infer_b2_elastic_watch(
         return True, "low_volume_elastic_watch"
 
     return False, None
+
+
+def score_b2_watch(
+    *,
+    verdict: str,
+    total_score: float,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+    elastic_watch_reason: str | None,
+    signal: str | None,
+    signal_type: str,
+) -> float | None:
+    if verdict != "WATCH":
+        return None
+
+    score = 0.0
+    score += max(0.0, total_score - 3.3) * 28.0
+    score += max(0.0, trend_structure - 3.0) * 8.0
+    score += max(0.0, price_position - 3.0) * 7.0
+    score += max(0.0, volume_behavior - 2.0) * 7.0
+    score += max(0.0, previous_abnormal_move - 3.0) * 6.0
+
+    if 4.2 <= macd_phase < 4.5:
+        score += 16.0
+    elif 3.8 <= macd_phase < 4.2:
+        score += 9.0
+    elif macd_phase >= 4.5:
+        score += 6.0
+
+    if elastic_watch_reason == "mid_macd_elastic_watch":
+        score += 12.0
+    elif elastic_watch_reason == "low_volume_elastic_watch":
+        score += 5.0
+
+    if signal in {"B3", "B3+"}:
+        score += 8.0
+    elif signal == "B5":
+        score -= 30.0
+
+    if signal_type == "trend_start":
+        score += 8.0
+    elif signal_type == "distribution_risk":
+        score -= 25.0
+
+    return round(score, 2)
+
+
+def infer_b2_watch_tier(
+    *,
+    verdict: str,
+    watch_score: float | None,
+    elastic_watch_reason: str | None,
+    signal: str | None,
+) -> str | None:
+    if verdict != "WATCH":
+        return None
+    if signal == "B5":
+        return "WATCH-C"
+
+    score = float(watch_score or 0.0)
+    if elastic_watch_reason in {"mid_macd_elastic_watch", "low_volume_elastic_watch"} and score >= 65.0:
+        return "WATCH-A"
+    if score >= 50.0:
+        return "WATCH-B"
+    return "WATCH-C"
 
 
 def _resolve_zx_lines(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:

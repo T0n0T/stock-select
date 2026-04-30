@@ -3,7 +3,9 @@ import pytest
 
 from stock_select.reviewers.b2 import (
     infer_b2_elastic_watch,
+    infer_b2_watch_tier,
     infer_b2_verdict,
+    score_b2_watch,
     _score_b2_previous_abnormal_move,
     _score_b2_price_position,
     _score_b2_trend_structure,
@@ -842,6 +844,66 @@ def test_b2_elastic_watch_matches_e_rule() -> None:
         previous_abnormal_move=5.0,
         macd_phase=3.7,
     ) == (True, "low_volume_elastic_watch")
+
+
+def test_b2_watch_score_rewards_mid_macd_elastic_watch() -> None:
+    assert score_b2_watch(
+        verdict="WATCH",
+        total_score=4.1,
+        trend_structure=4.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.3,
+        elastic_watch_reason="mid_macd_elastic_watch",
+        signal="B3",
+        signal_type="trend_start",
+    ) >= 70.0
+
+
+def test_b2_watch_tier_promotes_elastic_b3_to_watch_a() -> None:
+    assert infer_b2_watch_tier(
+        verdict="WATCH",
+        watch_score=72.0,
+        elastic_watch_reason="mid_macd_elastic_watch",
+        signal="B3",
+    ) == "WATCH-A"
+
+
+def test_b2_watch_tier_keeps_b5_as_watch_c() -> None:
+    assert infer_b2_watch_tier(
+        verdict="WATCH",
+        watch_score=90.0,
+        elastic_watch_reason="mid_macd_elastic_watch",
+        signal="B5",
+    ) == "WATCH-C"
+
+
+def test_b2_watch_tier_marks_plain_watch_as_watch_c() -> None:
+    assert infer_b2_watch_tier(
+        verdict="WATCH",
+        watch_score=39.0,
+        elastic_watch_reason=None,
+        signal="B2",
+    ) == "WATCH-C"
+
+
+def test_b2_review_includes_watch_score_and_tier(monkeypatch) -> None:
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda *, close, volume: 1.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.7)
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+    )
+
+    assert review["verdict"] == "WATCH"
+    assert review["watch_score"] is not None
+    assert review["watch_tier"] in {"WATCH-A", "WATCH-B", "WATCH-C"}
 
 
 def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
