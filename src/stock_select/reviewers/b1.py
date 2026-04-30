@@ -15,9 +15,7 @@ from stock_select.review_orchestrator import (
     map_macd_phase_score,
 )
 from stock_select.review_protocol import infer_signal_type, infer_verdict
-from stock_select.reviewers.default import (
-    _score_previous_abnormal_move,
-)
+from stock_select.reviewers.b2 import _score_b2_previous_abnormal_move
 from stock_select.strategies.b1 import compute_zx_lines
 
 _APPROX_TOLERANCE = 0.05
@@ -71,7 +69,7 @@ def review_b1_symbol_history(
     trend_structure = _score_b1_trend_structure(open_=open_, close=close, ma25=ma25, zxdkx=zxdkx, bbi=bbi)
     price_position = _score_b1_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq)
     volume_behavior = _score_b1_volume_behavior(recent_open, recent_close, recent_volume)
-    previous_abnormal_move = _score_previous_abnormal_move(close, volume)
+    previous_abnormal_move = _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume)
     weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
     daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], pick_date)
     weekly_macd = _classify_b1_weekly_macd_context(frame)
