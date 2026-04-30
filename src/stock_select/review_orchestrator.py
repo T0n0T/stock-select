@@ -141,7 +141,24 @@ def _map_macd_trend_phase_score(*, method: str, weekly_trend: Any, daily_trend: 
     linear_score = 1.0 + max(0.0, min(100.0, percent_score)) / 25.0
     if method == "b2":
         return _nonlinear_b2_macd_phase_score(linear_score)
+    if method == "b1":
+        return _nonlinear_b1_macd_phase_score(linear_score)
     return round(linear_score, 2)
+
+
+def _nonlinear_b1_macd_phase_score(linear_score: float) -> float:
+    score = max(1.0, min(5.0, float(linear_score)))
+    if score < 2.4:
+        return round(score, 2)
+    if score < 2.8:
+        return round(min(5.0, score + 0.3), 2)
+    if score < 3.6:
+        return round(score, 2)
+    if score < 3.8:
+        return round(max(1.0, score - 0.2), 2)
+    if score < 4.2:
+        return round(score, 2)
+    return round(max(1.0, score - 0.4), 2)
 
 
 def _nonlinear_b2_macd_phase_score(linear_score: float) -> float:
