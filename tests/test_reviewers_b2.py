@@ -238,8 +238,46 @@ def test_b2_verdict_passes_trend_start_mid_macd_when_volume_and_structure_suppor
             macd_phase=3.6,
             signal="B2",
             signal_type="trend_start",
+            close_above_ma25_pct=4.0,
+            ma25_above_zxdkx_pct=8.0,
         )
         == "PASS"
+    )
+
+
+def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_overextended_above_ma25() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.22,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=3.0,
+            previous_abnormal_move=5.0,
+            macd_phase=3.6,
+            signal="B2",
+            signal_type="trend_start",
+            close_above_ma25_pct=12.0,
+            ma25_above_zxdkx_pct=8.0,
+        )
+        == "WATCH"
+    )
+
+
+def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_ma25_too_far_above_zxdkx() -> None:
+    assert (
+        infer_b2_verdict(
+            total_score=4.22,
+            trend_structure=4.0,
+            price_position=5.0,
+            volume_behavior=3.0,
+            previous_abnormal_move=5.0,
+            macd_phase=3.6,
+            signal="B2",
+            signal_type="trend_start",
+            close_above_ma25_pct=4.0,
+            ma25_above_zxdkx_pct=18.0,
+        )
+        == "WATCH"
     )
 
 
@@ -745,9 +783,9 @@ def test_b2_review_marks_mid_macd_elastic_watch_for_non_upgrade_path(monkeypatch
     )
 
     assert review["signal_type"] == "trend_start"
-    assert review["verdict"] == "PASS"
-    assert review["elastic_watch"] is False
-    assert review["elastic_watch_reason"] is None
+    assert review["verdict"] == "WATCH"
+    assert review["elastic_watch"] is True
+    assert review["elastic_watch_reason"] == "mid_macd_elastic_watch"
 
 
 def test_b2_review_marks_low_volume_elastic_watch(monkeypatch) -> None:

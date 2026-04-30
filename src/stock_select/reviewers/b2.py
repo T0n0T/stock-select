@@ -88,6 +88,12 @@ def review_b2_symbol_history(
         macd_phase=macd_phase,
         signal=signal,
         signal_type=signal_type,
+        close_above_ma25_pct=(float(close.iloc[-1]) / float(ma25.iloc[-1]) - 1.0) * 100.0
+        if pd.notna(ma25.iloc[-1]) and float(ma25.iloc[-1]) != 0.0
+        else None,
+        ma25_above_zxdkx_pct=(float(ma25.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
+        if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
+        else None,
     )
     elastic_watch, elastic_watch_reason = infer_b2_elastic_watch(
         verdict=verdict,
@@ -130,6 +136,8 @@ def infer_b2_verdict(
     macd_phase: float,
     signal: str | None,
     signal_type: str,
+    close_above_ma25_pct: float | None = None,
+    ma25_above_zxdkx_pct: float | None = None,
 ) -> str:
     if signal_type == "distribution_risk":
         if (
@@ -153,6 +161,14 @@ def infer_b2_verdict(
     if strong_macd_setup:
         return "PASS"
 
+    overheat_extension = (
+        close_above_ma25_pct is not None
+        and close_above_ma25_pct >= 10.0
+    ) or (
+        ma25_above_zxdkx_pct is not None
+        and ma25_above_zxdkx_pct >= 15.0
+    )
+
     strong_trend_start_mid_macd_setup = (
         signal_type == "trend_start"
         and previous_abnormal_move >= 5.0
@@ -160,6 +176,7 @@ def infer_b2_verdict(
         and price_position >= 3.0
         and volume_behavior >= 3.0
         and total_score >= 4.0
+        and not overheat_extension
         and (
             macd_phase >= 4.2
             or (
