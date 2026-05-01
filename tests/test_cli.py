@@ -143,10 +143,31 @@ def test_prompt_dribull_reference_exists_and_preserves_dedicated_contract() -> N
 
 
 def test_skill_documents_dribull_dedicated_prompt() -> None:
-    content = Path(".agents/skills/stock-select/SKILL.md").read_text(encoding="utf-8")
+    content = (
+        Path(__file__).resolve().parents[1] / ".agents" / "skills" / "stock-select" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
-    assert "`dribull` uses `references/prompt-dribull.md`" in content
-    assert "dedicated reviewer" in content
+    assert "- `dribull` uses `references/prompt-dribull.md`" in content
+    assert (
+        "`review --method dribull` now uses a dedicated reviewer plus "
+        "`references/prompt-dribull.md`, while review artifacts keep the method key `dribull`."
+    ) in content
+    assert (
+        "(`b1` uses `references/prompt-b1.md`; `dribull` uses "
+        "`references/prompt-dribull.md`; `hcr` uses `references/prompt.md`; "
+        "`b2` uses `references/prompt-b2.md`)."
+    ) in content
+    assert "- `dribull`: `references/prompt-dribull.md`" in content
+    assert (
+        "(`references/prompt-b1.md` for `b1`, `references/prompt-dribull.md` for "
+        "`dribull`, `references/prompt-b2.md` for `b2`, `references/prompt.md` for `hcr`)"
+    ) in content
+    assert (
+        "The intended end state is multimodal subagent chart review driven by the "
+        "method-specific prompt files: `references/prompt-b1.md` for `b1`, "
+        "`references/prompt-dribull.md` for `dribull`, `references/prompt-b2.md` "
+        "for `b2`, and `references/prompt.md` for `hcr`."
+    ) in content
     assert "reuses the existing `b2` reviewer" not in content
 
 
