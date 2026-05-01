@@ -142,6 +142,14 @@ def test_prompt_dribull_reference_exists_and_preserves_dedicated_contract() -> N
     assert "高位置弹性通过条件" in content
 
 
+def test_skill_documents_dribull_dedicated_prompt() -> None:
+    content = Path(".agents/skills/stock-select/SKILL.md").read_text(encoding="utf-8")
+
+    assert "`dribull` uses `references/prompt-dribull.md`" in content
+    assert "dedicated reviewer" in content
+    assert "reuses the existing `b2` reviewer" not in content
+
+
 def test_validate_eod_pick_date_has_market_data_rejects_placeholder_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     market = pd.DataFrame(
         {

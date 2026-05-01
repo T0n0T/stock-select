@@ -29,7 +29,7 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Use the bundled review rubric and runtime layout references.
 - Use method-specific chart-review prompts from this skill when dispatching subagents:
   - `b1` uses `references/prompt-b1.md`
-  - `dribull` uses `references/prompt-b2.md`
+  - `dribull` uses `references/prompt-dribull.md`
   - `hcr` uses `references/prompt.md`
   - `b2` uses `references/prompt-b2.md`
 - Review should use rendered chart images, not HTML text.
@@ -88,7 +88,7 @@ Review and merge instructions must follow the active mode's runtime key:
 4. Run deterministic `b1`, `b2`, `dribull`, or `hcr` screening and write candidate outputs.
 5. Render daily chart PNG files for each candidate.
 6. Run CLI `review` first to write baseline review outputs and `llm_review_tasks.json`; add `--llm-min-baseline-score SCORE` when the caller wants LLM review tasks filtered by baseline score.
-7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` uses `references/prompt-b1.md`; `hcr` uses `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
+7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` uses `references/prompt-b1.md`; `dribull` uses `references/prompt-dribull.md`; `hcr` uses `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
 8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>.<method>` for end-of-day and `<run_id>.<method>` for intraday.
 9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
 10. If the caller asks for HTML output, run `stock-select html render` after `review-merge`.
@@ -111,7 +111,7 @@ When running chart review for quality-first selection:
 7. Unless the user explicitly requests parallel subagent work, dispatch chart-review subagents serially: one candidate at a time, wait for completion, persist the JSON, then move to the next candidate.
 8. Load the method-specific prompt and pass it as the subagent's core chart-review prompt:
    - `b1`: `references/prompt-b1.md`
-   - `dribull`: `references/prompt-b2.md`
+   - `dribull`: `references/prompt-dribull.md`
    - `hcr`: `references/prompt.md`
    - `b2`: `references/prompt-b2.md`
 9. Send each subagent exactly one candidate at a time.
@@ -119,7 +119,7 @@ When running chart review for quality-first selection:
    - stock code
    - pick date
    - chart image path pointing to `<code>_day.png`
-   - the prompt from the method-specific prompt file (`references/prompt-b1.md` for `b1`, `references/prompt-b2.md` for `b2` and `dribull`, `references/prompt.md` for `hcr`)
+   - the prompt from the method-specific prompt file (`references/prompt-b1.md` for `b1`, `references/prompt-dribull.md` for `dribull`, `references/prompt-b2.md` for `b2`, `references/prompt.md` for `hcr`)
 11. Require the subagent to return strict JSON matching the prompt contract:
    - `trend_reasoning`
    - `position_reasoning`
@@ -217,7 +217,7 @@ If any of the checks above fail:
   - `weekly_wave_context`
   - `daily_wave_context`
   - `wave_combo_context`
-- `review --method dribull` reuses the existing `b2` reviewer and `references/prompt-b2.md`, but review artifacts keep the method key `dribull`.
+- `review --method dribull` now uses a dedicated reviewer plus `references/prompt-dribull.md`, while review artifacts keep the method key `dribull`.
 - `run --method b2` currently means: new `b2` screening + existing legacy `b2` review.
 - `screen --intraday --recompute` forces the shared same-trade-date prepared cache to be rewritten; without it, the command reuses the existing shared cache when compatible.
 - `run` chains `screen`, `chart`, and `review`, while emitting stage progress and elapsed time to `stderr`; `--intraday` keeps those stages on the same latest intraday `run_id` for the requested method.
@@ -232,7 +232,7 @@ If any of the checks above fail:
 
 ## Future Upgrade Path
 
-- The intended end state is multimodal subagent chart review driven by the method-specific prompt files: `references/prompt-b1.md` for `b1`, `references/prompt-b2.md` for `b2` and `dribull`, and `references/prompt.md` for `hcr`.
+- The intended end state is multimodal subagent chart review driven by the method-specific prompt files: `references/prompt-b1.md` for `b1`, `references/prompt-dribull.md` for `dribull`, `references/prompt-b2.md` for `b2`, and `references/prompt.md` for `hcr`.
 - Keep the deterministic `screen` and `chart` stages unchanged and swap only the `review` stage orchestration.
 
 ## Bundled References
@@ -240,6 +240,7 @@ If any of the checks above fail:
 - `references/b1-selector.md`
 - `references/b2-selector.md`
 - `references/prompt-b1.md`
+- `references/prompt-dribull.md`
 - `references/prompt.md`
 - `references/prompt-b2.md`
 - `references/review-rubric.md`
