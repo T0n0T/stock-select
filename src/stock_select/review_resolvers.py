@@ -17,6 +17,7 @@ _REFERENCE_DIR = Path(__file__).resolve().parents[2] / ".agents" / "skills" / "s
 DEFAULT_PROMPT_PATH = str(_REFERENCE_DIR / "prompt.md")
 B1_PROMPT_PATH = str(_REFERENCE_DIR / "prompt-b1.md")
 B2_PROMPT_PATH = str(_REFERENCE_DIR / "prompt-b2.md")
+DRIBULL_PROMPT_PATH = str(_REFERENCE_DIR / "prompt-dribull.md")
 
 
 @dataclass(frozen=True)
@@ -34,12 +35,17 @@ def get_review_resolver(method: str) -> ReviewResolver:
             prompt_path=B1_PROMPT_PATH,
             review_history=review_b1_symbol_history,
         )
-    if normalized in {"b2", "dribull"}:
-        review_history = review_b2_symbol_history if normalized == "b2" else review_dribull_symbol_history
+    if normalized == "b2":
         return ReviewResolver(
-            name=normalized,
+            name="b2",
             prompt_path=B2_PROMPT_PATH,
-            review_history=review_history,
+            review_history=review_b2_symbol_history,
+        )
+    if normalized == "dribull":
+        return ReviewResolver(
+            name="dribull",
+            prompt_path=DRIBULL_PROMPT_PATH,
+            review_history=review_dribull_symbol_history,
         )
     return ReviewResolver(
         name="default",
