@@ -6,6 +6,13 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+SCORE_BUCKETS: tuple[tuple[str, float | None, float | None], ...] = (
+    (">= 4.5", 4.5, None),
+    ("4.0 - 4.49", 4.0, 4.5),
+    ("3.0 - 3.99", 3.0, 4.0),
+    ("< 3.0", None, 3.0),
+)
+
 
 def load_summary(path: Path) -> dict[str, Any]:
     try:
@@ -17,6 +24,35 @@ def load_summary(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Summary json root must be an object.")
     return payload
+
+
+def site_root_dir(runtime_root: Path) -> Path:
+    return runtime_root / "reviews" / "site"
+
+
+def site_report_dir(runtime_root: Path, *, pick_date: str, method: str) -> Path:
+    return site_root_dir(runtime_root) / f"{pick_date}.{method}"
+
+
+def resolve_item_score(item: dict[str, Any]) -> float | None:
+    for key in ("final_score", "total_score"):
+        value = item.get(key)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def score_bucket_label(score: float | None) -> str | None:
+    if score is None:
+        return None
+    for label, lower, upper in SCORE_BUCKETS:
+        lower_ok = lower is None or score >= lower
+        upper_ok = upper is None or score < upper
+        if lower_ok and upper_ok:
+            return label
+    return None
 
 
 def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str] | None = None) -> str:
@@ -37,6 +73,21 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
             _metric_card("Failures", len(failures)),
         ]
     )
+    verdict_nav = """
+<nav class="section-nav">
+  <a href="#verdict-pass">PASS</a>
+  <a href="#verdict-watch">WATCH</a>
+  <a href="#verdict-fail">FAIL</a>
+</nav>
+"""
+    score_nav = """
+<nav class="score-nav">
+  <a class="score-bucket" href="#score-ge-45">&gt;= 4.5</a>
+  <a class="score-bucket" href="#score-ge-40">4.0 - 4.49</a>
+  <a class="score-bucket" href="#score-ge-30">3.0 - 3.99</a>
+  <a class="score-bucket" href="#score-lt-30">&lt; 3.0</a>
+</nav>
+"""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -99,6 +150,28 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 14px;
       margin-top: 24px;
+    }}
+    .section-nav, .score-nav {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }}
+    .section-nav a, .score-nav a {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 999px;
+      text-decoration: none;
+      font-weight: 700;
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #f9fbfc;
+      background: rgba(255,255,255,0.08);
+    }}
+    .score-bucket {{
+      font-family: var(--mono);
     }}
     .metric-card {{
       background: rgba(255,255,255,0.10);
@@ -301,6 +374,8 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
       <h1>{_escape(method_label)} Summary Dashboard</h1>
       <p>Single-file review artifact generated from the merged stock-select summary. This package includes the standalone HTML, summary JSON, and referenced charts for offline inspection.</p>
       <div class="metrics">{metrics}</div>
+      {verdict_nav}
+      {score_nav}
     </section>
     {_render_section("PASS Recommendations", "Merged final picks after chart-review validation.", recommendations, "No PASS items.", names_by_code or {})}
     {_render_section("Excluded", "Includes WATCH and FAIL after merged scoring.", excluded, "No excluded items.", names_by_code or {})}
@@ -322,6 +397,31 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
 </body>
 </html>
 """
+
+
+def write_summary_site(
+    *,
+    summary_path: Path,
+    runtime_root: Path,
+    names_by_code: dict[str, str],
+) -> Path:
+    summary = load_summary(summary_path)
+    pick_date = str(summary.get("pick_date") or "")
+    method = str(summary.get("method") or "")
+    report_dir = site_report_dir(runtime_root, pick_date=pick_date, method=method)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    html_path = report_dir / "index.html"
+    copied_summary_path = report_dir / "summary.json"
+    charts_dir = report_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+
+    html_path.write_text(render_summary_html(summary, names_by_code=names_by_code), encoding="utf-8")
+    copied_summary_path.write_text(summary_path.read_text(encoding="utf-8"), encoding="utf-8")
+    for item in _iter_summary_items(summary):
+        chart_path = Path(str(item.get("chart_path") or ""))
+        if chart_path.exists():
+            (charts_dir / chart_path.name).write_bytes(chart_path.read_bytes())
+    return html_path
 
 
 def write_summary_package(

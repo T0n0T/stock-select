@@ -56,7 +56,7 @@ from stock_select.db_access import (
     load_dotenv_value,
     resolve_dsn,
 )
-from stock_select.html_export import write_summary_package
+from stock_select.html_export import write_summary_package, write_summary_site
 from stock_select.intraday import _normalize_ts_code, build_intraday_market_frame, normalize_rt_k_snapshot
 from stock_select.review_orchestrator import (
     build_review_payload,
@@ -2447,7 +2447,27 @@ def _html_render_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    raise NotImplementedError("html render is not implemented yet")
+    review_dir = _review_dir_path(runtime_root, pick_date, method)
+    summary_path = review_dir / "summary.json"
+    if not summary_path.exists():
+        raise typer.BadParameter(f"Summary file not found: {summary_path}")
+
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    if reporter:
+        reporter.emit("html-render", "connect db")
+    connection = _connect(resolved_dsn)
+    summary_payload = _load_summary_payload(summary_path)
+    codes = sorted(
+        {
+            str(item.get("code") or "").strip()
+            for key in ("recommendations", "excluded")
+            for item in summary_payload.get(key, [])
+            if isinstance(item, dict) and str(item.get("code") or "").strip()
+        }
+    )
+    names_by_code = fetch_instrument_names(connection, symbols=codes)
+    html_path = write_summary_site(summary_path=summary_path, runtime_root=runtime_root, names_by_code=names_by_code)
+    return html_path
 
 
 def _html_zip_impl(

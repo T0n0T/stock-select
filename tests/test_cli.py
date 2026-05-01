@@ -5939,6 +5939,73 @@ def test_render_html_uses_hcr_method_label(monkeypatch, tmp_path: Path) -> None:
         assert "HCR Summary" in html_text
 
 
+def test_html_render_writes_site_report_with_verdict_and_score_navigation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01", "b1")
+    chart_dir = runtime_root / "charts" / _eod_key("2026-04-01", "b1")
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "reviewed_count": 2,
+                "recommendations": [
+                    {
+                        "code": "000001.SZ",
+                        "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                        "review_mode": "merged",
+                        "baseline_review": {"trend_structure": 5, "price_position": 4, "volume_behavior": 5, "previous_abnormal_move": 4, "macd_phase": 5, "total_score": 4.6, "signal_type": "trend_start", "verdict": "PASS", "comment": "baseline"},
+                        "llm_review": None,
+                        "final_score": 4.6,
+                        "signal_type": "trend_start",
+                        "verdict": "PASS",
+                        "comment": "pass comment",
+                    }
+                ],
+                "excluded": [
+                    {
+                        "code": "000002.SZ",
+                        "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                        "review_mode": "merged",
+                        "baseline_review": {"trend_structure": 3, "price_position": 3, "volume_behavior": 3, "previous_abnormal_move": 3, "macd_phase": 3, "total_score": 3.4, "signal_type": "rebound", "verdict": "WATCH", "comment": "baseline"},
+                        "llm_review": None,
+                        "final_score": 3.4,
+                        "signal_type": "rebound",
+                        "verdict": "WATCH",
+                        "comment": "watch comment",
+                    }
+                ],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda dsn: object())
+    monkeypatch.setattr(cli, "fetch_instrument_names", lambda connection, symbols: {"000001.SZ": "平安银行", "000002.SZ": "万科A"})
+
+    result = runner.invoke(
+        app,
+        ["html", "render", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(runtime_root), "--dsn", "postgresql://example"],
+    )
+
+    assert result.exit_code == 0
+    report_path = Path(result.stdout.strip())
+    assert report_path == runtime_root / "reviews" / "site" / "2026-04-01.b1" / "index.html"
+    html_text = report_path.read_text(encoding="utf-8")
+    assert "PASS" in html_text
+    assert "WATCH" in html_text
+    assert "FAIL" in html_text
+    assert "&gt;= 4.5" in html_text or ">= 4.5" in html_text
+    assert "4.0 - 4.49" in html_text
+    assert "3.0 - 3.99" in html_text
+    assert "score-bucket" in html_text
+
+
 def test_screen_requires_dsn_when_real_data_fetch_is_needed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     monkeypatch.delenv("POSTGRES_DSN", raising=False)
