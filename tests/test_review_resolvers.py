@@ -21,6 +21,7 @@ def test_get_review_resolver_uses_b2_prompt_and_name() -> None:
 
     assert resolver.name == "b2"
     assert resolver.prompt_path.endswith(".agents/skills/stock-select/references/prompt-b2.md")
+    assert resolver.review_history.__module__ == "stock_select.reviewers.b2"
 
 
 def test_get_review_resolver_routes_dribull_to_dedicated_review_strategy() -> None:

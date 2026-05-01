@@ -121,6 +121,17 @@ def test_prompt_dribull_reference_exists_and_preserves_dedicated_contract() -> N
 
     content = prompt_path.read_text(encoding="utf-8")
 
+    assert "trend_reasoning" in content
+    assert "position_reasoning" in content
+    assert "volume_reasoning" in content
+    assert "abnormal_move_reasoning" in content
+    assert "macd_reasoning" in content
+    assert "signal_reasoning" in content
+    assert "scores" in content
+    assert "signal_type" in content
+    assert "verdict" in content
+    assert "comment" in content
+    assert "Output JSON format must remain identical to the default prompt contract." in content
     assert "符合 `dribull`" in content
     assert "trend_structure：0.18" in content
     assert "price_position：0.18" in content
@@ -3417,7 +3428,7 @@ def test_review_rejects_negative_llm_min_baseline_score(tmp_path: Path) -> None:
     assert "non-negative" in result.stderr.lower()
 
 
-def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
+def test_review_dribull_uses_dedicated_resolver_prompt_and_artifact_method(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -3431,7 +3442,7 @@ def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
         json.dumps(
             {
                 "pick_date": "2026-04-01",
-                "method": "b2",
+                "method": "dribull",
                 "candidates": [{"code": "000001.SZ"}],
             }
         ),
@@ -3458,7 +3469,7 @@ def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
         ),
     )
 
-    prompt_path = str(tmp_path / "prompt-b2-stub.md")
+    prompt_path = str(tmp_path / "prompt-dribull-stub.md")
     resolver_methods: list[str] = []
 
     monkeypatch.setattr(
@@ -3466,7 +3477,7 @@ def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
         "get_review_resolver",
         lambda method: resolver_methods.append(method)
         or SimpleNamespace(
-            name="b2",
+            name="dribull",
             prompt_path=prompt_path,
             review_history=lambda **kwargs: {
                 "review_type": "baseline",
