@@ -72,7 +72,7 @@ def review_symbol_history(
         volume_behavior=volume_behavior,
         price_position=price_position,
     )
-    verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
+    verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type, method=method)
     verdict = apply_macd_verdict_gate(method=method, current_verdict=verdict, daily_state=daily_state)
 
     return {
@@ -95,16 +95,17 @@ def review_symbol_history(
 def _score_trend_structure(close: pd.Series, ma20: pd.Series, ma60: pd.Series) -> float:
     if len(close) < 60 or pd.isna(ma20.iloc[-1]) or pd.isna(ma60.iloc[-1]):
         return 3.0
-    recent_gain = float(close.iloc[-1] / close.iloc[-20] - 1.0) if close.iloc[-20] else 0.0
-    ma20_slope = float(ma20.iloc[-1] - ma20.iloc[-5])
-    ma60_slope = float(ma60.iloc[-1] - ma60.iloc[-5])
-    if close.iloc[-1] > ma20.iloc[-1] > ma60.iloc[-1] and ma20_slope > 0 and ma60_slope >= 0 and recent_gain > 0.05:
-        return 5.0
-    if close.iloc[-1] >= ma20.iloc[-1] and ma20.iloc[-1] >= ma60.iloc[-1] and ma20_slope >= 0:
-        return 4.0
-    if close.iloc[-1] >= ma20.iloc[-1]:
+    recent_gain_pct = (float(close.iloc[-1] / close.iloc[-20] - 1.0) * 100) if close.iloc[-20] else 0.0
+    above_ma20 = float(close.iloc[-1]) >= float(ma20.iloc[-1])
+    above_ma60 = float(close.iloc[-1]) >= float(ma60.iloc[-1])
+
+    if not above_ma60:
+        return 1.0
+    if recent_gain_pct < 0:
+        return 5.0 if above_ma20 else 4.0
+    if recent_gain_pct <= 5.0:
         return 3.0
-    if close.iloc[-1] >= ma60.iloc[-1]:
+    if recent_gain_pct <= 8.0:
         return 2.0
     return 1.0
 
@@ -143,14 +144,14 @@ def _score_volume_behavior(open_: pd.Series, close: pd.Series, volume: pd.Series
     latest_green = bool(close.iloc[-1] >= open_.iloc[-1])
 
     if max_volume_bullish and avg_bullish > avg_bearish * 1.2 and latest_green:
-        return 5.0
+        return 1.0
+    if max_volume_bullish and avg_bullish < avg_bearish:
+        return 2.0
     if max_volume_bullish and avg_bullish >= avg_bearish:
         return 4.0
-    if max_volume_bullish:
-        return 3.0
     if latest_green and avg_bullish * 0.9 >= avg_bearish:
-        return 2.0
-    return 1.0
+        return 3.0
+    return 5.0
 
 
 def _score_previous_abnormal_move(close: pd.Series, volume: pd.Series) -> float:
