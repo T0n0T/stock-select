@@ -180,6 +180,49 @@ def test_html_group_exposes_render_zip_and_serve(monkeypatch: pytest.MonkeyPatch
     assert [name for name, _root in called] == ["render", "zip", "serve"]
 
 
+def test_html_serve_requires_existing_site_root(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["html", "serve", "--runtime-root", str(tmp_path / "runtime"), "--host", "127.0.0.1", "--port", "8000"],
+    )
+
+    assert result.exit_code != 0
+    assert "html site root not found" in result.stderr.lower()
+
+
+def test_html_serve_prints_base_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    site_root = tmp_path / "runtime" / "reviews" / "site"
+    site_root.mkdir(parents=True, exist_ok=True)
+    (site_root / "index.html").write_text("<html></html>", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            captured["served"] = True
+
+    def fake_make_server(*, directory: Path, host: str, port: int):
+        captured["directory"] = directory
+        captured["host"] = host
+        captured["port"] = port
+        return FakeServer()
+
+    monkeypatch.setattr(cli, "_make_html_http_server", fake_make_server)
+
+    result = runner.invoke(
+        app,
+        ["html", "serve", "--runtime-root", str(tmp_path / "runtime"), "--host", "127.0.0.1", "--port", "8000"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "http://127.0.0.1:8000/"
+    assert captured["directory"] == site_root
+    assert captured["served"] is True
+
+
 def test_analyze_symbol_requires_symbol(tmp_path: Path) -> None:
     runner = CliRunner()
 

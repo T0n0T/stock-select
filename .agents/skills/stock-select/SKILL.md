@@ -44,9 +44,12 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 - Preserve existing end-of-day instructions for `--pick-date` runs.
 - `screen --intraday` uses PostgreSQL confirmed history up to the previous trade date plus Tushare `rt_k` for the active trade date snapshot.
 - `chart --intraday` and `review --intraday` must reuse the latest intraday candidate plus the same-trade-date shared prepared cache instead of fetching fresh realtime data.
-- When the caller needs a shareable offline report, run CLI `render-html` after `review-merge`.
-- `render-html` must look up stock names from PostgreSQL and render `code + name` in the HTML, not only the code.
-- The packaged export should be a zip containing `summary.html`, `summary.json`, and the referenced chart PNG files under `charts/`.
+- `stock-select html render` is the preferred way to build the review HTML site after `review-merge`.
+- `stock-select html render` must look up stock names from PostgreSQL and render `code + name` in the HTML, not only the code.
+- `stock-select html render` must generate `runtime/reviews/site/<pick_date>.<method>/index.html` and rebuild `runtime/reviews/site/index.html`.
+- `stock-select html zip` packages `index.html`, `summary.json`, and the referenced chart PNG files under `charts/`.
+- `stock-select html serve` exposes the full `runtime/reviews/site/` tree as a local static site.
+- `render-html` is compatibility-only and not the preferred workflow.
 
 ## Runtime Paths By Mode
 
@@ -88,8 +91,10 @@ Review and merge instructions must follow the active mode's runtime key:
 7. After the CLI command returns, dispatch subagents from the task file against the rendered PNG files and the method-specific prompt file (`b1` uses `references/prompt-b1.md`; `hcr` uses `references/prompt.md`; `b2` uses `references/prompt-b2.md`).
 8. Write raw subagent JSON results under `runtime/reviews/<mode_key>/llm_review_results/`, where `<mode_key>` is `<pick_date>.<method>` for end-of-day and `<run_id>.<method>` for intraday.
 9. Run CLI `review-merge` to validate `llm_review`, merge it back into each per-stock review file, and rewrite the final summary in the same mode-specific review directory.
-10. If the caller asks for packaged HTML output, run CLI `render-html` after `review-merge`.
-11. If the caller wants to persist end-of-day `PASS` and `WATCH` ideas across review dates, run CLI `record-watch` after `review` or `review-merge`.
+10. If the caller asks for HTML output, run `stock-select html render` after `review-merge`.
+11. If the caller asks for an offline package, run `stock-select html zip` after `stock-select html render`.
+12. If the caller asks for browser access to the full review site, run `stock-select html serve`.
+13. If the caller wants to persist end-of-day `PASS` and `WATCH` ideas across review dates, run CLI `record-watch` after `review` or `review-merge`.
 
 ## Subagent Review Protocol
 
@@ -220,7 +225,10 @@ If any of the checks above fail:
 - `record-watch` is end-of-day only. It reads `runtime/reviews/<pick_date>.<method>/summary.json`, keeps rows with verdict `PASS` or `WATCH`, writes or overwrites `runtime/watch_pool.csv`, stamps `recorded_at`, sorts by trading-day distance from the command execution day, and trims rows older than the configured `--window-trading-days` window.
 - `record-watch` de-duplicates by `method + code`: when the same stock is selected again for the same method, replace the old row with the new summary row so `pick_date` and `recorded_at` reflect the latest selection.
 - `record-watch` keeps the `method` column in the CSV for traceability, but the runtime watch pool is shared across methods and is no longer split into per-method files.
-- `render-html` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `summary.html`, copies linked PNG charts, and packages them into a shareable zip file that includes `summary.html`, `summary.json`, and `charts/`.
+- `stock-select html render` reads the final `summary.json`, looks up stock names from PostgreSQL `instruments`, renders `runtime/reviews/site/<pick_date>.<method>/index.html`, and rebuilds `runtime/reviews/site/index.html`.
+- `stock-select html zip` packages the rendered report into a shareable zip file that includes `index.html`, `summary.json`, and `charts/`.
+- `stock-select html serve` exposes the full rendered site tree for local browser access.
+- `render-html` remains available as a compatibility wrapper around `stock-select html render` plus `stock-select html zip`.
 
 ## Future Upgrade Path
 

@@ -8,6 +8,8 @@ import re
 import shutil
 import time
 from datetime import datetime
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pandas as pd
@@ -56,7 +58,7 @@ from stock_select.db_access import (
     load_dotenv_value,
     resolve_dsn,
 )
-from stock_select.html_export import site_report_dir, write_summary_package, write_summary_site, zip_site_report
+from stock_select.html_export import site_report_dir, site_root_dir, write_summary_package, write_summary_site, zip_site_report
 from stock_select.intraday import _normalize_ts_code, build_intraday_market_frame, normalize_rt_k_snapshot
 from stock_select.review_orchestrator import (
     build_review_payload,
@@ -2459,14 +2461,27 @@ def _html_zip_impl(
     return zip_path
 
 
+def _make_html_http_server(*, directory: Path, host: str, port: int) -> ThreadingHTTPServer:
+    handler = partial(SimpleHTTPRequestHandler, directory=str(directory))
+    return ThreadingHTTPServer((host, port), handler)
+
+
 def _html_serve_impl(
     *,
     runtime_root: Path,
     host: str,
     port: int,
     reporter: ProgressReporter | None = None,
-) -> str:
-    raise NotImplementedError("html serve is not implemented yet")
+) -> tuple[ThreadingHTTPServer, str]:
+    root = site_root_dir(runtime_root)
+    index_path = root / "index.html"
+    if not root.exists() or not index_path.exists():
+        raise typer.BadParameter(f"HTML site root not found: {root}. Run `stock-select html render` first.")
+    if reporter:
+        reporter.emit("html-serve", f"serve root={root}")
+    server = _make_html_http_server(directory=root, host=host, port=port)
+    base_url = f"http://{host}:{port}/"
+    return server, base_url
 
 
 def _record_watch_impl(
@@ -2858,8 +2873,19 @@ def html_serve(
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     reporter = ProgressReporter(enabled=progress)
-    base_url = _html_serve_impl(runtime_root=runtime_root, host=host, port=port, reporter=reporter)
+    result = _html_serve_impl(runtime_root=runtime_root, host=host, port=port, reporter=reporter)
+    if isinstance(result, tuple):
+        server, base_url = result
+    else:
+        typer.echo(result)
+        return
     typer.echo(base_url)
+    try:
+        server.serve_forever()
+    finally:
+        close = getattr(server, "server_close", None)
+        if callable(close):
+            close()
 
 
 @app.command(name="run")
