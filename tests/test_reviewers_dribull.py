@@ -66,3 +66,80 @@ def test_dribull_review_uses_trend_state_macd_mapping(monkeypatch: pytest.Monkey
     assert dribull_review["macd_phase"] == 5.0
     assert "日线MACD上升浪（上升初期）" in dribull_review["comment"]
     assert "wave" not in dribull_review["comment"]
+
+def test_dribull_review_keeps_marginal_score_as_watch(monkeypatch: pytest.MonkeyPatch) -> None:
+    weekly_trend = SimpleNamespace(
+        phase="rising",
+        is_rising_initial=False,
+        is_top_divergence=False,
+        phase_index=1,
+        wave_stage="强势",
+        metrics={"dif": 0.5, "dea": 0.3, "spread": 0.2, "previous_spread": 0.1},
+        transition_warnings=(),
+    )
+    daily_trend = SimpleNamespace(
+        phase="rising",
+        is_rising_initial=True,
+        is_top_divergence=False,
+        phase_index=1,
+        wave_stage="强势",
+        metrics={"dif": 0.3, "dea": 0.1, "spread": 0.2, "previous_spread": 0.1},
+        transition_warnings=(),
+    )
+
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_price_position", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_volume_behavior", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "map_macd_phase_score", lambda **kwargs: 4.2)
+    monkeypatch.setattr(dribull_reviewer, "classify_weekly_macd_trend", lambda *args, **kwargs: weekly_trend)
+    monkeypatch.setattr(dribull_reviewer, "classify_daily_macd_trend", lambda *args, **kwargs: daily_trend)
+
+    review = dribull_reviewer.review_dribull_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert review["total_score"] == 4.04
+    assert review["verdict"] == "WATCH"
+
+
+def test_dribull_review_requires_strong_position_for_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    weekly_trend = SimpleNamespace(
+        phase="rising",
+        is_rising_initial=False,
+        is_top_divergence=False,
+        phase_index=1,
+        wave_stage="强势",
+        metrics={"dif": 0.5, "dea": 0.3, "spread": 0.2, "previous_spread": 0.1},
+        transition_warnings=(),
+    )
+    daily_trend = SimpleNamespace(
+        phase="rising",
+        is_rising_initial=True,
+        is_top_divergence=False,
+        phase_index=1,
+        wave_stage="强势",
+        metrics={"dif": 0.3, "dea": 0.1, "spread": 0.2, "previous_spread": 0.1},
+        transition_warnings=(),
+    )
+
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_price_position", lambda **kwargs: 5.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_volume_behavior", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "map_macd_phase_score", lambda **kwargs: 4.2)
+    monkeypatch.setattr(dribull_reviewer, "classify_weekly_macd_trend", lambda *args, **kwargs: weekly_trend)
+    monkeypatch.setattr(dribull_reviewer, "classify_daily_macd_trend", lambda *args, **kwargs: daily_trend)
+
+    review = dribull_reviewer.review_dribull_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert review["total_score"] == 4.22
+    assert review["verdict"] == "PASS"

@@ -87,6 +87,12 @@ def review_dribull_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
+    verdict = _refine_dribull_verdict(
+        verdict=verdict,
+        total_score=total_score,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+    )
     verdict = apply_macd_verdict_gate(
         method="dribull",
         current_verdict=verdict,
@@ -117,3 +123,19 @@ def _build_dribull_comment(*, weekly_trend: Any, daily_trend: Any, verdict: str)
     weekly_text = describe_macd_trend_state("周线", weekly_trend)
     daily_text = describe_macd_trend_state("日线", daily_trend)
     return f"{weekly_text}、{daily_text}，该MACD组合{combo_text}dribull，当前结论为{verdict}。"
+
+
+def _refine_dribull_verdict(
+    *,
+    verdict: str,
+    total_score: float,
+    price_position: float,
+    volume_behavior: float,
+) -> str:
+    if verdict != "PASS":
+        return verdict
+    if total_score < 4.2:
+        return "WATCH"
+    if price_position < 4.0 or volume_behavior < 4.0:
+        return "WATCH"
+    return verdict
