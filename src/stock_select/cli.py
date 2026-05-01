@@ -80,6 +80,8 @@ from stock_select.watch_pool import (
 
 
 app = typer.Typer(help="stock-select standalone CLI")
+html_app = typer.Typer(help="HTML site utilities")
+app.add_typer(html_app, name="html")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
 LLM_REVIEW_MAX_CONCURRENCY = 6
@@ -2437,6 +2439,37 @@ def _render_html_impl(
     return zip_path
 
 
+def _html_render_impl(
+    *,
+    method: str,
+    pick_date: str,
+    dsn: str | None,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    raise NotImplementedError("html render is not implemented yet")
+
+
+def _html_zip_impl(
+    *,
+    method: str,
+    pick_date: str,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    raise NotImplementedError("html zip is not implemented yet")
+
+
+def _html_serve_impl(
+    *,
+    runtime_root: Path,
+    host: str,
+    port: int,
+    reporter: ProgressReporter | None = None,
+) -> str:
+    raise NotImplementedError("html serve is not implemented yet")
+
+
 def _record_watch_impl(
     *,
     method: str,
@@ -2777,6 +2810,56 @@ def render_html(
         reporter=reporter,
     )
     typer.echo(str(zip_path))
+
+
+@html_app.command("render")
+def html_render(
+    method: str = typer.Option(..., "--method"),
+    pick_date: str = typer.Option(..., "--pick-date"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    normalized_method = _validate_review_method(method)
+    reporter = ProgressReporter(enabled=progress)
+    output_path = _html_render_impl(
+        method=normalized_method,
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        reporter=reporter,
+    )
+    typer.echo(str(output_path))
+
+
+@html_app.command("zip")
+def html_zip(
+    method: str = typer.Option(..., "--method"),
+    pick_date: str = typer.Option(..., "--pick-date"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    normalized_method = _validate_review_method(method)
+    reporter = ProgressReporter(enabled=progress)
+    zip_path = _html_zip_impl(
+        method=normalized_method,
+        pick_date=pick_date,
+        runtime_root=runtime_root,
+        reporter=reporter,
+    )
+    typer.echo(str(zip_path))
+
+
+@html_app.command("serve")
+def html_serve(
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    reporter = ProgressReporter(enabled=progress)
+    base_url = _html_serve_impl(runtime_root=runtime_root, host=host, port=port, reporter=reporter)
+    typer.echo(base_url)
 
 
 @app.command(name="run")

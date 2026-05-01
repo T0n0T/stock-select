@@ -86,6 +86,27 @@ def test_b2_prompt_reference_exists_and_preserves_default_json_contract() -> Non
     assert "output json format must remain identical to the default prompt contract" in content.lower()
 
 
+def test_b1_prompt_explains_watch_tiers_without_expanding_json_contract() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[1]
+        / ".agents"
+        / "skills"
+        / "stock-select"
+        / "references"
+        / "prompt-b1.md"
+    )
+
+    assert prompt_path.exists()
+    content = prompt_path.read_text(encoding="utf-8")
+
+    assert "B1 WATCH 分层解释" in content
+    assert "WATCH-A" in content
+    assert "WATCH-B" in content
+    assert "WATCH-C" in content
+    assert "高优先观察" in content
+    assert "输出 JSON schema 不新增字段" in content
+
+
 def test_validate_eod_pick_date_has_market_data_rejects_placeholder_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     market = pd.DataFrame(
         {
@@ -118,6 +139,45 @@ def test_screen_rejects_unknown_method() -> None:
     stderr = result.stderr.lower()
     assert "supported methods:" in stderr
     assert "dribull" in stderr
+
+
+def test_html_group_exposes_render_zip_and_serve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    called: list[tuple[str, Path]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_html_render_impl",
+        lambda **kwargs: called.append(("render", kwargs["runtime_root"])) or (tmp_path / "report.html"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_html_zip_impl",
+        lambda **kwargs: called.append(("zip", kwargs["runtime_root"])) or (tmp_path / "summary-package.zip"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_html_serve_impl",
+        lambda **kwargs: called.append(("serve", kwargs["runtime_root"])) or "http://127.0.0.1:8000/",
+    )
+
+    render_result = runner.invoke(
+        app,
+        ["html", "render", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(tmp_path), "--dsn", "postgresql://example"],
+    )
+    zip_result = runner.invoke(
+        app,
+        ["html", "zip", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(tmp_path)],
+    )
+    serve_result = runner.invoke(
+        app,
+        ["html", "serve", "--runtime-root", str(tmp_path), "--host", "127.0.0.1", "--port", "8000"],
+    )
+
+    assert render_result.exit_code == 0
+    assert zip_result.exit_code == 0
+    assert serve_result.exit_code == 0
+    assert [name for name, _root in called] == ["render", "zip", "serve"]
 
 
 def test_analyze_symbol_requires_symbol(tmp_path: Path) -> None:
