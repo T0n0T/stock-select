@@ -30,10 +30,10 @@ B1_BASELINE_SCORE_WEIGHTS = {
     "macd_phase": 0.15,
 }
 NO_MACD_SCORE_WEIGHTS = {
-    "trend_structure": 0.225,
-    "price_position": 0.225,
-    "volume_behavior": 0.30,
-    "previous_abnormal_move": 0.25,
+    "trend_structure": 0.30,
+    "price_position": 0.25,
+    "volume_behavior": 0.40,
+    "previous_abnormal_move": 0.05,
 }
 
 B1_LLM_NO_MACD_SCORE_WEIGHTS = {
@@ -92,12 +92,15 @@ def infer_signal_type(
     return "rebound"
 
 
-def infer_verdict(*, total_score: float, volume_behavior: float, signal_type: str) -> str:
+def infer_verdict(*, total_score: float, volume_behavior: float, signal_type: str, method: str = "") -> str:
     if volume_behavior <= 1.0 or signal_type == "distribution_risk":
         return "FAIL"
-    if total_score >= 4.0:
+    is_hcr = method.strip().lower() == "hcr"
+    pass_threshold = 3.5 if is_hcr else 4.0
+    watch_threshold = 3.0 if is_hcr else 3.2
+    if total_score >= pass_threshold:
         return "PASS"
-    if total_score >= 3.2:
+    if total_score >= watch_threshold:
         return "WATCH"
     return "FAIL"
 

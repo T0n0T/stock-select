@@ -7,6 +7,7 @@ from stock_select.strategies.hcr import (
     compute_hcr_yx,
     prepare_hcr_frame,
     run_hcr_screen_with_stats,
+    score_hcr_candidate,
 )
 
 
@@ -145,3 +146,92 @@ def test_run_hcr_screen_with_stats_requires_exact_pick_date_match() -> None:
     assert candidates == []
     assert stats["eligible"] == 0
     assert stats["fail_insufficient_history"] == 0
+
+
+def test_score_hcr_candidate_rewards_april_sweet_spot_and_penalizes_overheat() -> None:
+    sweet = pd.Series(
+        {
+            "open": 108.0,
+            "close": 110.0,
+            "ma25": 100.0,
+            "ma60": 95.0,
+            "turnover_n": 600_000_000.0,
+            "resonance_gap_pct": 0.001,
+        }
+    )
+    overheated = pd.Series(
+        {
+            "open": 118.0,
+            "close": 122.0,
+            "ma25": 100.0,
+            "ma60": 88.0,
+            "turnover_n": 600_000_000.0,
+            "resonance_gap_pct": 0.001,
+        }
+    )
+
+    assert score_hcr_candidate(sweet) > score_hcr_candidate(overheated)
+
+
+def test_score_hcr_candidate_penalizes_two_day_acceleration() -> None:
+    normal = pd.Series(
+        {
+            "open": 108.0,
+            "close": 110.0,
+            "ma25": 100.0,
+            "ma60": 95.0,
+            "turnover_n": 600_000_000.0,
+            "resonance_gap_pct": 0.001,
+        }
+    )
+    accelerated = pd.Series(
+        {
+            "open": 104.0,
+            "close": 110.0,
+            "ma25": 100.0,
+            "ma60": 95.0,
+            "turnover_n": 600_000_000.0,
+            "resonance_gap_pct": 0.001,
+        }
+    )
+
+    assert score_hcr_candidate(normal, previous_close=105.0) > score_hcr_candidate(
+        accelerated,
+        previous_close=105.0,
+    )
+
+
+def test_run_hcr_screen_with_stats_sorts_by_hcr_score_before_turnover() -> None:
+    pick_date = pd.Timestamp("2026-04-01")
+    dates = pd.bdate_range("2024-10-17", periods=380)
+
+    def _frame(*, close: float, ma25: float, ma60: float, turnover: float) -> pd.DataFrame:
+        frame = pd.DataFrame(
+            {
+                "trade_date": dates,
+                "open": [close * 0.99] * 380,
+                "high": [10.2] * 350 + [10.4] * 30,
+                "low": [9.6] * 350 + [9.8] * 30,
+                "close": [close] * 380,
+                "volume": [100.0] * 380,
+                "turnover_n": [turnover] * 380,
+            }
+        )
+        frame = prepare_hcr_frame(frame)
+        frame.loc[frame.index[-1], "p"] = 10.0
+        frame.loc[frame.index[-1], "yx"] = 10.0
+        frame.loc[frame.index[-1], "resonance_gap_pct"] = 0.001
+        frame.loc[frame.index[-1], "ma25"] = ma25
+        frame.loc[frame.index[-1], "ma60"] = ma60
+        frame.loc[frame.index[-1], "close"] = close
+        frame.loc[frame.index[-1], "turnover_n"] = turnover
+        return frame
+
+    sweet = _frame(close=110.0, ma25=100.0, ma60=95.0, turnover=200_000_000.0)
+    hot = _frame(close=122.0, ma25=100.0, ma60=88.0, turnover=2_000_000_000.0)
+
+    candidates, stats = run_hcr_screen_with_stats({"SWEET.SZ": sweet, "HOT.SZ": hot}, pick_date=pick_date)
+
+    assert stats["selected"] == 2
+    assert [item["code"] for item in candidates] == ["SWEET.SZ", "HOT.SZ"]
+    assert candidates[0]["hcr_score"] > candidates[1]["hcr_score"]

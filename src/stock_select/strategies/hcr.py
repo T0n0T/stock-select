@@ -41,6 +41,88 @@ def prepare_hcr_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return prepared
 
 
+def _score_hcr_resonance(*, resonance_gap_pct: float) -> float:
+    if resonance_gap_pct <= 0.0010:
+        return 30.0
+    if resonance_gap_pct <= 0.0015:
+        return 26.0
+    if resonance_gap_pct <= 0.0030:
+        return 20.0
+    if resonance_gap_pct <= HCR_RESONANCE_TOLERANCE_PCT:
+        return 12.0
+    return 0.0
+
+
+def _score_hcr_close_extension(*, close_above_ma25_pct: float) -> float:
+    if close_above_ma25_pct < 0.0:
+        return 4.0
+    if close_above_ma25_pct < 4.0:
+        return 10.0
+    if close_above_ma25_pct < 8.0:
+        return 17.0
+    if close_above_ma25_pct <= 16.0:
+        return 25.0
+    if close_above_ma25_pct <= 20.0:
+        return 8.0
+    return 0.0
+
+
+def _score_hcr_trend_support(*, ma25_above_ma60_pct: float) -> float:
+    if ma25_above_ma60_pct < 0.0:
+        return 0.0
+    if ma25_above_ma60_pct < 2.5:
+        return 8.0
+    if ma25_above_ma60_pct < 4.0:
+        return 18.0
+    if ma25_above_ma60_pct <= 8.0:
+        return 30.0
+    if ma25_above_ma60_pct <= 10.0:
+        return 12.0
+    return 0.0
+
+
+def _score_hcr_liquidity(*, turnover_n: float) -> float:
+    # Liquidity is useful as a capacity guard, but April diagnostics showed that
+    # unlimited turnover ranking is not predictive. Keep this capped and low weight.
+    if turnover_n >= 500_000_000:
+        return 15.0
+    if turnover_n >= 100_000_000:
+        return 10.0
+    if turnover_n >= 30_000_000:
+        return 6.0
+    return 3.0
+
+
+def score_hcr_candidate(row: pd.Series, *, previous_close: float | None = None) -> float:
+    """Score an already-selected hcr candidate for ranking.
+
+    The screen condition remains strict resonance + breakout. This score is only
+    for ranking the selected pool: reward tight resonance and the April-observed
+    trend-support sweet spot, cap liquidity, and penalize late-extension heat.
+    """
+    close = float(row["close"])
+    ma25 = float(row["ma25"])
+    ma60 = float(row["ma60"])
+    resonance_gap_pct = float(row["resonance_gap_pct"])
+    turnover_n = float(row["turnover_n"])
+
+    close_above_ma25_pct = (close / ma25 - 1.0) * 100.0 if ma25 else 0.0
+    ma25_above_ma60_pct = (ma25 / ma60 - 1.0) * 100.0 if ma60 else 0.0
+    day_pct = (close / float(row["open"]) - 1.0) * 100.0 if "open" in row and float(row["open"]) else 0.0
+    prev1_ret_pct = (close / previous_close - 1.0) * 100.0 if previous_close else 0.0
+    score = (
+        _score_hcr_resonance(resonance_gap_pct=resonance_gap_pct)
+        + _score_hcr_close_extension(close_above_ma25_pct=close_above_ma25_pct)
+        + _score_hcr_trend_support(ma25_above_ma60_pct=ma25_above_ma60_pct)
+        + _score_hcr_liquidity(turnover_n=turnover_n)
+    )
+    if close_above_ma25_pct > 20.0:
+        score -= 22.0
+    if day_pct > 5.0 and prev1_ret_pct > 4.0:
+        score -= 18.0
+    return round(max(score, 0.0), 2)
+
+
 def run_hcr_screen_with_stats(
     prepared_by_symbol: dict[str, pd.DataFrame],
     pick_date: pd.Timestamp,
@@ -76,6 +158,11 @@ def run_hcr_screen_with_stats(
         if float(row["close"]) <= float(row["yx"]):
             stats["fail_breakout"] += 1
             continue
+        previous_daily = frame.loc[trade_dates < target_date].tail(1)
+        previous_close = None if previous_daily.empty else float(previous_daily.iloc[-1]["close"])
+        hcr_score = score_hcr_candidate(row, previous_close=previous_close)
+        close_above_ma25_pct = (float(row["close"]) / float(row["ma25"]) - 1.0) * 100.0
+        ma25_above_ma60_pct = (float(row["ma25"]) / float(row["ma60"]) - 1.0) * 100.0
         candidates.append(
             {
                 "code": code,
@@ -85,8 +172,19 @@ def run_hcr_screen_with_stats(
                 "yx": float(row["yx"]),
                 "p": float(row["p"]),
                 "resonance_gap_pct": float(row["resonance_gap_pct"]),
+                "close_above_ma25_pct": round(close_above_ma25_pct, 4),
+                "ma25_above_ma60_pct": round(ma25_above_ma60_pct, 4),
+                "hcr_score": hcr_score,
             }
         )
         stats["selected"] += 1
 
+    candidates.sort(
+        key=lambda item: (
+            -float(item["hcr_score"]),
+            -float(item["turnover_n"]),
+            float(item["resonance_gap_pct"]),
+            str(item["code"]),
+        )
+    )
     return candidates, stats
