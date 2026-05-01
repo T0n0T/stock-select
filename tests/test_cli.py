@@ -6006,6 +6006,80 @@ def test_html_render_writes_site_report_with_verdict_and_score_navigation(monkey
     assert "score-bucket" in html_text
 
 
+def test_html_render_rebuilds_site_index_for_multiple_review_days(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    chart_dir = runtime_root / "charts" / _eod_key("2026-04-02", "b2")
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+
+    for pick_date, method, verdict, score in [
+        ("2026-04-01", "b1", "PASS", 4.6),
+        ("2026-04-02", "b2", "FAIL", 2.8),
+    ]:
+        review_dir = runtime_root / "reviews" / _eod_key(pick_date, method)
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "pick_date": pick_date,
+                    "method": method,
+                    "reviewed_count": 1,
+                    "recommendations": []
+                    if verdict != "PASS"
+                    else [
+                        {
+                            "code": "000001.SZ",
+                            "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                            "review_mode": "merged",
+                            "baseline_review": None,
+                            "llm_review": None,
+                            "final_score": score,
+                            "verdict": verdict,
+                            "signal_type": "trend_start",
+                            "comment": verdict.lower(),
+                        }
+                    ],
+                    "excluded": []
+                    if verdict == "PASS"
+                    else [
+                        {
+                            "code": "000001.SZ",
+                            "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                            "review_mode": "merged",
+                            "baseline_review": None,
+                            "llm_review": None,
+                            "final_score": score,
+                            "verdict": verdict,
+                            "signal_type": "trend_start",
+                            "comment": verdict.lower(),
+                        }
+                    ],
+                    "failures": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(cli, "_connect", lambda dsn: object())
+    monkeypatch.setattr(cli, "fetch_instrument_names", lambda connection, symbols: {"000001.SZ": "平安银行"})
+
+    first = runner.invoke(app, ["html", "render", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(runtime_root), "--dsn", "postgresql://example"])
+    second = runner.invoke(app, ["html", "render", "--method", "b2", "--pick-date", "2026-04-02", "--runtime-root", str(runtime_root), "--dsn", "postgresql://example"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    index_path = runtime_root / "reviews" / "site" / "index.html"
+    assert index_path.exists()
+    html_text = index_path.read_text(encoding="utf-8")
+    assert "2026-04-02" in html_text
+    assert "2026-04-01" in html_text
+    assert html_text.index("2026-04-02") < html_text.index("2026-04-01")
+    assert "PASS" in html_text
+    assert "FAIL" in html_text
+    assert "2026-04-02.b2/index.html" in html_text
+
+
 def test_screen_requires_dsn_when_real_data_fetch_is_needed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     monkeypatch.delenv("POSTGRES_DSN", raising=False)

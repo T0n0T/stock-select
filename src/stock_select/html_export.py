@@ -55,6 +55,26 @@ def score_bucket_label(score: float | None) -> str | None:
     return None
 
 
+def group_items_by_verdict(summary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped = {"PASS": [], "WATCH": [], "FAIL": []}
+    for item in _iter_summary_items(summary):
+        verdict = str(item.get("verdict") or "").upper()
+        grouped.setdefault(verdict, [])
+        grouped[verdict].append(item)
+    for key in grouped:
+        grouped[key] = sorted(grouped[key], key=lambda value: resolve_item_score(value) or -1.0, reverse=True)
+    return grouped
+
+
+def bucket_counts(summary: dict[str, Any]) -> dict[str, int]:
+    counts = {label: 0 for label, _lower, _upper in SCORE_BUCKETS}
+    for item in _iter_summary_items(summary):
+        label = score_bucket_label(resolve_item_score(item))
+        if label:
+            counts[label] += 1
+    return counts
+
+
 def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str] | None = None) -> str:
     recommendations = summary.get("recommendations", [])
     excluded = summary.get("excluded", [])
@@ -62,14 +82,17 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
     if not isinstance(recommendations, list) or not isinstance(excluded, list) or not isinstance(failures, list):
         raise ValueError("Summary json shape is invalid.")
     method_label = str(summary.get("method") or "-").upper()
+    grouped = group_items_by_verdict(summary)
+    score_counts = bucket_counts(summary)
 
     metrics = "".join(
         [
             _metric_card("Pick Date", summary.get("pick_date", "-")),
             _metric_card("Method", summary.get("method", "-")),
             _metric_card("Reviewed", summary.get("reviewed_count", 0)),
-            _metric_card("PASS", len(recommendations)),
-            _metric_card("Excluded", len(excluded)),
+            _metric_card("PASS", len(grouped.get("PASS", []))),
+            _metric_card("WATCH", len(grouped.get("WATCH", []))),
+            _metric_card("FAIL", len(grouped.get("FAIL", []))),
             _metric_card("Failures", len(failures)),
         ]
     )
@@ -80,14 +103,7 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
   <a href="#verdict-fail">FAIL</a>
 </nav>
 """
-    score_nav = """
-<nav class="score-nav">
-  <a class="score-bucket" href="#score-ge-45">&gt;= 4.5</a>
-  <a class="score-bucket" href="#score-ge-40">4.0 - 4.49</a>
-  <a class="score-bucket" href="#score-ge-30">3.0 - 3.99</a>
-  <a class="score-bucket" href="#score-lt-30">&lt; 3.0</a>
-</nav>
-"""
+    score_nav = _render_score_nav(score_counts)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -157,7 +173,7 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
       gap: 10px;
       margin-top: 18px;
     }}
-    .section-nav a, .score-nav a {{
+    .section-nav a, .score-bucket {{
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -377,8 +393,9 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
       {verdict_nav}
       {score_nav}
     </section>
-    {_render_section("PASS Recommendations", "Merged final picks after chart-review validation.", recommendations, "No PASS items.", names_by_code or {})}
-    {_render_section("Excluded", "Includes WATCH and FAIL after merged scoring.", excluded, "No excluded items.", names_by_code or {})}
+    {_render_section("PASS", "Merged PASS results.", grouped.get("PASS", []), "No PASS items.", names_by_code or {}, section_id="verdict-pass")}
+    {_render_section("WATCH", "WATCH results after merged scoring.", grouped.get("WATCH", []), "No WATCH items.", names_by_code or {}, section_id="verdict-watch")}
+    {_render_section("FAIL", "FAIL results after merged scoring.", grouped.get("FAIL", []), "No FAIL items.", names_by_code or {}, section_id="verdict-fail")}
   </main>
   <script>
     function toggleDetails(button) {{
@@ -397,6 +414,59 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
 </body>
 </html>
 """
+
+
+def render_site_index(entries: list[dict[str, Any]]) -> str:
+    cards = "".join(
+        f"""
+        <article class="site-card">
+          <h2><a href="{_escape(entry['slug'] + '/index.html')}">{_escape(entry['pick_date'])} · {_escape(entry['method'].upper())}</a></h2>
+          <p>reviewed={_escape(entry['reviewed_count'])} PASS={_escape(entry['pass_count'])} WATCH={_escape(entry['watch_count'])} FAIL={_escape(entry['fail_count'])}</p>
+          <p>score range {_escape(entry['min_score'])} - {_escape(entry['max_score'])}</p>
+        </article>
+        """
+        for entry in entries
+    )
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Review Site Index</title></head>
+<body>
+  <main>
+    <h1>Review Site Index</h1>
+    {cards}
+  </main>
+</body>
+</html>
+"""
+
+
+def rebuild_site_index(runtime_root: Path) -> Path:
+    root = site_root_dir(runtime_root)
+    root.mkdir(parents=True, exist_ok=True)
+    entries: list[dict[str, Any]] = []
+    for summary_copy in sorted(root.glob("*/summary.json"), reverse=True):
+        summary = load_summary(summary_copy)
+        slug = summary_copy.parent.name
+        scores = [resolve_item_score(item) for item in _iter_summary_items(summary)]
+        numeric_scores = [score for score in scores if score is not None]
+        grouped = group_items_by_verdict(summary)
+        entries.append(
+            {
+                "slug": slug,
+                "pick_date": str(summary.get("pick_date") or ""),
+                "method": str(summary.get("method") or ""),
+                "reviewed_count": int(summary.get("reviewed_count") or 0),
+                "pass_count": len(grouped.get("PASS", [])),
+                "watch_count": len(grouped.get("WATCH", [])),
+                "fail_count": len(grouped.get("FAIL", [])),
+                "min_score": "-" if not numeric_scores else f"{min(numeric_scores):.2f}",
+                "max_score": "-" if not numeric_scores else f"{max(numeric_scores):.2f}",
+            }
+        )
+    entries.sort(key=lambda item: (item["pick_date"], item["method"]), reverse=True)
+    index_path = root / "index.html"
+    index_path.write_text(render_site_index(entries), encoding="utf-8")
+    return index_path
 
 
 def write_summary_site(
@@ -421,6 +491,7 @@ def write_summary_site(
         chart_path = Path(str(item.get("chart_path") or ""))
         if chart_path.exists():
             (charts_dir / chart_path.name).write_bytes(chart_path.read_bytes())
+    rebuild_site_index(runtime_root)
     return html_path
 
 
@@ -503,6 +574,18 @@ def _metric_card(label: str, value: Any) -> str:
       <div class="metric-value">{_escape(value)}</div>
     </div>
     """
+
+
+def _render_score_nav(score_counts: dict[str, int]) -> str:
+    labels = "".join(
+        f'<span class="score-bucket">{_escape(label)} ({_escape(score_counts.get(label, 0))})</span>'
+        for label, _lower, _upper in SCORE_BUCKETS
+    )
+    return f"""
+<nav class="score-nav">
+  {labels}
+</nav>
+"""
 
 
 def _reasoning_block(title: str, value: Any) -> str:
@@ -624,10 +707,12 @@ def _render_section(
     items: list[dict[str, Any]],
     empty_text: str,
     names_by_code: dict[str, str],
+    *,
+    section_id: str,
 ) -> str:
     if not items:
         return f"""
-        <section class="section">
+        <section class="section" id="{_escape(section_id)}">
           <div class="section-heading">
             <h2>{_escape(title)}</h2>
             <p>{_escape(subtitle)}</p>
@@ -637,7 +722,7 @@ def _render_section(
         """
     cards = "".join(_detail_card(item, names_by_code) for item in items)
     return f"""
-    <section class="section">
+    <section class="section" id="{_escape(section_id)}">
       <div class="section-heading">
         <h2>{_escape(title)}</h2>
         <p>{_escape(subtitle)}</p>
