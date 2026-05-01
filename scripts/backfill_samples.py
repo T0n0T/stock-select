@@ -21,15 +21,16 @@ from stock_select.db_access import fetch_available_trade_dates, load_dotenv_valu
 from stock_select.strategies import validate_method
 
 
-DEFAULT_END_DATE = "2026-04-28"
-DEFAULT_SAMPLE_SIZE = 40
+DEFAULT_END_DATE = "2026-04-30"
+DEFAULT_START_DATE = None  # None means use default behavior (last N days before end_date)
+DEFAULT_SAMPLE_SIZE = 5
 DEFAULT_METHOD = "b2"
-DEFAULT_LLM_MIN_BASELINE_SCORE = 3.6
+DEFAULT_LLM_MIN_BASELINE_SCORE = 4.3
 DEFAULT_MAX_WORKERS_BY_METHOD = {
     "b1": 6,
-    "b2": 2,
-    "dribull": 2,
-    "hcr": 2,
+    "b2": 6,
+    "dribull": 6,
+    "hcr": 10,
 }
 
 
@@ -56,10 +57,15 @@ def collect_target_trade_dates(
     trade_dates: pd.DataFrame,
     *,
     sample_size: int,
-    end_date: str | None = None,
+    end_date: str,
     start_date: str | None = None,
-    forward: bool = False,
 ) -> list[str]:
+    """
+    Collect target trade dates within the specified range.
+    
+    If start_date is provided, returns all trade dates between start_date and end_date (inclusive).
+    If start_date is None, returns the last sample_size trade dates on or before end_date.
+    """
     if sample_size <= 0:
         raise ValueError("sample_size must be positive.")
 
@@ -69,19 +75,20 @@ def collect_target_trade_dates(
     normalized = pd.to_datetime(trade_dates["trade_date"], errors="coerce", format="mixed")
     unique_dates = sorted({timestamp.strftime("%Y-%m-%d") for timestamp in normalized.loc[normalized.notna()]})
 
-    if forward:
-        if start_date is None:
-            raise ValueError("start_date is required when forward=True.")
-        filtered = [value for value in unique_dates if value >= start_date]
-        if len(filtered) < sample_size:
-            raise ValueError(
-                f"Only found {len(filtered)} trade dates on or after {start_date}, fewer than requested {sample_size}."
-            )
-        return filtered[:sample_size]
-
-    if end_date is None:
-        raise ValueError("end_date is required when forward=False.")
+    # Filter by end_date
     filtered = [value for value in unique_dates if value <= end_date]
+    
+    if not filtered:
+        raise ValueError(f"No trade dates found on or before {end_date}.")
+    
+    if start_date is not None:
+        # Range mode: filter by start_date as well
+        filtered = [value for value in filtered if value >= start_date]
+        if not filtered:
+            raise ValueError(f"No trade dates found between {start_date} and {end_date}.")
+        return filtered
+    
+    # Default mode: return last sample_size dates
     if len(filtered) < sample_size:
         raise ValueError(
             f"Only found {len(filtered)} trade dates on or before {end_date}, fewer than requested {sample_size}."
@@ -146,13 +153,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Backfill run samples across a trade-date window, skipping dates with an existing review summary. "
-            "Use the default backward window up to --end-date or enable --forward with --start-date."
+            "Provide --start-date and --end-date to specify a date range, or just --end-date to run on the last N days."
         ),
     )
     parser.add_argument("--method", default=DEFAULT_METHOD)
     parser.add_argument("--end-date", default=DEFAULT_END_DATE)
-    parser.add_argument("--start-date")
-    parser.add_argument("--forward", action="store_true")
+    parser.add_argument("--start-date", default=DEFAULT_START_DATE)
     parser.add_argument("--sample-size", type=int, default=DEFAULT_SAMPLE_SIZE)
     parser.add_argument("--llm-min-baseline-score", type=float, default=DEFAULT_LLM_MIN_BASELINE_SCORE)
     parser.add_argument("--dsn")
@@ -166,17 +172,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.max_workers is None:
         args.max_workers = method_default_max_workers(args.method)
 
-    if args.forward:
-        if args.start_date is None:
-            parser.error("--start-date is required when using --forward.")
+    # Validate dates
+    args.end_date = validate_pick_date(args.end_date)
+    
+    if args.start_date is not None:
         args.start_date = validate_pick_date(args.start_date)
-        if args.end_date != DEFAULT_END_DATE and argv is not None and "--end-date" in argv:
-            parser.error("--end-date cannot be combined with --forward.")
-        args.end_date = None
-    else:
-        if args.start_date is not None:
-            parser.error("--start-date requires --forward.")
-        args.end_date = validate_pick_date(args.end_date)
+        if args.start_date > args.end_date:
+            parser.error(f"start_date ({args.start_date}) cannot be after end_date ({args.end_date}).")
 
     return args
 
@@ -281,7 +283,6 @@ def run_backfill(argv: Sequence[str] | None = None) -> int:
         end_date=args.end_date,
         start_date=args.start_date,
         sample_size=args.sample_size,
-        forward=args.forward,
     )
     plan = plan_backfill(target_dates=target_dates, runtime_root=args.runtime_root, method=args.method)
     print_plan(target_dates=target_dates, plan=plan)
