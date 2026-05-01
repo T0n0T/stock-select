@@ -107,6 +107,30 @@ def test_b1_prompt_explains_watch_tiers_without_expanding_json_contract() -> Non
     assert "输出 JSON schema 不新增字段" in content
 
 
+def test_prompt_dribull_reference_exists_and_preserves_dedicated_contract() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[1]
+        / ".agents"
+        / "skills"
+        / "stock-select"
+        / "references"
+        / "prompt-dribull.md"
+    )
+
+    assert prompt_path.exists()
+
+    content = prompt_path.read_text(encoding="utf-8")
+
+    assert "符合 `dribull`" in content
+    assert "trend_structure：0.18" in content
+    assert "price_position：0.18" in content
+    assert "volume_behavior：0.24" in content
+    assert "previous_abnormal_move：0.20" in content
+    assert "macd_phase：0.20" in content
+    assert "3.9 <= total_score < 4.2" in content
+    assert "高位置弹性通过条件" in content
+
+
 def test_validate_eod_pick_date_has_market_data_rejects_placeholder_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     market = pd.DataFrame(
         {
