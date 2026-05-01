@@ -5857,10 +5857,10 @@ def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: 
 
     with zipfile.ZipFile(zip_path) as archive:
         names = set(archive.namelist())
-        assert "summary.html" in names
+        assert "index.html" in names
         assert "summary.json" in names
         assert "charts/000001.SZ_day.png" in names
-        html_text = archive.read("summary.html").decode("utf-8")
+        html_text = archive.read("index.html").decode("utf-8")
         assert "B1 Summary" in html_text
         assert "000001.SZ" in html_text
         assert "平安银行" in html_text
@@ -5935,8 +5935,64 @@ def test_render_html_uses_hcr_method_label(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
-        html_text = archive.read("summary.html").decode("utf-8")
+        html_text = archive.read("index.html").decode("utf-8")
         assert "HCR Summary" in html_text
+
+
+def test_html_zip_packages_existing_site_report(tmp_path: Path) -> None:
+    runner = CliRunner()
+    report_dir = tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1"
+    charts_dir = report_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "index.html").write_text("<html><body>report</body></html>", encoding="utf-8")
+    (report_dir / "summary.json").write_text("{}", encoding="utf-8")
+    (charts_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+
+    result = runner.invoke(
+        app,
+        ["html", "zip", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(tmp_path / "runtime")],
+    )
+
+    assert result.exit_code == 0
+    zip_path = Path(result.stdout.strip())
+    with zipfile.ZipFile(zip_path) as archive:
+        names = set(archive.namelist())
+        assert "index.html" in names
+        assert "summary.json" in names
+        assert "charts/000001.SZ_day.png" in names
+
+
+def test_render_html_remains_compatible_and_prints_deprecation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        cli,
+        "_html_render_impl",
+        lambda **kwargs: tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1" / "index.html",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_html_zip_impl",
+        lambda **kwargs: tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1" / "summary-package.zip",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "render-html",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "deprecated" in result.stderr.lower()
+    assert str(tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1" / "summary-package.zip") in result.stdout
 
 
 def test_html_render_writes_site_report_with_verdict_and_score_navigation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

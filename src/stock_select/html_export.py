@@ -495,38 +495,28 @@ def write_summary_site(
     return html_path
 
 
+def zip_site_report(report_dir: Path) -> Path:
+    if not report_dir.exists():
+        raise ValueError(f"HTML report directory not found: {report_dir}")
+    zip_path = report_dir / "summary-package.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.write(report_dir / "index.html", "index.html")
+        archive.write(report_dir / "summary.json", "summary.json")
+        for chart_path in sorted((report_dir / "charts").glob("*.png")):
+            archive.write(chart_path, f"charts/{chart_path.name}")
+    return zip_path
+
+
 def write_summary_package(
     *,
     summary_path: Path,
     output_dir: Path,
     names_by_code: dict[str, str],
 ) -> Path:
-    summary = load_summary(summary_path)
-    html_body = render_summary_html(summary, names_by_code=names_by_code)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    html_path = output_dir / "summary.html"
-    copied_summary_path = output_dir / "summary.json"
-    charts_dir = output_dir / "charts"
-    charts_dir.mkdir(parents=True, exist_ok=True)
-
-    html_path.write_text(html_body, encoding="utf-8")
-    copied_summary_path.write_text(summary_path.read_text(encoding="utf-8"), encoding="utf-8")
-
-    for item in _iter_summary_items(summary):
-        chart_path = Path(str(item.get("chart_path") or ""))
-        if not chart_path.exists():
-            continue
-        target_path = charts_dir / chart_path.name
-        target_path.write_bytes(chart_path.read_bytes())
-
-    zip_path = output_dir / "summary-package.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(html_path, "summary.html")
-        archive.write(copied_summary_path, "summary.json")
-        for chart_path in sorted(charts_dir.glob("*.png")):
-            archive.write(chart_path, f"charts/{chart_path.name}")
-    return zip_path
+    runtime_root = output_dir.parents[2]
+    html_path = write_summary_site(summary_path=summary_path, runtime_root=runtime_root, names_by_code=names_by_code)
+    report_dir = html_path.parent
+    return zip_site_report(report_dir)
 
 
 def _iter_summary_items(summary: dict[str, Any]) -> list[dict[str, Any]]:

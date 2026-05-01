@@ -56,7 +56,7 @@ from stock_select.db_access import (
     load_dotenv_value,
     resolve_dsn,
 )
-from stock_select.html_export import write_summary_package, write_summary_site
+from stock_select.html_export import site_report_dir, write_summary_package, write_summary_site, zip_site_report
 from stock_select.intraday import _normalize_ts_code, build_intraday_market_frame, normalize_rt_k_snapshot
 from stock_select.review_orchestrator import (
     build_review_payload,
@@ -2401,41 +2401,14 @@ def _render_html_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    review_dir = _review_dir_path(runtime_root, pick_date, method)
-    summary_path = review_dir / "summary.json"
-    if not summary_path.exists():
-        raise typer.BadParameter(f"Summary file not found: {summary_path}")
-
-    resolved_dsn = _resolve_cli_dsn(dsn)
-    if reporter:
-        reporter.emit("render-html", "connect db")
-    connection = _connect(resolved_dsn)
-
-    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    codes: list[str] = []
-    for key in ("recommendations", "excluded"):
-        values = summary_payload.get(key, [])
-        if isinstance(values, list):
-            for item in values:
-                if not isinstance(item, dict):
-                    continue
-                code = str(item.get("code") or "").strip()
-                if code:
-                    codes.append(code)
-    unique_codes = sorted(set(codes))
-
-    if reporter:
-        reporter.emit("render-html", f"lookup names count={len(unique_codes)}")
-    names_by_code = fetch_instrument_names(connection, symbols=unique_codes)
-
-    package_dir = review_dir / "summary-package"
-    zip_path = write_summary_package(
-        summary_path=summary_path,
-        output_dir=package_dir,
-        names_by_code=names_by_code,
+    html_path = _html_render_impl(
+        method=method,
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        reporter=reporter,
     )
-    if reporter:
-        reporter.emit("render-html", f"write package={zip_path}")
+    zip_path = _html_zip_impl(method=method, pick_date=pick_date, runtime_root=runtime_root, reporter=reporter)
     return zip_path
 
 
@@ -2477,7 +2450,13 @@ def _html_zip_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
-    raise NotImplementedError("html zip is not implemented yet")
+    report_dir = site_report_dir(runtime_root, pick_date=pick_date, method=method)
+    if not report_dir.exists():
+        raise typer.BadParameter(f"HTML report directory not found: {report_dir}. Run `stock-select html render` first.")
+    zip_path = zip_site_report(report_dir)
+    if reporter:
+        reporter.emit("html-zip", f"write package={zip_path}")
+    return zip_path
 
 
 def _html_serve_impl(
@@ -2822,6 +2801,7 @@ def render_html(
 ) -> None:
     normalized_method = _validate_review_method(method)
     reporter = ProgressReporter(enabled=progress)
+    typer.echo("`render-html` is deprecated; use `stock-select html render` and `stock-select html zip`.", err=True)
     zip_path = _render_html_impl(
         method=normalized_method,
         pick_date=pick_date,
