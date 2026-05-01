@@ -96,6 +96,10 @@ uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://..
 uv run stock-select run --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select html render --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select html zip --method b1 --pick-date YYYY-MM-DD
+uv run stock-select html serve
+uv run stock-select render-html --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...  # compatibility only
 ```
 
 ## DSN 读取顺序
@@ -206,6 +210,16 @@ SZ002703 浙江世宝
   - 校验并归一化子代理图评 JSON
   - 将 `llm_review` 回填到单股 review 文件
   - 以 baseline 40% + llm 60% 重算最终分数并重写 `summary.json`
+- `html render`
+  - 读取 `reviews/<pick_date>.<method>/summary.json`
+  - 生成 `runtime/reviews/site/<pick_date>.<method>/index.html`
+  - 重建 `runtime/reviews/site/index.html`
+- `html zip`
+  - 打包已渲染的 `site/<pick_date>.<method>/`
+- `html serve`
+  - 暴露整个 `runtime/reviews/site/` 为本地静态站点
+- `render-html`
+  - 兼容入口；内部转调 `html render` + `html zip`
 - `analyze-symbol`
   - 直接从 PostgreSQL 拉取单只股票的日线历史
   - 在 `runtime/ad_hoc/` 下导出单张日线 PNG 图

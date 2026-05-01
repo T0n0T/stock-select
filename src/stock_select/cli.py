@@ -8,6 +8,8 @@ import re
 import shutil
 import time
 from datetime import datetime
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pandas as pd
@@ -56,7 +58,7 @@ from stock_select.db_access import (
     load_dotenv_value,
     resolve_dsn,
 )
-from stock_select.html_export import write_summary_package
+from stock_select.html_export import site_report_dir, site_root_dir, write_summary_package, write_summary_site, zip_site_report
 from stock_select.intraday import _normalize_ts_code, build_intraday_market_frame, normalize_rt_k_snapshot
 from stock_select.review_orchestrator import (
     build_review_payload,
@@ -80,6 +82,8 @@ from stock_select.watch_pool import (
 
 
 app = typer.Typer(help="stock-select standalone CLI")
+html_app = typer.Typer(help="HTML site utilities")
+app.add_typer(html_app, name="html")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
 LLM_REVIEW_MAX_CONCURRENCY = 6
@@ -2399,6 +2403,25 @@ def _render_html_impl(
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
 ) -> Path:
+    html_path = _html_render_impl(
+        method=method,
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        reporter=reporter,
+    )
+    zip_path = _html_zip_impl(method=method, pick_date=pick_date, runtime_root=runtime_root, reporter=reporter)
+    return zip_path
+
+
+def _html_render_impl(
+    *,
+    method: str,
+    pick_date: str,
+    dsn: str | None,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
     review_dir = _review_dir_path(runtime_root, pick_date, method)
     summary_path = review_dir / "summary.json"
     if not summary_path.exists():
@@ -2406,35 +2429,59 @@ def _render_html_impl(
 
     resolved_dsn = _resolve_cli_dsn(dsn)
     if reporter:
-        reporter.emit("render-html", "connect db")
+        reporter.emit("html-render", "connect db")
     connection = _connect(resolved_dsn)
-
-    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    codes: list[str] = []
-    for key in ("recommendations", "excluded"):
-        values = summary_payload.get(key, [])
-        if isinstance(values, list):
-            for item in values:
-                if not isinstance(item, dict):
-                    continue
-                code = str(item.get("code") or "").strip()
-                if code:
-                    codes.append(code)
-    unique_codes = sorted(set(codes))
-
-    if reporter:
-        reporter.emit("render-html", f"lookup names count={len(unique_codes)}")
-    names_by_code = fetch_instrument_names(connection, symbols=unique_codes)
-
-    package_dir = review_dir / "summary-package"
-    zip_path = write_summary_package(
-        summary_path=summary_path,
-        output_dir=package_dir,
-        names_by_code=names_by_code,
+    summary_payload = _load_summary_payload(summary_path)
+    codes = sorted(
+        {
+            str(item.get("code") or "").strip()
+            for key in ("recommendations", "excluded")
+            for item in summary_payload.get(key, [])
+            if isinstance(item, dict) and str(item.get("code") or "").strip()
+        }
     )
+    names_by_code = fetch_instrument_names(connection, symbols=codes)
+    html_path = write_summary_site(summary_path=summary_path, runtime_root=runtime_root, names_by_code=names_by_code)
+    return html_path
+
+
+def _html_zip_impl(
+    *,
+    method: str,
+    pick_date: str,
+    runtime_root: Path,
+    reporter: ProgressReporter | None = None,
+) -> Path:
+    report_dir = site_report_dir(runtime_root, pick_date=pick_date, method=method)
+    if not report_dir.exists():
+        raise typer.BadParameter(f"HTML report directory not found: {report_dir}. Run `stock-select html render` first.")
+    zip_path = zip_site_report(report_dir)
     if reporter:
-        reporter.emit("render-html", f"write package={zip_path}")
+        reporter.emit("html-zip", f"write package={zip_path}")
     return zip_path
+
+
+def _make_html_http_server(*, directory: Path, host: str, port: int) -> ThreadingHTTPServer:
+    handler = partial(SimpleHTTPRequestHandler, directory=str(directory))
+    return ThreadingHTTPServer((host, port), handler)
+
+
+def _html_serve_impl(
+    *,
+    runtime_root: Path,
+    host: str,
+    port: int,
+    reporter: ProgressReporter | None = None,
+) -> tuple[ThreadingHTTPServer, str]:
+    root = site_root_dir(runtime_root)
+    index_path = root / "index.html"
+    if not root.exists() or not index_path.exists():
+        raise typer.BadParameter(f"HTML site root not found: {root}. Run `stock-select html render` first.")
+    if reporter:
+        reporter.emit("html-serve", f"serve root={root}")
+    server = _make_html_http_server(directory=root, host=host, port=port)
+    base_url = f"http://{host}:{port}/"
+    return server, base_url
 
 
 def _record_watch_impl(
@@ -2769,6 +2816,7 @@ def render_html(
 ) -> None:
     normalized_method = _validate_review_method(method)
     reporter = ProgressReporter(enabled=progress)
+    typer.echo("`render-html` is deprecated; use `stock-select html render` and `stock-select html zip`.", err=True)
     zip_path = _render_html_impl(
         method=normalized_method,
         pick_date=pick_date,
@@ -2777,6 +2825,62 @@ def render_html(
         reporter=reporter,
     )
     typer.echo(str(zip_path))
+
+
+@html_app.command("render")
+def html_render(
+    method: str = typer.Option(..., "--method"),
+    pick_date: str = typer.Option(..., "--pick-date"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    normalized_method = _validate_review_method(method)
+    reporter = ProgressReporter(enabled=progress)
+    output_path = _html_render_impl(
+        method=normalized_method,
+        pick_date=pick_date,
+        dsn=dsn,
+        runtime_root=runtime_root,
+        reporter=reporter,
+    )
+    typer.echo(str(output_path))
+
+
+@html_app.command("zip")
+def html_zip(
+    method: str = typer.Option(..., "--method"),
+    pick_date: str = typer.Option(..., "--pick-date"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    normalized_method = _validate_review_method(method)
+    reporter = ProgressReporter(enabled=progress)
+    zip_path = _html_zip_impl(
+        method=normalized_method,
+        pick_date=pick_date,
+        runtime_root=runtime_root,
+        reporter=reporter,
+    )
+    typer.echo(str(zip_path))
+
+
+@html_app.command("serve")
+def html_serve(
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    reporter = ProgressReporter(enabled=progress)
+    server, base_url = _html_serve_impl(runtime_root=runtime_root, host=host, port=port, reporter=reporter)
+    typer.echo(base_url)
+    try:
+        server.serve_forever()
+    finally:
+        close = getattr(server, "server_close", None)
+        if callable(close):
+            close()
 
 
 @app.command(name="run")

@@ -86,6 +86,27 @@ def test_b2_prompt_reference_exists_and_preserves_default_json_contract() -> Non
     assert "output json format must remain identical to the default prompt contract" in content.lower()
 
 
+def test_b1_prompt_explains_watch_tiers_without_expanding_json_contract() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[1]
+        / ".agents"
+        / "skills"
+        / "stock-select"
+        / "references"
+        / "prompt-b1.md"
+    )
+
+    assert prompt_path.exists()
+    content = prompt_path.read_text(encoding="utf-8")
+
+    assert "B1 WATCH 分层解释" in content
+    assert "WATCH-A" in content
+    assert "WATCH-B" in content
+    assert "WATCH-C" in content
+    assert "高优先观察" in content
+    assert "输出 JSON schema 不新增字段" in content
+
+
 def test_validate_eod_pick_date_has_market_data_rejects_placeholder_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     market = pd.DataFrame(
         {
@@ -118,6 +139,97 @@ def test_screen_rejects_unknown_method() -> None:
     stderr = result.stderr.lower()
     assert "supported methods:" in stderr
     assert "dribull" in stderr
+
+
+def test_html_group_exposes_render_zip_and_serve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    called: list[tuple[str, Path]] = []
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            return None
+
+        def server_close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cli,
+        "_html_render_impl",
+        lambda **kwargs: called.append(("render", kwargs["runtime_root"])) or (tmp_path / "report.html"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_html_zip_impl",
+        lambda **kwargs: called.append(("zip", kwargs["runtime_root"])) or (tmp_path / "summary-package.zip"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_html_serve_impl",
+        lambda **kwargs: called.append(("serve", kwargs["runtime_root"])) or (FakeServer(), "http://127.0.0.1:8000/"),
+    )
+
+    render_result = runner.invoke(
+        app,
+        ["html", "render", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(tmp_path), "--dsn", "postgresql://example"],
+    )
+    zip_result = runner.invoke(
+        app,
+        ["html", "zip", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(tmp_path)],
+    )
+    serve_result = runner.invoke(
+        app,
+        ["html", "serve", "--runtime-root", str(tmp_path), "--host", "127.0.0.1", "--port", "8000"],
+    )
+
+    assert render_result.exit_code == 0
+    assert zip_result.exit_code == 0
+    assert serve_result.exit_code == 0
+    assert [name for name, _root in called] == ["render", "zip", "serve"]
+
+
+def test_html_serve_requires_existing_site_root(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["html", "serve", "--runtime-root", str(tmp_path / "runtime"), "--host", "127.0.0.1", "--port", "8000"],
+    )
+
+    assert result.exit_code != 0
+    assert "html site root not found" in result.stderr.lower()
+
+
+def test_html_serve_prints_base_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    site_root = tmp_path / "runtime" / "reviews" / "site"
+    site_root.mkdir(parents=True, exist_ok=True)
+    (site_root / "index.html").write_text("<html></html>", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            captured["served"] = True
+
+    def fake_make_server(*, directory: Path, host: str, port: int):
+        captured["directory"] = directory
+        captured["host"] = host
+        captured["port"] = port
+        return FakeServer()
+
+    monkeypatch.setattr(cli, "_make_html_http_server", fake_make_server)
+
+    result = runner.invoke(
+        app,
+        ["html", "serve", "--runtime-root", str(tmp_path / "runtime"), "--host", "127.0.0.1", "--port", "8000"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "http://127.0.0.1:8000/"
+    assert captured["directory"] == site_root
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8000
+    assert captured["served"] is True
 
 
 def test_analyze_symbol_requires_symbol(tmp_path: Path) -> None:
@@ -5797,10 +5909,10 @@ def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: 
 
     with zipfile.ZipFile(zip_path) as archive:
         names = set(archive.namelist())
-        assert "summary.html" in names
+        assert "index.html" in names
         assert "summary.json" in names
         assert "charts/000001.SZ_day.png" in names
-        html_text = archive.read("summary.html").decode("utf-8")
+        html_text = archive.read("index.html").decode("utf-8")
         assert "B1 Summary" in html_text
         assert "000001.SZ" in html_text
         assert "平安银行" in html_text
@@ -5875,8 +5987,205 @@ def test_render_html_uses_hcr_method_label(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
-        html_text = archive.read("summary.html").decode("utf-8")
+        html_text = archive.read("index.html").decode("utf-8")
         assert "HCR Summary" in html_text
+
+
+def test_html_zip_packages_existing_site_report(tmp_path: Path) -> None:
+    runner = CliRunner()
+    report_dir = tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1"
+    charts_dir = report_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "index.html").write_text("<html><body>report</body></html>", encoding="utf-8")
+    (report_dir / "summary.json").write_text("{}", encoding="utf-8")
+    (charts_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+
+    result = runner.invoke(
+        app,
+        ["html", "zip", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(tmp_path / "runtime")],
+    )
+
+    assert result.exit_code == 0
+    zip_path = Path(result.stdout.strip())
+    with zipfile.ZipFile(zip_path) as archive:
+        names = set(archive.namelist())
+        assert "index.html" in names
+        assert "summary.json" in names
+        assert "charts/000001.SZ_day.png" in names
+
+
+def test_render_html_remains_compatible_and_prints_deprecation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        cli,
+        "_html_render_impl",
+        lambda **kwargs: tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1" / "index.html",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_html_zip_impl",
+        lambda **kwargs: tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1" / "summary-package.zip",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "render-html",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "deprecated" in result.stderr.lower()
+    assert str(tmp_path / "runtime" / "reviews" / "site" / "2026-04-01.b1" / "summary-package.zip") in result.stdout
+
+
+def test_html_render_writes_site_report_with_verdict_and_score_navigation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01", "b1")
+    chart_dir = runtime_root / "charts" / _eod_key("2026-04-01", "b1")
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "reviewed_count": 2,
+                "recommendations": [
+                    {
+                        "code": "000001.SZ",
+                        "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                        "review_mode": "merged",
+                        "baseline_review": {"trend_structure": 5, "price_position": 4, "volume_behavior": 5, "previous_abnormal_move": 4, "macd_phase": 5, "total_score": 4.6, "signal_type": "trend_start", "verdict": "PASS", "comment": "baseline"},
+                        "llm_review": None,
+                        "final_score": 4.6,
+                        "signal_type": "trend_start",
+                        "verdict": "PASS",
+                        "comment": "pass comment",
+                    }
+                ],
+                "excluded": [
+                    {
+                        "code": "000002.SZ",
+                        "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                        "review_mode": "merged",
+                        "baseline_review": {"trend_structure": 3, "price_position": 3, "volume_behavior": 3, "previous_abnormal_move": 3, "macd_phase": 3, "total_score": 3.4, "signal_type": "rebound", "verdict": "WATCH", "comment": "baseline"},
+                        "llm_review": None,
+                        "final_score": 3.4,
+                        "signal_type": "rebound",
+                        "verdict": "WATCH",
+                        "comment": "watch comment",
+                    }
+                ],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "_connect", lambda dsn: object())
+    monkeypatch.setattr(cli, "fetch_instrument_names", lambda connection, symbols: {"000001.SZ": "平安银行", "000002.SZ": "万科A"})
+
+    result = runner.invoke(
+        app,
+        ["html", "render", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(runtime_root), "--dsn", "postgresql://example"],
+    )
+
+    assert result.exit_code == 0
+    report_path = Path(result.stdout.strip())
+    assert report_path == runtime_root / "reviews" / "site" / "2026-04-01.b1" / "index.html"
+    html_text = report_path.read_text(encoding="utf-8")
+    assert "PASS" in html_text
+    assert "WATCH" in html_text
+    assert "FAIL" in html_text
+    assert "&gt;= 4.5" in html_text or ">= 4.5" in html_text
+    assert "4.0 - 4.49" in html_text
+    assert "3.0 - 3.99" in html_text
+    assert "score-bucket" in html_text
+
+
+def test_html_render_rebuilds_site_index_for_multiple_review_days(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    chart_dir = runtime_root / "charts" / _eod_key("2026-04-02", "b2")
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png-bytes")
+
+    for pick_date, method, verdict, score in [
+        ("2026-04-01", "b1", "PASS", 4.6),
+        ("2026-04-02", "b2", "FAIL", 2.8),
+    ]:
+        review_dir = runtime_root / "reviews" / _eod_key(pick_date, method)
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "pick_date": pick_date,
+                    "method": method,
+                    "reviewed_count": 1,
+                    "recommendations": []
+                    if verdict != "PASS"
+                    else [
+                        {
+                            "code": "000001.SZ",
+                            "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                            "review_mode": "merged",
+                            "baseline_review": None,
+                            "llm_review": None,
+                            "final_score": score,
+                            "verdict": verdict,
+                            "signal_type": "trend_start",
+                            "comment": verdict.lower(),
+                        }
+                    ],
+                    "excluded": []
+                    if verdict == "PASS"
+                    else [
+                        {
+                            "code": "000001.SZ",
+                            "chart_path": str(chart_dir / "000001.SZ_day.png"),
+                            "review_mode": "merged",
+                            "baseline_review": None,
+                            "llm_review": None,
+                            "final_score": score,
+                            "verdict": verdict,
+                            "signal_type": "trend_start",
+                            "comment": verdict.lower(),
+                        }
+                    ],
+                    "failures": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(cli, "_connect", lambda dsn: object())
+    monkeypatch.setattr(cli, "fetch_instrument_names", lambda connection, symbols: {"000001.SZ": "平安银行"})
+
+    first = runner.invoke(app, ["html", "render", "--method", "b1", "--pick-date", "2026-04-01", "--runtime-root", str(runtime_root), "--dsn", "postgresql://example"])
+    second = runner.invoke(app, ["html", "render", "--method", "b2", "--pick-date", "2026-04-02", "--runtime-root", str(runtime_root), "--dsn", "postgresql://example"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    index_path = runtime_root / "reviews" / "site" / "index.html"
+    assert index_path.exists()
+    html_text = index_path.read_text(encoding="utf-8")
+    assert "2026-04-02" in html_text
+    assert "2026-04-01" in html_text
+    assert html_text.index("2026-04-02") < html_text.index("2026-04-01")
+    assert "PASS" in html_text
+    assert "FAIL" in html_text
+    assert "2026-04-02.b2/index.html" in html_text
 
 
 def test_screen_requires_dsn_when_real_data_fetch_is_needed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -6,6 +6,13 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+SCORE_BUCKETS: tuple[tuple[str, float | None, float | None], ...] = (
+    (">= 4.5", 4.5, None),
+    ("4.0 - 4.49", 4.0, 4.5),
+    ("3.0 - 3.99", 3.0, 4.0),
+    ("< 3.0", None, 3.0),
+)
+
 
 def load_summary(path: Path) -> dict[str, Any]:
     try:
@@ -19,6 +26,55 @@ def load_summary(path: Path) -> dict[str, Any]:
     return payload
 
 
+def site_root_dir(runtime_root: Path) -> Path:
+    return runtime_root / "reviews" / "site"
+
+
+def site_report_dir(runtime_root: Path, *, pick_date: str, method: str) -> Path:
+    return site_root_dir(runtime_root) / f"{pick_date}.{method}"
+
+
+def resolve_item_score(item: dict[str, Any]) -> float | None:
+    for key in ("final_score", "total_score"):
+        value = item.get(key)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def score_bucket_label(score: float | None) -> str | None:
+    if score is None:
+        return None
+    for label, lower, upper in SCORE_BUCKETS:
+        lower_ok = lower is None or score >= lower
+        upper_ok = upper is None or score < upper
+        if lower_ok and upper_ok:
+            return label
+    return None
+
+
+def group_items_by_verdict(summary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped = {"PASS": [], "WATCH": [], "FAIL": []}
+    for item in _iter_summary_items(summary):
+        verdict = str(item.get("verdict") or "").upper()
+        grouped.setdefault(verdict, [])
+        grouped[verdict].append(item)
+    for key in grouped:
+        grouped[key] = sorted(grouped[key], key=lambda value: resolve_item_score(value) or -1.0, reverse=True)
+    return grouped
+
+
+def bucket_counts(summary: dict[str, Any]) -> dict[str, int]:
+    counts = {label: 0 for label, _lower, _upper in SCORE_BUCKETS}
+    for item in _iter_summary_items(summary):
+        label = score_bucket_label(resolve_item_score(item))
+        if label:
+            counts[label] += 1
+    return counts
+
+
 def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str] | None = None) -> str:
     recommendations = summary.get("recommendations", [])
     excluded = summary.get("excluded", [])
@@ -26,17 +82,28 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
     if not isinstance(recommendations, list) or not isinstance(excluded, list) or not isinstance(failures, list):
         raise ValueError("Summary json shape is invalid.")
     method_label = str(summary.get("method") or "-").upper()
+    grouped = group_items_by_verdict(summary)
+    score_counts = bucket_counts(summary)
 
     metrics = "".join(
         [
             _metric_card("Pick Date", summary.get("pick_date", "-")),
             _metric_card("Method", summary.get("method", "-")),
             _metric_card("Reviewed", summary.get("reviewed_count", 0)),
-            _metric_card("PASS", len(recommendations)),
-            _metric_card("Excluded", len(excluded)),
+            _metric_card("PASS", len(grouped.get("PASS", []))),
+            _metric_card("WATCH", len(grouped.get("WATCH", []))),
+            _metric_card("FAIL", len(grouped.get("FAIL", []))),
             _metric_card("Failures", len(failures)),
         ]
     )
+    verdict_nav = """
+<nav class="section-nav">
+  <a href="#verdict-pass">PASS</a>
+  <a href="#verdict-watch">WATCH</a>
+  <a href="#verdict-fail">FAIL</a>
+</nav>
+"""
+    score_nav = _render_score_nav(score_counts)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -99,6 +166,28 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 14px;
       margin-top: 24px;
+    }}
+    .section-nav, .score-nav {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }}
+    .section-nav a, .score-bucket {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 999px;
+      text-decoration: none;
+      font-weight: 700;
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #f9fbfc;
+      background: rgba(255,255,255,0.08);
+    }}
+    .score-bucket {{
+      font-family: var(--mono);
     }}
     .metric-card {{
       background: rgba(255,255,255,0.10);
@@ -301,9 +390,12 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
       <h1>{_escape(method_label)} Summary Dashboard</h1>
       <p>Single-file review artifact generated from the merged stock-select summary. This package includes the standalone HTML, summary JSON, and referenced charts for offline inspection.</p>
       <div class="metrics">{metrics}</div>
+      {verdict_nav}
+      {score_nav}
     </section>
-    {_render_section("PASS Recommendations", "Merged final picks after chart-review validation.", recommendations, "No PASS items.", names_by_code or {})}
-    {_render_section("Excluded", "Includes WATCH and FAIL after merged scoring.", excluded, "No excluded items.", names_by_code or {})}
+    {_render_section("PASS", "Merged PASS results.", grouped.get("PASS", []), "No PASS items.", names_by_code or {}, section_id="verdict-pass")}
+    {_render_section("WATCH", "WATCH results after merged scoring.", grouped.get("WATCH", []), "No WATCH items.", names_by_code or {}, section_id="verdict-watch")}
+    {_render_section("FAIL", "FAIL results after merged scoring.", grouped.get("FAIL", []), "No FAIL items.", names_by_code or {}, section_id="verdict-fail")}
   </main>
   <script>
     function toggleDetails(button) {{
@@ -324,38 +416,107 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
 """
 
 
+def render_site_index(entries: list[dict[str, Any]]) -> str:
+    cards = "".join(
+        f"""
+        <article class="site-card">
+          <h2><a href="{_escape(entry['slug'] + '/index.html')}">{_escape(entry['pick_date'])} · {_escape(entry['method'].upper())}</a></h2>
+          <p>reviewed={_escape(entry['reviewed_count'])} PASS={_escape(entry['pass_count'])} WATCH={_escape(entry['watch_count'])} FAIL={_escape(entry['fail_count'])}</p>
+          <p>score range {_escape(entry['min_score'])} - {_escape(entry['max_score'])}</p>
+        </article>
+        """
+        for entry in entries
+    )
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Review Site Index</title></head>
+<body>
+  <main>
+    <h1>Review Site Index</h1>
+    {cards}
+  </main>
+</body>
+</html>
+"""
+
+
+def rebuild_site_index(runtime_root: Path) -> Path:
+    root = site_root_dir(runtime_root)
+    root.mkdir(parents=True, exist_ok=True)
+    entries: list[dict[str, Any]] = []
+    for summary_copy in sorted(root.glob("*/summary.json"), reverse=True):
+        summary = load_summary(summary_copy)
+        slug = summary_copy.parent.name
+        scores = [resolve_item_score(item) for item in _iter_summary_items(summary)]
+        numeric_scores = [score for score in scores if score is not None]
+        grouped = group_items_by_verdict(summary)
+        entries.append(
+            {
+                "slug": slug,
+                "pick_date": str(summary.get("pick_date") or ""),
+                "method": str(summary.get("method") or ""),
+                "reviewed_count": int(summary.get("reviewed_count") or 0),
+                "pass_count": len(grouped.get("PASS", [])),
+                "watch_count": len(grouped.get("WATCH", [])),
+                "fail_count": len(grouped.get("FAIL", [])),
+                "min_score": "-" if not numeric_scores else f"{min(numeric_scores):.2f}",
+                "max_score": "-" if not numeric_scores else f"{max(numeric_scores):.2f}",
+            }
+        )
+    entries.sort(key=lambda item: (item["pick_date"], item["method"]), reverse=True)
+    index_path = root / "index.html"
+    index_path.write_text(render_site_index(entries), encoding="utf-8")
+    return index_path
+
+
+def write_summary_site(
+    *,
+    summary_path: Path,
+    runtime_root: Path,
+    names_by_code: dict[str, str],
+) -> Path:
+    summary = load_summary(summary_path)
+    pick_date = str(summary.get("pick_date") or "")
+    method = str(summary.get("method") or "")
+    report_dir = site_report_dir(runtime_root, pick_date=pick_date, method=method)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    html_path = report_dir / "index.html"
+    copied_summary_path = report_dir / "summary.json"
+    charts_dir = report_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+
+    html_path.write_text(render_summary_html(summary, names_by_code=names_by_code), encoding="utf-8")
+    copied_summary_path.write_text(summary_path.read_text(encoding="utf-8"), encoding="utf-8")
+    for item in _iter_summary_items(summary):
+        chart_path = Path(str(item.get("chart_path") or ""))
+        if chart_path.exists():
+            (charts_dir / chart_path.name).write_bytes(chart_path.read_bytes())
+    rebuild_site_index(runtime_root)
+    return html_path
+
+
+def zip_site_report(report_dir: Path) -> Path:
+    if not report_dir.exists():
+        raise ValueError(f"HTML report directory not found: {report_dir}")
+    zip_path = report_dir / "summary-package.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.write(report_dir / "index.html", "index.html")
+        archive.write(report_dir / "summary.json", "summary.json")
+        for chart_path in sorted((report_dir / "charts").glob("*.png")):
+            archive.write(chart_path, f"charts/{chart_path.name}")
+    return zip_path
+
+
 def write_summary_package(
     *,
     summary_path: Path,
     output_dir: Path,
     names_by_code: dict[str, str],
 ) -> Path:
-    summary = load_summary(summary_path)
-    html_body = render_summary_html(summary, names_by_code=names_by_code)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    html_path = output_dir / "summary.html"
-    copied_summary_path = output_dir / "summary.json"
-    charts_dir = output_dir / "charts"
-    charts_dir.mkdir(parents=True, exist_ok=True)
-
-    html_path.write_text(html_body, encoding="utf-8")
-    copied_summary_path.write_text(summary_path.read_text(encoding="utf-8"), encoding="utf-8")
-
-    for item in _iter_summary_items(summary):
-        chart_path = Path(str(item.get("chart_path") or ""))
-        if not chart_path.exists():
-            continue
-        target_path = charts_dir / chart_path.name
-        target_path.write_bytes(chart_path.read_bytes())
-
-    zip_path = output_dir / "summary-package.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(html_path, "summary.html")
-        archive.write(copied_summary_path, "summary.json")
-        for chart_path in sorted(charts_dir.glob("*.png")):
-            archive.write(chart_path, f"charts/{chart_path.name}")
-    return zip_path
+    runtime_root = output_dir.parents[2]
+    html_path = write_summary_site(summary_path=summary_path, runtime_root=runtime_root, names_by_code=names_by_code)
+    report_dir = html_path.parent
+    return zip_site_report(report_dir)
 
 
 def _iter_summary_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -403,6 +564,18 @@ def _metric_card(label: str, value: Any) -> str:
       <div class="metric-value">{_escape(value)}</div>
     </div>
     """
+
+
+def _render_score_nav(score_counts: dict[str, int]) -> str:
+    labels = "".join(
+        f'<span class="score-bucket">{_escape(label)} ({_escape(score_counts.get(label, 0))})</span>'
+        for label, _lower, _upper in SCORE_BUCKETS
+    )
+    return f"""
+<nav class="score-nav">
+  {labels}
+</nav>
+"""
 
 
 def _reasoning_block(title: str, value: Any) -> str:
@@ -524,10 +697,12 @@ def _render_section(
     items: list[dict[str, Any]],
     empty_text: str,
     names_by_code: dict[str, str],
+    *,
+    section_id: str,
 ) -> str:
     if not items:
         return f"""
-        <section class="section">
+        <section class="section" id="{_escape(section_id)}">
           <div class="section-heading">
             <h2>{_escape(title)}</h2>
             <p>{_escape(subtitle)}</p>
@@ -537,7 +712,7 @@ def _render_section(
         """
     cards = "".join(_detail_card(item, names_by_code) for item in items)
     return f"""
-    <section class="section">
+    <section class="section" id="{_escape(section_id)}">
       <div class="section-heading">
         <h2>{_escape(title)}</h2>
         <p>{_escape(subtitle)}</p>
