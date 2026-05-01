@@ -99,7 +99,7 @@ uv run stock-select run --method hcr --pick-date YYYY-MM-DD --dsn postgresql://.
 uv run stock-select html render --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select html zip --method b1 --pick-date YYYY-MM-DD
 uv run stock-select html serve
-uv run stock-select render-html --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select render-html --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...  # compatibility only
 ```
 
 ## DSN 读取顺序

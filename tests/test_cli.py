@@ -145,6 +145,13 @@ def test_html_group_exposes_render_zip_and_serve(monkeypatch: pytest.MonkeyPatch
     runner = CliRunner()
     called: list[tuple[str, Path]] = []
 
+    class FakeServer:
+        def serve_forever(self) -> None:
+            return None
+
+        def server_close(self) -> None:
+            return None
+
     monkeypatch.setattr(
         cli,
         "_html_render_impl",
@@ -158,7 +165,7 @@ def test_html_group_exposes_render_zip_and_serve(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         cli,
         "_html_serve_impl",
-        lambda **kwargs: called.append(("serve", kwargs["runtime_root"])) or "http://127.0.0.1:8000/",
+        lambda **kwargs: called.append(("serve", kwargs["runtime_root"])) or (FakeServer(), "http://127.0.0.1:8000/"),
     )
 
     render_result = runner.invoke(
@@ -220,6 +227,8 @@ def test_html_serve_prints_base_url(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert result.exit_code == 0
     assert result.stdout.strip() == "http://127.0.0.1:8000/"
     assert captured["directory"] == site_root
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8000
     assert captured["served"] is True
 
 

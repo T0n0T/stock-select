@@ -2873,12 +2873,7 @@ def html_serve(
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     reporter = ProgressReporter(enabled=progress)
-    result = _html_serve_impl(runtime_root=runtime_root, host=host, port=port, reporter=reporter)
-    if isinstance(result, tuple):
-        server, base_url = result
-    else:
-        typer.echo(result)
-        return
+    server, base_url = _html_serve_impl(runtime_root=runtime_root, host=host, port=port, reporter=reporter)
     typer.echo(base_url)
     try:
         server.serve_forever()
