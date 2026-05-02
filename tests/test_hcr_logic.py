@@ -73,7 +73,8 @@ def test_run_hcr_screen_with_stats_selects_symbol_when_resonance_and_breakout_pa
         frame.loc[frame.index[-1], "yx"] - frame.loc[frame.index[-1], "p"]
     ) / frame.loc[frame.index[-1], "p"]
 
-    candidates, stats = run_hcr_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    frame["ts_code"] = "000001.SZ"
+    candidates, stats = run_hcr_screen_with_stats(frame, pick_date=pick_date)
 
     assert [item["code"] for item in candidates] == ["000001.SZ"]
     assert stats["selected"] == 1
@@ -93,8 +94,9 @@ def test_run_hcr_screen_with_stats_counts_insufficient_history_separately() -> N
         }
     )
     frame = prepare_hcr_frame(frame)
+    frame["ts_code"] = "000001.SZ"
 
-    _candidates, stats = run_hcr_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    _candidates, stats = run_hcr_screen_with_stats(frame, pick_date=pick_date)
 
     assert stats["eligible"] == 1
     assert stats["fail_insufficient_history"] == 1
@@ -119,7 +121,8 @@ def test_run_hcr_screen_with_stats_rejects_gap_above_half_percent() -> None:
     frame.loc[frame.index[-1], "yx"] = 10.06
     frame.loc[frame.index[-1], "resonance_gap_pct"] = 0.006
 
-    candidates, stats = run_hcr_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    frame["ts_code"] = "000001.SZ"
+    candidates, stats = run_hcr_screen_with_stats(frame, pick_date=pick_date)
 
     assert candidates == []
     assert stats["fail_resonance"] == 1
@@ -140,8 +143,9 @@ def test_run_hcr_screen_with_stats_requires_exact_pick_date_match() -> None:
         }
     )
     frame = prepare_hcr_frame(frame)
+    frame["ts_code"] = "000001.SZ"
 
-    candidates, stats = run_hcr_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_hcr_screen_with_stats(frame, pick_date=pick_date)
 
     assert candidates == []
     assert stats["eligible"] == 0
@@ -228,9 +232,13 @@ def test_run_hcr_screen_with_stats_sorts_by_hcr_score_before_turnover() -> None:
         return frame
 
     sweet = _frame(close=110.0, ma25=100.0, ma60=95.0, turnover=200_000_000.0)
+    sweet["ts_code"] = "SWEET.SZ"
     hot = _frame(close=122.0, ma25=100.0, ma60=88.0, turnover=2_000_000_000.0)
+    hot["ts_code"] = "HOT.SZ"
 
-    candidates, stats = run_hcr_screen_with_stats({"SWEET.SZ": sweet, "HOT.SZ": hot}, pick_date=pick_date)
+    candidates, stats = run_hcr_screen_with_stats(
+        pd.concat([sweet, hot], ignore_index=True), pick_date=pick_date
+    )
 
     assert stats["selected"] == 2
     assert [item["code"] for item in candidates] == ["SWEET.SZ", "HOT.SZ"]

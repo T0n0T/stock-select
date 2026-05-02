@@ -300,8 +300,8 @@ SZ002703 浙江世宝
 
 ```text
 candidates/<pick_date>.<method>.json
-prepared/<pick_date>.pkl                 # b1 / b2 / dribull 共享基础 prepare
-prepared/<pick_date>.hcr.pkl             # hcr 独立 prepare
+prepared/<pick_date>.feather + prepared/<pick_date>.meta.json      # b1 / b2 / dribull 共享基础 prepare
+prepared/<pick_date>.hcr.feather + prepared/<pick_date>.hcr.meta.json  # hcr 独立 prepare
 charts/<pick_date>.<method>/<code>_day.png
 reviews/<pick_date>.<method>/llm_review_tasks.json
 reviews/<pick_date>.<method>/llm_review_results/<code>.json
@@ -318,8 +318,8 @@ watch_pool.csv
 
 ```text
 candidates/<run_id>.<method>.json
-prepared/<trade_date>.intraday.pkl       # b1 / b2 / dribull 共享基础 prepare
-prepared/<trade_date>.intraday.hcr.pkl   # hcr 独立 prepare
+prepared/<trade_date>.intraday.feather + prepared/<trade_date>.intraday.meta.json  # b1 / b2 / dribull 共享
+prepared/<trade_date>.intraday.hcr.feather + prepared/<trade_date>.intraday.hcr.meta.json  # hcr 独立
 charts/<run_id>.<method>/
 reviews/<run_id>.<method>/
 ```

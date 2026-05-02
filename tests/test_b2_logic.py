@@ -57,7 +57,7 @@ def test_run_b2_screen_with_stats_selects_cur_b2_signal() -> None:
     pick_date = pd.Timestamp("2026-04-10")
     frame = _base_b2_frame()
 
-    candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_b2_screen_with_stats(frame, pick_date=pick_date)
 
     assert [item["code"] for item in candidates] == ["000001.SZ"]
     assert candidates[0]["signal"] == "B2"
@@ -73,7 +73,7 @@ def test_run_b2_screen_with_stats_rejects_when_price_gain_is_too_small() -> None
     frame.loc[frame.index[-1], "high"] = 10.68
     frame.loc[frame.index[-1], "low"] = 10.00
 
-    candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_b2_screen_with_stats(frame, pick_date=pick_date)
 
     assert candidates == []
     assert stats["fail_pct"] == 1
@@ -85,7 +85,7 @@ def test_run_b2_screen_with_stats_rejects_when_previous_bar_not_pre_ok() -> None
     frame = _base_b2_frame()
     frame.loc[frame.index[-2], "close"] = 10.70
 
-    candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_b2_screen_with_stats(frame, pick_date=pick_date)
 
     assert candidates == []
     assert stats["fail_pre_ok"] == 1
@@ -97,7 +97,7 @@ def test_run_b2_screen_with_stats_rejects_when_k_shape_is_invalid() -> None:
     frame = _base_b2_frame()
     frame.loc[frame.index[-1], "high"] = 11.80
 
-    candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_b2_screen_with_stats(frame, pick_date=pick_date)
 
     assert candidates == []
     assert stats["fail_k_shape"] == 1
@@ -120,7 +120,7 @@ def test_run_b2_screen_with_stats_selects_cur_b3_plus_signal() -> None:
     }
     frame = pd.concat([frame, pd.DataFrame([extra])], ignore_index=True)
 
-    candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_b2_screen_with_stats(frame, pick_date=pick_date)
 
     assert [item["code"] for item in candidates] == ["000001.SZ"]
     assert candidates[0]["signal"] == "B3+"
@@ -144,7 +144,7 @@ def test_run_b2_screen_with_stats_ignores_cur_b4_signal() -> None:
     }
     frame = pd.concat([frame, pd.DataFrame([extra])], ignore_index=True)
 
-    candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_b2_screen_with_stats(frame, pick_date=pick_date)
 
     assert candidates == []
 
@@ -177,6 +177,6 @@ def test_run_b2_screen_with_stats_ignores_cur_b5_signal() -> None:
     }
     frame = pd.concat([frame, pd.DataFrame([day_2, day_3])], ignore_index=True)
 
-    candidates, stats = run_b2_screen_with_stats({"000001.SZ": frame}, pick_date=pick_date)
+    candidates, stats = run_b2_screen_with_stats(frame, pick_date=pick_date)
 
     assert candidates == []

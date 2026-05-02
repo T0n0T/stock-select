@@ -5,12 +5,12 @@ Write all generated outputs under:
 ```text
 ~/.agents/skills/stock-select/runtime/
   candidates/<base_key>.<method>.json
-  prepared/<pick_date>.pkl
-  prepared/<pick_date>.b2.pkl
-  prepared/<pick_date>.hcr.pkl
-  prepared/<trade_date>.intraday.pkl
-  prepared/<trade_date>.intraday.b2.pkl
-  prepared/<trade_date>.intraday.hcr.pkl
+  prepared/<pick_date>.feather + prepared/<pick_date>.meta.json
+  prepared/<pick_date>.b2.feather + prepared/<pick_date>.b2.meta.json
+  prepared/<pick_date>.hcr.feather + prepared/<pick_date>.hcr.meta.json
+  prepared/<trade_date>.intraday.feather + prepared/<trade_date>.intraday.meta.json
+  prepared/<trade_date>.intraday.b2.feather + prepared/<trade_date>.intraday.b2.meta.json
+  prepared/<trade_date>.intraday.hcr.feather + prepared/<trade_date>.intraday.hcr.meta.json
   charts/<base_key>.<method>/<code>_day.png
   reviews/<base_key>.<method>/<code>.json
   reviews/<base_key>.<method>/summary.json
@@ -23,10 +23,10 @@ Current behavior:
 
 - `<base_key>` is `<pick_date>` for end-of-day runs and `<run_id>` for intraday snapshot runs.
 - `candidates/<base_key>.<method>.json` stores mode metadata, selected `method`, and screened candidate rows.
-- `prepared/<pick_date>.pkl` stores the shared end-of-day base prepare reused by `b1` and `dribull`.
-- `prepared/<trade_date>.intraday.pkl` stores the shared intraday base prepare reused by `b1` and `dribull`.
-- `prepared/<pick_date>.b2.pkl` and `prepared/<trade_date>.intraday.b2.pkl` store method-specific prepare for the new `b2` screening flow.
-- `prepared/<pick_date>.hcr.pkl` and `prepared/<trade_date>.intraday.hcr.pkl` stay method-specific for `hcr`.
+- `prepared/<pick_date>.feather` + `prepared/<pick_date>.meta.json` stores the shared end-of-day base prepare (as a Feather data table + JSON metadata) reused by `b1` and `dribull`.
+- `prepared/<trade_date>.intraday.feather` + `prepared/<trade_date>.intraday.meta.json` stores the shared intraday base prepare reused by `b1` and `dribull`.
+- `prepared/<pick_date>.b2.feather` + `prepared/<pick_date>.b2.meta.json` and `prepared/<trade_date>.intraday.b2.feather` + `prepared/<trade_date>.intraday.b2.meta.json` store method-specific prepare for the `b2` screening flow.
+- `prepared/<pick_date>.hcr.feather` + `prepared/<pick_date>.hcr.meta.json` and `prepared/<trade_date>.intraday.hcr.feather` + `prepared/<trade_date>.intraday.hcr.meta.json` stay method-specific for `hcr`.
 - `charts/<base_key>.<method>/<code>_day.png` stores rendered daily chart images for chart review.
 - `reviews/<base_key>.<method>/<code>.json` stores the local structured review result for one candidate.
 - `reviews/<base_key>.<method>/summary.json` stores the aggregated recommendations, exclusions, and failures.

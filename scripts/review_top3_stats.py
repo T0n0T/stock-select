@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
 import statistics
 import sys
 from collections import Counter
@@ -13,6 +12,8 @@ SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 import pandas as pd
+
+from stock_select.cli import _load_prepared_cache_v2
 
 
 REVIEWS_DIR = Path("/home/pi/.agents/skills/stock-select/runtime/reviews")
@@ -30,28 +31,44 @@ def collect_pass_top_reviews(summary: dict, *, top_n: int = 3) -> list[dict]:
     )[:top_n]
 
 
-def load_prepared(method: str) -> dict[str, pd.DataFrame]:
+def load_prepared(method: str) -> pd.DataFrame:
     normalized_method = method.strip().lower()
-    pattern = "*-*-*.pkl" if normalized_method in SHARED_PREPARED_METHODS else f"*-*-*.{normalized_method}.pkl"
-    prepared_paths = sorted(PREPARED_DIR.glob(pattern))
-    if not prepared_paths:
+    if normalized_method in SHARED_PREPARED_METHODS:
+        feather_pattern = "*-*-*.feather"
+        ignored_feather_suffixes = {".hcr.feather"}
+    else:
+        feather_pattern = f"*-*-*.{normalized_method}.feather"
+        ignored_feather_suffixes = set()
+
+    candidates: list[Path] = []
+    for path in sorted(PREPARED_DIR.glob(feather_pattern)):
+        if any(path.name.endswith(suffix) for suffix in ignored_feather_suffixes):
+            continue
+        candidates.append(path)
+
+    if not candidates:
         raise FileNotFoundError(
-            f"No prepared pickle matching {pattern} in {PREPARED_DIR}"
+            f"No prepared cache matching {feather_pattern} in {PREPARED_DIR}"
         )
-    payload = pickle.loads(prepared_paths[-1].read_bytes())
-    prepared = payload.get("prepared_by_symbol", payload)
+
+    data_path = sorted(candidates)[-1]
+    payload = _load_prepared_cache_v2(data_path, data_path.with_suffix(".meta.json"))
+    prepared = payload.get("prepared_table")
+    if not isinstance(prepared, pd.DataFrame):
+        raise ValueError("Prepared cache prepared_table missing.")
     return prepared
 
 
 def get_forward_data(
-    prepared: dict[str, pd.DataFrame],
+    prepared: pd.DataFrame,
     code: str,
     pick_date: str,
 ) -> dict:
-    hist = prepared.get(code)
-    if hist is None or len(hist) == 0:
+    if prepared.empty or "ts_code" not in prepared.columns:
         return None
-    df = hist.copy()
+    df = prepared.loc[prepared["ts_code"] == code].copy()
+    if df.empty:
+        return None
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce", format="mixed")
     df = df.sort_values("trade_date").reset_index(drop=True)
     for col in ["open", "close"]:

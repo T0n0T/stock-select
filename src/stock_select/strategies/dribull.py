@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import pandas as pd
 from stock_select.analysis.macd_waves import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.strategies.b1 import DEFAULT_B1_CONFIG, compute_expanding_j_quantile
@@ -34,24 +32,25 @@ _DRIBULL_NUMERIC_COLUMNS = (
 
 
 def run_dribull_screen(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
     config: dict[str, float] | None = None,
 ) -> list[dict]:
-    results, _stats = run_dribull_screen_with_stats(prepared_by_symbol, pick_date, config)
+    results, _stats = run_dribull_screen_with_stats(prepared_table, pick_date, config)
     return results
 
 
 def prefilter_dribull_non_macd(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
     config: dict[str, float] | None = None,
 ) -> list[str]:
     screen_config = DEFAULT_B1_CONFIG if config is None else config
     target_date = pd.Timestamp(pick_date)
     selected: list[str] = []
+    grouped = prepared_table.groupby("ts_code", sort=False) if not prepared_table.empty else []
 
-    for code, prepared in prepared_by_symbol.items():
+    for code, prepared in grouped:
         if prepared.empty or _missing_required_columns(prepared):
             continue
 
@@ -86,15 +85,16 @@ def prefilter_dribull_non_macd(
 
 
 def run_dribull_screen_with_stats(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
     config: dict[str, float] | None = None,
 ) -> tuple[list[dict], dict[str, int]]:
     screen_config = DEFAULT_B1_CONFIG if config is None else config
     target_date = pd.Timestamp(pick_date)
     candidates: list[dict] = []
+    grouped = prepared_table.groupby("ts_code", sort=False) if not prepared_table.empty else []
     stats = {
-        "total_symbols": len(prepared_by_symbol),
+        "total_symbols": prepared_table["ts_code"].nunique() if not prepared_table.empty and "ts_code" in prepared_table.columns else 0,
         "eligible": 0,
         "fail_recent_j": 0,
         "fail_insufficient_history": 0,
@@ -109,7 +109,7 @@ def run_dribull_screen_with_stats(
         "selected": 0,
     }
 
-    for code, prepared in prepared_by_symbol.items():
+    for code, prepared in grouped:
         if prepared.empty:
             continue
 

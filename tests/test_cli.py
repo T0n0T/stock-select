@@ -524,29 +524,32 @@ def test_clean_pick_date_removes_eod_artifacts_only(tmp_path: Path) -> None:
     (reviews_dir / _eod_key("2026-04-10")).mkdir(parents=True, exist_ok=True)
     (reviews_dir / _eod_key("2026-04-10", "dribull")).mkdir(parents=True, exist_ok=True)
     (reviews_dir / _intraday_key("2026-04-10T10-00-00+08-00")).mkdir(parents=True, exist_ok=True)
-    cli._write_prepared_cache(
-        prepared_dir / "2026-04-10.pkl",
+    cli._write_prepared_cache_v2(
+        prepared_dir / "2026-04-10.feather",
+        prepared_dir / "2026-04-10.meta.json",
         method="b1",
         pick_date="2026-04-10",
         start_date="2025-04-09",
         end_date="2026-04-10",
-        prepared_by_symbol={},
+        prepared_table=pd.DataFrame(),
     )
-    cli._write_prepared_cache(
-        prepared_dir / "2026-04-10.hcr.pkl",
+    cli._write_prepared_cache_v2(
+        prepared_dir / "2026-04-10.hcr.feather",
+        prepared_dir / "2026-04-10.hcr.meta.json",
         method="hcr",
         pick_date="2026-04-10",
         start_date="2025-04-09",
         end_date="2026-04-10",
-        prepared_by_symbol={},
+        prepared_table=pd.DataFrame(),
     )
-    cli._write_prepared_cache(
-        prepared_dir / "2026-04-10.intraday.pkl",
+    cli._write_prepared_cache_v2(
+        prepared_dir / "2026-04-10.intraday.feather",
+        prepared_dir / "2026-04-10.intraday.meta.json",
         method="b1",
         pick_date="2026-04-10",
         start_date="2025-04-09",
         end_date="2026-04-10",
-        prepared_by_symbol={},
+        prepared_table=pd.DataFrame(),
         metadata_overrides={"mode": "intraday_snapshot"},
     )
 
@@ -571,9 +574,12 @@ def test_clean_pick_date_removes_eod_artifacts_only(tmp_path: Path) -> None:
     assert not (reviews_dir / _eod_key("2026-04-10")).exists()
     assert not (reviews_dir / _eod_key("2026-04-10", "dribull")).exists()
     assert (reviews_dir / _intraday_key("2026-04-10T10-00-00+08-00")).exists()
-    assert not (prepared_dir / "2026-04-10.pkl").exists()
-    assert not (prepared_dir / "2026-04-10.hcr.pkl").exists()
-    assert (prepared_dir / "2026-04-10.intraday.pkl").exists()
+    assert not (prepared_dir / "2026-04-10.feather").exists()
+    assert not (prepared_dir / "2026-04-10.meta.json").exists()
+    assert not (prepared_dir / "2026-04-10.hcr.feather").exists()
+    assert not (prepared_dir / "2026-04-10.hcr.meta.json").exists()
+    assert (prepared_dir / "2026-04-10.intraday.feather").exists()
+    assert (prepared_dir / "2026-04-10.intraday.meta.json").exists()
 
 
 def test_clean_intraday_removes_only_non_current_trade_date_artifacts(
@@ -626,40 +632,44 @@ def test_clean_intraday_removes_only_non_current_trade_date_artifacts(
     (reviews_dir / _intraday_key(old_run_id)).mkdir(parents=True, exist_ok=True)
     (reviews_dir / _intraday_key(current_run_id, "b2")).mkdir(parents=True, exist_ok=True)
     (reviews_dir / _intraday_key("2026-04-20T09-35-00+08-00", "hcr")).mkdir(parents=True, exist_ok=True)
-    cli._write_prepared_cache(
-        prepared_dir / "2026-04-21.intraday.pkl",
+    cli._write_prepared_cache_v2(
+        prepared_dir / "2026-04-21.intraday.feather",
+        prepared_dir / "2026-04-21.intraday.meta.json",
         method="b1",
         pick_date="2026-04-21",
         start_date="2025-04-20",
         end_date="2026-04-21",
-        prepared_by_symbol={},
+        prepared_table=pd.DataFrame(),
         metadata_overrides={"mode": "intraday_snapshot"},
     )
-    cli._write_prepared_cache(
-        prepared_dir / "2026-04-21.intraday.hcr.pkl",
+    cli._write_prepared_cache_v2(
+        prepared_dir / "2026-04-21.intraday.hcr.feather",
+        prepared_dir / "2026-04-21.intraday.hcr.meta.json",
         method="hcr",
         pick_date="2026-04-21",
         start_date="2025-04-20",
         end_date="2026-04-21",
-        prepared_by_symbol={},
+        prepared_table=pd.DataFrame(),
         metadata_overrides={"mode": "intraday_snapshot"},
     )
-    cli._write_prepared_cache(
-        prepared_dir / "2026-04-22.intraday.pkl",
+    cli._write_prepared_cache_v2(
+        prepared_dir / "2026-04-22.intraday.feather",
+        prepared_dir / "2026-04-22.intraday.meta.json",
         method="b1",
         pick_date="2026-04-22",
         start_date="2025-04-21",
         end_date="2026-04-22",
-        prepared_by_symbol={},
+        prepared_table=pd.DataFrame(),
         metadata_overrides={"mode": "intraday_snapshot"},
     )
-    cli._write_prepared_cache(
-        prepared_dir / "2026-04-22.pkl",
+    cli._write_prepared_cache_v2(
+        prepared_dir / "2026-04-22.feather",
+        prepared_dir / "2026-04-22.meta.json",
         method="b1",
         pick_date="2026-04-22",
         start_date="2025-04-21",
         end_date="2026-04-22",
-        prepared_by_symbol={},
+        prepared_table=pd.DataFrame(),
     )
 
     monkeypatch.setattr(
@@ -681,10 +691,14 @@ def test_clean_intraday_removes_only_non_current_trade_date_artifacts(
     assert not (reviews_dir / _intraday_key(old_run_id)).exists()
     assert (reviews_dir / _intraday_key(current_run_id, "b2")).exists()
     assert not (reviews_dir / _intraday_key("2026-04-20T09-35-00+08-00", "hcr")).exists()
-    assert not (prepared_dir / "2026-04-21.intraday.pkl").exists()
-    assert not (prepared_dir / "2026-04-21.intraday.hcr.pkl").exists()
-    assert (prepared_dir / "2026-04-22.intraday.pkl").exists()
-    assert (prepared_dir / "2026-04-22.pkl").exists()
+    assert not (prepared_dir / "2026-04-21.intraday.feather").exists()
+    assert not (prepared_dir / "2026-04-21.intraday.meta.json").exists()
+    assert not (prepared_dir / "2026-04-21.intraday.hcr.feather").exists()
+    assert not (prepared_dir / "2026-04-21.intraday.hcr.meta.json").exists()
+    assert (prepared_dir / "2026-04-22.intraday.feather").exists()
+    assert (prepared_dir / "2026-04-22.intraday.meta.json").exists()
+    assert (prepared_dir / "2026-04-22.feather").exists()
+    assert (prepared_dir / "2026-04-22.meta.json").exists()
 
 
 def test_analyze_symbol_rejects_path_like_symbol_cleanly(tmp_path: Path) -> None:
@@ -994,7 +1008,7 @@ def test_analyze_symbol_impl_dispatches_supported_methods(
         monkeypatch.setattr(
             cli,
             "_call_prepare_screen_data",
-            lambda market, reporter=None: captured.update({"prepare_kind": "shared"}) or {"002350.SZ": prepared},
+            lambda market, reporter=None: captured.update({"prepare_kind": "shared"}) or prepared.assign(ts_code="002350.SZ"),
         )
         monkeypatch.setattr(
             cli,
@@ -1005,7 +1019,7 @@ def test_analyze_symbol_impl_dispatches_supported_methods(
         monkeypatch.setattr(
             cli,
             "_call_prepare_hcr_screen_data",
-            lambda market, reporter=None: captured.update({"prepare_kind": "hcr"}) or {"002350.SZ": prepared},
+            lambda market, reporter=None: captured.update({"prepare_kind": "hcr"}) or prepared.assign(ts_code="002350.SZ"),
         )
         monkeypatch.setattr(
             cli,
@@ -1016,7 +1030,13 @@ def test_analyze_symbol_impl_dispatches_supported_methods(
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: captured.update({"runner": "b1", "pick_ts": pick_date})
+        lambda prepared_table, pick_date, config: captured.update(
+            {
+                "runner": "b1",
+                "pick_ts": pick_date,
+                "prepared_codes": sorted(prepared_table["ts_code"].unique()),
+            }
+        )
         or ([{"code": "002350.SZ", "pick_date": "2026-04-21", "close": 10.4, "turnover_n": 125.0}], _b1_screen_stats(total_symbols=1, eligible=1, selected=1))
         if method == "b1"
         else pytest.fail("b1 runner should not run"),
@@ -1024,7 +1044,13 @@ def test_analyze_symbol_impl_dispatches_supported_methods(
     monkeypatch.setattr(
         cli,
         "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: captured.update({"runner": "dribull", "pick_ts": pick_date})
+        lambda prepared_table, pick_date, config: captured.update(
+            {
+                "runner": "dribull",
+                "pick_ts": pick_date,
+                "prepared_codes": sorted(prepared_table["ts_code"].unique()),
+            }
+        )
         or ([{"code": "002350.SZ", "pick_date": "2026-04-21", "close": 10.4, "turnover_n": 125.0}], _dribull_trend_stats(total_symbols=1, eligible=1, selected=1))
         if method == "dribull"
         else pytest.fail("dribull runner should not run"),
@@ -1032,7 +1058,13 @@ def test_analyze_symbol_impl_dispatches_supported_methods(
     monkeypatch.setattr(
         cli,
         "run_hcr_screen_with_stats",
-        lambda prepared_by_symbol, pick_date: captured.update({"runner": "hcr", "pick_ts": pick_date})
+        lambda prepared_table, pick_date: captured.update(
+            {
+                "runner": "hcr",
+                "pick_ts": pick_date,
+                "prepared_codes": sorted(prepared_table["ts_code"].unique()),
+            }
+        )
         or (
             [
                 {
@@ -1103,6 +1135,7 @@ def test_analyze_symbol_impl_dispatches_supported_methods(
     assert captured["end_date"] == "2026-04-21"
     assert captured["prepare_kind"] == prepare_kind
     assert captured["runner"] == method
+    assert captured["prepared_codes"] == ["002350.SZ"]
     assert str(captured["pick_ts"].date()) == "2026-04-21"
     if method == "hcr":
         assert captured["hcr_end_date"] == "2026-04-21"
@@ -1729,8 +1762,8 @@ def test_screen_dribull_phase_one_does_not_filter_on_daily_macd(monkeypatch: pyt
             }
         )
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
-        prepared = {}
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
         for code, group in market.groupby("ts_code"):
             group = group.sort_values("trade_date").reset_index(drop=True).copy()
             group["turnover_n"] = 999.0
@@ -1749,22 +1782,26 @@ def test_screen_dribull_phase_one_does_not_filter_on_daily_macd(monkeypatch: pyt
             group["dea_w"] = 0.08
             group["dif_m"] = 0.18
             group["dea_m"] = 0.12
-            prepared[code] = group
-        return prepared
+            frames.append(group)
+        return pd.concat(frames, ignore_index=True)
 
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]},
+        lambda prepared_table, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]},
     )
     monkeypatch.setattr(
         cli,
         "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 999.0}],
-            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(
+                total_symbols=int(prepared_table["ts_code"].nunique()),
+                eligible=int(prepared_table["ts_code"].nunique()),
+                selected=1,
+            ),
         ),
     )
 
@@ -1954,31 +1991,30 @@ def test_screen_custom_pool_rejects_missing_configuration_with_guidance(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "close": [10.2],
+                "J": [10.0],
+                "zxdq": [10.4],
+                "zxdkx": [10.0],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [100.0],
+            }
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -2041,31 +2077,30 @@ def test_screen_custom_pool_rejects_empty_code_list(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "close": [10.2],
+                "J": [10.0],
+                "zxdq": [10.4],
+                "zxdkx": [10.0],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [100.0],
+            }
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -2178,31 +2213,30 @@ def test_screen_writes_candidate_file(tmp_path: Path) -> None:
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "close": [10.6],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [1030.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "close": [10.6],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [1030.0],
+            }
+        )
 
     from stock_select import cli
 
@@ -2260,24 +2294,23 @@ def test_screen_writes_hcr_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(
         cli,
         "_prepare_hcr_screen_data",
-        lambda market, reporter=None: {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-09"]),
-                    "close": [10.6],
-                    "yx": [10.4],
-                    "p": [10.5],
-                    "resonance_gap_pct": [0.0095],
-                    "turnover_n": [1030.0],
-                }
-            )
-        },
+        lambda market, reporter=None: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-09"]),
+                "close": [10.6],
+                "yx": [10.4],
+                "p": [10.5],
+                "resonance_gap_pct": [0.0095],
+                "turnover_n": [1030.0],
+            }
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         cli,
         "run_hcr_screen_with_stats",
-        lambda prepared_by_symbol, pick_date: (
+        lambda prepared_table, pick_date: (
             [
                 {
                     "code": "000001.SZ",
@@ -2471,24 +2504,23 @@ def test_screen_hcr_uses_trade_date_lookback_window(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(
         cli,
         "_prepare_hcr_screen_data",
-        lambda market, reporter=None: {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-09"]),
-                    "close": [10.6],
-                    "yx": [10.4],
-                    "p": [10.5],
-                    "resonance_gap_pct": [0.0095],
-                    "turnover_n": [1030.0],
-                }
-            )
-        },
+        lambda market, reporter=None: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-09"]),
+                "close": [10.6],
+                "yx": [10.4],
+                "p": [10.5],
+                "resonance_gap_pct": [0.0095],
+                "turnover_n": [1030.0],
+            }
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         cli,
         "run_hcr_screen_with_stats",
-        lambda prepared_by_symbol, pick_date: (
+        lambda prepared_table, pick_date: (
             [],
             {
                 "total_symbols": 1,
@@ -2799,14 +2831,12 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
         cli,
         "_load_intraday_prepared_cache",
         lambda current_runtime_root, *, method, run_id, trade_date: (
-            {
-                "000001.SZ": pd.DataFrame(
-                    [
-                        {"date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "volume": 120.0},
-                        {"date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "volume": 150.0},
-                    ]
-                )
-            }
+            pd.DataFrame(
+                [
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                ]
+            )
             if current_runtime_root == runtime_root
             and method == "b1"
             and run_id == "2026-04-09T11-31-08+08-00"
@@ -2851,6 +2881,69 @@ def test_chart_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monke
 
     assert result.exit_code == 0
     assert (runtime_root / "charts" / _intraday_key("2026-04-09T11-31-08+08-00") / "000001.SZ_day.png").exists()
+
+
+def test_chart_intraday_works_with_only_v2_prepared_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    run_id = "2026-04-09T11-31-08+08-00"
+    trade_date = "2026-04-09"
+    (candidate_dir / f"{_intraday_key(run_id)}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "trade_date": trade_date,
+                "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
+                "run_id": run_id,
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / f"{trade_date}.intraday.feather",
+        runtime_root / "prepared" / f"{trade_date}.intraday.meta.json",
+        method="b1",
+        pick_date=trade_date,
+        start_date="2025-04-08",
+        end_date=trade_date,
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+            ]
+        ),
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "run_id": run_id,
+            "previous_trade_date": "2026-04-08",
+            "source": "tushare_rt_k",
+        },
+    )
+
+    exported: dict[str, object] = {}
+
+    def fake_export_daily_chart(history: pd.DataFrame, code: str, path: Path) -> Path:
+        exported["code"] = code
+        exported["rows"] = history.to_dict(orient="records")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"png")
+        return path
+
+    monkeypatch.setattr(cli, "export_daily_chart", fake_export_daily_chart)
+
+    result = runner.invoke(app, ["chart", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code == 0
+    assert exported["code"] == "000001.SZ"
+    assert exported["rows"] == [
+        {"date": pd.Timestamp("2026-04-08"), "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "volume": 120.0},
+        {"date": pd.Timestamp("2026-04-09"), "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "volume": 150.0},
+    ]
+    assert (runtime_root / "charts" / _intraday_key(run_id) / "000001.SZ_day.png").exists()
 
 
 def test_chart_intraday_warns_outside_trading_hours(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2938,13 +3031,11 @@ def test_chart_intraday_rejects_prepared_cache_metadata_mismatch(
         "_load_prepared_cache",
         lambda _path: {
             "pick_date": "2026-04-08",
-            "prepared_by_symbol": {
-                "000001.SZ": pd.DataFrame(
-                    [
-                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-                    ]
-                )
-            },
+            "prepared_table": pd.DataFrame(
+                [
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                ]
+            ),
             "metadata": {
                 "b1_config": cli.DEFAULT_B1_CONFIG,
                 "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
@@ -2981,30 +3072,13 @@ def test_chart_intraday_rejects_stale_b1_prepared_cache(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
-        pick_date="2026-04-09",
-        start_date="2025-04-08",
-        end_date="2026-04-09",
-        prepared_by_symbol={
-            "000001.SZ": pd.DataFrame(
-                [
-                    {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-                    {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
-                ]
-            )
-        },
-        metadata_overrides={
-            "mode": "intraday_snapshot",
-            "run_id": "2026-04-09T11-31-08+08-00",
-            "previous_trade_date": "2026-04-08",
-        },
-    )
+    (runtime_root / "prepared").mkdir(parents=True, exist_ok=True)
+    (runtime_root / "prepared" / "2026-04-09.intraday.feather").write_bytes(b"stale")
 
     result = runner.invoke(app, ["chart", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
 
     assert result.exit_code != 0
-    assert "stale intraday prepared cache" in result.stderr.lower()
+    assert "intraday.meta.json" in str(result.exception).lower()
 
 
 def test_review_writes_summary_json(tmp_path: Path) -> None:
@@ -3687,14 +3761,12 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
         cli,
         "_load_intraday_prepared_cache",
         lambda current_runtime_root, *, method, run_id, trade_date: (
-            {
-                "000001.SZ": pd.DataFrame(
-                    [
-                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-                        {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
-                    ]
-                )
-            }
+            pd.DataFrame(
+                [
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                ]
+            )
             if current_runtime_root == runtime_root
             and method == "b1"
             and run_id == "2026-04-09T11-31-08+08-00"
@@ -3720,8 +3792,8 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
         assert pick_date == "2026-04-09"
         assert Path(chart_path) == chart_dir / "000001.SZ_day.png"
         assert history.to_dict(orient="records") == [
-            {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-            {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+            {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+            {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
         ]
         return {
             "review_type": "baseline",
@@ -3770,6 +3842,117 @@ def test_review_intraday_uses_latest_intraday_candidate(monkeypatch: pytest.Monk
     assert (runtime_root / "reviews" / _intraday_key("2026-04-09T11-31-08+08-00") / "summary.json").exists()
 
 
+def test_review_intraday_works_with_only_v2_prepared_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    candidate_dir = runtime_root / "candidates"
+    run_id = "2026-04-09T11-31-08+08-00"
+    trade_date = "2026-04-09"
+    chart_dir = runtime_root / "charts" / _intraday_key(run_id)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (candidate_dir / f"{_intraday_key(run_id)}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
+                "trade_date": trade_date,
+                "run_id": run_id,
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / f"{trade_date}.intraday.feather",
+        runtime_root / "prepared" / f"{trade_date}.intraday.meta.json",
+        method="b1",
+        pick_date=trade_date,
+        start_date="2025-04-08",
+        end_date=trade_date,
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+            ]
+        ),
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "run_id": run_id,
+            "previous_trade_date": "2026-04-08",
+            "source": "tushare_rt_k",
+        },
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_review_history(
+        *,
+        code: str,
+        pick_date: str,
+        history: pd.DataFrame,
+        chart_path: str,
+    ) -> dict[str, object]:
+        captured["code"] = code
+        captured["pick_date"] = pick_date
+        captured["chart_path"] = chart_path
+        captured["rows"] = history.to_dict(orient="records")
+        return {
+            "review_type": "baseline",
+            "total_score": 4.2,
+            "signal_type": "trend_start",
+            "verdict": "PASS",
+            "comment": "intraday baseline",
+        }
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="default",
+            prompt_path="resolver-prompt.md",
+            review_history=fake_review_history,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_review_payload",
+        lambda **kwargs: {
+            "code": kwargs["code"],
+            "pick_date": kwargs["pick_date"],
+            "chart_path": kwargs["chart_path"],
+            "rubric_path": kwargs["rubric_path"],
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "summarize_reviews",
+        lambda pick_date, method, reviews, min_score, failures: {
+            "pick_date": pick_date,
+            "method": method,
+            "reviewed_count": len(reviews),
+            "recommendations": [{"code": reviews[0]["code"]}] if reviews else [],
+            "excluded": [],
+            "failures": failures,
+        },
+    )
+
+    result = runner.invoke(app, ["review", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
+
+    assert result.exit_code == 0
+    assert captured["code"] == "000001.SZ"
+    assert captured["pick_date"] == trade_date
+    assert Path(str(captured["chart_path"])) == chart_dir / "000001.SZ_day.png"
+    assert captured["rows"] == [
+        {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+        {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+    ]
+    assert (runtime_root / "reviews" / _intraday_key(run_id) / "summary.json").exists()
+
+
 def test_review_intraday_rejects_stale_b1_prepared_cache(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -3791,30 +3974,10 @@ def test_review_intraday_rejects_stale_b1_prepared_cache(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
-        pick_date="2026-04-09",
-        start_date="2025-04-08",
-        end_date="2026-04-09",
-        prepared_by_symbol={
-            "000001.SZ": pd.DataFrame(
-                [
-                    {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-                    {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
-                ]
-            )
-        },
-        metadata_overrides={
-            "mode": "intraday_snapshot",
-            "run_id": "2026-04-09T11-31-08+08-00",
-            "previous_trade_date": "2026-04-08",
-        },
-    )
-
     result = runner.invoke(app, ["review", "--method", "b1", "--intraday", "--runtime-root", str(runtime_root)])
 
     assert result.exit_code != 0
-    assert "stale intraday prepared cache" in result.stderr.lower()
+    assert "intraday.meta.json" in str(result.exception).lower()
 
 
 def test_review_intraday_warns_outside_trading_hours(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -3866,14 +4029,12 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
         cli,
         "_load_intraday_prepared_cache",
         lambda current_runtime_root, *, method, run_id, trade_date: (
-            {
-                "000001.SZ": pd.DataFrame(
-                    [
-                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-                        {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
-                    ]
-                )
-            }
+            pd.DataFrame(
+                [
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                ]
+            )
             if current_runtime_root == runtime_root
             and method == "b2"
             and run_id == "2026-04-09T11-31-08+08-00"
@@ -3892,8 +4053,8 @@ def test_review_intraday_uses_method_specific_resolver_prompt_and_baseline(
     resolver_calls: list[dict[str, object]] = []
     resolver_methods: list[str] = []
     expected_rows = [
-        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-        {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+        {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+        {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
     ]
 
     def fake_review_history(
@@ -4005,20 +4166,14 @@ def test_review_intraday_filters_llm_tasks_by_min_baseline_score(
     monkeypatch.setattr(
         cli,
         "_load_intraday_prepared_cache",
-        lambda current_runtime_root, *, method, run_id, trade_date: {
-            "000001.SZ": pd.DataFrame(
-                [
-                    {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-                    {"trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
-                ]
-            ),
-            "000002.SZ": pd.DataFrame(
-                [
-                    {"trade_date": "2026-04-08", "open": 21.9, "high": 22.1, "low": 21.8, "close": 22.0, "vol": 220.0},
-                    {"trade_date": "2026-04-09", "open": 22.1, "high": 22.5, "low": 22.0, "close": 22.34, "vol": 250.0},
-                ]
-            ),
-        },
+        lambda current_runtime_root, *, method, run_id, trade_date: pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+                {"ts_code": "000002.SZ", "trade_date": "2026-04-08", "open": 21.9, "high": 22.1, "low": 21.8, "close": 22.0, "vol": 220.0},
+                {"ts_code": "000002.SZ", "trade_date": "2026-04-09", "open": 22.1, "high": 22.5, "low": 22.0, "close": 22.34, "vol": 250.0},
+            ]
+        ),
     )
 
     baseline_scores = {"000001.SZ": 4.1, "000002.SZ": 3.8}
@@ -4369,13 +4524,11 @@ def test_review_intraday_rejects_prepared_cache_metadata_mismatch(
         "_load_prepared_cache",
         lambda _path: {
             "pick_date": "2026-04-09",
-            "prepared_by_symbol": {
-                "000001.SZ": pd.DataFrame(
-                    [
-                        {"trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
-                    ]
-                )
-            },
+            "prepared_table": pd.DataFrame(
+                [
+                    {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                ]
+            ),
                 "metadata": {
                     "b1_config": cli.DEFAULT_B1_CONFIG,
                     "turnover_window": cli.DEFAULT_TURNOVER_WINDOW,
@@ -4997,31 +5150,30 @@ def test_run_writes_final_summary(tmp_path: Path) -> None:
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "close": [10.6],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [1030.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "close": [10.6],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [1030.0],
+            }
+        )
 
     def fake_fetch_symbol_history(
         connection: object,
@@ -6304,58 +6456,63 @@ def test_screen_writes_candidate_records_from_market_data(monkeypatch, tmp_path:
             }
         )
 
-    def fake_prepare_screen_data(market: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(market: pd.DataFrame) -> pd.DataFrame:
         assert not market.empty
-        return {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-03-31", "2026-04-01"]),
-                    "close": [10.4, 10.7],
-                    "ma25": [10.5, 10.8],
-                    "ma60": [10.0, 10.2],
-                    "J": [11.0, 10.0],
-                    "zxdq": [10.2, 10.5],
-                    "zxdkx": [10.0, 10.2],
-                    "weekly_ma_bull": [True, True],
-                    "max_vol_not_bearish": [True, True],
-                    "chg_d": [1.0, 1.0],
-                    "amp_d": [2.0, 2.0],
-                    "body_d": [-1.0, -1.0],
-                    "vm3": [90.0, 90.0],
-                    "vm5": [100.0, 100.0],
-                    "vm10": [120.0, 120.0],
-                    "m5": [10.2, 10.5],
-                    "v_shrink": [True, True],
-                    "safe_mode": [True, True],
-                    "lt_filter": [True, True],
-                    "turnover_n": [1020.0, 2280.0],
-                }
-            ),
-            "000002.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "close": [9.3],
-                    "ma25": [9.0],
-                    "ma60": [9.5],
-                    "J": [90.0],
-                    "zxdq": [9.1],
-                    "zxdkx": [9.4],
-                    "weekly_ma_bull": [False],
-                    "max_vol_not_bearish": [False],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [9.2],
-                    "v_shrink": [False],
-                    "safe_mode": [False],
-                    "lt_filter": [False],
-                    "turnover_n": [760.0],
-                }
-            ),
-        }
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["000001.SZ", "000001.SZ"],
+                        "trade_date": pd.to_datetime(["2026-03-31", "2026-04-01"]),
+                        "close": [10.4, 10.7],
+                        "ma25": [10.5, 10.8],
+                        "ma60": [10.0, 10.2],
+                        "J": [11.0, 10.0],
+                        "zxdq": [10.2, 10.5],
+                        "zxdkx": [10.0, 10.2],
+                        "weekly_ma_bull": [True, True],
+                        "max_vol_not_bearish": [True, True],
+                        "chg_d": [1.0, 1.0],
+                        "amp_d": [2.0, 2.0],
+                        "body_d": [-1.0, -1.0],
+                        "vm3": [90.0, 90.0],
+                        "vm5": [100.0, 100.0],
+                        "vm10": [120.0, 120.0],
+                        "m5": [10.2, 10.5],
+                        "v_shrink": [True, True],
+                        "safe_mode": [True, True],
+                        "lt_filter": [True, True],
+                        "turnover_n": [1020.0, 2280.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["000002.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-01"]),
+                        "close": [9.3],
+                        "ma25": [9.0],
+                        "ma60": [9.5],
+                        "J": [90.0],
+                        "zxdq": [9.1],
+                        "zxdkx": [9.4],
+                        "weekly_ma_bull": [False],
+                        "max_vol_not_bearish": [False],
+                        "chg_d": [1.0],
+                        "amp_d": [2.0],
+                        "body_d": [-1.0],
+                        "vm3": [90.0],
+                        "vm5": [100.0],
+                        "vm10": [120.0],
+                        "m5": [9.2],
+                        "v_shrink": [False],
+                        "safe_mode": [False],
+                        "lt_filter": [False],
+                        "turnover_n": [760.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -6417,31 +6574,30 @@ def test_screen_uses_env_dsn_when_option_missing(monkeypatch, tmp_path: Path) ->
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "close": [10.6],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [1030.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "close": [10.6],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [1030.0],
+            }
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -6493,31 +6649,30 @@ def test_screen_uses_dotenv_dsn_when_option_and_env_missing(monkeypatch, tmp_pat
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "close": [10.6],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [1030.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "close": [10.6],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [1030.0],
+            }
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -6570,31 +6725,30 @@ def test_screen_option_dsn_overrides_dotenv(monkeypatch, tmp_path: Path) -> None
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "close": [10.6],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [1030.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "close": [10.6],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [1030.0],
+            }
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -6646,31 +6800,30 @@ def test_screen_can_disable_progress_output(tmp_path: Path) -> None:
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "close": [10.6],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [1030.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "close": [10.6],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [1030.0],
+            }
+        )
 
     from stock_select import cli
 
@@ -6724,8 +6877,8 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {"000001.SZ": pd.DataFrame()}
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame({"ts_code": ["000001.SZ"]})
 
     from stock_select import cli
 
@@ -6737,12 +6890,11 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
     original_pool = cli.build_top_turnover_pool
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["000001.SZ"]
-        assert prepared_by_symbol["000001.SZ"].empty
+        assert list(prepared_table["ts_code"].unique()) == ["000001.SZ"]
         assert pick_date == pd.Timestamp("2026-04-01")
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
@@ -6764,7 +6916,7 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
             ),
         )
 
-    def fake_build_top_turnover_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+    def fake_build_top_turnover_pool(prepared_table: pd.DataFrame, *, top_m: int):
         assert top_m == 5000
         return {pd.Timestamp("2026-04-01"): ["000001.SZ"]}
 
@@ -6896,70 +7048,301 @@ def test_prepare_screen_data_uses_reference_b1_windows() -> None:
         cli.compute_weekly_ma_bull = original_weekly  # type: ignore[assignment]
         cli.max_vol_not_bearish = original_max_vol  # type: ignore[assignment]
 
-    assert list(prepared) == ["000001.SZ"]
+    assert isinstance(prepared, pd.DataFrame)
+    assert set(prepared["ts_code"].unique()) == {"000001.SZ"}
     assert turnover_windows == [43]
     assert weekly_periods == [(10, 20, 30)]
-    assert {"dif", "dea", "macd_hist"}.issubset(prepared["000001.SZ"].columns)
-    assert prepared["000001.SZ"]["dif"].notna().all()
-    assert prepared["000001.SZ"]["dea"].notna().all()
-    assert prepared["000001.SZ"]["macd_hist"].notna().all()
+    assert {"dif", "dea", "macd_hist"}.issubset(prepared.columns)
+    assert prepared["dif"].notna().all()
+    assert prepared["dea"].notna().all()
+    assert prepared["macd_hist"].notna().all()
+
+
+def test_prepare_screen_data_returns_single_prepared_table() -> None:
+    market = pd.DataFrame(
+        {
+            "ts_code": ["AAA.SZ", "AAA.SZ", "BBB.SZ", "BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-01", "2026-04-02"]),
+            "open": [10.0, 10.2, 20.0, 20.1],
+            "high": [10.3, 10.4, 20.4, 20.5],
+            "low": [9.9, 10.1, 19.8, 20.0],
+            "close": [10.2, 10.3, 20.2, 20.4],
+            "vol": [100.0, 120.0, 200.0, 210.0],
+        }
+    )
+
+    prepared = cli._prepare_screen_data(market)
+
+    assert isinstance(prepared, pd.DataFrame)
+    assert {"ts_code", "trade_date", "close", "turnover_n", "J", "ma25", "ma60", "zxdq", "zxdkx"}.issubset(prepared.columns)
+    expected = prepared.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+    pd.testing.assert_frame_equal(prepared.reset_index(drop=True), expected)
+
+
+def test_prepare_hcr_screen_data_returns_single_prepared_table() -> None:
+    market = pd.DataFrame(
+        {
+            "ts_code": ["AAA.SZ", "AAA.SZ", "BBB.SZ", "BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-01", "2026-04-02"]),
+            "open": [10.0, 10.2, 20.0, 20.1],
+            "high": [10.3, 10.4, 20.4, 20.5],
+            "low": [9.9, 10.1, 19.8, 20.0],
+            "close": [10.2, 10.3, 20.2, 20.4],
+            "vol": [100.0, 120.0, 200.0, 210.0],
+        }
+    )
+
+    prepared = cli._prepare_hcr_screen_data(market)
+
+    assert isinstance(prepared, pd.DataFrame)
+    assert {"ts_code", "trade_date", "close", "turnover_n", "ma25", "ma60", "yx", "p", "resonance_gap_pct"}.issubset(prepared.columns)
+    expected = prepared.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+    pd.testing.assert_frame_equal(prepared.reset_index(drop=True), expected)
 
 
 def test_prepared_cache_round_trip(tmp_path: Path) -> None:
-    cache_path = tmp_path / "prepared" / f"{_eod_key('2026-04-01')}.pkl"
-    prepared_by_symbol = {
-        "AAA.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-01"]),
-                "turnover_n": [100.0],
-                "J": [10.0],
-            }
-        )
-    }
+    runtime_root = tmp_path / "runtime"
+    data_path = cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b1")
+    data_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame().to_feather(data_path)
 
-    cli._write_prepared_cache(
-        cache_path,
+    with pytest.raises(FileNotFoundError, match="meta.json"):
+        cli._load_prepared_cache(data_path.with_suffix(".feather"))
+
+
+def test_prepared_cache_v2_round_trip(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    data_path = cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b1")
+    meta_path = cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "b1")
+    prepared_table = pd.DataFrame(
+        {
+            "ts_code": ["AAA.SZ", "AAA.SZ", "BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-03-31", "2026-04-01", "2026-04-01"]),
+            "turnover_n": [90.0, 100.0, 80.0],
+            "J": [9.0, 10.0, 8.0],
+        }
+    )
+
+    cli._write_prepared_cache_v2(
+        data_path,
+        meta_path,
+        method="b1",
         pick_date="2026-04-01",
         start_date="2025-03-31",
         end_date="2026-04-01",
-        prepared_by_symbol=prepared_by_symbol,
+        prepared_table=prepared_table,
+        metadata_overrides={"mode": "eod"},
     )
 
-    payload = cli._load_prepared_cache(cache_path)
+    payload = cli._load_prepared_cache_v2(data_path, meta_path)
 
     assert payload["pick_date"] == "2026-04-01"
     assert payload["start_date"] == "2025-03-31"
     assert payload["end_date"] == "2026-04-01"
-    pd.testing.assert_frame_equal(payload["prepared_by_symbol"]["AAA.SZ"], prepared_by_symbol["AAA.SZ"])
+    assert payload["metadata"]["method"] == "b1"
+    assert payload["metadata"]["mode"] == "eod"
+    pd.testing.assert_frame_equal(payload["prepared_table"], prepared_table)
 
 
-def test_prepared_cache_path_uses_shared_eod_file_for_b1_and_b2(tmp_path: Path) -> None:
+def test_load_prepared_cache_v2_round_trip_with_defaults(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    data_path = cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b1")
+    meta_path = cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "b1")
+
+    data_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    cli._write_prepared_cache_v2(
+        data_path,
+        meta_path,
+        method="b1",
+        pick_date="2026-04-01",
+        start_date="2025-03-31",
+        end_date="2026-04-01",
+        prepared_table=pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [100.0],
+                "J": [10.0],
+            }
+        ),
+        metadata_overrides={"source": "v2"},
+    )
+
+    payload = cli._load_prepared_cache(data_path)
+
+    assert payload["start_date"] == "2025-03-31"
+    assert sorted(payload["prepared_table"]["ts_code"].unique()) == ["NEW.SZ"]
+    assert payload["metadata"]["source"] == "v2"
+
+
+def test_load_prepared_cache_v2_rejects_missing_metadata(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    data_path = cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b1")
+    meta_path = cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "b1")
+
+    data_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "ts_code": ["AAA.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01"]),
+            "turnover_n": [100.0],
+            "J": [10.0],
+        }
+    ).to_feather(data_path)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "start_date": "2025-03-31",
+                "end_date": "2026-04-01",
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="metadata missing"):
+        cli._load_prepared_cache_v2(data_path, meta_path)
+
+
+def test_prepared_cache_data_path_eod_uses_shared_stem_for_b1_b2_and_dribull(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
 
-    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b1") == runtime_root / "prepared" / "2026-04-01.pkl"
-    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "b2") == runtime_root / "prepared" / "2026-04-01.pkl"
-    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "dribull") == runtime_root / "prepared" / "2026-04-01.pkl"
-    assert cli._prepared_cache_path(runtime_root, "2026-04-01", "hcr") == runtime_root / "prepared" / "2026-04-01.hcr.pkl"
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b1")
+        == runtime_root / "prepared" / "2026-04-01.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b2")
+        == runtime_root / "prepared" / "2026-04-01.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "dribull")
+        == runtime_root / "prepared" / "2026-04-01.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "hcr")
+        == runtime_root / "prepared" / "2026-04-01.hcr.feather"
+    )
 
 
-def test_prepared_cache_path_uses_shared_intraday_file_for_b1_and_b2(tmp_path: Path) -> None:
+def test_prepared_cache_meta_path_eod_uses_shared_stem_for_b1_b2_and_dribull(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
 
     assert (
-        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "b1")
-        == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "b1")
+        == runtime_root / "prepared" / "2026-04-01.meta.json"
     )
     assert (
-        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "b2")
-        == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "b2")
+        == runtime_root / "prepared" / "2026-04-01.meta.json"
     )
     assert (
-        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "dribull")
-        == runtime_root / "prepared" / "2026-04-09.intraday.pkl"
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "dribull")
+        == runtime_root / "prepared" / "2026-04-01.meta.json"
     )
     assert (
-        cli._prepared_cache_path(runtime_root, "2026-04-09.intraday", "hcr")
-        == runtime_root / "prepared" / "2026-04-09.intraday.hcr.pkl"
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "hcr")
+        == runtime_root / "prepared" / "2026-04-01.hcr.meta.json"
+    )
+
+
+def test_prepared_cache_artifact_stem_uses_shared_base_key_for_shared_methods_and_hcr() -> None:
+    assert cli._prepared_cache_artifact_stem("2026-04-01", "b1") == "2026-04-01"
+    assert cli._prepared_cache_artifact_stem("2026-04-01", "b2") == "2026-04-01"
+    assert cli._prepared_cache_artifact_stem("2026-04-01", "dribull") == "2026-04-01"
+    assert cli._prepared_cache_artifact_stem("2026-04-01", "hcr") == "2026-04-01.hcr"
+
+    assert cli._prepared_cache_artifact_stem("2026-04-09.intraday", "b1") == "2026-04-09.intraday"
+    assert cli._prepared_cache_artifact_stem("2026-04-09.intraday", "b2") == "2026-04-09.intraday"
+    assert cli._prepared_cache_artifact_stem("2026-04-09.intraday", "dribull") == "2026-04-09.intraday"
+    assert cli._prepared_cache_artifact_stem("2026-04-09.intraday", "hcr") == "2026-04-09.intraday.hcr"
+
+
+def test_prepared_cache_data_path_v2_uses_shared_base_key_for_b1_b2_and_dribull(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b1")
+        == runtime_root / "prepared" / "2026-04-01.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b2")
+        == runtime_root / "prepared" / "2026-04-01.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "dribull")
+        == runtime_root / "prepared" / "2026-04-01.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "hcr")
+        == runtime_root / "prepared" / "2026-04-01.hcr.feather"
+    )
+
+
+def test_prepared_cache_meta_path_v2_uses_shared_base_key_and_hcr_artifact_key(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+
+    assert (
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "b1")
+        == runtime_root / "prepared" / "2026-04-01.meta.json"
+    )
+    assert (
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "dribull")
+        == runtime_root / "prepared" / "2026-04-01.meta.json"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "hcr")
+        == runtime_root / "prepared" / "2026-04-01.hcr.feather"
+    )
+    assert (
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "hcr")
+        == runtime_root / "prepared" / "2026-04-01.hcr.meta.json"
+    )
+
+
+def test_prepared_cache_data_path_v2_uses_shared_intraday_base_key_for_shared_methods_and_hcr(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-09.intraday", "b1")
+        == runtime_root / "prepared" / "2026-04-09.intraday.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-09.intraday", "b2")
+        == runtime_root / "prepared" / "2026-04-09.intraday.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-09.intraday", "dribull")
+        == runtime_root / "prepared" / "2026-04-09.intraday.feather"
+    )
+    assert (
+        cli._prepared_cache_data_path(runtime_root, "2026-04-09.intraday", "hcr")
+        == runtime_root / "prepared" / "2026-04-09.intraday.hcr.feather"
+    )
+
+
+def test_prepared_cache_meta_path_v2_uses_shared_intraday_base_key_for_shared_methods_and_hcr(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+
+    assert (
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-09.intraday", "b1")
+        == runtime_root / "prepared" / "2026-04-09.intraday.meta.json"
+    )
+    assert (
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-09.intraday", "b2")
+        == runtime_root / "prepared" / "2026-04-09.intraday.meta.json"
+    )
+    assert (
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-09.intraday", "dribull")
+        == runtime_root / "prepared" / "2026-04-09.intraday.meta.json"
+    )
+    assert (
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-09.intraday", "hcr")
+        == runtime_root / "prepared" / "2026-04-09.intraday.hcr.meta.json"
     )
 
 
@@ -6982,7 +7365,7 @@ def test_prepare_screen_data_adds_b1_tightening_columns() -> None:
 
     prepared = cli._prepare_screen_data(market)
 
-    frame = prepared["000001.SZ"]
+    frame = prepared.loc[prepared["ts_code"] == "000001.SZ"].reset_index(drop=True)
     row = frame.iloc[-1]
     assert {
         "chg_d",
@@ -7028,45 +7411,50 @@ def test_screen_uses_reference_b1_defaults_and_liquidity_pool(tmp_path: Path) ->
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [100.0],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "close": [10.6],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [200.0],
-                    "J": [10.0],
-                    "zxdq": [11.5],
-                    "zxdkx": [11.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "close": [11.6],
-                }
-            ),
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-01"]),
+                        "turnover_n": [100.0],
+                        "J": [10.0],
+                        "zxdq": [10.5],
+                        "zxdkx": [10.2],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "close": [10.6],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["BBB.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-01"]),
+                        "turnover_n": [200.0],
+                        "J": [10.0],
+                        "zxdq": [11.5],
+                        "zxdkx": [11.2],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "close": [11.6],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
 
-    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], top_m: int):
+    def fake_pool(prepared_table: pd.DataFrame, top_m: int):
         assert top_m == 5000
-        assert sorted(prepared_by_symbol) == ["AAA.SZ", "BBB.SZ"]
+        assert sorted(prepared_table["ts_code"].unique()) == ["AAA.SZ", "BBB.SZ"]
         return {pd.Timestamp("2026-04-01"): ["BBB.SZ"]}
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        assert list(prepared_table["ts_code"].unique()) == ["BBB.SZ"]
         assert pick_date == pd.Timestamp("2026-04-01")
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
@@ -7139,63 +7527,68 @@ def test_screen_uses_reference_dribull_defaults_shared_prep_and_liquidity_pool(t
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "turnover_n": [100.0],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "low": [10.3],
-                    "close": [10.6],
-                    "volume": [100.0],
-                    "ma25": [10.5],
-                    "ma60": [10.4],
-                    "ma144": [9.6],
-                    "dif": [0.11],
-                    "dea": [0.08],
-                    "dif_w": [0.20],
-                    "dea_w": [0.15],
-                    "dif_m": [0.30],
-                    "dea_m": [0.22],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "turnover_n": [200.0],
-                    "J": [10.0],
-                    "zxdq": [11.5],
-                    "zxdkx": [11.2],
-                    "low": [11.3],
-                    "close": [11.6],
-                    "volume": [120.0],
-                    "ma25": [11.5],
-                    "ma60": [11.4],
-                    "ma144": [10.6],
-                    "dif": [0.21],
-                    "dea": [0.18],
-                    "dif_w": [0.30],
-                    "dea_w": [0.25],
-                    "dif_m": [0.40],
-                    "dea_m": [0.32],
-                }
-            ),
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-10"]),
+                        "turnover_n": [100.0],
+                        "J": [10.0],
+                        "zxdq": [10.5],
+                        "zxdkx": [10.2],
+                        "low": [10.3],
+                        "close": [10.6],
+                        "volume": [100.0],
+                        "ma25": [10.5],
+                        "ma60": [10.4],
+                        "ma144": [9.6],
+                        "dif": [0.11],
+                        "dea": [0.08],
+                        "dif_w": [0.20],
+                        "dea_w": [0.15],
+                        "dif_m": [0.30],
+                        "dea_m": [0.22],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["BBB.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-10"]),
+                        "turnover_n": [200.0],
+                        "J": [10.0],
+                        "zxdq": [11.5],
+                        "zxdkx": [11.2],
+                        "low": [11.3],
+                        "close": [11.6],
+                        "volume": [120.0],
+                        "ma25": [11.5],
+                        "ma60": [11.4],
+                        "ma144": [10.6],
+                        "dif": [0.21],
+                        "dea": [0.18],
+                        "dif_w": [0.30],
+                        "dea_w": [0.25],
+                        "dif_m": [0.40],
+                        "dea_m": [0.32],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
 
-    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], top_m: int):
+    def fake_pool(prepared_table: pd.DataFrame, top_m: int):
         assert top_m == 5000
-        assert sorted(prepared_by_symbol) == ["AAA.SZ", "BBB.SZ"]
+        assert sorted(prepared_table["ts_code"].unique()) == ["AAA.SZ", "BBB.SZ"]
         return {pd.Timestamp("2026-04-10"): ["BBB.SZ"]}
 
     def fake_run_dribull_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        assert list(prepared_table["ts_code"].unique()) == ["BBB.SZ"]
         assert pick_date == pd.Timestamp("2026-04-10")
         assert config == {"j_threshold": 15.0, "j_q_threshold": 0.10}
         return (
@@ -7286,8 +7679,8 @@ def test_screen_dribull_real_flow_uses_shared_prep_and_liquidity_pool(
                 )
         return pd.DataFrame(market_rows)
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
-        prepared: dict[str, pd.DataFrame] = {}
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
         for code, group in market.groupby("ts_code"):
             group = group.sort_values("trade_date").reset_index(drop=True).copy()
             group["turnover_n"] = 100.0 if code == "AAA.SZ" else 200.0
@@ -7299,8 +7692,8 @@ def test_screen_dribull_real_flow_uses_shared_prep_and_liquidity_pool(
             group["ma25"] = group["close"] - 0.10
             group["ma60"] = group["close"] - 0.20
             group["ma144"] = group["close"]
-            prepared[code] = group
-        return prepared
+            frames.append(group)
+        return pd.concat(frames, ignore_index=True)
 
     run_calls: list[list[str]] = []
 
@@ -7310,16 +7703,16 @@ def test_screen_dribull_real_flow_uses_shared_prep_and_liquidity_pool(
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+        lambda prepared_table, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
     )
-    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_table, pick_date, config=None: ["BBB.SZ"])
     monkeypatch.setattr(
         cli,
         "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
-            run_calls.append(sorted(prepared_by_symbol))
+        lambda prepared_table, pick_date, config: (
+            run_calls.append(sorted(prepared_table["ts_code"].unique()))
             or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.02, "turnover_n": 359.0}],
-            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(total_symbols=len(prepared_table["ts_code"].unique()), eligible=len(prepared_table["ts_code"].unique()), selected=1),
         ),
     )
 
@@ -7388,35 +7781,34 @@ def test_screen_dribull_uses_longer_warmup_start_date_for_period_macd(
     monkeypatch.setattr(
         cli,
         "_prepare_screen_data",
-        lambda market, reporter=None: {
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "close": [13.18],
-                    "J": [10.0],
-                    "zxdq": [13.4],
-                    "zxdkx": [13.0],
-                    "low": [13.0],
-                    "volume": [120.0],
-                    "vol": [120.0],
-                    "ma25": [13.0],
-                    "ma60": [12.8],
-                    "ma144": [12.6],
-                    "turnover_n": [200.0],
-                }
-            )
-        },
+        lambda market, reporter=None: pd.DataFrame(
+            {
+                "ts_code": ["BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10"]),
+                "close": [13.18],
+                "J": [10.0],
+                "zxdq": [13.4],
+                "zxdkx": [13.0],
+                "low": [13.0],
+                "volume": [120.0],
+                "vol": [120.0],
+                "ma25": [13.0],
+                "ma60": [12.8],
+                "ma144": [12.6],
+                "turnover_n": [200.0],
+            }
+        ),
     )
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+        lambda prepared_table, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
     )
-    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_table, pick_date, config=None: ["BBB.SZ"])
     monkeypatch.setattr(
         cli,
         "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.18, "turnover_n": 200.0}],
             _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
         ),
@@ -7450,7 +7842,7 @@ def test_screen_dribull_uses_two_phase_fetch_and_only_warms_pool_symbols(
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
     fetch_calls: list[dict[str, object]] = []
     prepared_calls: list[list[str]] = []
-    run_inputs: dict[str, pd.DataFrame] = {}
+    run_inputs: list[str] = []
 
     def fake_connect(_: str) -> object:
         return object()
@@ -7492,10 +7884,10 @@ def test_screen_dribull_uses_two_phase_fetch_and_only_warms_pool_symbols(
         )
         return _market_frame(request_symbols)
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
         codes = sorted(market["ts_code"].unique().tolist())
         prepared_calls.append(codes)
-        prepared: dict[str, pd.DataFrame] = {}
+        frames: list[pd.DataFrame] = []
         for code, group in market.groupby("ts_code"):
             group = group.sort_values("trade_date").reset_index(drop=True).copy()
             group["turnover_n"] = 100.0 if code != "BBB.SZ" else 999.0
@@ -7516,21 +7908,21 @@ def test_screen_dribull_uses_two_phase_fetch_and_only_warms_pool_symbols(
             if code == "BBB.SZ":
                 group.loc[group.index[-1], "volume"] = group.loc[group.index[-2], "volume"] - 1.0
                 group.loc[group.index[-1], "vol"] = group.loc[group.index[-1], "volume"]
-            prepared[code] = group
-        return prepared
+            frames.append(group)
+        return pd.concat(frames, ignore_index=True)
 
     pool_calls: list[list[str]] = []
 
-    def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
-        pool_calls.append(sorted(prepared_by_symbol))
+    def fake_pool(prepared_table: pd.DataFrame, *, top_m: int):
+        pool_calls.append(sorted(prepared_table["ts_code"].unique()))
         return {pd.Timestamp("2026-04-10"): ["BBB.SZ"]}
 
     def fake_run_dribull_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        run_inputs.update(prepared_by_symbol)
+        run_inputs[:] = sorted(prepared_table["ts_code"].unique())
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
             _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
@@ -7564,7 +7956,7 @@ def test_screen_dribull_uses_two_phase_fetch_and_only_warms_pool_symbols(
     ]
     assert prepared_calls == [["AAA.SZ", "BBB.SZ", "CCC.SZ"], ["BBB.SZ"]]
     assert pool_calls == [["AAA.SZ", "BBB.SZ", "CCC.SZ"], ["BBB.SZ"]]
-    assert sorted(run_inputs) == ["BBB.SZ"]
+    assert run_inputs == ["BBB.SZ"]
 
 
 def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
@@ -7575,7 +7967,7 @@ def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
     runtime_root = tmp_path / "runtime"
     trade_dates = pd.bdate_range(end="2026-04-10", periods=160)
     fetch_calls: list[dict[str, object]] = []
-    warmup_run_inputs: dict[str, pd.DataFrame] = {}
+    warmup_run_inputs: list[str] = []
 
     def fake_connect(_: str) -> object:
         return object()
@@ -7617,8 +8009,8 @@ def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
         )
         return _market_frame(request_symbols)
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
-        prepared: dict[str, pd.DataFrame] = {}
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
         for code, group in market.groupby("ts_code"):
             group = group.sort_values("trade_date").reset_index(drop=True).copy()
             group["turnover_n"] = 999.0
@@ -7644,20 +8036,24 @@ def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
             elif code == "CCC.SZ":
                 group.loc[group.index[-1], "volume"] = group.loc[group.index[-2], "volume"] + 1.0
                 group.loc[group.index[-1], "vol"] = group.loc[group.index[-1], "volume"]
-            prepared[code] = group
-        return prepared
+            frames.append(group)
+        return pd.concat(frames, ignore_index=True)
+
+    def fake_run_dribull_screen_with_stats(
+        prepared_table: pd.DataFrame,
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        warmup_run_inputs.extend(sorted(prepared_table["ts_code"].unique()))
+        return (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
+            _dribull_trend_stats(total_symbols=len(prepared_table["ts_code"].unique()), eligible=len(prepared_table["ts_code"].unique()), selected=1),
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
-    monkeypatch.setattr(
-        cli,
-        "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
-            warmup_run_inputs.update(prepared_by_symbol) or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
-        ),
-    )
+    monkeypatch.setattr(cli, "run_dribull_screen_with_stats", fake_run_dribull_screen_with_stats)
 
     result = runner.invoke(
         app,
@@ -7679,7 +8075,7 @@ def test_screen_dribull_phase_one_prefilters_non_macd_rules_before_warmup(
         {"start_date": "2025-04-09", "end_date": "2026-04-10", "symbols": None},
         {"start_date": "2023-01-01", "end_date": "2026-04-10", "symbols": ["BBB.SZ"]},
     ]
-    assert sorted(warmup_run_inputs) == ["BBB.SZ"]
+    assert warmup_run_inputs == ["BBB.SZ"]
 
 
 def test_screen_dribull_writes_prepared_cache_before_prefilter(
@@ -7721,8 +8117,8 @@ def test_screen_dribull_writes_prepared_cache_before_prefilter(
                 )
         return pd.DataFrame(market_rows)
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
-        prepared: dict[str, pd.DataFrame] = {}
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
+        prepared_frames: list[pd.DataFrame] = []
         for code, group in market.groupby("ts_code"):
             group = group.sort_values("trade_date").reset_index(drop=True).copy()
             group["turnover_n"] = 999.0
@@ -7740,19 +8136,27 @@ def test_screen_dribull_writes_prepared_cache_before_prefilter(
             group["dea_w"] = 0.15
             group["dif_m"] = 0.30
             group["dea_m"] = 0.22
-            prepared[code] = group
-        return prepared
+            prepared_frames.append(group)
+        return pd.concat(prepared_frames, ignore_index=True)
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
     monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
-    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(
+        cli,
+        "prefilter_dribull_non_macd",
+        lambda prepared_table, pick_date, config=None: ["BBB.SZ"],
+    )
     monkeypatch.setattr(
         cli,
         "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 27.95, "turnover_n": 999.0}],
-            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(
+                total_symbols=int(prepared_table["ts_code"].nunique()),
+                eligible=int(prepared_table["ts_code"].nunique()),
+                selected=1,
+            ),
         ),
     )
 
@@ -7772,45 +8176,45 @@ def test_screen_dribull_writes_prepared_cache_before_prefilter(
     )
 
     assert result.exit_code == 0
-    cache_payload = cli._load_prepared_cache(runtime_root / "prepared" / "2026-04-10.pkl")
+    cache_payload = cli._load_prepared_cache(cli._prepared_cache_data_path(runtime_root, "2026-04-10", "b1"))
     assert cache_payload["start_date"] == "2025-04-09"
-    assert sorted(cache_payload["prepared_by_symbol"]) == ["AAA.SZ", "BBB.SZ", "CCC.SZ"]
+    assert sorted(cache_payload["prepared_table"]["ts_code"].unique()) == ["AAA.SZ", "BBB.SZ", "CCC.SZ"]
 
 
 def test_screen_dribull_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    shared_prepared = {
-        "BBB.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-10"]),
-                "turnover_n": [200.0],
-                "J": [10.0],
-                "zxdq": [11.5],
-                "zxdkx": [11.2],
-                "low": [11.1],
-                "close": [11.6],
-                "ma25": [11.3],
-                "ma60": [11.0],
-                "ma144": [10.8],
-                "dif": [0.12],
-                "dea": [0.08],
-                "dif_w": [0.20],
-                "dea_w": [0.15],
-                "dif_m": [0.30],
-                "dea_m": [0.22],
-                "volume": [120.0],
-                "vol": [120.0],
-            }
-        )
-    }
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-10.pkl",
+    shared_prepared = pd.DataFrame(
+        {
+            "ts_code": ["BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-10"]),
+            "turnover_n": [200.0],
+            "J": [10.0],
+            "zxdq": [11.5],
+            "zxdkx": [11.2],
+            "low": [11.1],
+            "close": [11.6],
+            "ma25": [11.3],
+            "ma60": [11.0],
+            "ma144": [10.8],
+            "dif": [0.12],
+            "dea": [0.08],
+            "dif_w": [0.20],
+            "dea_w": [0.15],
+            "dif_m": [0.30],
+            "dea_m": [0.22],
+            "volume": [120.0],
+            "vol": [120.0],
+        }
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / "2026-04-10.feather",
+        runtime_root / "prepared" / "2026-04-10.meta.json",
         method="b1",
         pick_date="2026-04-10",
         start_date="2025-04-09",
         end_date="2026-04-10",
-        prepared_by_symbol=shared_prepared,
+        prepared_table=shared_prepared,
     )
 
     original_connect = cli._connect
@@ -7825,19 +8229,19 @@ def test_screen_dribull_reuses_shared_b1_prepared_cache_for_phase_one(tmp_path: 
     def fail_fetch(*args, **kwargs):
         raise AssertionError("dribull should not fetch market window when shared prepared cache is reusable")
 
-    def fail_prepare(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fail_prepare(_: pd.DataFrame, reporter=None) -> pd.DataFrame:
         raise AssertionError("dribull should not recompute phase-one prepare when shared prepared cache is reusable")
 
-    def fake_prefilter_dribull_non_macd(prepared_by_symbol: dict[str, pd.DataFrame], pick_date: pd.Timestamp, config=None) -> list[str]:
-        assert list(prepared_by_symbol) == ["BBB.SZ"]
+    def fake_prefilter_dribull_non_macd(prepared_table: pd.DataFrame, pick_date: pd.Timestamp, config=None) -> list[str]:
+        assert sorted(prepared_table["ts_code"].unique()) == ["BBB.SZ"]
         return []
 
     def fake_run_dribull_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert prepared_by_symbol == {}
+        assert prepared_table.empty
         return (
             [],
             _dribull_trend_stats(total_symbols=0, eligible=0, selected=0),
@@ -7919,43 +8323,48 @@ def test_screen_record_watch_uses_latest_effective_rows_per_symbol(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [100.0],
-                }
-            ),
-            "CCC.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [20.2],
-                    "J": [10.0],
-                    "zxdq": [20.4],
-                    "zxdkx": [20.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [200.0],
-                }
-            ),
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [10.2],
+                        "J": [10.0],
+                        "zxdq": [10.4],
+                        "zxdkx": [10.0],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "turnover_n": [100.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["CCC.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [20.2],
+                        "J": [10.0],
+                        "zxdq": [20.4],
+                        "zxdkx": [20.0],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "turnover_n": [200.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
 
     def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
         raise AssertionError("turnover-top pool should not be used for record-watch")
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["AAA.SZ", "CCC.SZ"]
+        assert sorted(prepared_table["ts_code"].unique()) == ["AAA.SZ", "CCC.SZ"]
         assert pick_date == pd.Timestamp("2026-04-04")
         return (
             [
@@ -8024,37 +8433,41 @@ def test_screen_custom_pool_uses_whitespace_separated_file_codes(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            code: pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [close],
-                    "J": [10.0],
-                    "zxdq": [close + 0.2],
-                    "zxdkx": [close - 0.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [turnover],
-                }
-            )
-            for code, close, turnover in [
-                ("000001.SZ", 10.2, 100.0),
-                ("300058.SZ", 20.2, 200.0),
-                ("603138.SH", 30.2, 300.0),
-                ("688001.SH", 40.2, 400.0),
-            ]
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": [code],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [close],
+                        "J": [10.0],
+                        "zxdq": [close + 0.2],
+                        "zxdkx": [close - 0.2],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "turnover_n": [turnover],
+                    }
+                )
+                for code, close, turnover in [
+                    ("000001.SZ", 10.2, 100.0),
+                    ("300058.SZ", 20.2, 200.0),
+                    ("603138.SH", 30.2, 300.0),
+                    ("688001.SH", 40.2, 400.0),
+                ]
+            ],
+            ignore_index=True,
+        )
 
-    def fail_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+    def fail_pool(prepared_table: dict[str, pd.DataFrame], *, top_m: int):
         raise AssertionError("turnover-top pool should not be used for custom pool")
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["000001.SZ", "300058.SZ", "603138.SH"]
+        assert sorted(prepared_table["ts_code"].unique()) == ["000001.SZ", "300058.SZ", "603138.SH"]
         assert pick_date == pd.Timestamp("2026-04-04")
         return (
             [
@@ -8126,33 +8539,38 @@ def test_screen_custom_pool_uses_env_file_when_pool_file_not_passed(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "300058.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [20.2],
-                    "J": [10.0],
-                    "zxdq": [20.4],
-                    "zxdkx": [20.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [200.0],
-                }
-            ),
-            "603138.SH": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [30.2],
-                    "J": [10.0],
-                    "zxdq": [30.4],
-                    "zxdkx": [30.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [300.0],
-                }
-            ),
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["300058.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [20.2],
+                        "J": [10.0],
+                        "zxdq": [20.4],
+                        "zxdkx": [20.0],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "turnover_n": [200.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["603138.SH"],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [30.2],
+                        "J": [10.0],
+                        "zxdq": [30.4],
+                        "zxdkx": [30.0],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "turnover_n": [300.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -8160,11 +8578,11 @@ def test_screen_custom_pool_uses_env_file_when_pool_file_not_passed(
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "300058.SZ", "pick_date": "2026-04-04", "close": 20.2, "turnover_n": 200.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
-        if list(prepared_by_symbol) == ["300058.SZ"]
+        if sorted(prepared_table["ts_code"].unique()) == ["300058.SZ"]
         else pytest.fail("custom env pool should screen only env-provided symbols"),
     )
     monkeypatch.setenv("STOCK_SELECT_POOL_FILE", str(pool_file))
@@ -8225,53 +8643,58 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "603138.SH": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [30.2],
-                    "J": [10.0],
-                    "zxdq": [30.4],
-                    "zxdkx": [30.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [30.0],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [300.0],
-                }
-            ),
-            "300058.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [20.2],
-                    "J": [10.0],
-                    "zxdq": [20.4],
-                    "zxdkx": [20.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [20.0],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [200.0],
-                }
-            ),
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["603138.SH"],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [30.2],
+                        "J": [10.0],
+                        "zxdq": [30.4],
+                        "zxdkx": [30.0],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "chg_d": [1.0],
+                        "amp_d": [2.0],
+                        "body_d": [-1.0],
+                        "vm3": [90.0],
+                        "vm5": [100.0],
+                        "vm10": [120.0],
+                        "m5": [30.0],
+                        "v_shrink": [True],
+                        "safe_mode": [True],
+                        "lt_filter": [True],
+                        "turnover_n": [300.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["300058.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [20.2],
+                        "J": [10.0],
+                        "zxdq": [20.4],
+                        "zxdkx": [20.0],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "chg_d": [1.0],
+                        "amp_d": [2.0],
+                        "body_d": [-1.0],
+                        "vm3": [90.0],
+                        "vm5": [100.0],
+                        "vm10": [120.0],
+                        "m5": [20.0],
+                        "v_shrink": [True],
+                        "safe_mode": [True],
+                        "lt_filter": [True],
+                        "turnover_n": [200.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -8279,11 +8702,11 @@ def test_screen_custom_pool_uses_default_file_when_no_override_is_set(
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "603138.SH", "pick_date": "2026-04-04", "close": 30.2, "turnover_n": 300.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
-        if list(prepared_by_symbol) == ["603138.SH"]
+        if sorted(prepared_table["ts_code"].unique()) == ["603138.SH"]
         else pytest.fail("default custom pool should screen only default-file symbols"),
     )
     monkeypatch.delenv("STOCK_SELECT_POOL_FILE", raising=False)
@@ -8346,29 +8769,6 @@ def test_screen_custom_pool_does_not_reuse_artifacts_from_different_pool_file(
         ),
         encoding="utf-8",
     )
-    cli._write_prepared_cache(
-        prepared_dir / f"{_eod_key('2026-04-04')}.pkl",
-        method="b1",
-        pick_date="2026-04-04",
-        start_date="2025-04-03",
-        end_date="2026-04-04",
-        prepared_by_symbol={
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-        },
-        metadata_overrides={"pool_source": "custom", "pool_file": str(old_pool_file)},
-    )
-
     calls = {"connect": 0, "prepare": 0}
 
     def fake_connect(_: str) -> object:
@@ -8394,22 +8794,21 @@ def test_screen_custom_pool_does_not_reuse_artifacts_from_different_pool_file(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> pd.DataFrame:
         calls["prepare"] += 1
-        return {
-            "300058.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [20.2],
-                    "J": [10.0],
-                    "zxdq": [20.4],
-                    "zxdkx": [20.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [200.0],
-                }
-            )
-        }
+        return pd.DataFrame(
+            {
+                "ts_code": ["300058.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "close": [20.2],
+                "J": [10.0],
+                "zxdq": [20.4],
+                "zxdkx": [20.0],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "turnover_n": [200.0],
+            }
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -8417,11 +8816,11 @@ def test_screen_custom_pool_does_not_reuse_artifacts_from_different_pool_file(
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "300058.SZ", "pick_date": "2026-04-04", "close": 20.2, "turnover_n": 200.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
-        if list(prepared_by_symbol) == ["300058.SZ"]
+        if sorted(prepared_table["ts_code"].unique()) == ["300058.SZ"]
         else pytest.fail("custom pool should recompute for a different pool file"),
     )
 
@@ -8489,37 +8888,41 @@ def test_screen_custom_pool_extracts_numeric_codes_from_prefixed_lines(
     monkeypatch.setattr(
         cli,
         "_prepare_screen_data",
-        lambda _market, reporter=None: {
-            code: pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.0],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-            for code in ["603876.SH", "002008.SZ", "002703.SZ", "300058.SZ"]
-        },
+        lambda _market, reporter=None: pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": [code],
+                        "trade_date": pd.to_datetime(["2026-04-04"]),
+                        "close": [10.0],
+                        "J": [10.0],
+                        "zxdq": [10.4],
+                        "zxdkx": [10.0],
+                        "weekly_ma_bull": [True],
+                        "max_vol_not_bearish": [True],
+                        "turnover_n": [100.0],
+                    }
+                )
+                for code in ["603876.SH", "002008.SZ", "002703.SZ", "300058.SZ"]
+            ],
+            ignore_index=True,
+        ),
     )
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [
                 {"code": code, "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}
-                for code in prepared_by_symbol
+                for code in prepared_table["ts_code"].unique()
             ],
             _b1_screen_stats(
-                total_symbols=len(prepared_by_symbol),
-                eligible=len(prepared_by_symbol),
-                selected=len(prepared_by_symbol),
+                total_symbols=len(prepared_table["ts_code"].unique()),
+                eligible=len(prepared_table["ts_code"].unique()),
+                selected=len(prepared_table["ts_code"].unique()),
             ),
         )
-        if list(prepared_by_symbol) == ["603876.SH", "002008.SZ", "002703.SZ"]
+        if list(prepared_table["ts_code"].unique()) == ["603876.SH", "002008.SZ", "002703.SZ"]
         else pytest.fail("custom pool should extract numeric codes from prefixed lines only"),
     )
 
@@ -8576,31 +8979,30 @@ def test_screen_record_watch_rejects_missing_watch_pool_csv(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "close": [10.2],
+                "J": [10.0],
+                "zxdq": [10.4],
+                "zxdkx": [10.0],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [100.0],
+            }
+        )
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -8669,31 +9071,30 @@ def test_screen_record_watch_rejects_empty_effective_pool_after_intersection(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "close": [10.2],
+                "J": [10.0],
+                "zxdq": [10.4],
+                "zxdkx": [10.0],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+                "turnover_n": [100.0],
+            }
+        )
 
     def fake_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
         raise AssertionError("turnover-top pool should not be used for record-watch")
@@ -8782,52 +9183,56 @@ def test_screen_dribull_record_watch_drives_phase_one_and_warmup_selection(
 
     prepare_calls: list[list[str]] = []
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
         symbols = sorted(market["ts_code"].astype(str).unique().tolist())
         prepare_calls.append(symbols)
-        return {
-            code: pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "close": [10.0 if code == "AAA.SZ" else 20.2],
-                    "J": [10.0],
-                    "zxdq": [10.5 if code == "AAA.SZ" else 20.4],
-                    "zxdkx": [10.0 if code == "AAA.SZ" else 20.0],
-                    "low": [9.9 if code == "AAA.SZ" else 19.9],
-                    "volume": [100.0 if code == "AAA.SZ" else 200.0],
-                    "ma25": [10.0 if code == "AAA.SZ" else 20.0],
-                    "ma60": [9.8 if code == "AAA.SZ" else 19.8],
-                    "ma144": [9.6 if code == "AAA.SZ" else 19.6],
-                    "dif": [0.11],
-                    "dea": [0.08],
-                    "dif_w": [0.20],
-                    "dea_w": [0.15],
-                    "dif_m": [0.30],
-                    "dea_m": [0.22],
-                    "turnover_n": [100.0 if code == "AAA.SZ" else 200.0],
-                }
-            )
-            for code in symbols
-        }
+        return pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": [code],
+                        "trade_date": pd.to_datetime(["2026-04-10"]),
+                        "close": [10.0 if code == "AAA.SZ" else 20.2],
+                        "J": [10.0],
+                        "zxdq": [10.5 if code == "AAA.SZ" else 20.4],
+                        "zxdkx": [10.0 if code == "AAA.SZ" else 20.0],
+                        "low": [9.9 if code == "AAA.SZ" else 19.9],
+                        "volume": [100.0 if code == "AAA.SZ" else 200.0],
+                        "ma25": [10.0 if code == "AAA.SZ" else 20.0],
+                        "ma60": [9.8 if code == "AAA.SZ" else 19.8],
+                        "ma144": [9.6 if code == "AAA.SZ" else 19.6],
+                        "dif": [0.11],
+                        "dea": [0.08],
+                        "dif_w": [0.20],
+                        "dea_w": [0.15],
+                        "dif_m": [0.30],
+                        "dea_m": [0.22],
+                        "turnover_n": [100.0 if code == "AAA.SZ" else 200.0],
+                    }
+                )
+                for code in symbols
+            ],
+            ignore_index=True,
+        )
 
-    def fail_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+    def fail_pool(prepared_table: pd.DataFrame, *, top_m: int):
         raise AssertionError("turnover-top pool should not gate dribull record-watch screening")
 
     def fake_prefilter_dribull_non_macd(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> list[str]:
-        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        assert list(prepared_table["ts_code"].unique()) == ["BBB.SZ"]
         assert pick_date == pd.Timestamp("2026-04-10")
         return ["BBB.SZ"]
 
     def fake_run_dribull_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        assert list(prepared_table["ts_code"].unique()) == ["BBB.SZ"]
         assert pick_date == pd.Timestamp("2026-04-10")
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 20.2, "turnover_n": 200.0}],
@@ -8891,27 +9296,6 @@ def test_screen_record_watch_bypasses_existing_candidate_and_prepared_reuse(
         ),
         encoding="utf-8",
     )
-    cli._write_prepared_cache(
-        prepared_dir / f"{_eod_key('2026-04-04')}.pkl",
-        method="b1",
-        pick_date="2026-04-04",
-        start_date="2025-04-03",
-        end_date="2026-04-04",
-        prepared_by_symbol={
-            "OLD.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [9.9],
-                    "J": [10.0],
-                    "zxdq": [10.1],
-                    "zxdkx": [9.8],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [90.0],
-                }
-            )
-        },
-    )
     watch_file.write_text(
         "\n".join(
             [
@@ -8947,32 +9331,31 @@ def test_screen_record_watch_bypasses_existing_candidate_and_prepared_reuse(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> pd.DataFrame:
         calls["prepare"] += 1
-        return {
-            "NEW.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-        }
+        return pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "close": [10.2],
+                "J": [10.0],
+                "zxdq": [10.4],
+                "zxdkx": [10.0],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "turnover_n": [100.0],
+            }
+        )
 
-    def fail_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+    def fail_pool(prepared_table: dict[str, pd.DataFrame], *, top_m: int):
         raise AssertionError("turnover-top pool should not be used for record-watch")
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["NEW.SZ"]
+        assert list(prepared_table["ts_code"].unique()) == ["NEW.SZ"]
         return (
             [{"code": "NEW.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
@@ -9032,29 +9415,6 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
         ),
         encoding="utf-8",
     )
-    cli._write_prepared_cache(
-        prepared_dir / f"{_eod_key('2026-04-04')}.pkl",
-        method="b1",
-        pick_date="2026-04-04",
-        start_date="2025-04-03",
-        end_date="2026-04-04",
-        prepared_by_symbol={
-            "OLD.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [9.9],
-                    "J": [10.0],
-                    "zxdq": [10.1],
-                    "zxdkx": [9.8],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [90.0],
-                }
-            )
-        },
-        metadata_overrides={"pool_source": "record-watch"},
-    )
-
     calls = {"connect": 0, "prepare": 0}
 
     def fake_connect(_: str) -> object:
@@ -9080,32 +9440,31 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> pd.DataFrame:
         calls["prepare"] += 1
-        return {
-            "NEW.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-04"]),
-                    "close": [10.2],
-                    "J": [10.0],
-                    "zxdq": [10.4],
-                    "zxdkx": [10.0],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "turnover_n": [100.0],
-                }
-            )
-        }
+        return pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-04"]),
+                "close": [10.2],
+                "J": [10.0],
+                "zxdq": [10.4],
+                "zxdkx": [10.0],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "turnover_n": [100.0],
+            }
+        )
 
-    def fake_turnover_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+    def fake_turnover_pool(prepared_table: pd.DataFrame, *, top_m: int):
         return {pd.Timestamp("2026-04-04"): ["NEW.SZ"]}
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_by_symbol) == ["NEW.SZ"]
+        assert list(prepared_table["ts_code"].unique()) == ["NEW.SZ"]
         return (
             [{"code": "NEW.SZ", "pick_date": "2026-04-04", "close": 10.2, "turnover_n": 100.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
@@ -9141,7 +9500,7 @@ def test_screen_turnover_top_does_not_reuse_record_watch_artifacts(
     payload = json.loads((candidate_dir / f"{_eod_key('2026-04-04')}.json").read_text(encoding="utf-8"))
     assert payload["pool_source"] == "turnover-top"
     assert [item["code"] for item in payload["candidates"]] == ["NEW.SZ"]
-    cache_payload = cli._load_prepared_cache(prepared_dir / "2026-04-04.pkl")
+    cache_payload = cli._load_prepared_cache(cli._prepared_cache_data_path(runtime_root, "2026-04-04", "b1"))
     assert cache_payload["pick_date"] == "2026-04-04"
 
 
@@ -9177,55 +9536,60 @@ def test_screen_turnover_top_uses_ma25_above_ma60_pool_gate(
             }
         )
 
-    prepared = {
-        "AAA.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-24"]),
-                "turnover_n": [200.0],
-                "ma25": [10.5],
-                "ma60": [10.0],
-                "J": [10.0],
-                "zxdq": [10.6],
-                "zxdkx": [10.1],
-                "close": [10.7],
-                "weekly_ma_bull": [True],
-                "max_vol_not_bearish": [True],
-                "chg_d": [1.0],
-                "v_shrink": [True],
-                "safe_mode": [True],
-                "lt_filter": [True],
-            }
-        ),
-        "BBB.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-24"]),
-                "turnover_n": [300.0],
-                "ma25": [9.8],
-                "ma60": [10.0],
-                "J": [10.0],
-                "zxdq": [10.6],
-                "zxdkx": [10.1],
-                "close": [10.7],
-                "weekly_ma_bull": [True],
-                "max_vol_not_bearish": [True],
-                "chg_d": [1.0],
-                "v_shrink": [True],
-                "safe_mode": [True],
-                "lt_filter": [True],
-            }
-        ),
-    }
+    prepared = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "ts_code": ["AAA.SZ"],
+                    "trade_date": pd.to_datetime(["2026-04-24"]),
+                    "turnover_n": [200.0],
+                    "ma25": [10.5],
+                    "ma60": [10.0],
+                    "J": [10.0],
+                    "zxdq": [10.6],
+                    "zxdkx": [10.1],
+                    "close": [10.7],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "ts_code": ["BBB.SZ"],
+                    "trade_date": pd.to_datetime(["2026-04-24"]),
+                    "turnover_n": [300.0],
+                    "ma25": [9.8],
+                    "ma60": [10.0],
+                    "J": [10.0],
+                    "zxdq": [10.6],
+                    "zxdkx": [10.1],
+                    "close": [10.7],
+                    "weekly_ma_bull": [True],
+                    "max_vol_not_bearish": [True],
+                    "chg_d": [1.0],
+                    "v_shrink": [True],
+                    "safe_mode": [True],
+                    "lt_filter": [True],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
 
-    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame, reporter=None) -> pd.DataFrame:
         return prepared
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        captured["codes"] = sorted(prepared_by_symbol)
-        return ([], _b1_screen_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=0))
+        captured["codes"] = sorted(prepared_table["ts_code"].unique())
+        return ([], _b1_screen_stats(total_symbols=len(prepared_table["ts_code"].unique()), eligible=len(prepared_table["ts_code"].unique()), selected=0))
 
     monkeypatch.setattr(cli, "_connect", fake_connect)
     monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
@@ -9255,7 +9619,7 @@ def test_screen_turnover_top_uses_ma25_above_ma60_pool_gate(
     payload = json.loads((candidate_dir / f"{_eod_key('2026-04-24')}.json").read_text(encoding="utf-8"))
     assert payload["pool_source"] == "turnover-top"
     assert payload["candidates"] == []
-    cache_payload = cli._load_prepared_cache(prepared_dir / "2026-04-24.pkl")
+    cache_payload = cli._load_prepared_cache(cli._prepared_cache_data_path(runtime_root, "2026-04-24", "b1"))
     assert cache_payload["pick_date"] == "2026-04-24"
 
 
@@ -9300,48 +9664,47 @@ def test_screen_dribull_record_watch_zero_phase_one_survivors_writes_empty_candi
             }
         )
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
-        return {
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "close": [20.2],
-                    "J": [10.0],
-                    "zxdq": [20.4],
-                    "zxdkx": [20.0],
-                    "low": [19.9],
-                    "volume": [200.0],
-                    "ma25": [20.0],
-                    "ma60": [19.8],
-                    "ma144": [19.6],
-                    "dif": [0.11],
-                    "dea": [0.08],
-                    "dif_w": [0.20],
-                    "dea_w": [0.15],
-                    "dif_m": [0.30],
-                    "dea_m": [0.22],
-                    "turnover_n": [200.0],
-                }
-            )
-        }
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10"]),
+                "close": [20.2],
+                "J": [10.0],
+                "zxdq": [20.4],
+                "zxdkx": [20.0],
+                "low": [19.9],
+                "volume": [200.0],
+                "ma25": [20.0],
+                "ma60": [19.8],
+                "ma144": [19.6],
+                "dif": [0.11],
+                "dea": [0.08],
+                "dif_w": [0.20],
+                "dea_w": [0.15],
+                "dif_m": [0.30],
+                "dea_m": [0.22],
+                "turnover_n": [200.0],
+            }
+        )
 
-    def fail_pool(prepared_by_symbol: dict[str, pd.DataFrame], *, top_m: int):
+    def fail_pool(prepared_table: pd.DataFrame, *, top_m: int):
         raise AssertionError("turnover-top pool should not gate dribull record-watch screening")
 
     def fake_prefilter_dribull_non_macd(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> list[str]:
-        assert list(prepared_by_symbol) == ["BBB.SZ"]
+        assert list(prepared_table["ts_code"].unique()) == ["BBB.SZ"]
         return []
 
     def fake_run_dribull_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert prepared_by_symbol == {}
+        assert prepared_table.empty
         return (
             [],
             _dribull_trend_stats(total_symbols=0, eligible=0, selected=0),
@@ -9410,39 +9773,28 @@ def test_screen_hcr_turnover_top_uses_liquidity_pool(
     monkeypatch.setattr(
         cli,
         "_prepare_hcr_screen_data",
-        lambda market, reporter=None: {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "close": [10.6],
-                    "yx": [10.4],
-                    "p": [10.5],
-                    "resonance_gap_pct": [0.003],
-                    "turnover_n": [100.0],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "close": [20.6],
-                    "yx": [20.4],
-                    "p": [20.5],
-                    "resonance_gap_pct": [0.003],
-                    "turnover_n": [200.0],
-                }
-            ),
-        },
+        lambda market, reporter=None: pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ", "BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10", "2026-04-10"]),
+                "close": [10.6, 20.6],
+                "yx": [10.4, 20.4],
+                "p": [10.5, 20.5],
+                "resonance_gap_pct": [0.003, 0.003],
+                "turnover_n": [100.0, 200.0],
+            }
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+        lambda prepared_table, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
     )
     monkeypatch.setattr(
         cli,
         "run_hcr_screen_with_stats",
-        lambda prepared_by_symbol, pick_date: (
+        lambda prepared_table, pick_date: (
             [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 20.6, "turnover_n": 200.0, "yx": 20.4, "p": 20.5, "resonance_gap_pct": 0.003}],
             {
                 "total_symbols": 1,
@@ -9454,7 +9806,7 @@ def test_screen_hcr_turnover_top_uses_liquidity_pool(
                 "selected": 1,
             },
         )
-        if list(prepared_by_symbol) == ["BBB.SZ"]
+        if list(prepared_table["ts_code"].unique()) == ["BBB.SZ"]
         else pytest.fail("hcr should screen only the turnover-top subset"),
         raising=False,
     )
@@ -9524,39 +9876,44 @@ def test_screen_hcr_record_watch_uses_shared_watch_pool_subset(
     monkeypatch.setattr(
         cli,
         "_prepare_hcr_screen_data",
-        lambda market, reporter=None: {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "close": [10.6],
-                    "yx": [10.4],
-                    "p": [10.5],
-                    "resonance_gap_pct": [0.003],
-                    "turnover_n": [100.0],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "close": [20.6],
-                    "yx": [20.4],
-                    "p": [20.5],
-                    "resonance_gap_pct": [0.003],
-                    "turnover_n": [200.0],
-                }
-            ),
-        },
+        lambda market, reporter=None: pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-10"]),
+                        "close": [10.6],
+                        "yx": [10.4],
+                        "p": [10.5],
+                        "resonance_gap_pct": [0.003],
+                        "turnover_n": [100.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["BBB.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-10"]),
+                        "close": [20.6],
+                        "yx": [20.4],
+                        "p": [20.5],
+                        "resonance_gap_pct": [0.003],
+                        "turnover_n": [200.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: pytest.fail("turnover-top pool should not be used for hcr record-watch"),
+        lambda prepared_table, *, top_m: pytest.fail("turnover-top pool should not be used for hcr record-watch"),
     )
     monkeypatch.setattr(
         cli,
         "run_hcr_screen_with_stats",
-        lambda prepared_by_symbol, pick_date: (
+        lambda prepared_table, pick_date: (
             [{"code": "AAA.SZ", "pick_date": "2026-04-10", "close": 10.6, "turnover_n": 100.0, "yx": 10.4, "p": 10.5, "resonance_gap_pct": 0.003}],
             {
                 "total_symbols": 1,
@@ -9568,7 +9925,7 @@ def test_screen_hcr_record_watch_uses_shared_watch_pool_subset(
                 "selected": 1,
             },
         )
-        if list(prepared_by_symbol) == ["AAA.SZ"]
+        if list(prepared_table["ts_code"].unique()) == ["AAA.SZ"]
         else pytest.fail("hcr should screen only the effective watch-pool subset"),
         raising=False,
     )
@@ -9635,8 +9992,8 @@ def test_screen_dribull_real_flow_skips_malformed_pool_rows_without_crashing(
                 )
         return pd.DataFrame(market_rows)
 
-    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
-        prepared: dict[str, pd.DataFrame] = {}
+    def fake_prepare_screen_data(market: pd.DataFrame, reporter=None) -> pd.DataFrame:
+        rows = []
         for code, group in market.groupby("ts_code"):
             group = group.sort_values("trade_date").reset_index(drop=True).copy()
             group["turnover_n"] = 100.0 if code == "AAA.SZ" else 200.0
@@ -9648,8 +10005,8 @@ def test_screen_dribull_real_flow_skips_malformed_pool_rows_without_crashing(
             group["ma25"] = group["close"]
             group["ma60"] = group["close"]
             group["ma144"] = group["close"]
-            prepared[code] = group
-        return prepared
+            rows.append(group)
+        return pd.concat(rows, ignore_index=True)
 
     run_calls: list[list[str]] = []
 
@@ -9659,16 +10016,16 @@ def test_screen_dribull_real_flow_skips_malformed_pool_rows_without_crashing(
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
+        lambda prepared_table, *, top_m: {pd.Timestamp("2026-04-10"): ["BBB.SZ"]},
     )
-    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_by_symbol, pick_date, config=None: ["BBB.SZ"])
+    monkeypatch.setattr(cli, "prefilter_dribull_non_macd", lambda prepared_table, pick_date, config=None: ["BBB.SZ"])
     monkeypatch.setattr(
         cli,
         "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
-            run_calls.append(sorted(prepared_by_symbol))
+        lambda prepared_table, pick_date, config: (
+            run_calls.append(sorted(prepared_table["ts_code"].unique()))
             or [{"code": "BBB.SZ", "pick_date": "2026-04-10", "close": 13.02, "turnover_n": 359.0}],
-            _dribull_trend_stats(total_symbols=len(prepared_by_symbol), eligible=len(prepared_by_symbol), selected=1),
+            _dribull_trend_stats(total_symbols=len(prepared_table["ts_code"].unique()), eligible=len(prepared_table["ts_code"].unique()), selected=1),
         ),
     )
 
@@ -9796,32 +10153,31 @@ def test_screen_ignores_stale_b1_candidate_file_without_screen_version_and_recom
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
         calls["prepare"] += 1
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [100.0],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "close": [10.6],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                }
-            )
-        }
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [100.0],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "close": [10.6],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+            }
+        )
 
     def fake_run_b1_screen_with_stats(
         prepared_by_symbol: dict[str, pd.DataFrame],
@@ -9904,25 +10260,24 @@ def test_screen_ignores_existing_empty_candidate_file_and_recomputes(tmp_path: P
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
         calls["prepare"] += 1
-        return {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [100.0],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "close": [10.6],
-                }
-            )
-        }
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [100.0],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "close": [10.6],
+            }
+        )
 
     def fake_run_b1_screen_with_stats(
-        prepared_by_symbol: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
@@ -9969,39 +10324,39 @@ def test_screen_ignores_existing_empty_candidate_file_and_recomputes(tmp_path: P
 def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    prepared_by_symbol = {
-        "BBB.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-01"]),
-                "turnover_n": [200.0],
-                "J": [10.0],
-                "zxdq": [11.5],
-                "zxdkx": [11.2],
-                "weekly_ma_bull": [True],
-                "max_vol_not_bearish": [True],
-                "close": [11.6],
-                "ma25": [11.7],
-                "ma60": [11.2],
-                "chg_d": [1.0],
-                "amp_d": [2.0],
-                "body_d": [-1.0],
-                "vm3": [90.0],
-                "vm5": [100.0],
-                "vm10": [120.0],
-                "m5": [10.4],
-                "v_shrink": [True],
-                "safe_mode": [True],
-                "lt_filter": [True],
-            }
-        )
-    }
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-01.pkl",
+    prepared_table = pd.DataFrame(
+        {
+            "ts_code": ["BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01"]),
+            "turnover_n": [200.0],
+            "J": [10.0],
+            "zxdq": [11.5],
+            "zxdkx": [11.2],
+            "weekly_ma_bull": [True],
+            "max_vol_not_bearish": [True],
+            "close": [11.6],
+            "ma25": [11.7],
+            "ma60": [11.2],
+            "chg_d": [1.0],
+            "amp_d": [2.0],
+            "body_d": [-1.0],
+            "vm3": [90.0],
+            "vm5": [100.0],
+            "vm10": [120.0],
+            "m5": [10.4],
+            "v_shrink": [True],
+            "safe_mode": [True],
+            "lt_filter": [True],
+        }
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / "2026-04-01.feather",
+        runtime_root / "prepared" / "2026-04-01.meta.json",
         method="b1",
         pick_date="2026-04-01",
         start_date="2025-03-31",
         end_date="2026-04-01",
-        prepared_by_symbol=prepared_by_symbol,
+        prepared_table=prepared_table,
         metadata_overrides={"screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1)},
     )
 
@@ -10016,15 +10371,216 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
     def fail_fetch(*args, **kwargs):
         raise AssertionError("screen should not fetch market window when prepared cache is reusable")
 
-    def fail_prepare(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    def fail_prepare(_: pd.DataFrame) -> pd.DataFrame:
         raise AssertionError("screen should not prepare data when prepared cache is reusable")
 
     def fake_run_b1_screen_with_stats(
-        prepared_subset: dict[str, pd.DataFrame],
+        prepared_subset: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_subset) == ["BBB.SZ"]
+        assert sorted(prepared_subset["ts_code"].unique()) == ["BBB.SZ"]
+        return (
+            [{"code": "BBB.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0}],
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
+        )
+
+    cli._connect = fail_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
+    cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
+    cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b1",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    assert "[screen] reuse prepared path=" in result.stderr
+
+
+def test_screen_writes_prepared_cache_v2_files(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    def fake_connect(_: str) -> object:
+        return object()
+
+    def fake_fetch_daily_window(
+        connection: object,
+        *,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.9],
+                "close": [10.4],
+                "vol": [100.0],
+            }
+        )
+
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["AAA.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [100.0],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "ma25": [10.5],
+                "ma60": [10.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "close": [10.6],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+            }
+        )
+
+    def fake_run_b1_screen_with_stats(
+        prepared_table: pd.DataFrame,
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert set(prepared_table["ts_code"].unique()) == {"AAA.SZ"}
+        return (
+            [{"code": "AAA.SZ", "pick_date": "2026-04-01", "close": 10.6, "turnover_n": 100.0}],
+            _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
+        )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_run = cli.run_b1_screen_with_stats
+
+    cli._connect = fake_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
+    cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
+    cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "screen",
+                "--method",
+                "b1",
+                "--pick-date",
+                "2026-04-01",
+                "--runtime-root",
+                str(runtime_root),
+                "--dsn",
+                "postgresql://example",
+            ],
+        )
+    finally:
+        cli._connect = original_connect  # type: ignore[assignment]
+        cli.fetch_daily_window = original_fetch  # type: ignore[assignment]
+        cli._prepare_screen_data = original_prepare  # type: ignore[assignment]
+        cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
+
+    assert result.exit_code == 0
+    data_path = runtime_root / "prepared" / "2026-04-01.feather"
+    meta_path = runtime_root / "prepared" / "2026-04-01.meta.json"
+    assert data_path.exists()
+    assert meta_path.exists()
+    assert not data_path.with_suffix(".pkl").exists()
+
+    payload = cli._load_prepared_cache(data_path)
+    assert payload["metadata"]["method"] == "b1"
+    assert set(payload["prepared_table"]["ts_code"].unique()) == {"AAA.SZ"}
+
+
+def test_screen_reuses_prepared_cache_v2_when_candidate_output_missing(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    prepared_table = pd.DataFrame(
+        {
+            "ts_code": ["BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01"]),
+            "turnover_n": [200.0],
+            "J": [10.0],
+            "zxdq": [11.5],
+            "zxdkx": [11.2],
+            "weekly_ma_bull": [True],
+            "max_vol_not_bearish": [True],
+            "close": [11.6],
+            "ma25": [11.7],
+            "ma60": [11.2],
+            "chg_d": [1.0],
+            "amp_d": [2.0],
+            "body_d": [-1.0],
+            "vm3": [90.0],
+            "vm5": [100.0],
+            "vm10": [120.0],
+            "m5": [10.4],
+            "v_shrink": [True],
+            "safe_mode": [True],
+            "lt_filter": [True],
+        }
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / "2026-04-01.feather",
+        runtime_root / "prepared" / "2026-04-01.meta.json",
+        method="b1",
+        pick_date="2026-04-01",
+        start_date="2025-03-31",
+        end_date="2026-04-01",
+        prepared_table=prepared_table,
+        metadata_overrides={"screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1)},
+    )
+
+    original_connect = cli._connect
+    original_fetch = cli.fetch_daily_window
+    original_prepare = cli._prepare_screen_data
+    original_run = cli.run_b1_screen_with_stats
+
+    def fail_connect(_: str) -> object:
+        raise AssertionError("screen should not connect when v2 prepared cache is reusable")
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("screen should not fetch market window when v2 prepared cache is reusable")
+
+    def fail_prepare(_: pd.DataFrame) -> pd.DataFrame:
+        raise AssertionError("screen should not prepare data when v2 prepared cache is reusable")
+
+    def fake_run_b1_screen_with_stats(
+        prepared_table: pd.DataFrame,
+        pick_date: pd.Timestamp,
+        config: dict,
+    ) -> tuple[list[dict], dict[str, int]]:
+        assert set(prepared_table["ts_code"].unique()) == {"BBB.SZ"}
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
@@ -10063,27 +10619,18 @@ def test_screen_reuses_prepared_cache_when_candidate_output_missing(tmp_path: Pa
 def test_screen_hcr_ignores_prepared_cache_missing_pool_moving_averages(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    stale_prepared = {
-        "OLD.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-01"]),
-                "turnover_n": [50.0],
-                "close": [10.6],
-                "yx": [10.4],
-                "p": [10.5],
-                "resonance_gap_pct": [0.003],
-            }
-        )
-    }
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-01.hcr.pkl",
-        method="hcr",
-        pick_date="2026-04-01",
-        start_date="2025-04-29",
-        end_date="2026-04-01",
-        prepared_by_symbol=stale_prepared,
-        metadata_overrides={"screen_version": None},
+    stale_prepared = pd.DataFrame(
+        {
+            "ts_code": ["OLD.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01"]),
+            "turnover_n": [50.0],
+            "close": [10.6],
+            "yx": [10.4],
+            "p": [10.5],
+            "resonance_gap_pct": [0.003],
+        }
     )
+    (runtime_root / "prepared").mkdir(parents=True, exist_ok=True)
 
     original_connect = cli._connect
     original_fetch = cli.fetch_daily_window
@@ -10104,27 +10651,26 @@ def test_screen_hcr_ignores_prepared_cache_missing_pool_moving_averages(tmp_path
             }
         )
 
-    def fake_prepare_hcr_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        return {
-            "NEW.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [100.0],
-                    "ma25": [10.4],
-                    "ma60": [10.1],
-                    "close": [10.6],
-                    "yx": [10.4],
-                    "p": [10.5],
-                    "resonance_gap_pct": [0.003],
-                }
-            )
-        }
+    def fake_prepare_hcr_screen_data(_: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [100.0],
+                "ma25": [10.4],
+                "ma60": [10.1],
+                "close": [10.6],
+                "yx": [10.4],
+                "p": [10.5],
+                "resonance_gap_pct": [0.003],
+            }
+        )
 
     def fake_run_hcr_screen_with_stats(
-        prepared_subset: dict[str, pd.DataFrame],
+        prepared_subset: pd.DataFrame,
         pick_date: pd.Timestamp,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_subset) == ["NEW.SZ"]
+        assert sorted(prepared_subset["ts_code"].unique()) == ["NEW.SZ"]
         return (
             [{"code": "NEW.SZ", "pick_date": "2026-04-01", "close": 10.6, "turnover_n": 100.0}],
             {
@@ -10167,33 +10713,14 @@ def test_screen_hcr_ignores_prepared_cache_missing_pool_moving_averages(tmp_path
         cli.run_hcr_screen_with_stats = original_run  # type: ignore[assignment]
 
     assert result.exit_code == 0
-    assert "[screen] prepared reuse skipped" in result.stderr
-    assert "reason=stale_screen_version" in result.stderr
+    assert "[screen] connect db" in result.stderr
+    assert "[screen] write prepared path=" in result.stderr
 
 
 def test_screen_ignores_stale_b1_prepared_cache_without_screen_version_and_recomputes(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-01.pkl",
-        pick_date="2026-04-01",
-        start_date="2025-03-31",
-        end_date="2026-04-01",
-        prepared_by_symbol={
-            "OLD.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [50.0],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "close": [10.6],
-                }
-            )
-        },
-    )
+    (runtime_root / "prepared").mkdir(parents=True, exist_ok=True)
 
     calls = {"connect": 0, "prepare": 0}
 
@@ -10220,35 +10747,34 @@ def test_screen_ignores_stale_b1_prepared_cache_without_screen_version_and_recom
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
         calls["prepare"] += 1
-        return {
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [200.0],
-                    "J": [10.0],
-                    "zxdq": [11.5],
-                    "zxdkx": [11.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "close": [11.6],
-                    "chg_d": [1.0],
-                    "amp_d": [2.0],
-                    "body_d": [-1.0],
-                    "vm3": [90.0],
-                    "vm5": [100.0],
-                    "vm10": [120.0],
-                    "m5": [10.4],
-                    "v_shrink": [True],
-                    "safe_mode": [True],
-                    "lt_filter": [True],
-                }
-            )
-        }
+        return pd.DataFrame(
+            {
+                "ts_code": ["BBB.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [200.0],
+                "J": [10.0],
+                "zxdq": [11.5],
+                "zxdkx": [11.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "close": [11.6],
+                "chg_d": [1.0],
+                "amp_d": [2.0],
+                "body_d": [-1.0],
+                "vm3": [90.0],
+                "vm5": [100.0],
+                "vm10": [120.0],
+                "m5": [10.4],
+                "v_shrink": [True],
+                "safe_mode": [True],
+                "lt_filter": [True],
+            }
+        )
 
     def fake_run_b1_screen_with_stats(
-        prepared_subset: dict[str, pd.DataFrame],
+        prepared_subset: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
@@ -10296,27 +10822,27 @@ def test_screen_ignores_stale_b1_prepared_cache_without_screen_version_and_recom
 def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    prepared_by_symbol = {
-        "BBB.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-01"]),
-                "open": [11.2],
-                "high": [11.8],
-                "low": [11.0],
-                "close": [11.6],
-                "ma25": [11.7],
-                "ma60": [11.2],
-                "turnover_n": [200.0],
-                "volume": [120.0],
-            }
-        )
-    }
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-01.pkl",
+    prepared_table = pd.DataFrame(
+        {
+            "ts_code": ["BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01"]),
+            "open": [11.2],
+            "high": [11.8],
+            "low": [11.0],
+            "close": [11.6],
+            "ma25": [11.7],
+            "ma60": [11.2],
+            "turnover_n": [200.0],
+            "volume": [120.0],
+        }
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / "2026-04-01.feather",
+        runtime_root / "prepared" / "2026-04-01.meta.json",
         pick_date="2026-04-01",
         start_date="2025-03-31",
         end_date="2026-04-01",
-        prepared_by_symbol=prepared_by_symbol,
+        prepared_table=prepared_table,
     )
 
     original_connect = cli._connect
@@ -10330,14 +10856,14 @@ def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(tm
     def fail_fetch(*args, **kwargs):
         raise AssertionError("b2 screen should not fetch market window when shared prepared cache is reusable")
 
-    def fail_prepare(_: pd.DataFrame, reporter=None) -> dict[str, pd.DataFrame]:
+    def fail_prepare(_: pd.DataFrame, reporter=None) -> pd.DataFrame:
         raise AssertionError("b2 screen should not prepare data when shared prepared cache is reusable")
 
     def fake_run_b2_screen_with_stats(
-        prepared_subset: dict[str, pd.DataFrame],
+        prepared_subset: pd.DataFrame,
         pick_date: pd.Timestamp,
     ) -> tuple[list[dict], dict[str, int]]:
-        assert list(prepared_subset) == ["BBB.SZ"]
+        assert sorted(prepared_subset["ts_code"].unique()) == ["BBB.SZ"]
         return (
             [{"code": "BBB.SZ", "pick_date": "2026-04-01", "close": 11.6, "turnover_n": 200.0, "signal": "B2"}],
             {
@@ -10405,12 +10931,13 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
         ),
         encoding="utf-8",
     )
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / f"{_eod_key('2026-04-01')}.pkl",
+    cli._write_prepared_cache_v2(
+        cli._prepared_cache_data_path(runtime_root, "2026-04-01", "b1"),
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-01", "b1"),
         pick_date="2026-04-01",
         start_date="2025-03-31",
         end_date="2026-04-01",
-        prepared_by_symbol={"OLD.SZ": pd.DataFrame({"trade_date": pd.to_datetime(["2026-04-01"]), "turnover_n": [50.0]})},
+        prepared_table=pd.DataFrame({"ts_code": ["OLD.SZ"], "trade_date": pd.to_datetime(["2026-04-01"]), "turnover_n": [50.0]}),
     )
 
     calls = {"connect": 0, "prepare": 0}
@@ -10438,25 +10965,24 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
             }
         )
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
         calls["prepare"] += 1
-        return {
-            "NEW.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-01"]),
-                    "turnover_n": [200.0],
-                    "J": [10.0],
-                    "zxdq": [11.5],
-                    "zxdkx": [11.2],
-                    "weekly_ma_bull": [True],
-                    "max_vol_not_bearish": [True],
-                    "close": [11.6],
-                }
-            )
-        }
+        return pd.DataFrame(
+            {
+                "ts_code": ["NEW.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-01"]),
+                "turnover_n": [200.0],
+                "J": [10.0],
+                "zxdq": [11.5],
+                "zxdkx": [11.2],
+                "weekly_ma_bull": [True],
+                "max_vol_not_bearish": [True],
+                "close": [11.6],
+            }
+        )
 
     def fake_run_b1_screen_with_stats(
-        prepared_subset: dict[str, pd.DataFrame],
+        prepared_table: pd.DataFrame,
         pick_date: pd.Timestamp,
         config: dict,
     ) -> tuple[list[dict], dict[str, int]]:
@@ -10506,37 +11032,35 @@ def test_screen_recompute_bypasses_candidate_and_prepared_reuse(tmp_path: Path) 
 def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    prepared_path = runtime_root / "prepared" / "2026-04-10.pkl"
-    prepared_path.parent.mkdir(parents=True, exist_ok=True)
-    cli._write_prepared_cache(
-        prepared_path,
+    cli._write_prepared_cache_v2(
+        cli._prepared_cache_data_path(runtime_root, "2026-04-10", "dribull"),
+        cli._prepared_cache_meta_path(runtime_root, "2026-04-10", "dribull"),
         method="dribull",
         pick_date="2026-04-10",
         start_date="2025-04-09",
         end_date="2026-04-10",
-        prepared_by_symbol={
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-09"]),
-                    "turnover_n": [1030.0],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "low": [10.3],
-                    "close": [10.6],
-                    "volume": [100.0],
-                    "ma25": [10.5],
-                    "ma60": [10.4],
-                    "ma144": [9.6],
-                    "dif": [0.11],
-                    "dea": [0.08],
-                    "dif_w": [0.20],
-                    "dea_w": [0.15],
-                    "dif_m": [0.30],
-                    "dea_m": [0.22],
-                }
-            )
-        },
+        prepared_table=pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-09"]),
+                "turnover_n": [1030.0],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "low": [10.3],
+                "close": [10.6],
+                "volume": [100.0],
+                "ma25": [10.5],
+                "ma60": [10.4],
+                "ma144": [9.6],
+                "dif": [0.11],
+                "dea": [0.08],
+                "dif_w": [0.20],
+                "dea_w": [0.15],
+                "dif_m": [0.30],
+                "dea_m": [0.22],
+            }
+        ),
     )
 
     monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
@@ -10558,35 +11082,34 @@ def test_screen_skips_prepared_reuse_when_cache_does_not_cover_pick_date(monkeyp
     monkeypatch.setattr(
         cli,
         "_prepare_screen_data",
-        lambda market, reporter=None: {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-10"]),
-                    "turnover_n": [1030.0],
-                    "J": [10.0],
-                    "zxdq": [10.5],
-                    "zxdkx": [10.2],
-                    "low": [10.3],
-                    "close": [10.6],
-                    "volume": [100.0],
-                    "ma25": [10.5],
-                    "ma60": [10.4],
-                    "ma144": [9.6],
-                    "dif": [0.11],
-                    "dea": [0.08],
-                    "dif_w": [0.20],
-                    "dea_w": [0.15],
-                    "dif_m": [0.30],
-                    "dea_m": [0.22],
-                }
-            )
-        },
+        lambda market, reporter=None: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-10"]),
+                "turnover_n": [1030.0],
+                "J": [10.0],
+                "zxdq": [10.5],
+                "zxdkx": [10.2],
+                "low": [10.3],
+                "close": [10.6],
+                "volume": [100.0],
+                "ma25": [10.5],
+                "ma60": [10.4],
+                "ma144": [9.6],
+                "dif": [0.11],
+                "dea": [0.08],
+                "dif_w": [0.20],
+                "dea_w": [0.15],
+                "dif_m": [0.30],
+                "dea_m": [0.22],
+            }
+        ),
     )
-    monkeypatch.setattr(cli, "build_top_turnover_pool", lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]})
+    monkeypatch.setattr(cli, "build_top_turnover_pool", lambda prepared_table, *, top_m: {pd.Timestamp("2026-04-10"): ["000001.SZ"]})
     monkeypatch.setattr(
         cli,
         "run_dribull_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-10", "close": 10.6, "turnover_n": 1030.0}],
             _dribull_trend_stats(total_symbols=1, eligible=1, selected=1),
         ),
@@ -11081,45 +11604,49 @@ def test_screen_intraday_writes_timestamped_candidate_and_shared_prepared(monkey
 
     assert result.exit_code == 0
     candidate_path = runtime_root / "candidates" / f"{_intraday_key(expected_run_id)}.json"
-    prepared_path = runtime_root / "prepared" / "2026-04-09.intraday.pkl"
+    prepared_data_path = runtime_root / "prepared" / "2026-04-09.intraday.feather"
+    prepared_meta_path = runtime_root / "prepared" / "2026-04-09.intraday.meta.json"
     assert candidate_path.exists()
-    assert prepared_path.exists()
+    assert prepared_data_path.exists()
+    assert prepared_meta_path.exists()
+    assert not prepared_data_path.with_suffix(".pkl").exists()
 
     candidate_payload = json.loads(candidate_path.read_text(encoding="utf-8"))
     assert candidate_payload["run_id"] == expected_run_id
     assert candidate_payload["fetched_at"] == expected_run_id
 
-    prepared_payload = pickle.loads(prepared_path.read_bytes())
+    prepared_payload = cli._load_prepared_cache(prepared_data_path)
     assert prepared_payload["metadata"]["mode"] == "intraday_snapshot"
     assert prepared_payload["metadata"]["source"] == "tushare_rt_k"
     assert prepared_payload["metadata"]["run_id"] == expected_run_id
     assert prepared_payload["metadata"]["previous_trade_date"] == "2026-04-08"
+    assert set(prepared_payload["prepared_table"]["ts_code"].unique()) == {"000001.SZ"}
 
 
 def test_screen_intraday_reuses_shared_prepared_cache_without_recompute(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    prepared_by_symbol = {
-        "000001.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-09"]),
-                "turnover_n": [200.0],
-                "J": [10.0],
-                "zxdq": [11.5],
-                "zxdkx": [11.2],
-                "weekly_ma_bull": [True],
-                "max_vol_not_bearish": [True],
-                "close": [11.6],
-            }
-        )
-    }
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
+    prepared_table = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-09"]),
+            "turnover_n": [200.0],
+            "J": [10.0],
+            "zxdq": [11.5],
+            "zxdkx": [11.2],
+            "weekly_ma_bull": [True],
+            "max_vol_not_bearish": [True],
+            "close": [11.6],
+        }
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / "2026-04-09.intraday.feather",
+        runtime_root / "prepared" / "2026-04-09.intraday.meta.json",
         method="b1",
         pick_date="2026-04-09",
         start_date="2025-04-08",
         end_date="2026-04-09",
-        prepared_by_symbol=prepared_by_symbol,
+        prepared_table=prepared_table,
         metadata_overrides={
             "mode": "intraday_snapshot",
             "source": "tushare_rt_k",
@@ -11139,7 +11666,7 @@ def test_screen_intraday_reuses_shared_prepared_cache_without_recompute(monkeypa
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
-        lambda prepared_subset, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 11.6, "turnover_n": 200.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         ),
@@ -11164,26 +11691,26 @@ def test_screen_intraday_reuses_shared_prepared_cache_without_recompute(monkeypa
 def test_screen_intraday_b2_reuses_shared_prepared_cache_without_recompute(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    prepared_by_symbol = {
-        "000001.SZ": pd.DataFrame(
-            {
-                "trade_date": pd.to_datetime(["2026-04-09"]),
-                "open": [11.9],
-                "high": [12.1],
-                "low": [11.8],
-                "close": [12.0],
-                "turnover_n": [200.0],
-                "volume": [120.0],
-            }
-        )
-    }
-    cli._write_prepared_cache(
-        runtime_root / "prepared" / "2026-04-09.intraday.pkl",
+    prepared_table = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-09"]),
+            "open": [11.9],
+            "high": [12.1],
+            "low": [11.8],
+            "close": [12.0],
+            "turnover_n": [200.0],
+            "volume": [120.0],
+        }
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / "2026-04-09.intraday.feather",
+        runtime_root / "prepared" / "2026-04-09.intraday.meta.json",
         method="b1",
         pick_date="2026-04-09",
         start_date="2025-04-08",
         end_date="2026-04-09",
-        prepared_by_symbol=prepared_by_symbol,
+        prepared_table=prepared_table,
         metadata_overrides={
             "mode": "intraday_snapshot",
             "source": "tushare_rt_k",
@@ -11203,7 +11730,7 @@ def test_screen_intraday_b2_reuses_shared_prepared_cache_without_recompute(monke
     monkeypatch.setattr(
         cli,
         "run_b2_screen_with_stats",
-        lambda prepared_subset, pick_date: (
+        lambda prepared_table, pick_date: (
             [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 12.0, "turnover_n": 200.0, "signal": "B2"}],
             {
                 "total_symbols": 1,
@@ -11323,16 +11850,16 @@ def test_screen_intraday_record_watch_uses_watch_pool_subset(monkeypatch, tmp_pa
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: pytest.fail("turnover-top pool should not be used for intraday record-watch"),
+        lambda prepared_table, *, top_m: pytest.fail("turnover-top pool should not be used for intraday record-watch"),
     )
     monkeypatch.setattr(
         cli,
         "run_b1_screen_with_stats",
-        lambda prepared_by_symbol, pick_date, config: (
+        lambda prepared_table, pick_date, config: (
             [{"code": "000001.SZ", "pick_date": "2026-04-09", "close": 12.34, "turnover_n": 120.0}],
             _b1_screen_stats(total_symbols=1, eligible=1, selected=1),
         )
-        if list(prepared_by_symbol) == ["000001.SZ"]
+        if set(prepared_table["ts_code"].unique()) == {"000001.SZ"}
         else pytest.fail("intraday record-watch should screen only the watch-pool subset"),
         raising=False,
     )
@@ -11357,8 +11884,9 @@ def test_screen_intraday_record_watch_uses_watch_pool_subset(monkeypatch, tmp_pa
     candidate_payload = json.loads(candidate_files[0].read_text(encoding="utf-8"))
     assert candidate_payload["pool_source"] == "record-watch"
     assert [item["code"] for item in candidate_payload["candidates"]] == ["000001.SZ"]
-    prepared_payload = pickle.loads(next((runtime_root / "prepared").glob("*.pkl")).read_bytes())
+    prepared_payload = cli._load_prepared_cache(cli._prepared_cache_data_path(runtime_root, "2026-04-09.intraday", "b1"))
     assert prepared_payload["metadata"]["mode"] == "intraday_snapshot"
+    assert set(prepared_payload["prepared_table"]["ts_code"].unique()) == {"000001.SZ"}
 
 
 def test_screen_intraday_hcr_turnover_top_uses_liquidity_pool(monkeypatch, tmp_path: Path) -> None:
@@ -11448,39 +11976,28 @@ def test_screen_intraday_hcr_turnover_top_uses_liquidity_pool(monkeypatch, tmp_p
     monkeypatch.setattr(
         cli,
         "_prepare_hcr_screen_data",
-        lambda market, reporter=None: {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09"]),
-                    "close": [12.0, 12.34],
-                    "yx": [11.9, 12.2],
-                    "p": [12.0, 12.25],
-                    "resonance_gap_pct": [0.0083, 0.0041],
-                    "turnover_n": [900.0, 1000.0],
-                }
-            ),
-            "000002.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09"]),
-                    "close": [22.0, 22.34],
-                    "yx": [21.9, 22.2],
-                    "p": [22.0, 22.25],
-                    "resonance_gap_pct": [0.0045, 0.0020],
-                    "turnover_n": [1900.0, 2000.0],
-                }
-            ),
-        },
+        lambda market, reporter=None: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ", "000002.SZ", "000002.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09", "2026-04-08", "2026-04-09"]),
+                "close": [12.0, 12.34, 22.0, 22.34],
+                "yx": [11.9, 12.2, 21.9, 22.2],
+                "p": [12.0, 12.25, 22.0, 22.25],
+                "resonance_gap_pct": [0.0083, 0.0041, 0.0045, 0.0020],
+                "turnover_n": [900.0, 1000.0, 1900.0, 2000.0],
+            }
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         cli,
         "build_top_turnover_pool",
-        lambda prepared_by_symbol, *, top_m: {pd.Timestamp("2026-04-09"): ["000002.SZ"]},
+        lambda prepared_table, *, top_m: {pd.Timestamp("2026-04-09"): ["000002.SZ"]},
     )
     monkeypatch.setattr(
         cli,
         "run_hcr_screen_with_stats",
-        lambda prepared_by_symbol, pick_date: (
+        lambda prepared_table, pick_date: (
             [{"code": "000002.SZ", "pick_date": "2026-04-09", "close": 22.34, "turnover_n": 2000.0, "yx": 22.2, "p": 22.25, "resonance_gap_pct": 0.0020}],
             {
                 "total_symbols": 1,
@@ -11492,7 +12009,7 @@ def test_screen_intraday_hcr_turnover_top_uses_liquidity_pool(monkeypatch, tmp_p
                 "selected": 1,
             },
         )
-        if list(prepared_by_symbol) == ["000002.SZ"]
+        if list(prepared_table["ts_code"].unique()) == ["000002.SZ"]
         else pytest.fail("intraday hcr turnover-top should screen only the liquidity pool subset"),
         raising=False,
     )
@@ -11594,24 +12111,23 @@ def test_screen_intraday_hcr_uses_trade_date_lookback_window(monkeypatch, tmp_pa
     monkeypatch.setattr(
         cli,
         "_prepare_hcr_screen_data",
-        lambda market, reporter=None: {
-            "000001.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09"]),
-                    "close": [12.0, 12.34],
-                    "yx": [11.9, 12.2],
-                    "p": [12.0, 12.25],
-                    "resonance_gap_pct": [0.0083, 0.0041],
-                    "turnover_n": [900.0, 1000.0],
-                }
-            )
-        },
+        lambda market, reporter=None: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ"],
+                "trade_date": pd.to_datetime(["2026-04-08", "2026-04-09"]),
+                "close": [12.0, 12.34],
+                "yx": [11.9, 12.2],
+                "p": [12.0, 12.25],
+                "resonance_gap_pct": [0.0083, 0.0041],
+                "turnover_n": [900.0, 1000.0],
+            }
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         cli,
         "run_hcr_screen_with_stats",
-        lambda prepared_by_symbol, pick_date: (
+        lambda prepared_table, pick_date: (
             [],
             {
                 "total_symbols": 1,

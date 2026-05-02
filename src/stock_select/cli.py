@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import math
 import os
-import pickle
 import re
 import shutil
+import sys
 import time
 from datetime import datetime
 from functools import partial
@@ -125,6 +125,22 @@ class ProgressReporter:
 
 
 def main() -> None:
+    args = sys.argv[1:]
+    root_options = {"--help", "--install-completion", "--show-completion"}
+    subcommands = {
+        "screen",
+        "chart",
+        "review",
+        "analyze-symbol",
+        "record-watch",
+        "clean",
+        "review-merge",
+        "render-html",
+        "run",
+        "html",
+    }
+    if args and args[0] not in subcommands and args[0] not in root_options:
+        sys.argv = [sys.argv[0], "screen", *args]
     app()
 
 
@@ -258,10 +274,32 @@ def _candidate_path(runtime_root: Path, base_key: str, method: str) -> Path:
     return runtime_root / "candidates" / f"{_artifact_key(base_key, method)}.json"
 
 
-def _prepared_cache_path(runtime_root: Path, base_key: str, method: str) -> Path:
+def _prepared_cache_artifact_stem(base_key: str, method: str) -> str:
     if method in SHARED_PREPARED_METHODS:
-        return runtime_root / "prepared" / f"{base_key}.pkl"
-    return runtime_root / "prepared" / f"{_artifact_key(base_key, method)}.pkl"
+        return base_key
+    return _artifact_key(base_key, method)
+
+
+def _prepared_cache_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    return runtime_root / "prepared" / f"{_prepared_cache_artifact_stem(base_key, method)}.feather"
+
+
+def _prepared_cache_data_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    return runtime_root / "prepared" / f"{_prepared_cache_artifact_stem(base_key, method)}.feather"
+
+
+def _prepared_cache_meta_path(runtime_root: Path, base_key: str, method: str) -> Path:
+    return runtime_root / "prepared" / f"{_prepared_cache_artifact_stem(base_key, method)}.meta.json"
+
+
+def _prepared_cache_artifact_exists(runtime_root: Path, base_key: str, method: str) -> bool:
+    data_path = _prepared_cache_data_path(runtime_root, base_key, method)
+    meta_path = _prepared_cache_meta_path(runtime_root, base_key, method)
+    return data_path.exists() and meta_path.exists()
+
+
+def _prepared_cache_exists(runtime_root: Path, base_key: str, method: str) -> bool:
+    return _prepared_cache_artifact_exists(runtime_root, base_key, method)
 
 
 def _chart_dir_path(runtime_root: Path, base_key: str, method: str) -> Path:
@@ -307,7 +345,7 @@ def _extract_intraday_trade_date_from_candidate(candidate_path: Path) -> str | N
 
 
 def _extract_intraday_trade_date_from_prepared(prepared_path: Path) -> str | None:
-    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.intraday(?:\.[^.]+)?\.pkl", prepared_path.name)
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.intraday(?:\.[^.]+)?\.(?:feather|meta\.json)", prepared_path.name)
     if match is None:
         return None
     return match.group(1)
@@ -346,7 +384,10 @@ def _clean_eod_artifacts(runtime_root: Path, *, pick_date: str) -> dict[str, int
             summary[category] += 1
 
     prepared_paths = {
-        _prepared_cache_path(runtime_root, pick_date, method)
+        _prepared_cache_data_path(runtime_root, pick_date, method)
+        for method in BATCH_METHODS
+    } | {
+        _prepared_cache_meta_path(runtime_root, pick_date, method)
         for method in BATCH_METHODS
     }
     for prepared_path in sorted(prepared_paths):
@@ -387,12 +428,16 @@ def _clean_intraday_artifacts(runtime_root: Path, *, keep_trade_date: str) -> di
 
     prepared_dir = runtime_root / "prepared"
     if prepared_dir.exists():
-        for prepared_path in sorted(prepared_dir.glob("*.pkl")):
+        for prepared_path in sorted(prepared_dir.glob("*.feather")):
             trade_date = _extract_intraday_trade_date_from_prepared(prepared_path)
             if trade_date is None or trade_date == keep_trade_date:
                 continue
             _delete_path(prepared_path)
             summary["prepared"] += 1
+            meta_path = prepared_path.with_suffix(".meta.json")
+            if meta_path.exists():
+                _delete_path(meta_path)
+                summary["prepared"] += 1
     return summary
 
 
@@ -485,17 +530,11 @@ def _resolve_latest_intraday_candidate(runtime_root: Path, method: str) -> tuple
     return latest_path, _validate_intraday_candidate_payload(latest_path, latest_payload)
 
 
-def _write_prepared_cache(
-    cache_path: Path,
+def _build_prepared_cache_metadata(
     *,
-    method: str | None = None,
-    pick_date: str,
-    start_date: str,
-    end_date: str,
-    prepared_by_symbol: dict[str, pd.DataFrame],
-    metadata_overrides: dict[str, object] | None = None,
-) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    method: str | None,
+    metadata_overrides: dict[str, object] | None,
+) -> dict[str, object]:
     metadata = {
         "b1_config": DEFAULT_B1_CONFIG,
         "turnover_window": DEFAULT_TURNOVER_WINDOW,
@@ -510,18 +549,49 @@ def _write_prepared_cache(
         metadata["screen_version"] = HCR_ARTIFACT_VERSION
     if metadata_overrides:
         metadata.update(metadata_overrides)
+    return metadata
+
+
+def _write_prepared_cache_v2(
+    data_path: Path,
+    meta_path: Path,
+    *,
+    method: str | None = None,
+    pick_date: str,
+    start_date: str,
+    end_date: str,
+    prepared_table: pd.DataFrame,
+    metadata_overrides: dict[str, object] | None = None,
+) -> None:
+    data_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    prepared_table.to_feather(data_path)
+
     payload = {
         "pick_date": pick_date,
         "start_date": start_date,
         "end_date": end_date,
-        "prepared_by_symbol": prepared_by_symbol,
-        "metadata": metadata,
+        "metadata": _build_prepared_cache_metadata(method=method, metadata_overrides=metadata_overrides),
     }
-    cache_path.write_bytes(pickle.dumps(payload))
+    meta_path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True), encoding="utf-8")
+
+
+def _load_prepared_cache_v2(data_path: Path, meta_path: Path) -> dict[str, object]:
+    payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Prepared cache metadata payload must be a dict.")
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("Prepared cache metadata missing.")
+
+    payload["prepared_table"] = pd.read_feather(data_path)
+    return payload
 
 
 def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
-    payload = pickle.loads(cache_path.read_bytes())
+    data_path = cache_path.with_suffix(".feather")
+    meta_path = cache_path.with_suffix(".meta.json")
+    payload = _load_prepared_cache_v2(data_path, meta_path)
     if not isinstance(payload, dict):
         raise ValueError("Prepared cache payload must be a dict.")
 
@@ -538,10 +608,10 @@ def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
     if metadata.get("max_vol_lookback") != DEFAULT_MAX_VOL_LOOKBACK:
         raise ValueError("Prepared cache max_vol_lookback mismatch.")
 
-    prepared_by_symbol = payload.get("prepared_by_symbol")
-    if not isinstance(prepared_by_symbol, dict):
-        raise ValueError("Prepared cache prepared_by_symbol missing.")
-    payload["prepared_by_symbol"] = prepared_by_symbol
+    prepared_table = payload.get("prepared_table")
+    if not isinstance(prepared_table, pd.DataFrame):
+        raise ValueError("Prepared cache prepared_table missing.")
+    payload["prepared_table"] = prepared_table
     return payload
 
 
@@ -575,7 +645,7 @@ def _load_intraday_prepared_cache(
     method: str,
     run_id: str,
     trade_date: str,
-) -> dict[str, pd.DataFrame]:
+) -> pd.DataFrame:
     cache_path = _prepared_cache_path(runtime_root, f"{trade_date}.intraday", method)
     payload = _load_prepared_cache(cache_path)
     _require_current_intraday_prepared_cache(cache_path, payload, method=method)
@@ -590,9 +660,9 @@ def _load_intraday_prepared_cache(
     if payload.get("pick_date") != trade_date:
         raise IntradayArtifactError("Prepared intraday cache metadata mismatch.")
 
-    prepared = payload["prepared_by_symbol"]
-    if not isinstance(prepared, dict):
-        raise IntradayArtifactError("Prepared intraday payload missing prepared_by_symbol.")
+    prepared = payload["prepared_table"]
+    if not isinstance(prepared, pd.DataFrame):
+        raise IntradayArtifactError("Prepared intraday payload missing prepared_table.")
     return prepared  # type: ignore[return-value]
 
 
@@ -654,12 +724,30 @@ def _resolve_hcr_start_date(connection, *, end_date: str, trading_days: int) -> 
     return fetch_nth_latest_trade_date(connection, end_date=end_date, n=trading_days)
 
 
+def _filter_prepared_table_by_codes(prepared_table: pd.DataFrame, codes: list[str]) -> pd.DataFrame:
+    if prepared_table.empty or not codes:
+        return prepared_table.iloc[0:0].copy()
+    return prepared_table.loc[prepared_table["ts_code"].isin(codes)].copy()
+
+
+def _prepared_table_codes(prepared_table: pd.DataFrame) -> list[str]:
+    if prepared_table.empty or "ts_code" not in prepared_table.columns:
+        return []
+    return list(pd.Index(prepared_table["ts_code"]).dropna().unique())
+
+
+def _prepared_table_history_for_code(prepared_table: pd.DataFrame, code: str) -> pd.DataFrame:
+    if prepared_table.empty or "ts_code" not in prepared_table.columns:
+        return prepared_table.iloc[0:0].copy()
+    return prepared_table.loc[prepared_table["ts_code"] == code].copy()
+
+
 def _resolve_record_watch_pool_codes(
     *,
     runtime_root: Path,
     method: str,
     pick_date: str,
-    prepared_by_symbol: dict[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
 ) -> list[str]:
     csv_path = _watch_pool_path(runtime_root, method)
     if not csv_path.exists():
@@ -667,11 +755,12 @@ def _resolve_record_watch_pool_codes(
 
     watch_rows = load_watch_pool(csv_path)
     effective_symbols = effective_watch_pool_symbols(watch_rows, screening_date=pick_date)
-    pool_codes = [code for code in effective_symbols if code in prepared_by_symbol]
+    prepared_codes = set(_prepared_table_codes(prepared_table))
+    pool_codes = [code for code in effective_symbols if code in prepared_codes]
     if not pool_codes:
         raise typer.BadParameter(
             f"Effective watch pool is empty after applying screening date {pick_date} and prepared-data intersection."
-    )
+        )
     return pool_codes
 
 
@@ -742,7 +831,7 @@ def _resolve_pool_codes(
     runtime_root: Path,
     method: str,
     pick_date: str,
-    prepared_by_symbol: dict[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pool_file: Path | None = None,
 ) -> list[str]:
     if pool_source == "record-watch":
@@ -750,15 +839,16 @@ def _resolve_pool_codes(
             runtime_root=runtime_root,
             method=method,
             pick_date=pick_date,
-            prepared_by_symbol=prepared_by_symbol,
+            prepared_table=prepared_table,
         )
     if pool_source == "custom":
         _resolved_path, custom_codes = _load_custom_pool_codes(pool_file=pool_file)
-        pool_codes = [code for code in custom_codes if code in prepared_by_symbol]
+        prepared_codes = set(_prepared_table_codes(prepared_table))
+        pool_codes = [code for code in custom_codes if code in prepared_codes]
         if not pool_codes:
             raise typer.BadParameter("Effective custom pool is empty after prepared-data intersection.")
         return pool_codes
-    top_turnover_pool = build_top_turnover_pool(prepared_by_symbol, top_m=DEFAULT_TOP_M)
+    top_turnover_pool = build_top_turnover_pool(prepared_table, top_m=DEFAULT_TOP_M)
     return top_turnover_pool.get(pd.Timestamp(pick_date), [])
 
 
@@ -818,15 +908,12 @@ def _validate_eod_pick_date_has_market_data(connection, *, market: pd.DataFrame,
 def _validate_eod_pick_date_has_prepared_data(
     connection,
     *,
-    prepared_by_symbol: dict[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: str,
 ) -> None:
-    target_date = pd.Timestamp(pick_date)
-    for frame in prepared_by_symbol.values():
-        if frame.empty or "trade_date" not in frame.columns:
-            continue
-        trade_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
-        if bool((trade_dates == target_date).any()):
+    if not prepared_table.empty and "trade_date" in prepared_table.columns:
+        trade_dates = pd.to_datetime(prepared_table["trade_date"], errors="coerce")
+        if bool((trade_dates == pd.Timestamp(pick_date)).any()):
             return
     latest_trade_date = fetch_nth_latest_trade_date(connection, end_date=pick_date, n=1)
     raise typer.BadParameter(
@@ -834,14 +921,12 @@ def _validate_eod_pick_date_has_prepared_data(
     )
 
 
-def _prepared_cache_covers_pick_date(prepared_by_symbol: dict[str, pd.DataFrame], *, pick_date: str) -> bool:
-    target_date = pd.Timestamp(pick_date)
-    for frame in prepared_by_symbol.values():
-        if frame.empty or "trade_date" not in frame.columns:
-            continue
-        trade_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
-        if bool((trade_dates == target_date).any()):
-            return True
+def _prepared_cache_covers_pick_date(prepared_table: pd.DataFrame, *, pick_date: str) -> bool:
+    if prepared_table.empty or "trade_date" not in prepared_table.columns:
+        return False
+    trade_dates = pd.to_datetime(prepared_table["trade_date"], errors="coerce")
+    if bool((trade_dates == pd.Timestamp(pick_date)).any()):
+        return True
     return False
 
 
@@ -888,53 +973,55 @@ def _prepare_screen_data(
     *,
     reporter: ProgressReporter | None = None,
     progress_every: int = 500,
-) -> dict[str, pd.DataFrame]:
+) -> pd.DataFrame:
     if market.empty:
-        return {}
+        return pd.DataFrame()
 
-    prepared: dict[str, pd.DataFrame] = {}
-    frame = market.copy()
+    frame = market.sort_values(["ts_code", "trade_date"]).reset_index(drop=True).copy()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"])
     if "volume" not in frame.columns and "vol" in frame.columns:
         frame["volume"] = frame["vol"]
 
-    groups = list(frame.groupby("ts_code"))
-    total = len(groups)
+    total = int(frame["ts_code"].nunique()) if "ts_code" in frame.columns else 0
     if reporter:
         reporter.emit("screen", f"preparing symbols={total}")
 
-    for idx, (code, group) in enumerate(groups, start=1):
-        group = group.sort_values("trade_date").reset_index(drop=True)
-        group["turnover_n"] = compute_turnover_n(group, window=DEFAULT_TURNOVER_WINDOW)
+    for idx, (code, group_index) in enumerate(frame.groupby("ts_code", sort=False).groups.items(), start=1):
+        group = frame.loc[group_index].reset_index(drop=True)
+        frame.loc[group_index, "turnover_n"] = compute_turnover_n(group, window=DEFAULT_TURNOVER_WINDOW).to_numpy()
         kdj = compute_kdj(group)
-        group["J"] = kdj["J"]
-        group["ma25"] = group["close"].astype(float).rolling(window=25, min_periods=25).mean()
-        group["ma60"] = group["close"].astype(float).rolling(window=60, min_periods=60).mean()
-        group["ma144"] = group["close"].astype(float).rolling(window=144, min_periods=144).mean()
+        frame.loc[group_index, "J"] = kdj["J"].to_numpy()
+        frame.loc[group_index, "ma25"] = group["close"].astype(float).rolling(window=25, min_periods=25).mean().to_numpy()
+        frame.loc[group_index, "ma60"] = group["close"].astype(float).rolling(window=60, min_periods=60).mean().to_numpy()
+        frame.loc[group_index, "ma144"] = group["close"].astype(float).rolling(window=144, min_periods=144).mean().to_numpy()
         zxdq, zxdkx = compute_zx_lines(group)
-        group["zxdq"] = zxdq
-        group["zxdkx"] = zxdkx
+        frame.loc[group_index, "zxdq"] = zxdq.to_numpy()
+        frame.loc[group_index, "zxdkx"] = zxdkx.to_numpy()
         macd = compute_macd(group)
-        group["dif"] = macd["dif"]
-        group["dea"] = macd["dea"]
-        group["macd_hist"] = macd["macd_hist"]
+        frame.loc[group_index, "dif"] = macd["dif"].to_numpy()
+        frame.loc[group_index, "dea"] = macd["dea"].to_numpy()
+        frame.loc[group_index, "macd_hist"] = macd["macd_hist"].to_numpy()
         weekly_macd = _compute_period_macd_alignment(group, period="W")
-        group["dif_w"] = weekly_macd["dif"]
-        group["dea_w"] = weekly_macd["dea"]
+        frame.loc[group_index, "dif_w"] = weekly_macd["dif"].to_numpy()
+        frame.loc[group_index, "dea_w"] = weekly_macd["dea"].to_numpy()
         monthly_macd = _compute_period_macd_alignment(group, period="ME")
-        group["dif_m"] = monthly_macd["dif"]
-        group["dea_m"] = monthly_macd["dea"]
-        group["weekly_ma_bull"] = compute_weekly_ma_bull(group, ma_periods=DEFAULT_WEEKLY_MA_PERIODS)
-        group["max_vol_not_bearish"] = max_vol_not_bearish(group, lookback=DEFAULT_MAX_VOL_LOOKBACK)
+        frame.loc[group_index, "dif_m"] = monthly_macd["dif"].to_numpy()
+        frame.loc[group_index, "dea_m"] = monthly_macd["dea"].to_numpy()
+        frame.loc[group_index, "weekly_ma_bull"] = compute_weekly_ma_bull(
+            group, ma_periods=DEFAULT_WEEKLY_MA_PERIODS
+        ).to_numpy()
+        frame.loc[group_index, "max_vol_not_bearish"] = max_vol_not_bearish(
+            group, lookback=DEFAULT_MAX_VOL_LOOKBACK
+        ).to_numpy()
         tightening = compute_b1_tightening_columns(group)
-        group[list(tightening.columns)] = tightening
-        prepared[code] = group
+        for column in tightening.columns:
+            frame.loc[group_index, column] = tightening[column].to_numpy()
         if reporter and (idx == 1 or idx == total or idx % progress_every == 0):
             reporter.emit(
                 "screen",
                 f"prepare {idx}/{total} symbol={code} elapsed={reporter.elapsed_seconds():.1f}s",
             )
-    return prepared
+    return frame
 
 
 def _compute_period_macd_alignment(group: pd.DataFrame, *, period: str) -> pd.DataFrame:
@@ -1019,7 +1106,7 @@ def _call_prepare_screen_data(
     market: pd.DataFrame,
     *,
     reporter: ProgressReporter | None = None,
-) -> dict[str, pd.DataFrame]:
+) -> pd.DataFrame:
     try:
         return _prepare_screen_data(market, reporter=reporter)
     except TypeError as exc:
@@ -1036,7 +1123,7 @@ def _prepare_dribull_screen_data_for_pick(
     pool_file: Path | None,
     runtime_root: Path,
     reporter: ProgressReporter | None = None,
-) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     short_start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     if reporter:
         reporter.emit("screen", f"fetch market window end_date={pick_date} mode=pool start_date={short_start_date}")
@@ -1058,19 +1145,19 @@ def _prepare_dribull_screen_data_for_pick(
         runtime_root=runtime_root,
         method="dribull",
         pick_date=pick_date,
-        prepared_by_symbol=short_prepared,
+        prepared_table=short_prepared,
         pool_file=pool_file,
     )
-    pooled_prepared = {code: short_prepared[code] for code in pool_codes if code in short_prepared}
-    if not pooled_prepared:
-        return short_prepared, {}
+    pooled_prepared = _filter_prepared_table_by_codes(short_prepared, pool_codes)
+    if pooled_prepared.empty:
+        return short_prepared, pd.DataFrame()
     filtered_codes = prefilter_dribull_non_macd(
         pooled_prepared,
         pd.Timestamp(pick_date),
         DEFAULT_B1_CONFIG,
     )
     if not filtered_codes:
-        return short_prepared, {}
+        return short_prepared, pd.DataFrame()
     if reporter:
         reporter.emit(
             "screen",
@@ -1097,20 +1184,20 @@ def _prepare_dribull_warmup_from_base_prepared(
     pool_source: str,
     pool_file: Path | None,
     runtime_root: Path,
-    base_prepared: dict[str, pd.DataFrame],
+    base_prepared: pd.DataFrame,
     reporter: ProgressReporter | None = None,
-) -> dict[str, pd.DataFrame]:
+) -> pd.DataFrame:
     pool_codes = _resolve_pool_codes(
         pool_source=pool_source,
         runtime_root=runtime_root,
         method="dribull",
         pick_date=pick_date,
-        prepared_by_symbol=base_prepared,
+        prepared_table=base_prepared,
         pool_file=pool_file,
     )
-    pooled_prepared = {code: base_prepared[code] for code in pool_codes if code in base_prepared}
-    if not pooled_prepared:
-        return {}
+    pooled_prepared = _filter_prepared_table_by_codes(base_prepared, pool_codes)
+    if pooled_prepared.empty:
+        return pd.DataFrame()
 
     filtered_codes = prefilter_dribull_non_macd(
         pooled_prepared,
@@ -1118,7 +1205,7 @@ def _prepare_dribull_warmup_from_base_prepared(
         DEFAULT_B1_CONFIG,
     )
     if not filtered_codes:
-        return {}
+        return pd.DataFrame()
 
     if reporter:
         reporter.emit(
@@ -1152,11 +1239,11 @@ def _resolve_shared_base_prepared_payload(
         base_key = pick_date
     cache_method = "b1" if method in SHARED_PREPARED_METHODS else method
     cache_path = _prepared_cache_path(runtime_root, base_key, cache_method)
-    if not cache_path.exists():
+    if not _prepared_cache_artifact_exists(runtime_root, base_key, cache_method):
         return cache_path, None
     try:
         payload = _load_prepared_cache(cache_path)
-    except (OSError, ValueError, pickle.PickleError):
+    except (OSError, ValueError):
         return cache_path, None
     if not _prepared_cache_matches_screen_version(payload, method=method):
         return cache_path, None
@@ -1168,11 +1255,11 @@ def _prepare_hcr_screen_data(
     *,
     reporter: ProgressReporter | None = None,
     progress_every: int = 500,
-) -> dict[str, pd.DataFrame]:
+) -> pd.DataFrame:
     if market.empty:
-        return {}
+        return pd.DataFrame()
 
-    prepared: dict[str, pd.DataFrame] = {}
+    prepared_frames: list[pd.DataFrame] = []
     frame = market.copy()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"])
     if "volume" not in frame.columns and "vol" in frame.columns:
@@ -1186,12 +1273,15 @@ def _prepare_hcr_screen_data(
     for idx, (code, group) in enumerate(groups, start=1):
         group = group.sort_values("trade_date").reset_index(drop=True)
         group["turnover_n"] = compute_turnover_n(group, window=DEFAULT_TURNOVER_WINDOW)
-        prepared[code] = prepare_hcr_frame(group)
+        prepared_frames.append(prepare_hcr_frame(group))
         if reporter and (idx == 1 or idx == total or idx % progress_every == 0):
             reporter.emit(
                 "screen",
                 f"prepare {idx}/{total} symbol={code} elapsed={reporter.elapsed_seconds():.1f}s",
             )
+    prepared = pd.concat(prepared_frames, ignore_index=True) if prepared_frames else pd.DataFrame()
+    if not prepared.empty:
+        prepared = prepared.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
     return prepared
 
 
@@ -1199,7 +1289,7 @@ def _call_prepare_hcr_screen_data(
     market: pd.DataFrame,
     *,
     reporter: ProgressReporter | None = None,
-) -> dict[str, pd.DataFrame]:
+) -> pd.DataFrame:
     try:
         return _prepare_hcr_screen_data(market, reporter=reporter)
     except TypeError as exc:
@@ -1319,17 +1409,17 @@ def _screen_impl(
                     return out_path
 
     prepared_cache_path = _prepared_cache_path(runtime_root, pick_date, method)
-    prepared: dict[str, pd.DataFrame] | None = None
-    screen_prepared: dict[str, pd.DataFrame] | None = None
+    prepared: pd.DataFrame | None = None
+    screen_prepared: pd.DataFrame | None = None
     reused_base_prepared = False
     if method in {"b1", "b2", "dribull"}:
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     else:
         start_date = None
-    if allow_reuse and prepared_cache_path.exists():
+    if allow_reuse and _prepared_cache_artifact_exists(runtime_root, pick_date, method):
         try:
             cache_payload = _load_prepared_cache(prepared_cache_path)
-        except (OSError, ValueError, pickle.PickleError) as exc:
+        except (OSError, ValueError) as exc:
             if reporter:
                 reporter.emit("screen", f"prepared reuse skipped path={prepared_cache_path} reason={type(exc).__name__}")
         else:
@@ -1344,7 +1434,7 @@ def _screen_impl(
                 cached_start_date = cache_payload.get("start_date")
                 cached_end_date = cache_payload.get("end_date")
                 if cached_pick_date == pick_date and cached_start_date == start_date and cached_end_date == pick_date:
-                    cached_prepared = cache_payload["prepared_by_symbol"]  # type: ignore[assignment]
+                    cached_prepared = cache_payload["prepared_table"]  # type: ignore[assignment]
                     if _prepared_cache_covers_pick_date(cached_prepared, pick_date=pick_date):
                         prepared = cached_prepared
                         screen_prepared = cached_prepared
@@ -1408,13 +1498,14 @@ def _screen_impl(
                 screen_prepared = prepared
             else:
                 prepared = _call_prepare_hcr_screen_data(market, reporter=reporter)
-        _write_prepared_cache(
-            prepared_cache_path,
+        _write_prepared_cache_v2(
+            _prepared_cache_data_path(runtime_root, pick_date, method),
+            _prepared_cache_meta_path(runtime_root, pick_date, method),
             method=method,
             pick_date=pick_date,
             start_date=start_date,
             end_date=pick_date,
-            prepared_by_symbol=screen_prepared if screen_prepared is not None else prepared,
+            prepared_table=screen_prepared if screen_prepared is not None else prepared,
             metadata_overrides={
                 "pool_source": pool_source,
                 "pool_file": str(_resolve_custom_pool_file(pool_file)) if pool_source == "custom" else None,
@@ -1428,10 +1519,10 @@ def _screen_impl(
             runtime_root=runtime_root,
             method=method,
             pick_date=pick_date,
-            prepared_by_symbol=prepared,
+            prepared_table=prepared,
             pool_file=pool_file,
         )
-        pooled_prepared = {code: prepared[code] for code in pool_codes if code in prepared}
+        pooled_prepared = _filter_prepared_table_by_codes(prepared, pool_codes)
         filtered_codes = prefilter_dribull_non_macd(
             pooled_prepared,
             pd.Timestamp(pick_date),
@@ -1452,24 +1543,24 @@ def _screen_impl(
                 reporter=reporter,
             )
         else:
-            prepared = {}
+            prepared = prepared.iloc[0:0].copy()
     if method in {"b1", "b2", "dribull"}:
         if prepared is None:
-            prepared = {}
+            prepared = pd.DataFrame()
         if method == "dribull" and pool_source == "record-watch" and screen_prepared is not None:
-            pool_codes = list(prepared)
+            pool_codes = _prepared_table_codes(prepared)
         else:
             pool_codes = _resolve_pool_codes(
                 pool_source=pool_source,
                 runtime_root=runtime_root,
                 method=method,
                 pick_date=pick_date,
-                prepared_by_symbol=prepared,
+                prepared_table=prepared,
                 pool_file=pool_file,
             )
-        prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
+        prepared_for_pick = _filter_prepared_table_by_codes(prepared, pool_codes)
         if reporter:
-            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared_for_pick)}")
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={prepared_for_pick['ts_code'].nunique() if not prepared_for_pick.empty else 0}")
             if pool_source == "record-watch":
                 reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", f"run {method} screen")
@@ -1492,18 +1583,18 @@ def _screen_impl(
             )
     else:
         if prepared is None:
-            prepared = {}
+            prepared = pd.DataFrame()
         pool_codes = _resolve_pool_codes(
             pool_source=pool_source,
             runtime_root=runtime_root,
                 method=method,
                 pick_date=pick_date,
-                prepared_by_symbol=prepared,
+                prepared_table=prepared,
                 pool_file=pool_file,
             )
-        prepared = {code: prepared[code] for code in pool_codes if code in prepared}
+        prepared = _filter_prepared_table_by_codes(prepared, pool_codes)
         if reporter:
-            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared)}")
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={prepared['ts_code'].nunique() if not prepared.empty else 0}")
             if pool_source == "record-watch":
                 reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", "run hcr screen")
@@ -1539,16 +1630,16 @@ def _screen_intraday_impl(
         pick_date=trade_date,
         intraday=True,
     )
-    prepared: dict[str, pd.DataFrame]
+    prepared: pd.DataFrame
     previous_trade_date: str
     if not recompute and cache_payload is not None:
         metadata = cache_payload.get("metadata")
-        cached_prepared = cache_payload.get("prepared_by_symbol")
+        cached_prepared = cache_payload.get("prepared_table")
         if (
             isinstance(metadata, dict)
             and metadata.get("mode") == "intraday_snapshot"
             and cache_payload.get("pick_date") == trade_date
-            and isinstance(cached_prepared, dict)
+            and isinstance(cached_prepared, pd.DataFrame)
         ):
             prepared = cached_prepared  # type: ignore[assignment]
             previous_trade_date = str(metadata.get("previous_trade_date") or "")
@@ -1589,13 +1680,14 @@ def _screen_intraday_impl(
             prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
         else:
             prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
-        _write_prepared_cache(
-            prepared_cache_path,
+        _write_prepared_cache_v2(
+            prepared_cache_path.with_suffix(".feather"),
+            prepared_cache_path.with_suffix(".meta.json"),
             method=method,
             pick_date=trade_date,
             start_date=start_date,
             end_date=trade_date,
-            prepared_by_symbol=prepared,
+            prepared_table=prepared,
             metadata_overrides={
                 "method": method,
                 "mode": "intraday_snapshot",
@@ -1613,12 +1705,12 @@ def _screen_intraday_impl(
             runtime_root=runtime_root,
             method=method,
             pick_date=trade_date,
-            prepared_by_symbol=prepared,
+            prepared_table=prepared,
             pool_file=pool_file,
         )
-        prepared_for_pick = {code: prepared[code] for code in pool_codes if code in prepared}
+        prepared_for_pick = _filter_prepared_table_by_codes(prepared, pool_codes)
         if reporter:
-            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared_for_pick)}")
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={prepared_for_pick['ts_code'].nunique() if not prepared_for_pick.empty else 0}")
             if pool_source == "record-watch":
                 reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", f"run {method} screen")
@@ -1645,12 +1737,12 @@ def _screen_intraday_impl(
             runtime_root=runtime_root,
             method=method,
             pick_date=trade_date,
-            prepared_by_symbol=prepared,
+            prepared_table=prepared,
             pool_file=pool_file,
         )
-        prepared = {code: prepared[code] for code in pool_codes if code in prepared}
+        prepared = _filter_prepared_table_by_codes(prepared, pool_codes)
         if reporter:
-            reporter.emit("screen", f"pool_source={pool_source} pool_size={len(prepared)}")
+            reporter.emit("screen", f"pool_source={pool_source} pool_size={prepared['ts_code'].nunique() if not prepared.empty else 0}")
             if pool_source == "record-watch":
                 reporter.emit("screen", f"watch_pool_path={_watch_pool_path(runtime_root, method)}")
             reporter.emit("screen", "run hcr screen")
@@ -1739,7 +1831,7 @@ def _chart_intraday_impl(
     chart_dir = _chart_dir_path(runtime_root, run_id, method)
     chart_dir.mkdir(parents=True, exist_ok=True)
     try:
-        prepared_by_symbol = _load_intraday_prepared_cache(
+        prepared_table = _load_intraday_prepared_cache(
             runtime_root,
             method=method,
             run_id=run_id,
@@ -1755,8 +1847,8 @@ def _chart_intraday_impl(
         code = candidate["code"]
         if reporter:
             reporter.emit("chart", f"candidate {idx}/{len(candidates)} code={code}")
-        history = prepared_by_symbol.get(code)
-        if history is None:
+        history = _prepared_table_history_for_code(prepared_table, code)
+        if history.empty:
             raise typer.BadParameter(f"Prepared intraday history not found for candidate: {code}")
         chart_data = _prepare_chart_data(history)
         if chart_data.empty:
@@ -1907,7 +1999,7 @@ def _review_intraday_impl(
     review_dir = _review_dir_path(runtime_root, run_id, method)
     review_dir.mkdir(parents=True, exist_ok=True)
     try:
-        prepared_by_symbol = _load_intraday_prepared_cache(
+        prepared_table = _load_intraday_prepared_cache(
             runtime_root,
             method=method,
             run_id=run_id,
@@ -1934,8 +2026,8 @@ def _review_intraday_impl(
                 reporter.emit("review", f"skip code={code} reason=missing_chart")
             continue
 
-        history = prepared_by_symbol.get(code)
-        if history is None or history.empty:
+        history = _prepared_table_history_for_code(prepared_table, code)
+        if history.empty:
             failures.append({"code": code, "reason": f"Prepared intraday history not found: {code}"})
             if reporter:
                 reporter.emit("review", f"skip code={code} reason=missing_prepared_history")
@@ -2173,30 +2265,29 @@ def _analyze_non_b2_symbol_screen(
     history: pd.DataFrame,
 ) -> dict[str, object]:
     if method in {"b1", "dribull"}:
-        prepared_by_symbol = _call_prepare_screen_data(history)
+        prepared_table = _call_prepare_screen_data(history)
     else:
-        prepared_by_symbol = _call_prepare_hcr_screen_data(history)
+        prepared_table = _call_prepare_hcr_screen_data(history)
 
-    prepared = prepared_by_symbol.get(symbol)
-    if prepared is None or prepared.empty:
+    prepared = _prepared_table_history_for_code(prepared_table, symbol)
+    if prepared.empty:
         raise typer.BadParameter(f"Prepared history not found for symbol: {symbol}")
 
-    prepared_for_pick = {symbol: prepared}
     if method == "b1":
         candidates, stats = run_b1_screen_with_stats(
-            prepared_for_pick,
+            prepared,
             pd.Timestamp(pick_date),
             DEFAULT_B1_CONFIG,
         )
     elif method == "dribull":
         candidates, stats = run_dribull_screen_with_stats(
-            prepared_for_pick,
+            prepared,
             pd.Timestamp(pick_date),
             DEFAULT_B1_CONFIG,
         )
     else:
         candidates, stats = run_hcr_screen_with_stats(
-            prepared_for_pick,
+            prepared,
             pd.Timestamp(pick_date),
         )
 
