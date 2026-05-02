@@ -28,10 +28,10 @@ def test_parse_args_uses_method_specific_default_max_workers() -> None:
     dribull_args = script.parse_args(["--method", "dribull"])
     hcr_args = script.parse_args(["--method", "hcr"])
 
-    assert b1_args.max_workers == 6
-    assert b2_args.max_workers == 2
-    assert dribull_args.max_workers == 2
-    assert hcr_args.max_workers == 2
+    assert b1_args.max_workers == 4
+    assert b2_args.max_workers == 4
+    assert dribull_args.max_workers == 4
+    assert hcr_args.max_workers == 6
 
 
 def test_parse_args_accepts_explicit_positive_max_workers() -> None:
@@ -77,9 +77,9 @@ def test_collect_target_trade_dates_supports_forward_window_from_start_date() ->
 
     result = script.collect_target_trade_dates(
         trade_dates,
+        end_date="2026-04-30",
         start_date="2026-04-28",
         sample_size=3,
-        forward=True,
     )
 
     assert result == ["2026-04-28", "2026-04-29", "2026-04-30"]
@@ -190,9 +190,8 @@ def test_run_backfill_supports_forward_date_windows(monkeypatch: pytest.MonkeyPa
         {"trade_date": ["2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30"]}
     )
     args = SimpleNamespace(
-        end_date=None,
+        end_date="2026-04-30",
         start_date="2026-04-28",
-        forward=True,
         sample_size=3,
         method="dribull",
         llm_min_baseline_score=3.6,

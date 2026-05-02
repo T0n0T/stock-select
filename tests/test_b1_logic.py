@@ -368,32 +368,38 @@ def test_max_vol_not_bearish_tolerates_all_na_volume_window() -> None:
 
 def test_build_top_turnover_pool_keeps_only_top_codes_per_pick_date() -> None:
     pool = build_top_turnover_pool(
-        {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
-                    "turnover_n": [100.0, 400.0],
-                    "ma25": [11.0, 11.0],
-                    "ma60": [10.0, 10.0],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
-                    "turnover_n": [300.0, 200.0],
-                    "ma25": [11.0, 11.0],
-                    "ma60": [10.0, 10.0],
-                }
-            ),
-            "CCC.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
-                    "turnover_n": [200.0, 300.0],
-                    "ma25": [11.0, 11.0],
-                    "ma60": [10.0, 10.0],
-                }
-            ),
-        },
+        pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ", "AAA.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
+                        "turnover_n": [100.0, 400.0],
+                        "ma25": [11.0, 11.0],
+                        "ma60": [10.0, 10.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["BBB.SZ", "BBB.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
+                        "turnover_n": [300.0, 200.0],
+                        "ma25": [11.0, 11.0],
+                        "ma60": [10.0, 10.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["CCC.SZ", "CCC.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
+                        "turnover_n": [200.0, 300.0],
+                        "ma25": [11.0, 11.0],
+                        "ma60": [10.0, 10.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        ),
         top_m=2,
     )
 
@@ -403,31 +409,37 @@ def test_build_top_turnover_pool_keeps_only_top_codes_per_pick_date() -> None:
 
 def test_build_top_turnover_pool_skips_malformed_rows() -> None:
     pool = build_top_turnover_pool(
-        {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": ["not-a-date", "2026-04-03"],
-                    "turnover_n": [100.0, "boom"],
-                    "ma25": [11.0, 11.0],
-                    "ma60": [10.0, 10.0],
-                }
-            ),
-            "AAB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-02"]),
-                    "ma25": [11.0],
-                    "ma60": [10.0],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
-                    "turnover_n": [300.0, 200.0],
-                    "ma25": [11.0, 11.0],
-                    "ma60": [10.0, 10.0],
-                }
-            ),
-        },
+        pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ", "AAA.SZ"],
+                        "trade_date": ["not-a-date", "2026-04-03"],
+                        "turnover_n": [100.0, "boom"],
+                        "ma25": [11.0, 11.0],
+                        "ma60": [10.0, 10.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAB.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-02"]),
+                        "ma25": [11.0],
+                        "ma60": [10.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["BBB.SZ", "BBB.SZ"],
+                        "trade_date": pd.to_datetime(["2026-04-02", "2026-04-03"]),
+                        "turnover_n": [300.0, 200.0],
+                        "ma25": [11.0, 11.0],
+                        "ma60": [10.0, 10.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        ),
         top_m=2,
     )
 
@@ -439,24 +451,29 @@ def test_build_top_turnover_pool_skips_malformed_rows() -> None:
 
 def test_build_top_turnover_pool_requires_ma25_above_ma60() -> None:
     pool = build_top_turnover_pool(
-        {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": ["2026-04-24"],
-                    "turnover_n": [200.0],
-                    "ma25": [10.5],
-                    "ma60": [10.0],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": ["2026-04-24"],
-                    "turnover_n": [300.0],
-                    "ma25": [9.8],
-                    "ma60": [10.0],
-                }
-            ),
-        },
+        pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ"],
+                        "trade_date": ["2026-04-24"],
+                        "turnover_n": [200.0],
+                        "ma25": [10.5],
+                        "ma60": [10.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["BBB.SZ"],
+                        "trade_date": ["2026-04-24"],
+                        "turnover_n": [300.0],
+                        "ma25": [9.8],
+                        "ma60": [10.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        ),
         top_m=5,
     )
 
@@ -465,32 +482,38 @@ def test_build_top_turnover_pool_requires_ma25_above_ma60() -> None:
 
 def test_build_top_turnover_pool_skips_rows_missing_ma25_or_ma60() -> None:
     pool = build_top_turnover_pool(
-        {
-            "AAA.SZ": pd.DataFrame(
-                {
-                    "trade_date": ["2026-04-24"],
-                    "turnover_n": [200.0],
-                    "ma25": [None],
-                    "ma60": [10.0],
-                }
-            ),
-            "BBB.SZ": pd.DataFrame(
-                {
-                    "trade_date": ["2026-04-24"],
-                    "turnover_n": [180.0],
-                    "ma25": [10.2],
-                    "ma60": [None],
-                }
-            ),
-            "CCC.SZ": pd.DataFrame(
-                {
-                    "trade_date": ["2026-04-24"],
-                    "turnover_n": [160.0],
-                    "ma25": [10.3],
-                    "ma60": [10.0],
-                }
-            ),
-        },
+        pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "ts_code": ["AAA.SZ"],
+                        "trade_date": ["2026-04-24"],
+                        "turnover_n": [200.0],
+                        "ma25": [None],
+                        "ma60": [10.0],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["BBB.SZ"],
+                        "trade_date": ["2026-04-24"],
+                        "turnover_n": [180.0],
+                        "ma25": [10.2],
+                        "ma60": [None],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "ts_code": ["CCC.SZ"],
+                        "trade_date": ["2026-04-24"],
+                        "turnover_n": [160.0],
+                        "ma25": [10.3],
+                        "ma60": [10.0],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        ),
         top_m=5,
     )
 
@@ -528,8 +551,10 @@ def test_run_b1_screen_filters_symbols_on_pick_date() -> None:
     failing = passing.copy()
     failing["close"] = [10.4, 10.8, 10.3]
 
+    passing["ts_code"] = "000001.SZ"
+    failing["ts_code"] = "000002.SZ"
     result = run_b1_screen(
-        {"000001.SZ": passing, "000002.SZ": failing},
+        pd.concat([passing, failing], ignore_index=True),
         pick_date=pick_date,
         config={"j_threshold": 20.0, "j_q_threshold": 0.5},
     )
@@ -587,20 +612,25 @@ def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> Non
             }
         )
 
+    prepared_frames = {}
+    for _code, _frame in [
+        ("PASS.SZ", make_frame()),
+        ("FAILJ.SZ", make_frame(j=85.0)),
+        ("FAILCLOSE.SZ", make_frame(close=10.2)),
+        ("FAILZXDQ.SZ", make_frame(zxdq=10.1)),
+        ("FAILWEEKLY.SZ", make_frame(weekly_ma_bull=False)),
+        ("FAILMAXVOL.SZ", make_frame(max_vol_not_bearish_value=False)),
+        ("FAILCHG.SZ", make_frame(chg_d=5.2)),
+        ("FAILSHRINK.SZ", make_frame(v_shrink=False)),
+        ("FAILSAFE.SZ", make_frame(safe_mode=False)),
+        ("FAILLT.SZ", make_frame(lt_filter=False)),
+        ("MISSING.SZ", make_frame().iloc[[0, 1]].copy()),
+    ]:
+        _frame["ts_code"] = _code
+        prepared_frames[_code] = _frame
+
     candidates, stats = run_b1_screen_with_stats(
-        {
-            "PASS.SZ": make_frame(),
-            "FAILJ.SZ": make_frame(j=85.0),
-            "FAILCLOSE.SZ": make_frame(close=10.2),
-            "FAILZXDQ.SZ": make_frame(zxdq=10.1),
-            "FAILWEEKLY.SZ": make_frame(weekly_ma_bull=False),
-            "FAILMAXVOL.SZ": make_frame(max_vol_not_bearish_value=False),
-            "FAILCHG.SZ": make_frame(chg_d=5.2),
-            "FAILSHRINK.SZ": make_frame(v_shrink=False),
-            "FAILSAFE.SZ": make_frame(safe_mode=False),
-            "FAILLT.SZ": make_frame(lt_filter=False),
-            "MISSING.SZ": make_frame().iloc[[0, 1]].copy(),
-        },
+        pd.concat(list(prepared_frames.values()), ignore_index=True),
         pick_date=pick_date,
         config={"j_threshold": 20.0, "j_q_threshold": 0.5},
     )
@@ -652,8 +682,9 @@ def test_run_b1_screen_with_stats_keeps_legacy_order_before_new_filters() -> Non
         }
     )
 
+    frame["ts_code"] = "ORDER.SZ"
     _, stats = run_b1_screen_with_stats(
-        {"ORDER.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 20.0, "j_q_threshold": 0.5},
     )
@@ -684,8 +715,9 @@ def test_run_b1_screen_with_stats_counts_missing_tightening_columns_as_insuffici
         }
     )
 
+    frame["ts_code"] = "MISSINGTIGHTENING.SZ"
     candidates, stats = run_b1_screen_with_stats(
-        {"MISSINGTIGHTENING.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 20.0, "j_q_threshold": 0.5},
     )
@@ -727,8 +759,9 @@ def test_run_b1_screen_with_stats_counts_missing_zxdkx_as_insufficient_history()
         }
     )
 
+    frame["ts_code"] = "MISSINGZXDKX.SZ"
     candidates, stats = run_b1_screen_with_stats(
-        {"MISSINGZXDKX.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 20.0, "j_q_threshold": 0.5},
     )
@@ -787,12 +820,18 @@ def test_run_b1_screen_with_stats_counts_nan_tightening_booleans_as_first_failur
             }
         )
 
+    prepared_frames = []
+    for _code, _kwargs in [
+        ("NANSHRINK.SZ", {"v_shrink": float("nan")}),
+        ("NANSAFE.SZ", {"safe_mode": float("nan")}),
+        ("NANLT.SZ", {"lt_filter": float("nan")}),
+    ]:
+        _frame = make_frame(**_kwargs)
+        _frame["ts_code"] = _code
+        prepared_frames.append(_frame)
+
     candidates, stats = run_b1_screen_with_stats(
-        {
-            "NANSHRINK.SZ": make_frame(v_shrink=float("nan")),
-            "NANSAFE.SZ": make_frame(safe_mode=float("nan")),
-            "NANLT.SZ": make_frame(lt_filter=float("nan")),
-        },
+        pd.concat(prepared_frames, ignore_index=True),
         pick_date=pick_date,
         config={"j_threshold": 20.0, "j_q_threshold": 0.5},
     )
@@ -833,8 +872,9 @@ def test_run_b1_screen_with_stats_counts_only_earliest_new_failure() -> None:
         }
     )
 
+    frame["ts_code"] = "ORDERNEW.SZ"
     _, stats = run_b1_screen_with_stats(
-        {"ORDERNEW.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 20.0, "j_q_threshold": 0.5},
     )
@@ -874,8 +914,9 @@ def test_run_b1_screen_uses_expanding_history_quantile_per_symbol() -> None:
         }
     )
 
+    frame["ts_code"] = "PASS.SZ"
     candidates = run_b1_screen(
-        {"PASS.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )

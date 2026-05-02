@@ -27,10 +27,10 @@ DEFAULT_SAMPLE_SIZE = 5
 DEFAULT_METHOD = "b2"
 DEFAULT_LLM_MIN_BASELINE_SCORE = 4.3
 DEFAULT_MAX_WORKERS_BY_METHOD = {
-    "b1": 6,
-    "b2": 6,
-    "dribull": 6,
-    "hcr": 10,
+    "b1": 4,
+    "b2": 4,
+    "dribull": 4,
+    "hcr": 6,
 }
 
 

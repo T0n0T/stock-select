@@ -84,8 +84,9 @@ def test_run_dribull_screen_with_stats_passes_when_recent_j_hit_and_formula_hold
     pick_date = pd.Timestamp("2026-04-10")
     frame = _base_dribull_frame()
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -104,12 +105,11 @@ def test_prefilter_dribull_non_macd_keeps_only_symbols_passing_non_macd_rules() 
     fail_volume.loc[fail_volume.index[-1], "volume"] = fail_volume.loc[fail_volume.index[-2], "volume"] + 1.0
     fail_volume.loc[fail_volume.index[-1], "vol"] = fail_volume.loc[fail_volume.index[-1], "volume"]
 
+    passing["ts_code"] = "PASS.SZ"
+    fail_zxdq["ts_code"] = "FAILZXDQ.SZ"
+    fail_volume["ts_code"] = "FAILVOL.SZ"
     selected = prefilter_dribull_non_macd(
-        {
-            "PASS.SZ": passing,
-            "FAILZXDQ.SZ": fail_zxdq,
-            "FAILVOL.SZ": fail_volume,
-        },
+        pd.concat([passing, fail_zxdq, fail_volume], ignore_index=True),
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -124,8 +124,9 @@ def test_prefilter_dribull_non_macd_does_not_require_daily_macd_any_more() -> No
     frame.loc[frame.index[-1], "dif"] = 0.07
     frame.loc[frame.index[-1], "dea"] = 0.08
 
+    frame["ts_code"] = "PASS.SZ"
     selected = prefilter_dribull_non_macd(
-        {"PASS.SZ": frame},
+        pd.concat([frame], ignore_index=True),
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -138,8 +139,9 @@ def test_run_dribull_screen_with_stats_ignores_missing_legacy_macd_columns() -> 
     pick_date = pd.Timestamp("2026-04-10")
     frame = _base_dribull_frame().drop(columns=["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -156,8 +158,9 @@ def test_run_dribull_screen_with_stats_ignores_malformed_legacy_macd_columns(col
     frame[column_name] = frame[column_name].astype(object)
     frame.loc[3, column_name] = "boom"
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -172,8 +175,9 @@ def test_run_dribull_screen_with_stats_fails_when_no_recent_j_hit_exists() -> No
     frame = _base_dribull_frame()
     frame["J"] = [100.0 + idx for idx in range(len(frame))]
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -188,8 +192,9 @@ def test_run_dribull_screen_with_stats_fails_when_current_zxdq_is_not_above_zxdk
     frame = _base_dribull_frame()
     frame.loc[frame.index[-1], "zxdq"] = 9.9
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -206,8 +211,9 @@ def test_run_dribull_screen_with_stats_fails_when_support_on_ma25_is_not_valid()
     frame.loc[frame.index[-1], "close"] = 10.4
     frame.loc[frame.index[-1], "ma25"] = 10.5
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -223,8 +229,9 @@ def test_run_dribull_screen_with_stats_fails_when_volume_does_not_shrink() -> No
     frame.loc[frame.index[-1], "volume"] = frame.loc[frame.index[-2], "volume"] + 10.0
     frame.loc[frame.index[-1], "vol"] = frame.loc[frame.index[-1], "volume"]
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -240,8 +247,9 @@ def test_run_dribull_screen_with_stats_fails_when_weekly_trend_is_not_allowed(mo
     monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("ended"))
     monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True))
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = module.run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -258,8 +266,9 @@ def test_run_dribull_screen_with_stats_fails_when_daily_trend_is_invalid(monkeyp
     monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
     monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("invalid"))
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = module.run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -276,8 +285,9 @@ def test_run_dribull_screen_with_stats_fails_when_trend_combo_is_not_allowed(mon
     monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
     monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=False))
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = module.run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -294,8 +304,9 @@ def test_run_dribull_screen_with_stats_rejects_top_divergence(monkeypatch: pytes
     monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
     monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True, divergence=True))
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = module.run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -310,8 +321,9 @@ def test_run_dribull_screen_with_stats_fails_when_ma60_is_not_upward() -> None:
     frame = _base_dribull_frame()
     frame.loc[frame.index[-2], "ma60"] = frame.loc[frame.index[-1], "ma60"] + 0.01
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -326,8 +338,9 @@ def test_run_dribull_screen_with_stats_fails_when_distance_to_ma144_exceeds_30_p
     frame = _base_dribull_frame()
     frame.loc[frame.index[-1], "close"] = frame.loc[frame.index[-1], "ma144"] * 1.31
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -340,8 +353,11 @@ def test_run_dribull_screen_with_stats_treats_missing_required_columns_as_insuff
     run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
 
+    frame = _base_dribull_frame().drop(columns=["ma144"])
+    frame["ts_code"] = "000001.SZ"
+
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": _base_dribull_frame().drop(columns=["ma144"])},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -358,8 +374,9 @@ def test_run_dribull_screen_with_stats_treats_malformed_trade_dates_as_insuffici
     frame["trade_date"] = frame["trade_date"].astype(object)
     frame.loc[10, "trade_date"] = "boom"
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
@@ -379,8 +396,9 @@ def test_run_dribull_screen_with_stats_treats_any_malformed_required_numeric_val
     frame[column_name] = frame[column_name].astype(object)
     frame.loc[3, column_name] = "boom"
 
+    frame["ts_code"] = "000001.SZ"
     candidates, stats = run_dribull_screen_with_stats(
-        {"000001.SZ": frame},
+        frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )

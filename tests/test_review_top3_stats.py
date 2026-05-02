@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
-import pickle
 from pathlib import Path
 
 import pandas as pd
+from stock_select import cli
 
 
 def _load_review_top3_stats_module():
@@ -40,22 +40,52 @@ def test_collect_pass_top3_includes_pass_items_from_excluded() -> None:
 def test_load_prepared_uses_shared_cache_name_for_b1_b2_and_dribull(tmp_path: Path) -> None:
     module = _load_review_top3_stats_module()
 
-    shared_payload = {
-        "prepared_by_symbol": {
-            "AAA.SZ": pd.DataFrame([{"trade_date": "2026-04-10", "open": 1.0, "close": 1.1}])
-        }
-    }
-    hcr_payload = {
-        "prepared_by_symbol": {
-            "HCR.SZ": pd.DataFrame([{"trade_date": "2026-04-10", "open": 2.0, "close": 2.1}])
-        }
-    }
-    (tmp_path / "2026-04-10.pkl").write_bytes(pickle.dumps(shared_payload))
-    (tmp_path / "2026-04-10.hcr.pkl").write_bytes(pickle.dumps(hcr_payload))
+    cli._write_prepared_cache_v2(
+        tmp_path / "2026-04-10.feather",
+        tmp_path / "2026-04-10.meta.json",
+        method="b1",
+        pick_date="2026-04-10",
+        start_date="2025-04-10",
+        end_date="2026-04-10",
+        prepared_table=pd.DataFrame(
+            [{"ts_code": "AAA.SZ", "trade_date": "2026-04-10", "open": 1.0, "close": 1.1}]
+        ),
+    )
+    cli._write_prepared_cache_v2(
+        tmp_path / "2026-04-10.hcr.feather",
+        tmp_path / "2026-04-10.hcr.meta.json",
+        method="hcr",
+        pick_date="2026-04-10",
+        start_date="2025-04-10",
+        end_date="2026-04-10",
+        prepared_table=pd.DataFrame(
+            [{"ts_code": "HCR.SZ", "trade_date": "2026-04-10", "open": 2.0, "close": 2.1}]
+        ),
+    )
 
     module.PREPARED_DIR = tmp_path
 
-    assert sorted(module.load_prepared("b1")) == ["AAA.SZ"]
-    assert sorted(module.load_prepared("b2")) == ["AAA.SZ"]
-    assert sorted(module.load_prepared("dribull")) == ["AAA.SZ"]
-    assert sorted(module.load_prepared("hcr")) == ["HCR.SZ"]
+    assert sorted(module.load_prepared("b1")["ts_code"].unique()) == ["AAA.SZ"]
+    assert sorted(module.load_prepared("b2")["ts_code"].unique()) == ["AAA.SZ"]
+    assert sorted(module.load_prepared("dribull")["ts_code"].unique()) == ["AAA.SZ"]
+    assert sorted(module.load_prepared("hcr")["ts_code"].unique()) == ["HCR.SZ"]
+
+
+def test_load_prepared_accepts_v2_prepared_cache(tmp_path: Path) -> None:
+    module = _load_review_top3_stats_module()
+
+    cli._write_prepared_cache_v2(
+        tmp_path / "2026-04-10.feather",
+        tmp_path / "2026-04-10.meta.json",
+        method="b1",
+        pick_date="2026-04-10",
+        start_date="2025-04-10",
+        end_date="2026-04-10",
+        prepared_table=pd.DataFrame(
+            [{"ts_code": "AAA.SZ", "trade_date": "2026-04-10", "open": 1.0, "close": 1.1}]
+        ),
+    )
+
+    module.PREPARED_DIR = tmp_path
+
+    assert sorted(module.load_prepared("b1")["ts_code"].unique()) == ["AAA.SZ"]

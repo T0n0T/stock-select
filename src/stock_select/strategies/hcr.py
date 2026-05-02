@@ -124,13 +124,14 @@ def score_hcr_candidate(row: pd.Series, *, previous_close: float | None = None) 
 
 
 def run_hcr_screen_with_stats(
-    prepared_by_symbol: dict[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
 ) -> tuple[list[dict], dict[str, int]]:
     target_date = pd.Timestamp(pick_date)
     candidates: list[dict] = []
+    grouped = prepared_table.groupby("ts_code", sort=False) if not prepared_table.empty else []
     stats = {
-        "total_symbols": len(prepared_by_symbol),
+        "total_symbols": prepared_table["ts_code"].nunique() if not prepared_table.empty and "ts_code" in prepared_table.columns else 0,
         "eligible": 0,
         "fail_insufficient_history": 0,
         "fail_resonance": 0,
@@ -139,7 +140,7 @@ def run_hcr_screen_with_stats(
         "selected": 0,
     }
 
-    for code, frame in prepared_by_symbol.items():
+    for code, frame in grouped:
         trade_dates = pd.to_datetime(frame["trade_date"])
         daily = frame.loc[trade_dates == target_date]
         if daily.empty:

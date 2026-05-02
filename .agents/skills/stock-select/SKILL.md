@@ -56,8 +56,8 @@ Use this skill when the task is to run the standalone `stock-select` workflow ag
 End-of-day `--pick-date` runs use:
 
 - `runtime/candidates/<pick_date>.<method>.json`
-- `runtime/prepared/<pick_date>.pkl` for shared `b1` / `b2` / `dribull` base prepare
-- `runtime/prepared/<pick_date>.hcr.pkl` for `hcr`
+- `runtime/prepared/<pick_date>.feather` + `runtime/prepared/<pick_date>.meta.json` for shared `b1` / `b2` / `dribull` base prepare
+- `runtime/prepared/<pick_date>.hcr.feather` + `runtime/prepared/<pick_date>.hcr.meta.json` for `hcr`
 - `runtime/charts/<pick_date>.<method>/`
 - `runtime/reviews/<pick_date>.<method>/`
 - `runtime/watch_pool.csv`
@@ -66,8 +66,8 @@ End-of-day `--pick-date` runs use:
 Intraday `--intraday` runs use:
 
 - `runtime/candidates/<run_id>.<method>.json`
-- `runtime/prepared/<trade_date>.intraday.pkl` for shared `b1` / `b2` / `dribull` base prepare
-- `runtime/prepared/<trade_date>.intraday.hcr.pkl` for `hcr`
+- `runtime/prepared/<trade_date>.intraday.feather` + `runtime/prepared/<trade_date>.intraday.meta.json` for shared `b1` / `b2` / `dribull` base prepare
+- `runtime/prepared/<trade_date>.intraday.hcr.feather` + `runtime/prepared/<trade_date>.intraday.hcr.meta.json` for `hcr`
 - `runtime/charts/<run_id>.<method>/`
 - `runtime/reviews/<run_id>.<method>/`
 
@@ -75,10 +75,10 @@ Review and merge instructions must follow the active mode's runtime key:
 
 - end-of-day mode: use `<pick_date>.<method>`
 - intraday mode: use the latest intraday `<run_id>.<method>` selected by the candidate artifact
-- prepared-cache lookup is different from candidate/review lookup:
-  - end-of-day `b1` / `b2` / `dribull`: `<pick_date>.pkl`
-  - intraday `b1` / `b2` / `dribull`: `<trade_date>.intraday.pkl`
-  - `hcr`: keep method-specific prepared files
+- prepared-cache is stored as `<stem>.feather` (data) + `<stem>.meta.json` (metadata):
+  - end-of-day `b1` / `b2` / `dribull`: `<pick_date>`
+  - intraday `b1` / `b2` / `dribull`: `<trade_date>.intraday`
+  - `hcr`: keep method-specific `<pick_date>.hcr` / `<trade_date>.intraday.hcr` stems
 
 ## Execution Order
 
@@ -190,7 +190,7 @@ If any of the checks above fail:
 ## Current Implementation
 
 - `screen --pick-date` reads one year of `daily_market` OHLCV data, computes the requested method's derived fields locally, and writes `runtime/candidates/<pick_date>.<method>.json`.
-- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, stores shared base prepare at `runtime/prepared/<trade_date>.intraday.pkl` for `b1` / `dribull`, and stores method-specific prepare for `b2` / `hcr`.
+- `screen --intraday` combines PostgreSQL confirmed history with Tushare `rt_k`, writes `runtime/candidates/<run_id>.<method>.json`, stores shared base prepare as `runtime/prepared/<trade_date>.intraday.feather` + `runtime/prepared/<trade_date>.intraday.meta.json` for `b1` / `dribull`, and stores method-specific prepare for `b2` / `hcr`.
 - `b1` keeps the low-`J`, `close > zxdkx`, `zxdq > zxdkx`, weekly bullish alignment, and non-bearish max-volume-day filters described in `references/b1-selector.md`.
 - `b2` screening now follows the new主图信号口径 and emits deterministic `B2` / `B3` / `B3+` / `B4` / `B5` candidates from daily OHLCV + KDJ + trend context.
 - `dribull` keeps the former two-stage screening rule:

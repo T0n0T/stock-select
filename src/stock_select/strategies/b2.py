@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import numpy as np
 import pandas as pd
 
@@ -25,21 +23,22 @@ _B2_NUMERIC_COLUMNS = (
 
 
 def run_b2_screen(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
 ) -> list[dict]:
-    results, _stats = run_b2_screen_with_stats(prepared_by_symbol, pick_date=pick_date)
+    results, _stats = run_b2_screen_with_stats(prepared_table, pick_date=pick_date)
     return results
 
 
 def run_b2_screen_with_stats(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
 ) -> tuple[list[dict], dict[str, int]]:
     target_date = pd.Timestamp(pick_date)
     candidates: list[dict] = []
+    grouped = prepared_table.groupby("ts_code", sort=False) if not prepared_table.empty else []
     stats = {
-        "total_symbols": len(prepared_by_symbol),
+        "total_symbols": prepared_table["ts_code"].nunique() if not prepared_table.empty and "ts_code" in prepared_table.columns else 0,
         "eligible": 0,
         "fail_insufficient_history": 0,
         "fail_pre_ok": 0,
@@ -57,7 +56,7 @@ def run_b2_screen_with_stats(
         "selected_b3_plus": 0,
     }
 
-    for code, prepared in prepared_by_symbol.items():
+    for code, prepared in grouped:
         if prepared.empty:
             continue
 

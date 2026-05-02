@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import pandas as pd
 
 from stock_select.indicators import compute_macd
@@ -215,37 +213,34 @@ def compute_b1_tightening_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_top_turnover_pool(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     *,
     top_m: int,
 ) -> dict[pd.Timestamp, list[str]]:
-    if top_m <= 0:
+    if top_m <= 0 or prepared_table.empty:
         return {}
 
     pool: dict[pd.Timestamp, list[tuple[float, str]]] = {}
-    for symbol, frame in prepared_by_symbol.items():
-        if frame.empty:
+    working = prepared_table.copy()
+    if "trade_date" in working.columns:
+        date_col = "trade_date"
+    elif "date" in working.columns:
+        date_col = "date"
+    else:
+        return {}
+    if "turnover_n" not in working.columns or "ma25" not in working.columns or "ma60" not in working.columns:
+        return {}
+    working[date_col] = pd.to_datetime(working[date_col], errors="coerce", format="mixed")
+    working["turnover_n"] = pd.to_numeric(working["turnover_n"], errors="coerce")
+    working["ma25"] = pd.to_numeric(working["ma25"], errors="coerce")
+    working["ma60"] = pd.to_numeric(working["ma60"], errors="coerce")
+    for _, row in working.iterrows():
+        if pd.isna(row[date_col]) or pd.isna(row["turnover_n"]) or pd.isna(row["ma25"]) or pd.isna(row["ma60"]):
             continue
-        working = frame.copy()
-        if "trade_date" in working.columns:
-            date_col = "trade_date"
-        elif "date" in working.columns:
-            date_col = "date"
-        else:
+        if not float(row["ma25"]) > float(row["ma60"]):
             continue
-        if "turnover_n" not in working.columns or "ma25" not in working.columns or "ma60" not in working.columns:
-            continue
-        working[date_col] = pd.to_datetime(working[date_col], errors="coerce", format="mixed")
-        working["turnover_n"] = pd.to_numeric(working["turnover_n"], errors="coerce")
-        working["ma25"] = pd.to_numeric(working["ma25"], errors="coerce")
-        working["ma60"] = pd.to_numeric(working["ma60"], errors="coerce")
-        for _, row in working.iterrows():
-            if pd.isna(row[date_col]) or pd.isna(row["turnover_n"]) or pd.isna(row["ma25"]) or pd.isna(row["ma60"]):
-                continue
-            if not float(row["ma25"]) > float(row["ma60"]):
-                continue
-            trade_date = pd.Timestamp(row[date_col])
-            pool.setdefault(trade_date, []).append((float(row["turnover_n"]), symbol))
+        trade_date = pd.Timestamp(row[date_col])
+        pool.setdefault(trade_date, []).append((float(row["turnover_n"]), str(row["ts_code"])))
 
     result: dict[pd.Timestamp, list[str]] = {}
     for trade_date, items in pool.items():
@@ -255,23 +250,24 @@ def build_top_turnover_pool(
 
 
 def run_b1_screen(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
     config: dict,
 ) -> list[dict]:
-    results, _stats = run_b1_screen_with_stats(prepared_by_symbol, pick_date, config)
+    results, _stats = run_b1_screen_with_stats(prepared_table, pick_date, config)
     return results
 
 
 def run_b1_screen_with_stats(
-    prepared_by_symbol: Mapping[str, pd.DataFrame],
+    prepared_table: pd.DataFrame,
     pick_date: pd.Timestamp,
     config: dict,
 ) -> tuple[list[dict], dict[str, int]]:
     results: list[dict] = []
     target_date = pd.Timestamp(pick_date)
+    grouped = prepared_table.groupby("ts_code", sort=False) if not prepared_table.empty else []
     stats = {
-        "total_symbols": len(prepared_by_symbol),
+        "total_symbols": prepared_table["ts_code"].nunique() if not prepared_table.empty and "ts_code" in prepared_table.columns else 0,
         "eligible": 0,
         "fail_j": 0,
         "fail_insufficient_history": 0,
@@ -286,7 +282,7 @@ def run_b1_screen_with_stats(
         "selected": 0,
     }
 
-    for symbol, prepared in prepared_by_symbol.items():
+    for symbol, prepared in grouped:
         if prepared.empty:
             continue
 
