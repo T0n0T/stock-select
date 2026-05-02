@@ -87,6 +87,15 @@ def review_dribull_symbol_history(
         price_position=price_position,
     )
     verdict = infer_verdict(total_score=total_score, volume_behavior=volume_behavior, signal_type=signal_type)
+    verdict = _refine_dribull_verdict(
+        verdict=verdict,
+        total_score=total_score,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+    )
     verdict = apply_macd_verdict_gate(
         method="dribull",
         current_verdict=verdict,
@@ -117,3 +126,50 @@ def _build_dribull_comment(*, weekly_trend: Any, daily_trend: Any, verdict: str)
     weekly_text = describe_macd_trend_state("周线", weekly_trend)
     daily_text = describe_macd_trend_state("日线", daily_trend)
     return f"{weekly_text}、{daily_text}，该MACD组合{combo_text}dribull，当前结论为{verdict}。"
+
+
+def _refine_dribull_verdict(
+    *,
+    verdict: str,
+    total_score: float,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+) -> str:
+    if verdict == "WATCH" and _is_dribull_elastic_pass(
+        total_score=total_score,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+    ):
+        return "PASS"
+    if verdict != "PASS":
+        return verdict
+    if total_score < 4.2:
+        return "WATCH"
+    if price_position < 4.0 or volume_behavior < 4.0:
+        return "WATCH"
+    return verdict
+
+
+def _is_dribull_elastic_pass(
+    *,
+    total_score: float,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+) -> bool:
+    return (
+        3.9 <= total_score < 4.2
+        and trend_structure >= 4.0
+        and price_position >= 5.0
+        and volume_behavior >= 2.0
+        and previous_abnormal_move >= 5.0
+        and macd_phase >= 4.0
+    )

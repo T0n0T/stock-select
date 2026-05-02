@@ -107,6 +107,70 @@ def test_b1_prompt_explains_watch_tiers_without_expanding_json_contract() -> Non
     assert "输出 JSON schema 不新增字段" in content
 
 
+def test_prompt_dribull_reference_exists_and_preserves_dedicated_contract() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[1]
+        / ".agents"
+        / "skills"
+        / "stock-select"
+        / "references"
+        / "prompt-dribull.md"
+    )
+
+    assert prompt_path.exists()
+
+    content = prompt_path.read_text(encoding="utf-8")
+
+    assert "trend_reasoning" in content
+    assert "position_reasoning" in content
+    assert "volume_reasoning" in content
+    assert "abnormal_move_reasoning" in content
+    assert "macd_reasoning" in content
+    assert "signal_reasoning" in content
+    assert "scores" in content
+    assert "signal_type" in content
+    assert "verdict" in content
+    assert "comment" in content
+    assert "Output JSON format must remain identical to the default prompt contract." in content
+    assert "符合 `dribull`" in content
+    assert "trend_structure：0.18" in content
+    assert "price_position：0.18" in content
+    assert "volume_behavior：0.24" in content
+    assert "previous_abnormal_move：0.20" in content
+    assert "macd_phase：0.20" in content
+    assert "3.9 <= total_score < 4.2" in content
+    assert "高位置弹性通过条件" in content
+
+
+def test_skill_documents_dribull_dedicated_prompt() -> None:
+    content = (
+        Path(__file__).resolve().parents[1] / ".agents" / "skills" / "stock-select" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "- `dribull` uses `references/prompt-dribull.md`" in content
+    assert (
+        "`review --method dribull` now uses a dedicated reviewer plus "
+        "`references/prompt-dribull.md`, while review artifacts keep the method key `dribull`."
+    ) in content
+    assert (
+        "(`b1` uses `references/prompt-b1.md`; `dribull` uses "
+        "`references/prompt-dribull.md`; `hcr` uses `references/prompt.md`; "
+        "`b2` uses `references/prompt-b2.md`)."
+    ) in content
+    assert "- `dribull`: `references/prompt-dribull.md`" in content
+    assert (
+        "(`references/prompt-b1.md` for `b1`, `references/prompt-dribull.md` for "
+        "`dribull`, `references/prompt-b2.md` for `b2`, `references/prompt.md` for `hcr`)"
+    ) in content
+    assert (
+        "The intended end state is multimodal subagent chart review driven by the "
+        "method-specific prompt files: `references/prompt-b1.md` for `b1`, "
+        "`references/prompt-dribull.md` for `dribull`, `references/prompt-b2.md` "
+        "for `b2`, and `references/prompt.md` for `hcr`."
+    ) in content
+    assert "reuses the existing `b2` reviewer" not in content
+
+
 def test_validate_eod_pick_date_has_market_data_rejects_placeholder_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     market = pd.DataFrame(
         {
@@ -3393,7 +3457,7 @@ def test_review_rejects_negative_llm_min_baseline_score(tmp_path: Path) -> None:
     assert "non-negative" in result.stderr.lower()
 
 
-def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
+def test_review_dribull_uses_dedicated_resolver_prompt_and_artifact_method(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -3407,7 +3471,7 @@ def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
         json.dumps(
             {
                 "pick_date": "2026-04-01",
-                "method": "b2",
+                "method": "dribull",
                 "candidates": [{"code": "000001.SZ"}],
             }
         ),
@@ -3434,7 +3498,7 @@ def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
         ),
     )
 
-    prompt_path = str(tmp_path / "prompt-b2-stub.md")
+    prompt_path = str(tmp_path / "prompt-dribull-stub.md")
     resolver_methods: list[str] = []
 
     monkeypatch.setattr(
@@ -3442,7 +3506,7 @@ def test_review_dribull_uses_b2_resolver_prompt_and_dribull_artifact_method(
         "get_review_resolver",
         lambda method: resolver_methods.append(method)
         or SimpleNamespace(
-            name="b2",
+            name="dribull",
             prompt_path=prompt_path,
             review_history=lambda **kwargs: {
                 "review_type": "baseline",
