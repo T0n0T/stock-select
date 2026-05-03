@@ -16,8 +16,10 @@ from stock_select.review_orchestrator import (
     summarize_reviews,
 )
 from stock_select.review_protocol import (
+    compute_b1_weighted_total,
     compute_b2_weighted_total,
     compute_b2_weighted_total_for_profile,
+    compute_weighted_total_for_profile,
     infer_signal_type,
     infer_verdict_for_profile,
 )
@@ -91,11 +93,71 @@ def test_compute_b2_weighted_total_for_profile_uses_profile_weights() -> None:
     assert total == 4.53
 
 
+def test_compute_weighted_total_for_profile_matches_b1_neutral_baseline() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    scores = {
+        "trend_structure": 4.4,
+        "price_position": 3.6,
+        "volume_behavior": 3.2,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 2.8,
+    }
+
+    assert compute_weighted_total_for_profile(scores, profile=profile) == compute_b1_weighted_total(scores)
+
+
+def test_compute_weighted_total_for_profile_matches_b2_neutral_baseline() -> None:
+    profile = get_method_environment_profile(method="b2", state="neutral")
+    scores = {
+        "trend_structure": 4.2,
+        "price_position": 3.8,
+        "volume_behavior": 2.5,
+        "previous_abnormal_move": 3.9,
+        "macd_phase": 4.1,
+    }
+
+    assert compute_weighted_total_for_profile(scores, profile=profile, signal="B3") == compute_b2_weighted_total(scores, signal="B3")
+
+
 def test_infer_verdict_for_profile_uses_profile_thresholds() -> None:
     profile = get_method_environment_profile(method="b1", state="weak")
 
     assert infer_verdict_for_profile(total_score=4.05, volume_behavior=3.0, signal_type="rebound", profile=profile) == "WATCH"
     assert infer_verdict_for_profile(total_score=4.2, volume_behavior=3.0, signal_type="rebound", profile=profile) == "PASS"
+
+
+def test_infer_verdict_for_profile_applies_direct_fail_gates() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+
+    assert infer_verdict_for_profile(
+        total_score=5.0,
+        volume_behavior=1.0,
+        signal_type="rebound",
+        profile=profile,
+    ) == "FAIL"
+    assert infer_verdict_for_profile(
+        total_score=5.0,
+        volume_behavior=3.0,
+        signal_type="distribution_risk",
+        profile=profile,
+    ) == "FAIL"
+
+
+def test_infer_verdict_for_profile_honors_exact_thresholds() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    assert infer_verdict_for_profile(
+        total_score=profile.watch_threshold,
+        volume_behavior=3.0,
+        signal_type="rebound",
+        profile=profile,
+    ) == "WATCH"
+    assert infer_verdict_for_profile(
+        total_score=profile.pass_threshold,
+        volume_behavior=3.0,
+        signal_type="rebound",
+        profile=profile,
+    ) == "PASS"
 
 
 def _trend(

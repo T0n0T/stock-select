@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+from stock_select.environment_profiles import MethodEnvironmentProfile
+
 BASELINE_SCORE_WEIGHTS = {
     "trend_structure": 0.18,
     "price_position": 0.18,
@@ -59,10 +61,10 @@ def compute_b2_weighted_total(scores: dict[str, float], *, signal: str | None = 
     return round(total, 2)
 
 
-def compute_b2_weighted_total_for_profile(
+def compute_weighted_total_for_profile(
     scores: dict[str, float],
     *,
-    profile,
+    profile: MethodEnvironmentProfile,
     signal: str | None = None,
 ) -> float:
     total = sum(
@@ -71,6 +73,15 @@ def compute_b2_weighted_total_for_profile(
     )
     total += b2_signal_score(signal) * float(profile.signal_weight or 0.0)
     return round(total, 2)
+
+
+def compute_b2_weighted_total_for_profile(
+    scores: dict[str, float],
+    *,
+    profile: MethodEnvironmentProfile,
+    signal: str | None = None,
+) -> float:
+    return compute_weighted_total_for_profile(scores, profile=profile, signal=signal)
 
 
 def compute_b1_weighted_total(scores: dict[str, float]) -> float:
@@ -124,7 +135,7 @@ def infer_verdict_for_profile(
     total_score: float,
     volume_behavior: float,
     signal_type: str,
-    profile,
+    profile: MethodEnvironmentProfile,
 ) -> str:
     if volume_behavior <= 1.0 or signal_type == "distribution_risk":
         return "FAIL"
