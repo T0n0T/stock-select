@@ -49,8 +49,10 @@ def resolve_market_environment(runtime_root: Path, *, pick_date: str) -> dict[st
         if interval.start_date <= pick_date and (interval.end_date is None or pick_date <= interval.end_date)
     ]
     if applicable_intervals:
+        preferred_intervals = [interval for interval in applicable_intervals if interval.manual_override]
+        ranked_intervals = preferred_intervals or applicable_intervals
         newest = max(
-            applicable_intervals,
+            ranked_intervals,
             key=lambda interval: (interval.start_date, interval.evaluated_at, interval.manual_override),
         )
         return {

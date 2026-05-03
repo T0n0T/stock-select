@@ -52,6 +52,15 @@ def test_load_environment_history_rejects_malformed_interval_entry(tmp_path: Pat
         load_environment_history(tmp_path)
 
 
+def test_load_environment_history_rejects_invalid_json_text(tmp_path: Path) -> None:
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "history.json").write_text("{", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid environment history payload"):
+        load_environment_history(tmp_path)
+
+
 def test_resolve_market_environment_returns_interval_covering_pick_date(tmp_path: Path) -> None:
     write_environment_history(
         tmp_path,
@@ -128,3 +137,35 @@ def test_resolve_market_environment_prefers_newer_overlapping_interval(tmp_path:
     assert resolved["state"] == "strong"
     assert resolved["interval_start"] == "2026-05-12"
     assert resolved["reason"] == "manual rebound override"
+
+
+def test_resolve_market_environment_prefers_manual_override_over_later_start_date(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-10",
+                "end_date": "2026-05-25",
+                "evaluated_at": "2026-05-11",
+                "source": "manual",
+                "manual_override": True,
+                "reason": "manual caution override",
+            },
+            {
+                "state": "weak",
+                "start_date": "2026-05-12",
+                "end_date": "2026-05-25",
+                "evaluated_at": "2026-05-12",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "later scheduled interval",
+            },
+        ],
+    )
+
+    resolved = resolve_market_environment(tmp_path, pick_date="2026-05-19")
+
+    assert resolved["state"] == "strong"
+    assert resolved["interval_start"] == "2026-05-10"
+    assert resolved["reason"] == "manual caution override"
