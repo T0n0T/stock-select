@@ -277,7 +277,10 @@ def _resolve_review_environment_context(
         resolved_environment = resolve_market_environment(runtime_root, pick_date=pick_date)
     except ValueError:
         return None, None
-    profile = get_method_environment_profile(method=normalized_method, state=str(resolved_environment["state"]))
+    try:
+        profile = get_method_environment_profile(method=normalized_method, state=str(resolved_environment["state"]))
+    except ValueError:
+        return None, None
     return resolved_environment, profile
 
 
@@ -2190,6 +2193,7 @@ def _review_merge_impl(
     restrict_codes = bool(selected_codes)
     merged_reviews: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
+    existing_summary = _load_summary_payload(review_dir / "summary.json")
 
     for review_path in sorted(review_dir.glob("*.json")):
         if review_path.name in {"summary.json", "llm_review_tasks.json"}:
@@ -2224,6 +2228,9 @@ def _review_merge_impl(
         min_score=4.0,
         failures=failures,
     )
+    environment_snapshot = existing_summary.get("environment_snapshot")
+    if environment_snapshot is not None:
+        summary["environment_snapshot"] = environment_snapshot
     summary_path = review_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if reporter:
