@@ -123,6 +123,16 @@ def override_market_environment(runtime_root: Path, *, pick_date: str, state: st
             return new_interval
         if last_start_date < pick_date:
             intervals[-1]["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+            intervals.append(new_interval)
+            write_environment_history(runtime_root, intervals)
+            return new_interval
+    for index in range(len(intervals) - 1, -1, -1):
+        interval = intervals[index]
+        if interval["start_date"] <= pick_date <= str(interval["end_date"]):
+            interval["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+            intervals.append(new_interval)
+            write_environment_history(runtime_root, intervals)
+            return new_interval
     intervals.append(new_interval)
     write_environment_history(runtime_root, intervals)
     return new_interval
