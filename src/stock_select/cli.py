@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -18,7 +19,13 @@ import typer
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.environment_profiles import get_method_environment_profile
-from stock_select.market_environment import resolve_market_environment
+from stock_select.market_environment import (
+    ensure_market_environment,
+    evaluate_market_environment,
+    load_environment_history,
+    override_market_environment,
+    resolve_market_environment,
+)
 from stock_select.reviewers import review_b2_symbol_history
 from stock_select.strategies import (
     DEFAULT_B1_CONFIG,
@@ -53,6 +60,7 @@ from stock_select.charting import export_daily_chart
 from stock_select.db_access import (
     fetch_available_trade_dates,
     fetch_daily_window,
+    fetch_index_history,
     fetch_instrument_names,
     fetch_nth_latest_trade_date,
     fetch_previous_trade_date,
@@ -85,7 +93,9 @@ from stock_select.watch_pool import (
 
 app = typer.Typer(help="stock-select standalone CLI")
 html_app = typer.Typer(help="HTML site utilities")
+market_env_app = typer.Typer(help="Market environment utilities")
 app.add_typer(html_app, name="html")
+app.add_typer(market_env_app, name="market-env")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
 LLM_REVIEW_MAX_CONCURRENCY = 6
@@ -140,6 +150,7 @@ def main() -> None:
         "render-html",
         "run",
         "html",
+        "market-env",
     }
     if args and args[0] not in subcommands and args[0] not in root_options:
         sys.argv = [sys.argv[0], "screen", *args]
@@ -184,6 +195,30 @@ def _validate_cli_pick_date(pick_date: str) -> str:
         raise typer.BadParameter("pick_date must be a valid date in YYYY-MM-DD format.") from exc
 
 
+def _evaluate_market_environment_for_pick_date(
+    *,
+    runtime_root: Path,
+    pick_date: str,
+    dsn: str | None,
+    reporter: ProgressReporter | None = None,
+) -> dict[str, object]:
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    if reporter:
+        reporter.emit("market-env", "connect db")
+    connection = _connect(resolved_dsn)
+    start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=180)).strftime("%Y-%m-%d")
+    if reporter:
+        reporter.emit("market-env", "fetch index history")
+    sse_history = fetch_index_history(connection, symbol="000001.SH", start_date=start_date, end_date=pick_date)
+    cn2000_history = fetch_index_history(connection, symbol="399303.SZ", start_date=start_date, end_date=pick_date)
+    del runtime_root
+    return evaluate_market_environment(
+        pick_date=pick_date,
+        sse_history=sse_history,
+        cn2000_history=cn2000_history,
+    )
+
+
 def _validate_analyze_symbol(symbol: str) -> str:
     normalized = symbol.strip().upper()
     if not re.fullmatch(r"\d{6}(?:\.(?:SZ|SH|BJ))?", normalized):
@@ -218,6 +253,39 @@ def _resolve_cli_dsn(dsn: str | None) -> str:
 
 def _load_candidate_payload(candidate_path: Path) -> dict:
     return json.loads(candidate_path.read_text(encoding="utf-8"))
+
+
+@market_env_app.command("show")
+def market_env_show(
+    pick_date: str = typer.Option(..., "--pick-date"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+) -> None:
+    normalized_pick_date = _validate_cli_pick_date(pick_date)
+    payload = resolve_market_environment(runtime_root, pick_date=normalized_pick_date)
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@market_env_app.command("history")
+def market_env_history(
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+) -> None:
+    typer.echo(json.dumps({"intervals": load_environment_history(runtime_root)}, ensure_ascii=False, indent=2))
+
+
+@market_env_app.command("override")
+def market_env_override(
+    pick_date: str = typer.Option(..., "--pick-date"),
+    state: str = typer.Option(..., "--state"),
+    reason: str = typer.Option(..., "--reason"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+) -> None:
+    payload = override_market_environment(
+        runtime_root,
+        pick_date=_validate_cli_pick_date(pick_date),
+        state=state,
+        reason=reason,
+    )
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _candidate_payload_matches_screen_version(payload: dict[str, object], *, method: str) -> bool:
@@ -1345,6 +1413,7 @@ def _call_prepare_hcr_screen_data(
 def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: ProgressReporter | None) -> None:
     if not reporter:
         return
+    stats = defaultdict(int, stats)
     if method == "b1":
         reporter.emit(
             "screen",
@@ -1431,6 +1500,16 @@ def _screen_impl(
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = _candidate_path(runtime_root, pick_date, method)
+    ensure_market_environment(
+        runtime_root,
+        pick_date=pick_date,
+        evaluation_loader=lambda: _evaluate_market_environment_for_pick_date(
+            runtime_root=runtime_root,
+            pick_date=pick_date,
+            dsn=dsn,
+            reporter=reporter,
+        ),
+    )
     allow_reuse = not recompute
     if allow_reuse and out_path.exists():
         try:

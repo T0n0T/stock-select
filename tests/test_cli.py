@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from stock_select import cli
 from stock_select.cli import app
+from stock_select.market_environment import write_environment_history
 
 
 def _dribull_trend_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
@@ -3316,6 +3317,80 @@ def test_review_environment_snapshot_is_omitted_when_resolved_state_is_unsupport
     assert "environment_state" not in tasks["tasks"][0]
     assert "environment_reason" not in tasks["tasks"][0]
     assert "environment_llm_focus" not in tasks["tasks"][0]
+
+
+def test_market_env_show_prints_resolved_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-12",
+                "end_date": None,
+                "evaluated_at": "2026-05-12",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["market-env", "show", "--pick-date", "2026-05-19", "--runtime-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert '"state": "strong"' in result.stdout
+
+
+def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    runner = CliRunner()
+
+    def fake_ensure(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"state": "neutral", "interval_start": "2026-05-05", "source": "scheduled", "reason": "range"}
+
+    monkeypatch.setattr(cli, "ensure_market_environment", fake_ensure)
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ", "000002.SZ", "000002.SZ"],
+                "trade_date": ["2026-05-18", "2026-05-19", "2026-05-18", "2026-05-19"],
+                "open": [10.0, 10.1, 12.0, 12.1],
+                "high": [10.3, 10.4, 12.4, 12.5],
+                "low": [9.8, 9.9, 11.8, 11.9],
+                "close": [10.2, 10.3, 12.2, 12.3],
+                "vol": [1000.0, 1100.0, 900.0, 950.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_call_prepare_screen_data", lambda market, reporter=None: market.assign(turnover_n=100.0))
+    monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "run_b1_screen_with_stats", lambda prepared, pick_date, config: ([], {"selected": 0, "eligible": 0}))
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-05-19",
+            "--runtime-root",
+            str(tmp_path),
+            "--dsn",
+            "postgresql://example",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls
+    assert calls[0][1]["pick_date"] == "2026-05-19"
 
 
 def test_review_rejects_stale_b1_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
