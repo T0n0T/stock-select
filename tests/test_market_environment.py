@@ -174,7 +174,7 @@ def test_resolve_market_environment_prefers_manual_override_over_later_start_dat
 
 
 def test_evaluate_market_environment_returns_strong_when_indices_trend_up() -> None:
-    dates = pd.date_range("2026-03-02", periods=80, freq="B")
+    dates = pd.date_range("2026-01-05", periods=120, freq="B")
     sse = pd.DataFrame(
         {
             "ts_code": ["000001.SH"] * len(dates),
