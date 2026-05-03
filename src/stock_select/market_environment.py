@@ -103,6 +103,8 @@ def _score_index_environment_frame(frame: pd.DataFrame, *, pick_date: str) -> di
     working = frame.copy()
     working["trade_date"] = pd.to_datetime(working["trade_date"])
     working = working.loc[working["trade_date"] <= pd.Timestamp(pick_date)].sort_values("trade_date").reset_index(drop=True)
+    if working.empty or working.iloc[-1]["trade_date"] != pd.Timestamp(pick_date):
+        raise ValueError(f"No market environment data found for pick_date {pick_date}.")
     if len(working) < 60:
         raise ValueError("Insufficient history for market environment evaluation.")
     close = working["close"].astype(float)

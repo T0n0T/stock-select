@@ -242,6 +242,24 @@ def test_score_index_environment_frame_raises_for_insufficient_history() -> None
         _score_index_environment_frame(frame, pick_date="2026-05-21")
 
 
+def test_score_index_environment_frame_raises_when_pick_date_is_missing() -> None:
+    dates = pd.date_range("2026-01-05", periods=60, freq="B")
+    frame = pd.DataFrame(
+        {
+            "ts_code": ["000001.SH"] * len(dates),
+            "trade_date": dates,
+            "open": [3000 + i for i in range(len(dates))],
+            "high": [3005 + i for i in range(len(dates))],
+            "low": [2995 + i for i in range(len(dates))],
+            "close": [3002 + i for i in range(len(dates))],
+            "vol": [1000 + i * 10 for i in range(len(dates))],
+        }
+    )
+
+    with pytest.raises(ValueError, match="No market environment data found for pick_date 2026-03-28"):
+        _score_index_environment_frame(frame, pick_date="2026-03-28")
+
+
 def test_score_index_environment_frame_ignores_rows_after_pick_date() -> None:
     dates = pd.date_range("2026-01-05", periods=70, freq="B")
     baseline = pd.DataFrame(
@@ -267,6 +285,26 @@ def test_score_index_environment_frame_ignores_rows_after_pick_date() -> None:
     )
 
 
+def test_score_index_environment_frame_uses_fixed_tail_windows() -> None:
+    dates = pd.date_range("2026-01-05", periods=120, freq="B")
+    frame = pd.DataFrame(
+        {
+            "ts_code": ["000001.SH"] * len(dates),
+            "trade_date": dates,
+            "open": [100.0] * len(dates),
+            "high": [101.0] * len(dates),
+            "low": [99.0] * len(dates),
+            "close": [200.0] * 61 + [100.0] * 58 + [101.0],
+            "vol": [1000.0] * 100 + [1.0] * 19 + [20.0],
+        }
+    )
+
+    result = _score_index_environment_frame(frame, pick_date="2026-06-19")
+
+    assert result["position_score"] == 1.0
+    assert result["volume_score"] == 1.0
+
+
 def test_score_index_environment_frame_returns_exact_component_scores() -> None:
     dates = pd.date_range("2026-01-05", periods=60, freq="B")
     frame = pd.DataFrame(
@@ -288,3 +326,38 @@ def test_score_index_environment_frame_returns_exact_component_scores() -> None:
         "macd_score": 1.0,
         "total_score": 4.0,
     }
+
+
+def test_evaluate_market_environment_returns_neutral_at_boundary_scores() -> None:
+    dates = pd.date_range("2026-01-05", periods=60, freq="B")
+    sse = pd.DataFrame(
+        {
+            "ts_code": ["000001.SH"] * len(dates),
+            "trade_date": dates,
+            "open": [100.0] * len(dates),
+            "high": [101.0] * len(dates),
+            "low": [99.0] * len(dates),
+            "close": [100.0] * 59 + [101.0],
+            "vol": [100.0] * 59 + [50.0],
+        }
+    )
+    cn2000 = pd.DataFrame(
+        {
+            "ts_code": ["399303.SZ"] * len(dates),
+            "trade_date": dates,
+            "open": [200.0] * len(dates),
+            "high": [201.0] * len(dates),
+            "low": [199.0] * len(dates),
+            "close": [100.0] * 41 + [99.0] * 19,
+            "vol": [100.0] * 59 + [50.0],
+        }
+    )
+
+    result = evaluate_market_environment(
+        pick_date="2026-03-27",
+        sse_history=sse,
+        cn2000_history=cn2000,
+    )
+
+    assert result["state"] == "neutral"
+    assert result["total_score"] == 4.0
