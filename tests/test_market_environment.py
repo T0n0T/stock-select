@@ -413,6 +413,53 @@ def test_override_market_environment_resolves_new_override_inside_closed_interva
     assert resolved["source"] == "manual_override"
 
 
+def test_override_market_environment_replaces_closed_interval_at_start_boundary(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-10",
+                "end_date": "2026-05-20",
+                "evaluated_at": "2026-05-10",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-10",
+        state="weak",
+        reason="panic break",
+    )
+
+    intervals = load_environment_history(tmp_path)
+
+    assert intervals == [
+        {
+            "state": "weak",
+            "start_date": "2026-05-10",
+            "end_date": None,
+            "evaluated_at": "2026-05-10",
+            "source": "manual_override",
+            "manual_override": True,
+            "reason": "panic break",
+        }
+    ]
+    assert all(
+        interval["end_date"] is None or interval["end_date"] >= interval["start_date"]
+        for interval in intervals
+    )
+
+    resolved = resolve_market_environment(tmp_path, pick_date="2026-05-10")
+    assert resolved["state"] == "weak"
+    assert resolved["interval_start"] == "2026-05-10"
+    assert resolved["source"] == "manual_override"
+
+
 def test_override_market_environment_same_day_does_not_create_invalid_interval(tmp_path: Path) -> None:
     write_environment_history(
         tmp_path,
