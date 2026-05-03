@@ -1,7 +1,9 @@
 import pandas as pd
 import pytest
 
+from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.reviewers import b1 as b1_reviewer
+from stock_select.reviewers.b1 import _score_b1_price_position
 from stock_select.reviewers.b2 import _score_b2_previous_abnormal_move
 from stock_select.reviewers.b1 import review_b1_symbol_history
 
@@ -258,6 +260,17 @@ def test_b1_price_position_keeps_high_position_observable_when_ma25_holds_zxdq()
     score = b1_reviewer._score_b1_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq)
 
     assert score == 3.0
+
+
+def test_b1_price_position_scores_more_favorably_in_weak_environment_for_deeper_pullback() -> None:
+    profile_weak = get_method_environment_profile(method="b1", state="weak")
+    profile_strong = get_method_environment_profile(method="b1", state="strong")
+    close = pd.Series([10.0] * 100 + [8.8, 8.9, 9.0, 9.1, 9.2])
+
+    weak_score = _score_b1_price_position(close=close, profile=profile_weak)
+    strong_score = _score_b1_price_position(close=close, profile=profile_strong)
+
+    assert weak_score >= strong_score
 
 
 def test_b1_previous_abnormal_move_reuses_b2_event_logic() -> None:

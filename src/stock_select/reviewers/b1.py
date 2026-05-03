@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
+from stock_select.environment_profiles import MethodEnvironmentProfile
 from stock_select.indicators import compute_macd
 from stock_select.review_orchestrator import (
     apply_macd_verdict_gate,
@@ -35,6 +36,7 @@ def review_b1_symbol_history(
     pick_date: str,
     history: pd.DataFrame,
     chart_path: str,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> dict[str, Any]:
     frame = history.copy()
     if frame.empty:
@@ -67,7 +69,14 @@ def review_b1_symbol_history(
     )
 
     trend_structure = _score_b1_trend_structure(open_=open_, close=close, ma25=ma25, zxdkx=zxdkx, bbi=bbi)
-    price_position = _score_b1_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq)
+    price_position = _score_b1_price_position(
+        close=close,
+        high=high,
+        low=low,
+        ma25=ma25,
+        zxdq=zxdq,
+        profile=profile,
+    )
     volume_behavior = _score_b1_volume_behavior(recent_open, recent_close, recent_volume)
     previous_abnormal_move = _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume)
     weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
@@ -459,13 +468,21 @@ def _score_b1_trend_structure(
 def _score_b1_price_position(
     *,
     close: pd.Series,
-    high: pd.Series,
-    low: pd.Series,
-    ma25: pd.Series,
-    zxdq: pd.Series,
+    high: pd.Series | None = None,
+    low: pd.Series | None = None,
+    ma25: pd.Series | None = None,
+    zxdq: pd.Series | None = None,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> float:
-    recent_high = high.tail(120).dropna()
-    recent_low = low.tail(120).dropna()
+    if high is None or low is None:
+        if len(close) < 60:
+            return 3.0
+        recent_high = close.tail(120).dropna()
+        recent_low = close.tail(120).dropna()
+    else:
+        recent_high = high.tail(120).dropna()
+        recent_low = low.tail(120).dropna()
+
     if recent_high.empty or recent_low.empty or pd.isna(close.iloc[-1]):
         return 3.0
 
@@ -475,14 +492,34 @@ def _score_b1_price_position(
         return 3.0
 
     position = (float(close.iloc[-1]) - box_low) / (box_high - box_low)
-    latest_ma25 = float(ma25.iloc[-1]) if not pd.isna(ma25.iloc[-1]) else float("nan")
-    latest_zxdq = float(zxdq.iloc[-1]) if not pd.isna(zxdq.iloc[-1]) else float("nan")
+    latest_ma25 = (
+        float(ma25.iloc[-1])
+        if ma25 is not None and not pd.isna(ma25.iloc[-1])
+        else float("nan")
+    )
+    latest_zxdq = (
+        float(zxdq.iloc[-1])
+        if zxdq is not None and not pd.isna(zxdq.iloc[-1])
+        else float("nan")
+    )
     ma25_holds_zxdq = bool(
         pd.notna(latest_ma25)
         and pd.notna(latest_zxdq)
         and latest_zxdq > 0.0
         and latest_ma25 >= latest_zxdq * (1.0 - _APPROX_TOLERANCE)
     )
+    mode = profile.subscore_mode.get("price_position", "default") if profile is not None else "default"
+
+    if mode == "left_side_favored":
+        if position <= 0.45:
+            return 5.0
+        if position <= 0.60:
+            return 4.0
+    if mode == "less_left_bias":
+        if position <= 0.30:
+            return 5.0
+        if position <= 0.50:
+            return 4.0
 
     if position <= 0.45:
         return 5.0
