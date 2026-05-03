@@ -312,10 +312,74 @@ def test_override_market_environment_same_day_does_not_create_invalid_interval(t
     )
 
     intervals = load_environment_history(tmp_path)
-    assert intervals[0]["start_date"] == "2026-05-19"
-    assert intervals[0]["end_date"] is None
-    assert intervals[1]["start_date"] == "2026-05-19"
-    assert intervals[1]["manual_override"] is True
+    assert intervals == [
+        {
+            "state": "weak",
+            "start_date": "2026-05-19",
+            "end_date": None,
+            "evaluated_at": "2026-05-19",
+            "source": "manual_override",
+            "manual_override": True,
+            "reason": "panic break",
+        }
+    ]
+
+
+def test_override_market_environment_repeated_same_day_resolves_to_latest_state(tmp_path: Path) -> None:
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-19",
+        state="weak",
+        reason="panic break",
+    )
+
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-19",
+        state="strong",
+        reason="reversal rebound",
+    )
+
+    resolved = resolve_market_environment(tmp_path, pick_date="2026-05-19")
+
+    assert resolved["state"] == "strong"
+    assert resolved["reason"] == "reversal rebound"
+    assert resolved["source"] == "manual_override"
+
+
+def test_override_market_environment_same_day_keeps_single_active_interval(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "neutral",
+                "start_date": "2026-05-19",
+                "end_date": None,
+                "evaluated_at": "2026-05-19",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "range-bound",
+            }
+        ],
+    )
+
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-19",
+        state="strong",
+        reason="late breakout",
+    )
+
+    intervals = load_environment_history(tmp_path)
+    active_for_day = [
+        interval
+        for interval in intervals
+        if interval["start_date"] <= "2026-05-19" and (interval["end_date"] is None or "2026-05-19" <= interval["end_date"])
+    ]
+
+    assert len(active_for_day) == 1
+    assert active_for_day[0]["state"] == "strong"
+    assert active_for_day[0]["manual_override"] is True
 
 
 def test_override_market_environment_creates_manual_interval_for_empty_history(tmp_path: Path) -> None:
