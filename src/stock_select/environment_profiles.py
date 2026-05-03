@@ -6,6 +6,7 @@ class MethodEnvironmentProfile:
     method: str
     state: str
     weights: dict[str, float]
+    signal_weight: float | None
     pass_threshold: float
     watch_threshold: float
     subscore_mode: dict[str, str]
@@ -23,6 +24,7 @@ _PROFILES = {
             "previous_abnormal_move": 0.20,
             "macd_phase": 0.14,
         },
+        signal_weight=None,
         pass_threshold=4.1,
         watch_threshold=3.2,
         subscore_mode={
@@ -41,6 +43,7 @@ _PROFILES = {
             "previous_abnormal_move": 0.20,
             "macd_phase": 0.15,
         },
+        signal_weight=None,
         pass_threshold=4.0,
         watch_threshold=3.2,
         subscore_mode={"price_position": "default", "trend_structure": "default"},
@@ -56,6 +59,7 @@ _PROFILES = {
             "previous_abnormal_move": 0.20,
             "macd_phase": 0.15,
         },
+        signal_weight=None,
         pass_threshold=4.0,
         watch_threshold=3.2,
         subscore_mode={
@@ -73,8 +77,8 @@ _PROFILES = {
             "volume_behavior": 0.00,
             "previous_abnormal_move": 0.20,
             "macd_phase": 0.25,
-            "signal": 0.15,
         },
+        signal_weight=0.15,
         pass_threshold=4.15,
         watch_threshold=3.3,
         subscore_mode={"price_position": "low_risk_required", "macd_phase": "strict"},
@@ -89,8 +93,8 @@ _PROFILES = {
             "volume_behavior": 0.00,
             "previous_abnormal_move": 0.14,
             "macd_phase": 0.35,
-            "signal": 0.15,
         },
+        signal_weight=0.15,
         pass_threshold=4.0,
         watch_threshold=3.3,
         subscore_mode={"price_position": "default", "macd_phase": "default"},
@@ -105,8 +109,8 @@ _PROFILES = {
             "volume_behavior": 0.00,
             "previous_abnormal_move": 0.12,
             "macd_phase": 0.37,
-            "signal": 0.15,
         },
+        signal_weight=0.15,
         pass_threshold=3.95,
         watch_threshold=3.3,
         subscore_mode={"price_position": "breakout_tolerant", "macd_phase": "aggressive"},
@@ -119,4 +123,14 @@ def get_method_environment_profile(*, method: str, state: str) -> MethodEnvironm
     key = (method.strip().lower(), state.strip().lower())
     if key not in _PROFILES:
         raise ValueError(f"Unsupported environment profile method/state: {key[0]} {key[1]}")
-    return _PROFILES[key]
+    profile = _PROFILES[key]
+    return MethodEnvironmentProfile(
+        method=profile.method,
+        state=profile.state,
+        weights=dict(profile.weights),
+        signal_weight=profile.signal_weight,
+        pass_threshold=profile.pass_threshold,
+        watch_threshold=profile.watch_threshold,
+        subscore_mode=dict(profile.subscore_mode),
+        llm_focus=profile.llm_focus,
+    )
