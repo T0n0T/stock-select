@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from stock_select.environment_models import MarketEnvironmentInterval
 
 
@@ -63,3 +65,65 @@ def resolve_market_environment(runtime_root: Path, *, pick_date: str) -> dict[st
             "source": newest.source,
         }
     raise ValueError(f"No market environment interval covers pick_date {pick_date}.")
+
+
+def evaluate_market_environment(
+    *,
+    pick_date: str,
+    sse_history: pd.DataFrame,
+    cn2000_history: pd.DataFrame,
+) -> dict[str, object]:
+    sse_score = _score_index_environment_frame(sse_history, pick_date=pick_date)
+    cn2000_score = _score_index_environment_frame(cn2000_history, pick_date=pick_date)
+    total_score = round(float(sse_score["total_score"]) + float(cn2000_score["total_score"]), 2)
+    if total_score >= 8.0:
+        state = "strong"
+    elif total_score <= 3.5:
+        state = "weak"
+    else:
+        state = "neutral"
+    return {
+        "evaluate_date": pick_date,
+        "state": state,
+        "total_score": total_score,
+        "indices": {
+            "sse": sse_score,
+            "cn2000": cn2000_score,
+        },
+        "reason": _summarize_environment_reason(
+            state=state,
+            sse_score=sse_score,
+            cn2000_score=cn2000_score,
+        ),
+        "source": "scheduled",
+    }
+
+
+def _score_index_environment_frame(frame: pd.DataFrame, *, pick_date: str) -> dict[str, object]:
+    working = frame.copy()
+    working["trade_date"] = pd.to_datetime(working["trade_date"])
+    working = working.loc[working["trade_date"] <= pd.Timestamp(pick_date)].sort_values("trade_date").reset_index(drop=True)
+    close = working["close"].astype(float)
+    volume = working["vol"].astype(float)
+    short_mean = close.tail(min(25, len(close))).mean()
+    long_mean = close.tail(min(60, len(close))).mean()
+    trend_score = 2.0 if close.iloc[-1] >= short_mean >= long_mean else 0.0
+    position_score = 1.0 if close.iloc[-1] >= close.tail(min(60, len(close))).median() else 0.0
+    volume_score = 1.0 if volume.iloc[-1] >= volume.tail(min(20, len(volume))).mean() else 0.0
+    macd_base = close.iloc[-20] if len(close) >= 20 else close.iloc[0]
+    macd_score = 1.0 if close.iloc[-1] >= macd_base else 0.0
+    return {
+        "trend_score": trend_score,
+        "position_score": position_score,
+        "volume_score": volume_score,
+        "macd_score": macd_score,
+        "total_score": trend_score + position_score + volume_score + macd_score,
+    }
+
+
+def _summarize_environment_reason(*, state: str, sse_score: dict[str, object], cn2000_score: dict[str, object]) -> str:
+    if state == "strong":
+        return "indices trend up"
+    if state == "weak":
+        return "indices break down"
+    return "mixed market signals"
