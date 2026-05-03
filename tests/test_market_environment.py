@@ -288,6 +288,90 @@ def test_override_market_environment_closes_previous_interval(tmp_path: Path) ->
     assert intervals[1]["manual_override"] is True
 
 
+def test_override_market_environment_same_day_does_not_create_invalid_interval(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-19",
+                "end_date": None,
+                "evaluated_at": "2026-05-19",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-19",
+        state="weak",
+        reason="panic break",
+    )
+
+    intervals = load_environment_history(tmp_path)
+    assert intervals[0]["start_date"] == "2026-05-19"
+    assert intervals[0]["end_date"] is None
+    assert intervals[1]["start_date"] == "2026-05-19"
+    assert intervals[1]["manual_override"] is True
+
+
+def test_override_market_environment_creates_manual_interval_for_empty_history(tmp_path: Path) -> None:
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-19",
+        state="weak",
+        reason="panic break",
+    )
+
+    assert load_environment_history(tmp_path) == [
+        {
+            "state": "weak",
+            "start_date": "2026-05-19",
+            "end_date": None,
+            "evaluated_at": "2026-05-19",
+            "source": "manual_override",
+            "manual_override": True,
+            "reason": "panic break",
+        }
+    ]
+
+
+def test_override_market_environment_preserves_boundary_resolution(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-12",
+                "end_date": None,
+                "evaluated_at": "2026-05-12",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-19",
+        state="weak",
+        reason="panic break",
+    )
+
+    previous_day = resolve_market_environment(tmp_path, pick_date="2026-05-18")
+    override_day = resolve_market_environment(tmp_path, pick_date="2026-05-19")
+
+    assert previous_day["state"] == "strong"
+    assert previous_day["interval_end"] == "2026-05-18"
+    assert override_day["state"] == "weak"
+    assert override_day["interval_start"] == "2026-05-19"
+    assert override_day["source"] == "manual_override"
+
+
 def test_evaluate_market_environment_returns_strong_when_indices_trend_up() -> None:
     dates = pd.date_range("2026-01-05", periods=120, freq="B")
     sse = pd.DataFrame(

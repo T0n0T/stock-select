@@ -99,7 +99,7 @@ def ensure_market_environment(
 
 def override_market_environment(runtime_root: Path, *, pick_date: str, state: str, reason: str) -> dict[str, object]:
     intervals = load_environment_history(runtime_root)
-    if intervals and intervals[-1].get("end_date") is None:
+    if intervals and intervals[-1].get("end_date") is None and str(intervals[-1]["start_date"]) < pick_date:
         intervals[-1]["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
     intervals.append(
         {
