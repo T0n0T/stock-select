@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.reviewers.b2 import (
     infer_b2_elastic_watch,
     infer_b2_watch_tier,
@@ -263,6 +264,35 @@ def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_overextended_above_
         )
         == "WATCH"
     )
+
+
+def test_b2_price_position_penalizes_high_box_position_more_in_weak_environment() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    close = pd.Series([10 + i * 0.05 for i in range(120)])
+    high = close + 0.2
+    low = close - 0.2
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    zxdq = ma25.bfill()
+
+    weak_score = _score_b2_price_position(
+        close=close,
+        high=high,
+        low=low,
+        ma25=ma25,
+        zxdq=zxdq,
+        profile=profile_weak,
+    )
+    strong_score = _score_b2_price_position(
+        close=close,
+        high=high,
+        low=low,
+        ma25=ma25,
+        zxdq=zxdq,
+        profile=profile_strong,
+    )
+
+    assert weak_score <= strong_score
 
 
 def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_ma25_too_far_above_zxdkx() -> None:
