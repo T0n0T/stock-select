@@ -3,7 +3,6 @@ import pytest
 
 from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.reviewers import b1 as b1_reviewer
-from stock_select.reviewers.b1 import _score_b1_price_position
 from stock_select.reviewers.b2 import _score_b2_previous_abnormal_move
 from stock_select.reviewers.b1 import review_b1_symbol_history
 
@@ -262,15 +261,38 @@ def test_b1_price_position_keeps_high_position_observable_when_ma25_holds_zxdq()
     assert score == 3.0
 
 
-def test_b1_price_position_scores_more_favorably_in_weak_environment_for_deeper_pullback() -> None:
+def test_b1_review_uses_environment_profile_for_price_position_scoring() -> None:
     profile_weak = get_method_environment_profile(method="b1", state="weak")
     profile_strong = get_method_environment_profile(method="b1", state="strong")
-    close = pd.Series([10.0] * 100 + [8.8, 8.9, 9.0, 9.1, 9.2])
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(end="2026-04-30", periods=130),
+            "open": [10.0] * 120 + [8.7, 8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.45, 9.5],
+            "high": [10.2] * 120 + [9.0, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.65, 9.7, 9.75],
+            "low": [9.8] * 120 + [8.6, 8.7, 8.8, 8.9, 9.0, 9.05, 9.1, 9.15, 9.18, 9.2],
+            "close": [10.0] * 120 + [8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.45, 9.5, 9.55],
+            "vol": [900.0] * 130,
+        }
+    )
 
-    weak_score = _score_b1_price_position(close=close, profile=profile_weak)
-    strong_score = _score_b1_price_position(close=close, profile=profile_strong)
+    weak_review = review_b1_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=profile_weak,
+    )
+    strong_review = review_b1_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=profile_strong,
+    )
 
-    assert weak_score >= strong_score
+    assert weak_review["price_position"] == 4.0
+    assert strong_review["price_position"] == 3.0
+    assert weak_review["total_score"] > strong_review["total_score"]
 
 
 def test_b1_previous_abnormal_move_reuses_b2_event_logic() -> None:

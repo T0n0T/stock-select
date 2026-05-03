@@ -468,21 +468,14 @@ def _score_b1_trend_structure(
 def _score_b1_price_position(
     *,
     close: pd.Series,
-    high: pd.Series | None = None,
-    low: pd.Series | None = None,
-    ma25: pd.Series | None = None,
-    zxdq: pd.Series | None = None,
+    high: pd.Series,
+    low: pd.Series,
+    ma25: pd.Series,
+    zxdq: pd.Series,
     profile: MethodEnvironmentProfile | None = None,
 ) -> float:
-    if high is None or low is None:
-        if len(close) < 60:
-            return 3.0
-        recent_high = close.tail(120).dropna()
-        recent_low = close.tail(120).dropna()
-    else:
-        recent_high = high.tail(120).dropna()
-        recent_low = low.tail(120).dropna()
-
+    recent_high = high.tail(120).dropna()
+    recent_low = low.tail(120).dropna()
     if recent_high.empty or recent_low.empty or pd.isna(close.iloc[-1]):
         return 3.0
 
@@ -492,16 +485,8 @@ def _score_b1_price_position(
         return 3.0
 
     position = (float(close.iloc[-1]) - box_low) / (box_high - box_low)
-    latest_ma25 = (
-        float(ma25.iloc[-1])
-        if ma25 is not None and not pd.isna(ma25.iloc[-1])
-        else float("nan")
-    )
-    latest_zxdq = (
-        float(zxdq.iloc[-1])
-        if zxdq is not None and not pd.isna(zxdq.iloc[-1])
-        else float("nan")
-    )
+    latest_ma25 = float(ma25.iloc[-1]) if not pd.isna(ma25.iloc[-1]) else float("nan")
+    latest_zxdq = float(zxdq.iloc[-1]) if not pd.isna(zxdq.iloc[-1]) else float("nan")
     ma25_holds_zxdq = bool(
         pd.notna(latest_ma25)
         and pd.notna(latest_zxdq)
