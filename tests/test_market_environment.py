@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from stock_select.market_environment import (
+    _score_index_environment_frame,
     evaluate_market_environment,
     load_environment_history,
     resolve_market_environment,
@@ -200,7 +201,7 @@ def test_evaluate_market_environment_returns_strong_when_indices_trend_up() -> N
 
 
 def test_evaluate_market_environment_returns_weak_when_indices_break_down() -> None:
-    dates = pd.date_range("2026-03-02", periods=80, freq="B")
+    dates = pd.date_range("2026-01-05", periods=120, freq="B")
     sse = pd.DataFrame(
         {
             "ts_code": ["000001.SH"] * len(dates),
@@ -221,3 +222,69 @@ def test_evaluate_market_environment_returns_weak_when_indices_break_down() -> N
     )
 
     assert result["state"] == "weak"
+
+
+def test_score_index_environment_frame_raises_for_insufficient_history() -> None:
+    dates = pd.date_range("2026-03-02", periods=59, freq="B")
+    frame = pd.DataFrame(
+        {
+            "ts_code": ["000001.SH"] * len(dates),
+            "trade_date": dates,
+            "open": [3000 + i for i in range(len(dates))],
+            "high": [3005 + i for i in range(len(dates))],
+            "low": [2995 + i for i in range(len(dates))],
+            "close": [3002 + i for i in range(len(dates))],
+            "vol": [1000 + i * 10 for i in range(len(dates))],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Insufficient history for market environment evaluation"):
+        _score_index_environment_frame(frame, pick_date="2026-05-21")
+
+
+def test_score_index_environment_frame_ignores_rows_after_pick_date() -> None:
+    dates = pd.date_range("2026-01-05", periods=70, freq="B")
+    baseline = pd.DataFrame(
+        {
+            "ts_code": ["000001.SH"] * len(dates),
+            "trade_date": dates,
+            "open": [3000 + i for i in range(len(dates))],
+            "high": [3005 + i for i in range(len(dates))],
+            "low": [2995 + i for i in range(len(dates))],
+            "close": [3002 + i for i in range(len(dates))],
+            "vol": [1000 + i * 10 for i in range(len(dates))],
+        }
+    )
+    pick_date = str(dates[59].date())
+    future_breakdown = baseline.copy()
+    future_mask = future_breakdown["trade_date"] > pd.Timestamp(pick_date)
+    future_breakdown.loc[future_mask, "close"] = 100.0
+    future_breakdown.loc[future_mask, "vol"] = 1.0
+
+    assert _score_index_environment_frame(future_breakdown, pick_date=pick_date) == _score_index_environment_frame(
+        baseline.loc[baseline["trade_date"] <= pd.Timestamp(pick_date)],
+        pick_date=pick_date,
+    )
+
+
+def test_score_index_environment_frame_returns_exact_component_scores() -> None:
+    dates = pd.date_range("2026-01-05", periods=60, freq="B")
+    frame = pd.DataFrame(
+        {
+            "ts_code": ["000001.SH"] * len(dates),
+            "trade_date": dates,
+            "open": [100.0] * len(dates),
+            "high": [101.0] * len(dates),
+            "low": [99.0] * len(dates),
+            "close": [100.0] * 59 + [101.0],
+            "vol": [100.0] * 59 + [50.0],
+        }
+    )
+
+    assert _score_index_environment_frame(frame, pick_date="2026-03-27") == {
+        "trend_score": 2.0,
+        "position_score": 1.0,
+        "volume_score": 0.0,
+        "macd_score": 1.0,
+        "total_score": 4.0,
+    }
