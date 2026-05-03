@@ -3342,6 +3342,71 @@ def test_market_env_show_prints_resolved_interval(tmp_path: Path, monkeypatch: p
     assert '"state": "strong"' in result.stdout
 
 
+def test_market_env_history_prints_intervals(tmp_path: Path) -> None:
+    runner = CliRunner()
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "neutral",
+                "start_date": "2026-05-05",
+                "end_date": "2026-05-11",
+                "evaluated_at": "2026-05-05",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "range",
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["market-env", "history", "--runtime-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert '"intervals"' in result.stdout
+    assert '"state": "neutral"' in result.stdout
+
+
+def test_market_env_override_writes_manual_interval(tmp_path: Path) -> None:
+    runner = CliRunner()
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-12",
+                "end_date": None,
+                "evaluated_at": "2026-05-12",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "market-env",
+            "override",
+            "--pick-date",
+            "2026-05-19",
+            "--state",
+            "weak",
+            "--reason",
+            "manual caution",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"state": "weak"' in result.stdout
+    history = json.loads((tmp_path / "environment" / "history.json").read_text(encoding="utf-8"))
+    assert history["intervals"][-1]["state"] == "weak"
+    assert history["intervals"][-1]["source"] == "manual_override"
+    assert history["intervals"][-1]["manual_override"] is True
+
+
 def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     runner = CliRunner()
@@ -3370,7 +3435,11 @@ def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, mon
     monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "_call_prepare_screen_data", lambda market, reporter=None: market.assign(turnover_n=100.0))
     monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
-    monkeypatch.setattr(cli, "run_b1_screen_with_stats", lambda prepared, pick_date, config: ([], {"selected": 0, "eligible": 0}))
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared, pick_date, config: ([], _b1_screen_stats(total_symbols=2, eligible=0, selected=0)),
+    )
 
     result = runner.invoke(
         app,
@@ -3391,6 +3460,106 @@ def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, mon
     assert result.exit_code == 0
     assert calls
     assert calls[0][1]["pick_date"] == "2026-05-19"
+
+
+def test_run_calls_ensure_market_environment_for_eod_screen_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    def fake_ensure(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"state": "neutral", "interval_start": "2026-05-05", "source": "scheduled", "reason": "range"}
+
+    monkeypatch.setattr(cli, "ensure_market_environment", fake_ensure)
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ", "000002.SZ", "000002.SZ"],
+                "trade_date": ["2026-05-18", "2026-05-19", "2026-05-18", "2026-05-19"],
+                "open": [10.0, 10.1, 12.0, 12.1],
+                "high": [10.3, 10.4, 12.4, 12.5],
+                "low": [9.8, 9.9, 11.8, 11.9],
+                "close": [10.2, 10.3, 12.2, 12.3],
+                "vol": [1000.0, 1100.0, 900.0, 950.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_call_prepare_screen_data", lambda market, reporter=None: market.assign(turnover_n=100.0))
+    monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared, pick_date, config: ([], _b1_screen_stats(total_symbols=2, eligible=0, selected=0)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_chart_impl",
+        lambda *, method, pick_date, dsn, runtime_root, reporter=None: runtime_root / "charts" / _eod_key(pick_date),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_review_impl",
+        lambda *, method, pick_date, dsn, runtime_root, llm_min_baseline_score=None, reporter=None: (
+            runtime_root / "reviews" / _eod_key(pick_date) / "summary.json"
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-05-19",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls
+    assert calls[0][1]["pick_date"] == "2026-05-19"
+
+
+def test_screen_intraday_does_not_call_ensure_market_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fake_ensure(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"state": "neutral"}
+
+    monkeypatch.setattr(cli, "ensure_market_environment", fake_ensure)
+    monkeypatch.setattr(cli, "_screen_intraday_impl", lambda **kwargs: tmp_path / "candidates" / "intraday.json")
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path),
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert not calls
 
 
 def test_review_rejects_stale_b1_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

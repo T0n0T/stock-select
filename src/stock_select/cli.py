@@ -7,7 +7,6 @@ import re
 import shutil
 import sys
 import time
-from collections import defaultdict
 from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -1413,7 +1412,6 @@ def _call_prepare_hcr_screen_data(
 def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: ProgressReporter | None) -> None:
     if not reporter:
         return
-    stats = defaultdict(int, stats)
     if method == "b1":
         reporter.emit(
             "screen",
