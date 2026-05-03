@@ -105,13 +105,12 @@ def _score_index_environment_frame(frame: pd.DataFrame, *, pick_date: str) -> di
     working = working.loc[working["trade_date"] <= pd.Timestamp(pick_date)].sort_values("trade_date").reset_index(drop=True)
     close = working["close"].astype(float)
     volume = working["vol"].astype(float)
-    short_mean = close.tail(min(25, len(close))).mean()
-    long_mean = close.tail(min(60, len(close))).mean()
-    trend_score = 2.0 if close.iloc[-1] >= short_mean >= long_mean else 0.0
-    position_score = 1.0 if close.iloc[-1] >= close.tail(min(60, len(close))).median() else 0.0
-    volume_score = 1.0 if volume.iloc[-1] >= volume.tail(min(20, len(volume))).mean() else 0.0
-    macd_base = close.iloc[-20] if len(close) >= 20 else close.iloc[0]
-    macd_score = 1.0 if close.iloc[-1] >= macd_base else 0.0
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    ma60 = close.rolling(window=60, min_periods=60).mean()
+    trend_score = 2.0 if close.iloc[-1] >= ma25.iloc[-1] >= ma60.iloc[-1] else 0.0
+    position_score = 1.0 if close.iloc[-1] >= close.tail(60).median() else 0.0
+    volume_score = 1.0 if volume.iloc[-1] >= volume.tail(20).mean() else 0.0
+    macd_score = 1.0 if close.iloc[-1] >= close.iloc[-20] else 0.0
     return {
         "trend_score": trend_score,
         "position_score": position_score,
