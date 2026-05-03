@@ -37,6 +37,11 @@ def load_environment_history(runtime_root: Path) -> list[dict[str, object]]:
     return [interval.to_dict() for interval in _load_interval_models(runtime_root)]
 
 
+def _raise_if_out_of_order_insertion(intervals: list[dict[str, object]], *, pick_date: str) -> None:
+    if intervals and pick_date < str(intervals[-1]["start_date"]):
+        raise ValueError(f"Out-of-order market environment insertion is not supported for pick_date {pick_date}.")
+
+
 def write_environment_history(runtime_root: Path, intervals: list[dict[str, object]]) -> Path:
     path = _history_path(runtime_root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,8 +85,9 @@ def ensure_market_environment(
     except ValueError as exc:
         if str(exc) != no_interval_message or evaluation_loader is None:
             raise
-        evaluation = evaluation_loader()
         intervals = load_environment_history(runtime_root)
+        _raise_if_out_of_order_insertion(intervals, pick_date=pick_date)
+        evaluation = evaluation_loader()
         intervals.append(
             {
                 "state": evaluation["state"],
@@ -99,6 +105,7 @@ def ensure_market_environment(
 
 def override_market_environment(runtime_root: Path, *, pick_date: str, state: str, reason: str) -> dict[str, object]:
     intervals = load_environment_history(runtime_root)
+    _raise_if_out_of_order_insertion(intervals, pick_date=pick_date)
     new_interval = {
         "state": state,
         "start_date": pick_date,

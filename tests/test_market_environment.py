@@ -259,6 +259,39 @@ def test_ensure_market_environment_malformed_history_does_not_trigger_loader(tmp
     assert called["value"] is False
 
 
+def test_ensure_market_environment_rejects_out_of_order_creation_before_future_interval(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-19",
+                "end_date": None,
+                "evaluated_at": "2026-05-19",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    called = {"value": False}
+
+    def fake_loader() -> dict[str, object]:
+        called["value"] = True
+        return {
+            "state": "weak",
+            "evaluate_date": "2026-05-12",
+            "source": "scheduled",
+            "reason": "should not be used",
+        }
+
+    with pytest.raises(ValueError, match="Out-of-order market environment insertion is not supported for pick_date 2026-05-12"):
+        ensure_market_environment(tmp_path, pick_date="2026-05-12", evaluation_loader=fake_loader)
+
+    assert called["value"] is False
+
+
 def test_override_market_environment_closes_previous_interval(tmp_path: Path) -> None:
     write_environment_history(
         tmp_path,
@@ -286,6 +319,31 @@ def test_override_market_environment_closes_previous_interval(tmp_path: Path) ->
     assert intervals[0]["end_date"] == "2026-05-18"
     assert intervals[1]["state"] == "weak"
     assert intervals[1]["manual_override"] is True
+
+
+def test_override_market_environment_rejects_out_of_order_override_before_future_interval(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-19",
+                "end_date": None,
+                "evaluated_at": "2026-05-19",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Out-of-order market environment insertion is not supported for pick_date 2026-05-12"):
+        override_market_environment(
+            tmp_path,
+            pick_date="2026-05-12",
+            state="weak",
+            reason="panic break",
+        )
 
 
 def test_override_market_environment_same_day_does_not_create_invalid_interval(tmp_path: Path) -> None:
