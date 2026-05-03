@@ -8,8 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from stock_select.market_environment import (
     _score_index_environment_frame,
+    ensure_market_environment,
     evaluate_market_environment,
     load_environment_history,
+    override_market_environment,
     resolve_market_environment,
     write_environment_history,
 )
@@ -172,6 +174,65 @@ def test_resolve_market_environment_prefers_manual_override_over_later_start_dat
     assert resolved["state"] == "strong"
     assert resolved["interval_start"] == "2026-05-10"
     assert resolved["reason"] == "manual caution override"
+
+
+def test_ensure_market_environment_reuses_existing_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "neutral",
+                "start_date": "2026-05-05",
+                "end_date": None,
+                "evaluated_at": "2026-05-05",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "range-bound",
+            }
+        ],
+    )
+
+    called = {"value": False}
+
+    def fake_evaluate(**_kwargs):
+        called["value"] = True
+        return {}
+
+    monkeypatch.setattr("stock_select.market_environment.evaluate_market_environment", fake_evaluate)
+
+    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-12")
+
+    assert resolved["state"] == "neutral"
+    assert called["value"] is False
+
+
+def test_override_market_environment_closes_previous_interval(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-12",
+                "end_date": None,
+                "evaluated_at": "2026-05-12",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    override_market_environment(
+        tmp_path,
+        pick_date="2026-05-19",
+        state="weak",
+        reason="panic break",
+    )
+
+    intervals = load_environment_history(tmp_path)
+    assert intervals[0]["end_date"] == "2026-05-18"
+    assert intervals[1]["state"] == "weak"
+    assert intervals[1]["manual_override"] is True
 
 
 def test_evaluate_market_environment_returns_strong_when_indices_trend_up() -> None:

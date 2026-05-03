@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -65,6 +66,53 @@ def resolve_market_environment(runtime_root: Path, *, pick_date: str) -> dict[st
             "source": newest.source,
         }
     raise ValueError(f"No market environment interval covers pick_date {pick_date}.")
+
+
+def ensure_market_environment(
+    runtime_root: Path,
+    *,
+    pick_date: str,
+    evaluation_loader: Callable[[], dict[str, object]] | None = None,
+) -> dict[str, object]:
+    try:
+        return resolve_market_environment(runtime_root, pick_date=pick_date)
+    except ValueError:
+        if evaluation_loader is None:
+            raise
+        evaluation = evaluation_loader()
+        intervals = load_environment_history(runtime_root)
+        intervals.append(
+            {
+                "state": evaluation["state"],
+                "start_date": pick_date,
+                "end_date": None,
+                "evaluated_at": evaluation["evaluate_date"],
+                "source": evaluation.get("source", "scheduled"),
+                "manual_override": False,
+                "reason": evaluation.get("reason"),
+            }
+        )
+        write_environment_history(runtime_root, intervals)
+        return resolve_market_environment(runtime_root, pick_date=pick_date)
+
+
+def override_market_environment(runtime_root: Path, *, pick_date: str, state: str, reason: str) -> dict[str, object]:
+    intervals = load_environment_history(runtime_root)
+    if intervals and intervals[-1].get("end_date") is None:
+        intervals[-1]["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+    intervals.append(
+        {
+            "state": state,
+            "start_date": pick_date,
+            "end_date": None,
+            "evaluated_at": pick_date,
+            "source": "manual_override",
+            "manual_override": True,
+            "reason": reason,
+        }
+    )
+    write_environment_history(runtime_root, intervals)
+    return intervals[-1]
 
 
 def evaluate_market_environment(
