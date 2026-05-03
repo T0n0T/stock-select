@@ -429,7 +429,7 @@ def _score_b2_price_position(
     if mode == "low_risk_required":
         if 0.60 <= box_position < 0.80:
             return 4.0
-        if 0.80 <= box_position < 0.90:
+        if 0.80 <= box_position < 0.92:
             return 2.0
     if mode == "breakout_tolerant":
         if 0.70 <= box_position < 0.92:
