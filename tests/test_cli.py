@@ -3167,6 +3167,79 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert "[review] done reviewed=1 failures=0" in result.stderr
 
 
+def test_review_summary_writes_environment_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-01.b1"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir = runtime_root / "charts" / "2026-04-01.b1"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    candidate_path = runtime_root / "candidates" / "2026-04-01.b1.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "screen_version": 1,
+                "pool_source": "turnover-top",
+                "candidates": [{"code": "000001.SZ", "close": 10.5, "turnover_n": 200.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"] * 80,
+                "trade_date": pd.date_range("2025-12-01", periods=80, freq="B"),
+                "open": [10.0] * 80,
+                "high": [10.5] * 80,
+                "low": [9.8] * 80,
+                "close": [10.2] * 80,
+                "vol": [1000.0] * 80,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_market_environment",
+        lambda runtime_root, pick_date: {
+            "state": "weak",
+            "interval_start": "2026-03-24",
+            "interval_end": None,
+            "source": "scheduled",
+            "reason": "risk-off",
+        },
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary_path = review_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["environment_snapshot"]["state"] == "weak"
+
+
 def test_review_rejects_stale_b1_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"

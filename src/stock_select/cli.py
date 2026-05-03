@@ -17,6 +17,8 @@ import psycopg
 import typer
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
+from stock_select.environment_profiles import get_method_environment_profile
+from stock_select.market_environment import resolve_market_environment
 from stock_select.reviewers import review_b2_symbol_history
 from stock_select.strategies import (
     DEFAULT_B1_CONFIG,
@@ -260,6 +262,45 @@ def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: s
         "daily_wave_context": daily_context,
         "wave_combo_context": combo_context,
     }
+
+
+def _resolve_review_environment_context(
+    *,
+    runtime_root: Path,
+    pick_date: str,
+    method: str,
+):
+    normalized_method = method.strip().lower()
+    if normalized_method not in {"b1", "b2"}:
+        return None, None
+    try:
+        resolved_environment = resolve_market_environment(runtime_root, pick_date=pick_date)
+    except ValueError:
+        return None, None
+    profile = get_method_environment_profile(method=normalized_method, state=str(resolved_environment["state"]))
+    return resolved_environment, profile
+
+
+def _build_review_task_extra_context(
+    *,
+    history: pd.DataFrame,
+    pick_date: str,
+    method: str,
+    resolved_environment: dict[str, object] | None,
+    profile,
+) -> dict[str, object] | None:
+    extra_context: dict[str, object] = {}
+    if method.lower() in {"b1", "b2", "dribull"}:
+        extra_context.update(_build_wave_task_context(history, pick_date, method=method))
+    if resolved_environment is not None and profile is not None:
+        extra_context.update(
+            {
+                "environment_state": str(resolved_environment["state"]),
+                "environment_reason": resolved_environment.get("reason"),
+                "environment_llm_focus": profile.llm_focus,
+            }
+        )
+    return extra_context or None
 
 
 def _is_review_trend_combo_ok(*, weekly_trend: object, daily_trend: object) -> bool:
@@ -1887,6 +1928,12 @@ def _review_impl(
     connection = _connect(resolved_dsn)
     start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
     candidates = payload.get("candidates", [])
+    normalized_method = method.lower()
+    resolved_environment, profile = _resolve_review_environment_context(
+        runtime_root=runtime_root,
+        pick_date=pick_date,
+        method=normalized_method,
+    )
     if reporter:
         reporter.emit("review", f"candidates={len(candidates)}")
 
@@ -1931,10 +1978,12 @@ def _review_impl(
             chart_path=str(chart_path),
             rubric_path="references/review-rubric.md",
             prompt_path=resolver.prompt_path,
-            extra_context=(
-                _build_wave_task_context(history, pick_date, method=method)
-                if method.lower() in {"b1", "b2", "dribull"}
-                else None
+            extra_context=_build_review_task_extra_context(
+                history=history,
+                pick_date=pick_date,
+                method=method,
+                resolved_environment=resolved_environment,
+                profile=profile,
             ),
         )
         if _should_include_llm_review_task(review, llm_min_baseline_score):
@@ -1951,16 +2000,22 @@ def _review_impl(
 
     summary = summarize_reviews(
         pick_date,
-        method.lower(),
+        normalized_method,
         reviews,
         min_score=4.0,
         failures=failures,
     )
+    if resolved_environment is not None:
+        summary["environment_snapshot"] = {
+            "state": resolved_environment["state"],
+            "interval_start": resolved_environment.get("interval_start"),
+            "source": resolved_environment.get("source"),
+        }
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
     tasks_payload = {
         "pick_date": pick_date,
-        "method": method.lower(),
+        "method": normalized_method,
         "prompt_path": resolver.prompt_path,
         "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,
@@ -2008,6 +2063,12 @@ def _review_intraday_impl(
     except IntradayArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
     candidates = payload.get("candidates", [])
+    normalized_method = method.lower()
+    resolved_environment, profile = _resolve_review_environment_context(
+        runtime_root=runtime_root,
+        pick_date=pick_date,
+        method=normalized_method,
+    )
     if reporter:
         reporter.emit("review", f"candidates={len(candidates)} intraday_run_id={run_id}")
 
@@ -2054,10 +2115,12 @@ def _review_intraday_impl(
             chart_path=str(chart_path),
             rubric_path="references/review-rubric.md",
             prompt_path=resolver.prompt_path,
-            extra_context=(
-                _build_wave_task_context(history, pick_date, method=method)
-                if method.lower() in {"b1", "b2", "dribull"}
-                else None
+            extra_context=_build_review_task_extra_context(
+                history=history,
+                pick_date=pick_date,
+                method=method,
+                resolved_environment=resolved_environment,
+                profile=profile,
             ),
         )
         if _should_include_llm_review_task(review, llm_min_baseline_score):
@@ -2074,16 +2137,22 @@ def _review_intraday_impl(
 
     summary = summarize_reviews(
         pick_date,
-        method.lower(),
+        normalized_method,
         reviews,
         min_score=4.0,
         failures=failures,
     )
+    if resolved_environment is not None:
+        summary["environment_snapshot"] = {
+            "state": resolved_environment["state"],
+            "interval_start": resolved_environment.get("interval_start"),
+            "source": resolved_environment.get("source"),
+        }
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
     tasks_payload = {
         "pick_date": pick_date,
-        "method": method.lower(),
+        "method": normalized_method,
         "prompt_path": resolver.prompt_path,
         "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,

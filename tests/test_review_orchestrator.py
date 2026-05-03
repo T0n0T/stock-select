@@ -282,6 +282,23 @@ def test_build_review_payload_merges_extra_context() -> None:
     assert payload["weekly_wave_context"] == "周线MACD上升浪"
 
 
+def test_build_review_payload_merges_environment_context() -> None:
+    payload = build_review_payload(
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        chart_path="/tmp/000001_day.png",
+        rubric_path="references/review-rubric.md",
+        extra_context={
+            "environment_state": "weak",
+            "environment_reason": "risk-off",
+            "environment_llm_focus": "优先高分给回调充分且支撑有效的结构。",
+        },
+    )
+
+    assert payload["environment_state"] == "weak"
+    assert payload["environment_llm_focus"] == "优先高分给回调充分且支撑有效的结构。"
+
+
 def test_build_review_result_prefers_llm_review_when_present() -> None:
     result = build_review_result(
         code="000001.SZ",
