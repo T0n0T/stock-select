@@ -59,6 +59,25 @@ def compute_b2_weighted_total(scores: dict[str, float], *, signal: str | None = 
     return round(total, 2)
 
 
+def compute_b2_weighted_total_for_profile(
+    scores: dict[str, float],
+    *,
+    profile,
+    signal: str | None = None,
+) -> float:
+    adjusted_scores = dict(scores)
+    if adjusted_scores["price_position"] >= 5.0:
+        adjusted_scores["price_position"] = 3.5
+    if adjusted_scores["previous_abnormal_move"] >= 5.0:
+        adjusted_scores["previous_abnormal_move"] = 3.857142857142857
+    total = sum(
+        float(adjusted_scores[field]) * weight
+        for field, weight in profile.weights.items()
+    )
+    total += b2_signal_score(signal) * float(profile.signal_weight or 0.0)
+    return round(total, 2)
+
+
 def compute_b1_weighted_total(scores: dict[str, float]) -> float:
     return round(sum(float(scores[field]) * weight for field, weight in B1_BASELINE_SCORE_WEIGHTS.items()), 2)
 
@@ -101,6 +120,22 @@ def infer_verdict(*, total_score: float, volume_behavior: float, signal_type: st
     if total_score >= pass_threshold:
         return "PASS"
     if total_score >= watch_threshold:
+        return "WATCH"
+    return "FAIL"
+
+
+def infer_verdict_for_profile(
+    *,
+    total_score: float,
+    volume_behavior: float,
+    signal_type: str,
+    profile,
+) -> str:
+    if volume_behavior <= 1.0 or signal_type == "distribution_risk":
+        return "FAIL"
+    if total_score >= profile.pass_threshold:
+        return "PASS"
+    if total_score >= profile.watch_threshold:
         return "WATCH"
     return "FAIL"
 

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.review_orchestrator import (
     apply_macd_verdict_gate,
     compute_method_total_score,
@@ -14,7 +15,12 @@ from stock_select.review_orchestrator import (
     review_symbol_history as orchestrator_review_symbol_history,
     summarize_reviews,
 )
-from stock_select.review_protocol import compute_b2_weighted_total, infer_signal_type
+from stock_select.review_protocol import (
+    compute_b2_weighted_total,
+    compute_b2_weighted_total_for_profile,
+    infer_signal_type,
+    infer_verdict_for_profile,
+)
 from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
 
 
@@ -68,6 +74,29 @@ def test_b2_weighted_total_uses_lower_volume_behavior_weight() -> None:
     high_volume_scores = {**base_scores, "volume_behavior": 5.0}
 
     assert compute_b2_weighted_total(high_volume_scores, signal="B3") - compute_b2_weighted_total(base_scores, signal="B3") == pytest.approx(0.0)
+
+
+def test_compute_b2_weighted_total_for_profile_uses_profile_weights() -> None:
+    profile = get_method_environment_profile(method="b2", state="weak")
+    scores = {
+        "trend_structure": 4.0,
+        "price_position": 5.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 5.0,
+        "macd_phase": 4.2,
+    }
+
+    total = compute_b2_weighted_total_for_profile(scores, profile=profile, signal="B2")
+
+    assert total > 0
+    assert isinstance(total, float)
+
+
+def test_infer_verdict_for_profile_uses_profile_thresholds() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    assert infer_verdict_for_profile(total_score=4.05, volume_behavior=3.0, signal_type="rebound", profile=profile) == "WATCH"
+    assert infer_verdict_for_profile(total_score=4.2, volume_behavior=3.0, signal_type="rebound", profile=profile) == "PASS"
 
 
 def _trend(
