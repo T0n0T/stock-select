@@ -65,13 +65,8 @@ def compute_b2_weighted_total_for_profile(
     profile,
     signal: str | None = None,
 ) -> float:
-    adjusted_scores = dict(scores)
-    if adjusted_scores["price_position"] >= 5.0:
-        adjusted_scores["price_position"] = 3.5
-    if adjusted_scores["previous_abnormal_move"] >= 5.0:
-        adjusted_scores["previous_abnormal_move"] = 3.857142857142857
     total = sum(
-        float(adjusted_scores[field]) * weight
+        float(scores[field]) * weight
         for field, weight in profile.weights.items()
     )
     total += b2_signal_score(signal) * float(profile.signal_weight or 0.0)

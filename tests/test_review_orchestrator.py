@@ -88,8 +88,7 @@ def test_compute_b2_weighted_total_for_profile_uses_profile_weights() -> None:
 
     total = compute_b2_weighted_total_for_profile(scores, profile=profile, signal="B2")
 
-    assert total > 0
-    assert isinstance(total, float)
+    assert total == 4.53
 
 
 def test_infer_verdict_for_profile_uses_profile_thresholds() -> None:
