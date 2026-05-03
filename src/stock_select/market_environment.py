@@ -74,10 +74,11 @@ def ensure_market_environment(
     pick_date: str,
     evaluation_loader: Callable[[], dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    no_interval_message = f"No market environment interval covers pick_date {pick_date}."
     try:
         return resolve_market_environment(runtime_root, pick_date=pick_date)
-    except ValueError:
-        if evaluation_loader is None:
+    except ValueError as exc:
+        if str(exc) != no_interval_message or evaluation_loader is None:
             raise
         evaluation = evaluation_loader()
         intervals = load_environment_history(runtime_root)

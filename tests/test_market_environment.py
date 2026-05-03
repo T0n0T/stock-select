@@ -176,7 +176,7 @@ def test_resolve_market_environment_prefers_manual_override_over_later_start_dat
     assert resolved["reason"] == "manual caution override"
 
 
-def test_ensure_market_environment_reuses_existing_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_market_environment_reuses_existing_interval(tmp_path: Path) -> None:
     write_environment_history(
         tmp_path,
         [
@@ -194,15 +194,68 @@ def test_ensure_market_environment_reuses_existing_interval(tmp_path: Path, monk
 
     called = {"value": False}
 
-    def fake_evaluate(**_kwargs):
+    def fake_loader() -> dict[str, object]:
         called["value"] = True
         return {}
 
-    monkeypatch.setattr("stock_select.market_environment.evaluate_market_environment", fake_evaluate)
-
-    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-12")
+    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-12", evaluation_loader=fake_loader)
 
     assert resolved["state"] == "neutral"
+    assert called["value"] is False
+
+
+def test_ensure_market_environment_creates_and_persists_interval(tmp_path: Path) -> None:
+    evaluation = {
+        "evaluate_date": "2026-05-19",
+        "state": "strong",
+        "total_score": 8.5,
+        "indices": {
+            "sse": {"total_score": 4.0},
+            "cn2000": {"total_score": 4.5},
+        },
+        "reason": "indices trend up",
+        "source": "scheduled",
+    }
+
+    def fake_loader() -> dict[str, object]:
+        return evaluation
+
+    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-19", evaluation_loader=fake_loader)
+
+    assert resolved == {
+        "state": "strong",
+        "interval_start": "2026-05-19",
+        "interval_end": None,
+        "reason": "indices trend up",
+        "source": "scheduled",
+    }
+    assert load_environment_history(tmp_path) == [
+        {
+            "state": "strong",
+            "start_date": "2026-05-19",
+            "end_date": None,
+            "evaluated_at": "2026-05-19",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "indices trend up",
+        }
+    ]
+
+
+def test_ensure_market_environment_malformed_history_does_not_trigger_loader(tmp_path: Path) -> None:
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "history.json").write_text("{", encoding="utf-8")
+
+    called = {"value": False}
+
+    def fake_loader() -> dict[str, object]:
+        called["value"] = True
+        return {}
+
+    with pytest.raises(ValueError, match="Invalid environment history payload"):
+        ensure_market_environment(tmp_path, pick_date="2026-05-19", evaluation_loader=fake_loader)
+
     assert called["value"] is False
 
 
