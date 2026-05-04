@@ -92,6 +92,37 @@ def _get_verdict(item: dict[str, object]) -> str:
     return str(baseline.get("verdict") or "").upper()
 
 
+def attach_environment_state(
+    rows: list[dict[str, object]],
+    environment_history: list[dict[str, object]],
+    *,
+    environment_key: str,
+) -> list[dict[str, object]]:
+    tagged: list[dict[str, object]] = []
+    for row in rows:
+        pick_date = str(row["pick_date"])
+        matched = next(
+            (
+                item
+                for item in environment_history
+                if str(item["start_date"]) <= pick_date
+                and (item.get("end_date") is None or pick_date <= str(item["end_date"]))
+            ),
+            None,
+        )
+        tagged.append(
+            {
+                **row,
+                "environment_state": (
+                    str(matched.get(environment_key) or matched.get("state")).lower()
+                    if matched is not None
+                    else "unknown"
+                ),
+            }
+        )
+    return tagged
+
+
 def collect_review_samples(
     *,
     methods: list[str],
