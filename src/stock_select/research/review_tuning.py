@@ -8,27 +8,40 @@ import pandas as pd
 from stock_select.cli import SHARED_PREPARED_METHODS, _load_prepared_cache_v2
 
 
-def _load_prepared(method: str, prepared_root: Path) -> pd.DataFrame:
+SCORE_FIELDS = (
+    "trend_structure",
+    "price_position",
+    "volume_behavior",
+    "previous_abnormal_move",
+    "macd_phase",
+)
+
+
+def _load_prepared(method: str, prepared_root: Path, *, end_date: str) -> pd.DataFrame:
     normalized_method = method.strip().lower()
     if normalized_method in SHARED_PREPARED_METHODS:
-        feather_pattern = "*-*-*.feather"
+        feather_pattern = "*.feather"
         ignored_feather_suffixes = {".hcr.feather"}
+        feather_suffix = ".feather"
     else:
-        feather_pattern = f"*-*-*.{normalized_method}.feather"
+        feather_pattern = f"*.{normalized_method}.feather"
         ignored_feather_suffixes = set()
+        feather_suffix = f".{normalized_method}.feather"
 
-    candidates: list[Path] = []
+    candidates: list[tuple[str, Path]] = []
     for path in sorted(prepared_root.glob(feather_pattern)):
         if any(path.name.endswith(suffix) for suffix in ignored_feather_suffixes):
             continue
-        candidates.append(path)
+        date_part = path.name.removesuffix(feather_suffix)
+        if date_part <= end_date:
+            candidates.append((date_part, path))
 
     if not candidates:
         raise FileNotFoundError(
-            f"No prepared cache matching {feather_pattern} in {prepared_root}"
+            f"No prepared cache found for method={method} on or before {end_date} in {prepared_root}"
         )
 
-    data_path = candidates[-1]
+    data_path = sorted(candidates, key=lambda item: item[0])[-1][1]
     payload = _load_prepared_cache_v2(data_path, data_path.with_suffix(".meta.json"))
     prepared = payload.get("prepared_table")
     if not isinstance(prepared, pd.DataFrame):
@@ -63,6 +76,22 @@ def _get_forward_returns(prepared: pd.DataFrame, *, code: str, pick_date: str) -
     return result
 
 
+def _get_score(item: dict[str, object], field: str) -> float | None:
+    if field in item and item[field] is not None:
+        return float(item[field])
+    baseline = item.get("baseline_review") or {}
+    value = baseline.get(field)
+    return None if value is None else float(value)
+
+
+def _get_verdict(item: dict[str, object]) -> str:
+    top_level = item.get("verdict")
+    if top_level:
+        return str(top_level).upper()
+    baseline = item.get("baseline_review") or {}
+    return str(baseline.get("verdict") or "").upper()
+
+
 def collect_review_samples(
     *,
     methods: list[str],
@@ -74,10 +103,11 @@ def collect_review_samples(
     rows: list[dict[str, object]] = []
 
     for method in methods:
-        prepared = _load_prepared(method, prepared_root)
+        normalized_method = method.strip().lower()
+        prepared = _load_prepared(normalized_method, prepared_root, end_date=end_date)
         reviews_root = runtime_root / "reviews"
-        for review_dir in sorted(reviews_root.glob(f"????-??-??.{method}")):
-            pick_date = review_dir.name.replace(f".{method}", "")
+        for review_dir in sorted(reviews_root.glob(f"????-??-??.{normalized_method}")):
+            pick_date = review_dir.name.replace(f".{normalized_method}", "")
             if pick_date < start_date or pick_date > end_date:
                 continue
 
@@ -91,21 +121,19 @@ def collect_review_samples(
             for item in items:
                 code = str(item["code"])
                 fwd = _get_forward_returns(prepared, code=code, pick_date=summary_pick_date)
+                row = {
+                    "method": normalized_method,
+                    "pick_date": summary_pick_date,
+                    "code": code,
+                    "total_score": float(item["total_score"]),
+                    "verdict": _get_verdict(item),
+                    "ret3_pct": None if fwd is None else fwd.get("ret3_pct"),
+                    "ret5_pct": None if fwd is None else fwd.get("ret5_pct"),
+                }
+                for field in SCORE_FIELDS:
+                    row[field] = _get_score(item, field)
                 rows.append(
-                    {
-                        "method": method,
-                        "pick_date": summary_pick_date,
-                        "code": code,
-                        "total_score": float(item["total_score"]),
-                        "trend_structure": float(item["trend_structure"]),
-                        "price_position": float(item["price_position"]),
-                        "volume_behavior": float(item["volume_behavior"]),
-                        "previous_abnormal_move": float(item["previous_abnormal_move"]),
-                        "macd_phase": float(item["macd_phase"]),
-                        "verdict": str(item["verdict"]).upper(),
-                        "ret3_pct": None if fwd is None else fwd.get("ret3_pct"),
-                        "ret5_pct": None if fwd is None else fwd.get("ret5_pct"),
-                    }
+                    row
                 )
 
     return rows
