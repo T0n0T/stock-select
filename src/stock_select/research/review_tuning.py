@@ -21,7 +21,7 @@ def _load_prepared(method: str, prepared_root: Path, *, end_date: str) -> pd.Dat
     normalized_method = method.strip().lower()
     if normalized_method in SHARED_PREPARED_METHODS:
         feather_pattern = "*.feather"
-        ignored_feather_suffixes = {".hcr.feather"}
+        ignored_feather_suffixes = {".hcr.feather", ".intraday.feather"}
         feather_suffix = ".feather"
     else:
         feather_pattern = f"*.{normalized_method}.feather"

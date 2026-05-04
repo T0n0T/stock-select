@@ -245,6 +245,84 @@ def test_collect_review_samples_picks_latest_prepared_snapshot_on_or_before_end_
     assert rows[0]["ret5_pct"] == 6.0
 
 
+def test_collect_review_samples_ignores_intraday_prepared_cache_for_shared_method(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-10.b2"
+    review_dir.mkdir(parents=True)
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-10",
+                "recommendations": [
+                    {
+                        "code": "000001.SZ",
+                        "method": "b2",
+                        "total_score": 4.2,
+                        "trend_structure": 4.0,
+                        "price_position": 5.0,
+                        "volume_behavior": 3.0,
+                        "previous_abnormal_move": 5.0,
+                        "macd_phase": 4.5,
+                        "verdict": "PASS",
+                    }
+                ],
+                "excluded": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prepared_root = tmp_path / "prepared"
+    prepared_root.mkdir()
+    cli._write_prepared_cache_v2(
+        prepared_root / "2026-04-15.feather",
+        prepared_root / "2026-04-15.meta.json",
+        method="b2",
+        pick_date="2026-04-15",
+        start_date="2026-04-01",
+        end_date="2026-04-15",
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-10", "open": 10.0, "close": 10.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-11", "open": 10.1, "close": 10.2},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-12", "open": 10.2, "close": 10.3},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-13", "open": 10.3, "close": 10.4},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-14", "open": 10.4, "close": 10.5},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-15", "open": 10.5, "close": 10.6},
+            ]
+        ),
+    )
+    cli._write_prepared_cache_v2(
+        prepared_root / "2026-04-29.intraday.feather",
+        prepared_root / "2026-04-29.intraday.meta.json",
+        method="b2",
+        pick_date="2026-04-29",
+        start_date="2026-04-01",
+        end_date="2026-04-29",
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-10", "open": 10.0, "close": 10.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-11", "open": 10.1, "close": 10.1},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-12", "open": 10.2, "close": 10.2},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-13", "open": 10.3, "close": 10.3},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-14", "open": 10.4, "close": 10.4},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-15", "open": 10.5, "close": 10.5},
+            ]
+        ),
+    )
+
+    rows = collect_review_samples(
+        methods=["b2"],
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+        runtime_root=runtime_root,
+        prepared_root=prepared_root,
+    )
+
+    assert rows[0]["ret3_pct"] == 4.0
+    assert rows[0]["ret5_pct"] == 6.0
+
+
 def test_collect_review_samples_normalizes_method_name_for_review_lookup(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
     review_dir = runtime_root / "reviews" / "2026-04-10.b2"
