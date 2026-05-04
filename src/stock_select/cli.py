@@ -17,6 +17,14 @@ import psycopg
 import typer
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
+from stock_select.environment_profiles import get_method_environment_profile
+from stock_select.market_environment import (
+    ensure_market_environment,
+    evaluate_market_environment,
+    load_environment_history,
+    override_market_environment,
+    resolve_market_environment,
+)
 from stock_select.reviewers import review_b2_symbol_history
 from stock_select.strategies import (
     DEFAULT_B1_CONFIG,
@@ -51,6 +59,7 @@ from stock_select.charting import export_daily_chart
 from stock_select.db_access import (
     fetch_available_trade_dates,
     fetch_daily_window,
+    fetch_index_history,
     fetch_instrument_names,
     fetch_nth_latest_trade_date,
     fetch_previous_trade_date,
@@ -83,7 +92,9 @@ from stock_select.watch_pool import (
 
 app = typer.Typer(help="stock-select standalone CLI")
 html_app = typer.Typer(help="HTML site utilities")
+market_env_app = typer.Typer(help="Market environment utilities")
 app.add_typer(html_app, name="html")
+app.add_typer(market_env_app, name="market-env")
 
 DEFAULT_SCREEN_LOOKBACK_DAYS = 366
 LLM_REVIEW_MAX_CONCURRENCY = 6
@@ -138,6 +149,7 @@ def main() -> None:
         "render-html",
         "run",
         "html",
+        "market-env",
     }
     if args and args[0] not in subcommands and args[0] not in root_options:
         sys.argv = [sys.argv[0], "screen", *args]
@@ -182,6 +194,30 @@ def _validate_cli_pick_date(pick_date: str) -> str:
         raise typer.BadParameter("pick_date must be a valid date in YYYY-MM-DD format.") from exc
 
 
+def _evaluate_market_environment_for_pick_date(
+    *,
+    runtime_root: Path,
+    pick_date: str,
+    dsn: str | None,
+    reporter: ProgressReporter | None = None,
+) -> dict[str, object]:
+    resolved_dsn = _resolve_cli_dsn(dsn)
+    if reporter:
+        reporter.emit("market-env", "connect db")
+    connection = _connect(resolved_dsn)
+    start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=180)).strftime("%Y-%m-%d")
+    if reporter:
+        reporter.emit("market-env", "fetch index history")
+    sse_history = fetch_index_history(connection, symbol="000001.SH", start_date=start_date, end_date=pick_date)
+    cn2000_history = fetch_index_history(connection, symbol="399303.SZ", start_date=start_date, end_date=pick_date)
+    del runtime_root
+    return evaluate_market_environment(
+        pick_date=pick_date,
+        sse_history=sse_history,
+        cn2000_history=cn2000_history,
+    )
+
+
 def _validate_analyze_symbol(symbol: str) -> str:
     normalized = symbol.strip().upper()
     if not re.fullmatch(r"\d{6}(?:\.(?:SZ|SH|BJ))?", normalized):
@@ -216,6 +252,39 @@ def _resolve_cli_dsn(dsn: str | None) -> str:
 
 def _load_candidate_payload(candidate_path: Path) -> dict:
     return json.loads(candidate_path.read_text(encoding="utf-8"))
+
+
+@market_env_app.command("show")
+def market_env_show(
+    pick_date: str = typer.Option(..., "--pick-date"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+) -> None:
+    normalized_pick_date = _validate_cli_pick_date(pick_date)
+    payload = resolve_market_environment(runtime_root, pick_date=normalized_pick_date)
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@market_env_app.command("history")
+def market_env_history(
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+) -> None:
+    typer.echo(json.dumps({"intervals": load_environment_history(runtime_root)}, ensure_ascii=False, indent=2))
+
+
+@market_env_app.command("override")
+def market_env_override(
+    pick_date: str = typer.Option(..., "--pick-date"),
+    state: str = typer.Option(..., "--state"),
+    reason: str = typer.Option(..., "--reason"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+) -> None:
+    payload = override_market_environment(
+        runtime_root,
+        pick_date=_validate_cli_pick_date(pick_date),
+        state=state,
+        reason=reason,
+    )
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _candidate_payload_matches_screen_version(payload: dict[str, object], *, method: str) -> bool:
@@ -260,6 +329,48 @@ def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: s
         "daily_wave_context": daily_context,
         "wave_combo_context": combo_context,
     }
+
+
+def _resolve_review_environment_context(
+    *,
+    runtime_root: Path,
+    pick_date: str,
+    method: str,
+):
+    normalized_method = method.strip().lower()
+    if normalized_method not in {"b1", "b2"}:
+        return None, None
+    try:
+        resolved_environment = resolve_market_environment(runtime_root, pick_date=pick_date)
+    except ValueError:
+        return None, None
+    try:
+        profile = get_method_environment_profile(method=normalized_method, state=str(resolved_environment["state"]))
+    except ValueError:
+        return None, None
+    return resolved_environment, profile
+
+
+def _build_review_task_extra_context(
+    *,
+    history: pd.DataFrame,
+    pick_date: str,
+    method: str,
+    resolved_environment: dict[str, object] | None,
+    profile,
+) -> dict[str, object] | None:
+    extra_context: dict[str, object] = {}
+    if method.lower() in {"b1", "b2", "dribull"}:
+        extra_context.update(_build_wave_task_context(history, pick_date, method=method))
+    if resolved_environment is not None and profile is not None:
+        extra_context.update(
+            {
+                "environment_state": str(resolved_environment["state"]),
+                "environment_reason": resolved_environment.get("reason"),
+                "environment_llm_focus": profile.llm_focus,
+            }
+        )
+    return extra_context or None
 
 
 def _is_review_trend_combo_ok(*, weekly_trend: object, daily_trend: object) -> bool:
@@ -1387,6 +1498,16 @@ def _screen_impl(
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = _candidate_path(runtime_root, pick_date, method)
+    ensure_market_environment(
+        runtime_root,
+        pick_date=pick_date,
+        evaluation_loader=lambda: _evaluate_market_environment_for_pick_date(
+            runtime_root=runtime_root,
+            pick_date=pick_date,
+            dsn=dsn,
+            reporter=reporter,
+        ),
+    )
     allow_reuse = not recompute
     if allow_reuse and out_path.exists():
         try:
@@ -1887,6 +2008,12 @@ def _review_impl(
     connection = _connect(resolved_dsn)
     start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=366)).strftime("%Y-%m-%d")
     candidates = payload.get("candidates", [])
+    normalized_method = method.lower()
+    resolved_environment, profile = _resolve_review_environment_context(
+        runtime_root=runtime_root,
+        pick_date=pick_date,
+        method=normalized_method,
+    )
     if reporter:
         reporter.emit("review", f"candidates={len(candidates)}")
 
@@ -1931,10 +2058,12 @@ def _review_impl(
             chart_path=str(chart_path),
             rubric_path="references/review-rubric.md",
             prompt_path=resolver.prompt_path,
-            extra_context=(
-                _build_wave_task_context(history, pick_date, method=method)
-                if method.lower() in {"b1", "b2", "dribull"}
-                else None
+            extra_context=_build_review_task_extra_context(
+                history=history,
+                pick_date=pick_date,
+                method=method,
+                resolved_environment=resolved_environment,
+                profile=profile,
             ),
         )
         if _should_include_llm_review_task(review, llm_min_baseline_score):
@@ -1951,16 +2080,22 @@ def _review_impl(
 
     summary = summarize_reviews(
         pick_date,
-        method.lower(),
+        normalized_method,
         reviews,
         min_score=4.0,
         failures=failures,
     )
+    if resolved_environment is not None:
+        summary["environment_snapshot"] = {
+            "state": resolved_environment["state"],
+            "interval_start": resolved_environment.get("interval_start"),
+            "source": resolved_environment.get("source"),
+        }
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
     tasks_payload = {
         "pick_date": pick_date,
-        "method": method.lower(),
+        "method": normalized_method,
         "prompt_path": resolver.prompt_path,
         "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,
@@ -2008,6 +2143,12 @@ def _review_intraday_impl(
     except IntradayArtifactError as exc:
         raise typer.BadParameter(str(exc)) from exc
     candidates = payload.get("candidates", [])
+    normalized_method = method.lower()
+    resolved_environment, profile = _resolve_review_environment_context(
+        runtime_root=runtime_root,
+        pick_date=pick_date,
+        method=normalized_method,
+    )
     if reporter:
         reporter.emit("review", f"candidates={len(candidates)} intraday_run_id={run_id}")
 
@@ -2054,10 +2195,12 @@ def _review_intraday_impl(
             chart_path=str(chart_path),
             rubric_path="references/review-rubric.md",
             prompt_path=resolver.prompt_path,
-            extra_context=(
-                _build_wave_task_context(history, pick_date, method=method)
-                if method.lower() in {"b1", "b2", "dribull"}
-                else None
+            extra_context=_build_review_task_extra_context(
+                history=history,
+                pick_date=pick_date,
+                method=method,
+                resolved_environment=resolved_environment,
+                profile=profile,
             ),
         )
         if _should_include_llm_review_task(review, llm_min_baseline_score):
@@ -2074,16 +2217,22 @@ def _review_intraday_impl(
 
     summary = summarize_reviews(
         pick_date,
-        method.lower(),
+        normalized_method,
         reviews,
         min_score=4.0,
         failures=failures,
     )
+    if resolved_environment is not None:
+        summary["environment_snapshot"] = {
+            "state": resolved_environment["state"],
+            "interval_start": resolved_environment.get("interval_start"),
+            "source": resolved_environment.get("source"),
+        }
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
     tasks_payload = {
         "pick_date": pick_date,
-        "method": method.lower(),
+        "method": normalized_method,
         "prompt_path": resolver.prompt_path,
         "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,
@@ -2121,6 +2270,7 @@ def _review_merge_impl(
     restrict_codes = bool(selected_codes)
     merged_reviews: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
+    existing_summary = _load_summary_payload(review_dir / "summary.json")
 
     for review_path in sorted(review_dir.glob("*.json")):
         if review_path.name in {"summary.json", "llm_review_tasks.json"}:
@@ -2155,6 +2305,9 @@ def _review_merge_impl(
         min_score=4.0,
         failures=failures,
     )
+    environment_snapshot = existing_summary.get("environment_snapshot")
+    if environment_snapshot is not None:
+        summary["environment_snapshot"] = environment_snapshot
     summary_path = review_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if reporter:

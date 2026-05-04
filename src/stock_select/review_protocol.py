@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+from stock_select.environment_profiles import MethodEnvironmentProfile
+
 BASELINE_SCORE_WEIGHTS = {
     "trend_structure": 0.18,
     "price_position": 0.18,
@@ -59,6 +61,29 @@ def compute_b2_weighted_total(scores: dict[str, float], *, signal: str | None = 
     return round(total, 2)
 
 
+def compute_weighted_total_for_profile(
+    scores: dict[str, float],
+    *,
+    profile: MethodEnvironmentProfile,
+    signal: str | None = None,
+) -> float:
+    total = sum(
+        float(scores[field]) * weight
+        for field, weight in profile.weights.items()
+    )
+    total += b2_signal_score(signal) * float(profile.signal_weight or 0.0)
+    return round(total, 2)
+
+
+def compute_b2_weighted_total_for_profile(
+    scores: dict[str, float],
+    *,
+    profile: MethodEnvironmentProfile,
+    signal: str | None = None,
+) -> float:
+    return compute_weighted_total_for_profile(scores, profile=profile, signal=signal)
+
+
 def compute_b1_weighted_total(scores: dict[str, float]) -> float:
     return round(sum(float(scores[field]) * weight for field, weight in B1_BASELINE_SCORE_WEIGHTS.items()), 2)
 
@@ -101,6 +126,22 @@ def infer_verdict(*, total_score: float, volume_behavior: float, signal_type: st
     if total_score >= pass_threshold:
         return "PASS"
     if total_score >= watch_threshold:
+        return "WATCH"
+    return "FAIL"
+
+
+def infer_verdict_for_profile(
+    *,
+    total_score: float,
+    volume_behavior: float,
+    signal_type: str,
+    profile: MethodEnvironmentProfile,
+) -> str:
+    if volume_behavior <= 1.0 or signal_type == "distribution_risk":
+        return "FAIL"
+    if total_score >= profile.pass_threshold:
+        return "PASS"
+    if total_score >= profile.watch_threshold:
         return "WATCH"
     return "FAIL"
 

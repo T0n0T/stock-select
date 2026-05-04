@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.review_orchestrator import (
     apply_macd_verdict_gate,
     compute_method_total_score,
@@ -14,7 +15,14 @@ from stock_select.review_orchestrator import (
     review_symbol_history as orchestrator_review_symbol_history,
     summarize_reviews,
 )
-from stock_select.review_protocol import compute_b2_weighted_total, infer_signal_type
+from stock_select.review_protocol import (
+    compute_b1_weighted_total,
+    compute_b2_weighted_total,
+    compute_b2_weighted_total_for_profile,
+    compute_weighted_total_for_profile,
+    infer_signal_type,
+    infer_verdict_for_profile,
+)
 from stock_select.reviewers.default import review_symbol_history as default_review_symbol_history
 
 
@@ -68,6 +76,88 @@ def test_b2_weighted_total_uses_lower_volume_behavior_weight() -> None:
     high_volume_scores = {**base_scores, "volume_behavior": 5.0}
 
     assert compute_b2_weighted_total(high_volume_scores, signal="B3") - compute_b2_weighted_total(base_scores, signal="B3") == pytest.approx(0.0)
+
+
+def test_compute_b2_weighted_total_for_profile_uses_profile_weights() -> None:
+    profile = get_method_environment_profile(method="b2", state="weak")
+    scores = {
+        "trend_structure": 4.0,
+        "price_position": 5.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 5.0,
+        "macd_phase": 4.2,
+    }
+
+    total = compute_b2_weighted_total_for_profile(scores, profile=profile, signal="B2")
+
+    assert total == 4.53
+
+
+def test_compute_weighted_total_for_profile_matches_b1_neutral_baseline() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    scores = {
+        "trend_structure": 4.4,
+        "price_position": 3.6,
+        "volume_behavior": 3.2,
+        "previous_abnormal_move": 4.0,
+        "macd_phase": 2.8,
+    }
+
+    assert compute_weighted_total_for_profile(scores, profile=profile) == compute_b1_weighted_total(scores)
+
+
+def test_compute_weighted_total_for_profile_matches_b2_neutral_baseline() -> None:
+    profile = get_method_environment_profile(method="b2", state="neutral")
+    scores = {
+        "trend_structure": 4.2,
+        "price_position": 3.8,
+        "volume_behavior": 2.5,
+        "previous_abnormal_move": 3.9,
+        "macd_phase": 4.1,
+    }
+
+    assert compute_weighted_total_for_profile(scores, profile=profile, signal="B3") == compute_b2_weighted_total(scores, signal="B3")
+
+
+def test_infer_verdict_for_profile_uses_profile_thresholds() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    assert infer_verdict_for_profile(total_score=4.05, volume_behavior=3.0, signal_type="rebound", profile=profile) == "WATCH"
+    assert infer_verdict_for_profile(total_score=4.2, volume_behavior=3.0, signal_type="rebound", profile=profile) == "PASS"
+
+
+def test_infer_verdict_for_profile_applies_direct_fail_gates() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+
+    assert infer_verdict_for_profile(
+        total_score=5.0,
+        volume_behavior=1.0,
+        signal_type="rebound",
+        profile=profile,
+    ) == "FAIL"
+    assert infer_verdict_for_profile(
+        total_score=5.0,
+        volume_behavior=3.0,
+        signal_type="distribution_risk",
+        profile=profile,
+    ) == "FAIL"
+
+
+def test_infer_verdict_for_profile_honors_exact_thresholds() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    assert infer_verdict_for_profile(
+        total_score=profile.watch_threshold,
+        volume_behavior=3.0,
+        signal_type="rebound",
+        profile=profile,
+    ) == "WATCH"
+    assert infer_verdict_for_profile(
+        total_score=profile.pass_threshold,
+        volume_behavior=3.0,
+        signal_type="rebound",
+        profile=profile,
+    ) == "PASS"
 
 
 def _trend(
@@ -190,6 +280,23 @@ def test_build_review_payload_merges_extra_context() -> None:
     )
 
     assert payload["weekly_wave_context"] == "周线MACD上升浪"
+
+
+def test_build_review_payload_merges_environment_context() -> None:
+    payload = build_review_payload(
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        chart_path="/tmp/000001_day.png",
+        rubric_path="references/review-rubric.md",
+        extra_context={
+            "environment_state": "weak",
+            "environment_reason": "risk-off",
+            "environment_llm_focus": "优先高分给回调充分且支撑有效的结构。",
+        },
+    )
+
+    assert payload["environment_state"] == "weak"
+    assert payload["environment_llm_focus"] == "优先高分给回调充分且支撑有效的结构。"
 
 
 def test_build_review_result_prefers_llm_review_when_present() -> None:

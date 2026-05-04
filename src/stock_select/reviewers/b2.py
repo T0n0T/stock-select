@@ -5,6 +5,7 @@ from typing import Any
 import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
+from stock_select.environment_profiles import MethodEnvironmentProfile
 from stock_select.review_orchestrator import (
     compute_method_total_score,
     describe_macd_trend_state,
@@ -22,6 +23,7 @@ def review_b2_symbol_history(
     history: pd.DataFrame,
     chart_path: str,
     signal: str | None = None,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> dict[str, Any]:
     frame = history.copy()
     if frame.empty:
@@ -54,7 +56,14 @@ def review_b2_symbol_history(
         weekly_trend=weekly_trend,
         daily_trend=daily_trend,
     )
-    price_position = _score_b2_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq)
+    price_position = _score_b2_price_position(
+        close=close,
+        high=high,
+        low=low,
+        ma25=ma25,
+        zxdq=zxdq,
+        profile=profile,
+    )
     volume_behavior = _score_b2_volume_behavior(close=close, volume=volume)
     previous_abnormal_move = _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume)
     macd_phase = _score_b2_macd_phase(frame, weekly_trend=weekly_trend, daily_trend=daily_trend)
@@ -394,6 +403,7 @@ def _score_b2_price_position(
     low: pd.Series,
     ma25: pd.Series,
     zxdq: pd.Series,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> float:
     recent_high = high.tail(120).dropna()
     recent_low = low.tail(120).dropna()
@@ -414,6 +424,18 @@ def _score_b2_price_position(
     current_mid_price = (latest_high + latest_low) / 2.0
     box_range = box_high - box_low
     box_position = (current_mid_price - box_low) / box_range
+    mode = profile.subscore_mode.get("price_position", "default") if profile is not None else "default"
+
+    if mode == "low_risk_required":
+        if 0.60 <= box_position < 0.80:
+            return 4.0
+        if 0.80 <= box_position < 0.92:
+            return 2.0
+    if mode == "breakout_tolerant":
+        if 0.70 <= box_position < 0.92:
+            return 5.0
+        if 0.92 <= box_position < 1.00:
+            return 4.0
 
     if 0.70 <= box_position < 0.85:
         return 5.0

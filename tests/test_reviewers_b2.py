@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.reviewers.b2 import (
     infer_b2_elastic_watch,
     infer_b2_watch_tier,
@@ -263,6 +264,40 @@ def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_overextended_above_
         )
         == "WATCH"
     )
+
+
+def test_b2_review_uses_environment_profile_for_extension_zone_price_position() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(end="2026-04-30", periods=130),
+            "open": [10.0] * 120 + [11.0, 11.2, 11.4, 11.6, 11.8, 12.0, 12.2, 12.35, 12.55, 12.75],
+            "high": [10.2] * 120 + [11.2, 11.4, 11.6, 11.8, 12.0, 12.2, 12.4, 12.6, 12.9, 13.2],
+            "low": [9.8] * 120 + [10.9, 11.1, 11.3, 11.5, 11.7, 11.9, 12.1, 12.25, 12.45, 12.588],
+            "close": [10.0] * 120 + [11.1, 11.3, 11.5, 11.7, 11.9, 12.1, 12.3, 12.45, 12.7, 12.92],
+            "vol": [900.0] * 130,
+        }
+    )
+
+    weak_review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=profile_weak,
+    )
+    strong_review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=profile_strong,
+    )
+
+    assert weak_review["price_position"] == 2.0
+    assert strong_review["price_position"] == 5.0
+    assert weak_review["total_score"] < strong_review["total_score"]
 
 
 def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_ma25_too_far_above_zxdkx() -> None:

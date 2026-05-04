@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from stock_select import cli
 from stock_select.cli import app
+from stock_select.market_environment import write_environment_history
 
 
 def _dribull_trend_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
@@ -3167,6 +3168,400 @@ def test_review_writes_summary_json(tmp_path: Path) -> None:
     assert "[review] done reviewed=1 failures=0" in result.stderr
 
 
+def test_review_summary_writes_environment_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-01.b1"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir = runtime_root / "charts" / "2026-04-01.b1"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    candidate_path = runtime_root / "candidates" / "2026-04-01.b1.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "screen_version": 1,
+                "pool_source": "turnover-top",
+                "candidates": [{"code": "000001.SZ", "close": 10.5, "turnover_n": 200.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"] * 80,
+                "trade_date": pd.date_range("2025-12-01", periods=80, freq="B"),
+                "open": [10.0] * 80,
+                "high": [10.5] * 80,
+                "low": [9.8] * 80,
+                "close": [10.2] * 80,
+                "vol": [1000.0] * 80,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_market_environment",
+        lambda runtime_root, pick_date: {
+            "state": "weak",
+            "interval_start": "2026-03-24",
+            "interval_end": None,
+            "source": "scheduled",
+            "reason": "risk-off",
+        },
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary_path = review_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["environment_snapshot"]["state"] == "weak"
+
+
+def test_review_environment_snapshot_is_omitted_when_resolved_state_is_unsupported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-01.b1"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir = runtime_root / "charts" / "2026-04-01.b1"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    candidate_path = runtime_root / "candidates" / "2026-04-01.b1.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "screen_version": 1,
+                "pool_source": "turnover-top",
+                "candidates": [{"code": "000001.SZ", "close": 10.5, "turnover_n": 200.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"] * 80,
+                "trade_date": pd.date_range("2025-12-01", periods=80, freq="B"),
+                "open": [10.0] * 80,
+                "high": [10.5] * 80,
+                "low": [9.8] * 80,
+                "close": [10.2] * 80,
+                "vol": [1000.0] * 80,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_market_environment",
+        lambda runtime_root, pick_date: {
+            "state": "panic",
+            "interval_start": "2026-03-24",
+            "interval_end": None,
+            "source": "scheduled",
+            "reason": "unsupported-state",
+        },
+        raising=False,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    assert "environment_snapshot" not in summary
+    assert "environment_state" not in tasks["tasks"][0]
+    assert "environment_reason" not in tasks["tasks"][0]
+    assert "environment_llm_focus" not in tasks["tasks"][0]
+
+
+def test_market_env_show_prints_resolved_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-12",
+                "end_date": None,
+                "evaluated_at": "2026-05-12",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["market-env", "show", "--pick-date", "2026-05-19", "--runtime-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert '"state": "strong"' in result.stdout
+
+
+def test_market_env_history_prints_intervals(tmp_path: Path) -> None:
+    runner = CliRunner()
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "neutral",
+                "start_date": "2026-05-05",
+                "end_date": "2026-05-11",
+                "evaluated_at": "2026-05-05",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "range",
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["market-env", "history", "--runtime-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert '"intervals"' in result.stdout
+    assert '"state": "neutral"' in result.stdout
+
+
+def test_market_env_override_writes_manual_interval(tmp_path: Path) -> None:
+    runner = CliRunner()
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "strong",
+                "start_date": "2026-05-12",
+                "end_date": None,
+                "evaluated_at": "2026-05-12",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "broad rally",
+            }
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "market-env",
+            "override",
+            "--pick-date",
+            "2026-05-19",
+            "--state",
+            "weak",
+            "--reason",
+            "manual caution",
+            "--runtime-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"state": "weak"' in result.stdout
+    history = json.loads((tmp_path / "environment" / "history.json").read_text(encoding="utf-8"))
+    assert history["intervals"][-1]["state"] == "weak"
+    assert history["intervals"][-1]["source"] == "manual_override"
+    assert history["intervals"][-1]["manual_override"] is True
+
+
+def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    runner = CliRunner()
+
+    def fake_ensure(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"state": "neutral", "interval_start": "2026-05-05", "source": "scheduled", "reason": "range"}
+
+    monkeypatch.setattr(cli, "ensure_market_environment", fake_ensure)
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ", "000002.SZ", "000002.SZ"],
+                "trade_date": ["2026-05-18", "2026-05-19", "2026-05-18", "2026-05-19"],
+                "open": [10.0, 10.1, 12.0, 12.1],
+                "high": [10.3, 10.4, 12.4, 12.5],
+                "low": [9.8, 9.9, 11.8, 11.9],
+                "close": [10.2, 10.3, 12.2, 12.3],
+                "vol": [1000.0, 1100.0, 900.0, 950.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_call_prepare_screen_data", lambda market, reporter=None: market.assign(turnover_n=100.0))
+    monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared, pick_date, config: ([], _b1_screen_stats(total_symbols=2, eligible=0, selected=0)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-05-19",
+            "--runtime-root",
+            str(tmp_path),
+            "--dsn",
+            "postgresql://example",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls
+    assert calls[0][1]["pick_date"] == "2026-05-19"
+
+
+def test_run_calls_ensure_market_environment_for_eod_screen_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+
+    def fake_ensure(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"state": "neutral", "interval_start": "2026-05-05", "source": "scheduled", "reason": "range"}
+
+    monkeypatch.setattr(cli, "ensure_market_environment", fake_ensure)
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ", "000002.SZ", "000002.SZ"],
+                "trade_date": ["2026-05-18", "2026-05-19", "2026-05-18", "2026-05-19"],
+                "open": [10.0, 10.1, 12.0, 12.1],
+                "high": [10.3, 10.4, 12.4, 12.5],
+                "low": [9.8, 9.9, 11.8, 11.9],
+                "close": [10.2, 10.3, 12.2, 12.3],
+                "vol": [1000.0, 1100.0, 900.0, 950.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_call_prepare_screen_data", lambda market, reporter=None: market.assign(turnover_n=100.0))
+    monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared, pick_date, config: ([], _b1_screen_stats(total_symbols=2, eligible=0, selected=0)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_chart_impl",
+        lambda *, method, pick_date, dsn, runtime_root, reporter=None: runtime_root / "charts" / _eod_key(pick_date),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_review_impl",
+        lambda *, method, pick_date, dsn, runtime_root, llm_min_baseline_score=None, reporter=None: (
+            runtime_root / "reviews" / _eod_key(pick_date) / "summary.json"
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-05-19",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls
+    assert calls[0][1]["pick_date"] == "2026-05-19"
+
+
+def test_screen_intraday_does_not_call_ensure_market_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fake_ensure(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"state": "neutral"}
+
+    monkeypatch.setattr(cli, "ensure_market_environment", fake_ensure)
+    monkeypatch.setattr(cli, "_screen_intraday_impl", lambda **kwargs: tmp_path / "candidates" / "intraday.json")
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--intraday",
+            "--runtime-root",
+            str(tmp_path),
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert not calls
+
+
 def test_review_rejects_stale_b1_candidate_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
@@ -5855,6 +6250,105 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
     assert merged["verdict"] == "WATCH"
     assert summary["excluded"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr
+
+
+def test_review_merge_preserves_environment_snapshot(tmp_path: Path) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / _eod_key("2026-04-01")
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "000001.SZ.json").write_text(
+        json.dumps(
+            {
+                "code": "000001.SZ",
+                "pick_date": "2026-04-01",
+                "chart_path": str(runtime_root / "charts" / _eod_key("2026-04-01") / "000001.SZ_day.png"),
+                "review_mode": "baseline_local",
+                "llm_review": None,
+                "baseline_review": {
+                    "review_type": "baseline",
+                    "trend_structure": 3.0,
+                    "price_position": 3.0,
+                    "volume_behavior": 3.0,
+                    "previous_abnormal_move": 4.0,
+                    "macd_phase": 4.0,
+                    "total_score": 3.4,
+                    "signal_type": "rebound",
+                    "verdict": "WATCH",
+                    "comment": "baseline",
+                },
+                "total_score": 3.4,
+                "signal_type": "rebound",
+                "verdict": "WATCH",
+                "comment": "baseline",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "reviewed_count": 1,
+                "recommendations": [],
+                "excluded": ["placeholder"],
+                "failures": [],
+                "environment_snapshot": {
+                    "state": "weak",
+                    "interval_start": "2026-03-24",
+                    "source": "scheduled",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (review_dir / "llm_review_results").mkdir(parents=True, exist_ok=True)
+    (review_dir / "llm_review_results" / "000001.SZ.json").write_text(
+        json.dumps(
+            {
+                "trend_reasoning": "趋势向上",
+                "position_reasoning": "位置中位",
+                "volume_reasoning": "量价配合良好",
+                "abnormal_move_reasoning": "前期有异动",
+                "macd_reasoning": "MACD 进入启动阶段",
+                "signal_reasoning": "更像主升启动",
+                "scores": {
+                    "trend_structure": 5,
+                    "price_position": 4,
+                    "volume_behavior": 5,
+                    "previous_abnormal_move": 4,
+                    "macd_phase": 5,
+                },
+                "total_score": 4.6,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": "llm",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review-merge",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["environment_snapshot"] == {
+        "state": "weak",
+        "interval_start": "2026-03-24",
+        "source": "scheduled",
+    }
 
 
 def test_review_merge_can_limit_merge_to_selected_codes(tmp_path: Path) -> None:

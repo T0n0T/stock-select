@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
+from stock_select.environment_profiles import MethodEnvironmentProfile
 from stock_select.indicators import compute_macd
 from stock_select.review_orchestrator import (
     apply_macd_verdict_gate,
@@ -35,6 +36,7 @@ def review_b1_symbol_history(
     pick_date: str,
     history: pd.DataFrame,
     chart_path: str,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> dict[str, Any]:
     frame = history.copy()
     if frame.empty:
@@ -67,7 +69,14 @@ def review_b1_symbol_history(
     )
 
     trend_structure = _score_b1_trend_structure(open_=open_, close=close, ma25=ma25, zxdkx=zxdkx, bbi=bbi)
-    price_position = _score_b1_price_position(close=close, high=high, low=low, ma25=ma25, zxdq=zxdq)
+    price_position = _score_b1_price_position(
+        close=close,
+        high=high,
+        low=low,
+        ma25=ma25,
+        zxdq=zxdq,
+        profile=profile,
+    )
     volume_behavior = _score_b1_volume_behavior(recent_open, recent_close, recent_volume)
     previous_abnormal_move = _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume)
     weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
@@ -463,6 +472,7 @@ def _score_b1_price_position(
     low: pd.Series,
     ma25: pd.Series,
     zxdq: pd.Series,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> float:
     recent_high = high.tail(120).dropna()
     recent_low = low.tail(120).dropna()
@@ -483,6 +493,18 @@ def _score_b1_price_position(
         and latest_zxdq > 0.0
         and latest_ma25 >= latest_zxdq * (1.0 - _APPROX_TOLERANCE)
     )
+    mode = profile.subscore_mode.get("price_position", "default") if profile is not None else "default"
+
+    if mode == "left_side_favored":
+        if position <= 0.45:
+            return 5.0
+        if position <= 0.60:
+            return 4.0
+    if mode == "less_left_bias":
+        if position <= 0.30:
+            return 5.0
+        if position <= 0.50:
+            return 4.0
 
     if position <= 0.45:
         return 5.0

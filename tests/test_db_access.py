@@ -5,6 +5,8 @@ from pathlib import Path
 from stock_select.db_access import (
     fetch_available_trade_dates,
     fetch_daily_window,
+    fetch_index_history,
+    fetch_index_window,
     fetch_instrument_names,
     fetch_nth_latest_trade_date,
     load_dotenv_value,
@@ -157,6 +159,110 @@ def test_fetch_symbol_history_uses_symbol_and_date_window() -> None:
     ]
     assert connection.cursor_obj.executed[0][1] == {
         "symbol": "000001.SZ",
+        "start_date": "2026-04-01",
+        "end_date": "2026-04-30",
+    }
+
+
+def test_fetch_index_history_uses_index_market_table() -> None:
+    connection = FakeConnection(
+        rows=[("000001.SH", "2026-04-01", 3200.0, 3220.0, 3190.0, 3215.0, 4_200_000.0)],
+        columns=["TS_CODE", "TRADE_DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOL"],
+    )
+
+    result = fetch_index_history(
+        connection,
+        symbol="000001.SH",
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+    )
+
+    assert result.to_dict(orient="records") == [
+        {
+            "ts_code": "000001.SH",
+            "trade_date": "2026-04-01",
+            "open": 3200.0,
+            "high": 3220.0,
+            "low": 3190.0,
+            "close": 3215.0,
+            "vol": 4_200_000.0,
+        }
+    ]
+    query, params = connection.cursor_obj.executed[0]
+    assert "FROM index_daily_market" in query
+    assert params == {
+        "symbol": "000001.SH",
+        "start_date": "2026-04-01",
+        "end_date": "2026-04-30",
+    }
+
+
+def test_fetch_index_window_normalizes_columns_and_params() -> None:
+    connection = FakeConnection(
+        rows=[("000001.SH", "2026-04-01", 3200.0, 3220.0, 3190.0, 3215.0, 4_200_000.0)],
+        columns=["TS_CODE", "TRADE_DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOL"],
+    )
+
+    result = fetch_index_window(
+        connection,
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+        symbols=["000001.SH"],
+    )
+
+    assert list(result.columns) == ["ts_code", "trade_date", "open", "high", "low", "close", "vol"]
+    assert result.to_dict(orient="records") == [
+        {
+            "ts_code": "000001.SH",
+            "trade_date": "2026-04-01",
+            "open": 3200.0,
+            "high": 3220.0,
+            "low": 3190.0,
+            "close": 3215.0,
+            "vol": 4_200_000.0,
+        }
+    ]
+    assert connection.cursor_obj.executed[0][1] == {
+        "start_date": "2026-04-01",
+        "end_date": "2026-04-30",
+        "symbols": ["000001.SH"],
+    }
+
+
+def test_fetch_index_window_filters_index_symbols() -> None:
+    connection = RecordingConnection()
+
+    fetch_index_window(
+        connection,
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+        symbols=["000001.SH", "399303.SZ"],
+    )
+
+    query, params = connection.cursor_obj.executed[0]
+    assert "FROM index_daily_market" in query
+    assert "ts_code = ANY(%(symbols)s)" in query
+    assert params == {
+        "start_date": "2026-04-01",
+        "end_date": "2026-04-30",
+        "symbols": ["000001.SH", "399303.SZ"],
+    }
+
+
+def test_fetch_index_window_omits_symbol_filter_when_symbols_missing() -> None:
+    connection = RecordingConnection()
+
+    fetch_index_window(
+        connection,
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+        symbols=None,
+    )
+
+    query, params = connection.cursor_obj.executed[0]
+    assert "ANY(%(symbols)s)" not in query
+    assert "ts_code = ANY" not in query
+    assert params == {
         "start_date": "2026-04-01",
         "end_date": "2026-04-30",
     }

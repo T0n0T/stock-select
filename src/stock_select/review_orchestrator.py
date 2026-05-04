@@ -498,8 +498,8 @@ def build_review_payload(
     chart_path: str,
     rubric_path: str,
     prompt_path: str = REFERENCE_PROMPT_PATH,
-    extra_context: dict[str, str] | None = None,
-) -> dict[str, str]:
+    extra_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = {
         "code": code,
         "pick_date": pick_date,
@@ -670,4 +670,3 @@ def summarize_reviews(
         "excluded": excluded,
         "failures": failures,
     }
-

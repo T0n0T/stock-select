@@ -101,6 +101,51 @@ def fetch_symbol_history(
     return _fetch_dataframe(connection, query, params)
 
 
+def fetch_index_window(
+    connection: ConnectionLike,
+    *,
+    start_date: str,
+    end_date: str,
+    symbols: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    query = """
+        SELECT ts_code, trade_date, open, high, low, close, vol
+        FROM index_daily_market
+        WHERE trade_date BETWEEN %(start_date)s AND %(end_date)s
+    """
+    params: dict[str, object] = {
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    if symbols is not None:
+        query += "\n          AND ts_code = ANY(%(symbols)s)"
+        params["symbols"] = list(symbols)
+    query += "\n        ORDER BY trade_date ASC, ts_code ASC\n    "
+    return _fetch_dataframe(connection, query, params)
+
+
+def fetch_index_history(
+    connection: ConnectionLike,
+    *,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    query = """
+        SELECT ts_code, trade_date, open, high, low, close, vol
+        FROM index_daily_market
+        WHERE ts_code = %(symbol)s
+          AND trade_date BETWEEN %(start_date)s AND %(end_date)s
+        ORDER BY trade_date ASC
+    """
+    params = {
+        "symbol": symbol,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    return _fetch_dataframe(connection, query, params)
+
+
 def fetch_available_trade_dates(connection: ConnectionLike) -> pd.DataFrame:
     query = """
         SELECT trade_date
