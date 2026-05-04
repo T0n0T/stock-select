@@ -7,7 +7,18 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from stock_select.market_environment import (
+    _apply_environment_state_machine,
+    _box_volume_component,
+    _build_monthly_macd_bias,
+    _collapse_single_day_neutral_islands,
+    _compute_raw_environment_state,
+    _diagnostic_macd_environment_state,
+    _score_based_environment_state,
+    _smooth_environment_states,
     _score_index_environment_frame,
+    _combine_environment_state,
+    _macd_component,
+    _vote_based_environment_state,
     ensure_market_environment,
     evaluate_market_environment,
     load_environment_history,
@@ -608,7 +619,7 @@ def test_override_market_environment_preserves_boundary_resolution(tmp_path: Pat
     assert override_day["source"] == "manual_override"
 
 
-def test_evaluate_market_environment_returns_strong_when_indices_trend_up() -> None:
+def test_evaluate_market_environment_keeps_uptrend_without_wave_confirmation_as_neutral() -> None:
     dates = pd.date_range("2026-01-05", periods=120, freq="B")
     sse = pd.DataFrame(
         {
@@ -629,12 +640,14 @@ def test_evaluate_market_environment_returns_strong_when_indices_trend_up() -> N
         cn2000_history=cn2000,
     )
 
-    assert result["state"] == "strong"
+    assert result["state"] == "neutral"
     assert result["total_score"] > 0
+    assert result["indices"]["sse"]["trend"]["state"] == "Sx_mixed"
+    assert result["indices"]["sse"]["macd"]["state"] == "M6_top_divergence_setup"
     assert "indices" in result
 
 
-def test_evaluate_market_environment_returns_weak_when_indices_break_down() -> None:
+def test_evaluate_market_environment_treats_breakdown_with_bottom_divergence_setup_as_score_weak() -> None:
     dates = pd.date_range("2026-01-05", periods=120, freq="B")
     sse = pd.DataFrame(
         {
@@ -656,6 +669,12 @@ def test_evaluate_market_environment_returns_weak_when_indices_break_down() -> N
     )
 
     assert result["state"] == "weak"
+    assert result["score_based_state"] == "weak"
+    assert result["rule_based_state"] == "neutral"
+    assert result["vote_based_state"] == "weak"
+    assert result["score_based_total"] == -14.0
+    assert result["indices"]["sse"]["trend"]["state"] == "S10_weak"
+    assert result["indices"]["sse"]["macd"]["state"] == "M2_bottom_divergence_setup"
 
 
 def test_score_index_environment_frame_raises_for_insufficient_history() -> None:
@@ -719,7 +738,7 @@ def test_score_index_environment_frame_ignores_rows_after_pick_date() -> None:
     )
 
 
-def test_score_index_environment_frame_uses_fixed_tail_windows() -> None:
+def test_score_index_environment_frame_pivot_box_detection() -> None:
     dates = pd.date_range("2026-01-05", periods=120, freq="B")
     frame = pd.DataFrame(
         {
@@ -735,8 +754,10 @@ def test_score_index_environment_frame_uses_fixed_tail_windows() -> None:
 
     result = _score_index_environment_frame(frame, pick_date="2026-06-19")
 
-    assert result["position_score"] == 1.0
-    assert result["volume_score"] == 1.0
+    assert result["box_volume"]["zone"] == "opportunity"
+    assert result["box_volume"]["volume_up"] is True
+    assert result["total_score"] == 1.0
+    assert result["state_hint"] == "neutral"
 
 
 def test_score_index_environment_frame_returns_exact_component_scores() -> None:
@@ -754,11 +775,39 @@ def test_score_index_environment_frame_returns_exact_component_scores() -> None:
     )
 
     assert _score_index_environment_frame(frame, pick_date="2026-03-27") == {
-        "trend_score": 2.0,
-        "position_score": 1.0,
-        "volume_score": 0.0,
-        "macd_score": 1.0,
-        "total_score": 4.0,
+        "box_volume": {
+            "phase": "strong_box",
+            "zone": "risk",
+            "score": -1.0,
+            "P": 100.0,
+            "V": 100.0,
+            "N": 100.0,
+            "Q": "high_first",
+            "volume_up": False,
+        },
+        "trend": {
+            "state": "Sx_mixed",
+            "score": 0.0,
+            "bbi_slope": "up",
+            "close_vs_zxdkx": "below",
+            "ma25_vs_ma60": "above",
+            "ma25_slope": "up",
+            "ma60_slope": "down",
+        },
+        "macd": {
+            "state": "M12_primary_advance",
+            "score": 4.5,
+            "golden_cross": True,
+            "death_cross": False,
+            "dea_sign": "above_zero",
+            "dea_trend": "up",
+            "hist_trend": "expand",
+        },
+        "total_score": 3.5,
+        "state_hint": "neutral",
+        "close": 101.0,
+        "ma25": 100.04,
+        "ma60": 100.017,
     }
 
 
@@ -794,4 +843,420 @@ def test_evaluate_market_environment_returns_neutral_at_boundary_scores() -> Non
     )
 
     assert result["state"] == "neutral"
-    assert result["total_score"] == 4.0
+    assert result["total_score"] == 1.5
+    assert result["indices"]["cn2000"]["trend"]["state"] == "S10_weak"
+    assert result["indices"]["cn2000"]["state_hint"] == "neutral"
+
+
+def test_combine_environment_state_promotes_underwater_golden_cross_to_strong() -> None:
+    sse_score = {
+        "box_volume": {"zone": "risk"},
+        "trend": {"state": "S1_weak_to_strong_initial"},
+        "macd": {"state": "M3_underwater_golden_cross"},
+    }
+    cn2000_score = {
+        "box_volume": {"zone": "risk"},
+        "trend": {"state": "Sx_mixed"},
+        "macd": {"state": "M3_underwater_golden_cross"},
+    }
+
+    assert _combine_environment_state(sse_score=sse_score, cn2000_score=cn2000_score) == "strong"
+
+
+def test_combine_environment_state_keeps_repair_window_neutral_even_if_trend_is_weak() -> None:
+    sse_score = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S10_weak"},
+        "macd": {"state": "M2_bottom_divergence_setup"},
+    }
+    cn2000_score = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S9_risk_increasing"},
+        "macd": {"state": "M2_bottom_divergence_setup"},
+    }
+
+    assert _combine_environment_state(sse_score=sse_score, cn2000_score=cn2000_score) == "neutral"
+
+
+def test_macd_component_marks_long_positive_shrink_streak_as_uptrend_exhausting() -> None:
+    frame = pd.DataFrame(
+        {
+            "dif": [10.0, 9.5],
+            "dea": [7.8, 8.2],
+            "hist": [2.2, 1.3],
+            "golden_cross": [False, False],
+            "death_cross": [False, False],
+            "hist_shrink_streak": [4, 5],
+        }
+    )
+
+    result = _macd_component(frame)
+
+    assert result["state"] == "M7_uptrend_exhausting"
+    assert result["score"] == -1.0
+
+
+def test_macd_component_keeps_underwater_post_cross_expansion_constructive() -> None:
+    frame = pd.DataFrame(
+        {
+            "dif": [-42.6901, -37.3014],
+            "dea": [-47.0016, -45.0615],
+            "hist": [4.3115, 7.7601],
+            "golden_cross": [True, False],
+            "death_cross": [False, False],
+            "hist_shrink_streak": [1, 1],
+        }
+    )
+
+    result = _macd_component(frame)
+
+    assert result["state"] == "M5_underwater_advance"
+    assert result["score"] == 4.0
+
+
+def test_macd_component_keeps_underwater_advance_for_recent_post_cross_expansion() -> None:
+    frame = pd.DataFrame(
+        {
+            "dif": [-42.6901, -37.3014, -31.0547],
+            "dea": [-47.0016, -45.0615, -42.2602],
+            "hist": [4.3115, 7.7601, 11.2054],
+            "golden_cross": [True, False, False],
+            "death_cross": [False, False, False],
+            "hist_shrink_streak": [1, 1, 1],
+        }
+    )
+
+    result = _macd_component(frame)
+
+    assert result["state"] == "M5_underwater_advance"
+    assert result["score"] == 4.0
+
+
+def test_macd_component_does_not_mark_first_positive_shrink_as_top_divergence_setup() -> None:
+    frame = pd.DataFrame(
+        {
+            "dif": [90.1015, 113.2727],
+            "dea": [-18.5392, 7.8232],
+            "hist": [108.6407, 105.4495],
+            "golden_cross": [False, False],
+            "death_cross": [False, False],
+            "hist_shrink_streak": [1, 2],
+        }
+    )
+
+    result = _macd_component(frame)
+
+    assert result["state"] == "M12_primary_advance"
+    assert result["score"] == 4.5
+
+
+def test_combine_environment_state_treats_mature_top_exhaustion_as_weak() -> None:
+    sse_score = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M7_uptrend_exhausting"},
+    }
+    cn2000_score = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M7_uptrend_exhausting"},
+    }
+
+    assert _combine_environment_state(sse_score=sse_score, cn2000_score=cn2000_score) == "weak"
+
+
+def test_combine_environment_state_keeps_single_m7_exhaustion_as_neutral() -> None:
+    sse_score = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M7_uptrend_exhausting"},
+    }
+    cn2000_score = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M6_top_divergence_setup"},
+    }
+
+    assert _combine_environment_state(sse_score=sse_score, cn2000_score=cn2000_score) == "neutral"
+
+
+def test_build_monthly_macd_bias_marks_underwater_monthly_repair_as_negative() -> None:
+    dates = pd.date_range("2025-01-01", periods=260, freq="B")
+    close = [120.0 - idx * 0.25 for idx in range(220)] + [65.0 + idx * 0.35 for idx in range(40)]
+    frame = pd.DataFrame(
+        {
+            "trade_date": dates,
+            "open": close,
+            "high": [value + 1.0 for value in close],
+            "low": [value - 1.0 for value in close],
+            "close": close,
+            "vol": [1000.0] * len(close),
+        }
+    )
+
+    result = _build_monthly_macd_bias(frame, pick_date="2025-12-31")
+
+    assert result["bias"] in {"negative", "repairing"}
+
+
+def test_compute_raw_environment_state_downgrades_single_day_strong_when_monthly_bias_is_negative() -> None:
+    sse_score = {
+        "box_volume": {"zone": "risk"},
+        "trend": {"state": "S1_weak_to_strong_initial"},
+        "macd": {"state": "M3_underwater_golden_cross"},
+    }
+    cn2000_score = {
+        "box_volume": {"zone": "risk"},
+        "trend": {"state": "Sx_mixed"},
+        "macd": {"state": "M3_underwater_golden_cross"},
+    }
+
+    result = _compute_raw_environment_state(
+        sse_score=sse_score,
+        cn2000_score=cn2000_score,
+        sse_monthly_bias={"bias": "negative"},
+        cn2000_monthly_bias={"bias": "negative"},
+    )
+
+    assert result == "neutral"
+
+
+def test_apply_environment_state_machine_blocks_direct_weak_to_strong_jump() -> None:
+    result = _apply_environment_state_machine(
+        previous_state="weak",
+        raw_state="strong",
+        consecutive_raw_counts={"strong": 2, "neutral": 0, "weak": 0},
+        hard_strong_trigger=False,
+        hard_weak_trigger=False,
+    )
+
+    assert result == "neutral"
+
+
+def test_apply_environment_state_machine_blocks_direct_strong_to_weak_jump() -> None:
+    result = _apply_environment_state_machine(
+        previous_state="strong",
+        raw_state="weak",
+        consecutive_raw_counts={"strong": 0, "neutral": 0, "weak": 2},
+        hard_strong_trigger=False,
+        hard_weak_trigger=True,
+    )
+
+    assert result == "neutral"
+
+
+def test_apply_environment_state_machine_promotes_neutral_to_strong_after_confirmation() -> None:
+    result = _apply_environment_state_machine(
+        previous_state="neutral",
+        raw_state="strong",
+        consecutive_raw_counts={"strong": 2, "neutral": 0, "weak": 0},
+        hard_strong_trigger=False,
+        hard_weak_trigger=False,
+    )
+
+    assert result == "strong"
+
+
+def test_smooth_environment_states_backfills_single_day_neutral_before_confirmed_strong() -> None:
+    result = _smooth_environment_states(
+        raw_states=["neutral", "strong", "strong"],
+        hard_strong_triggers=[False, False, False],
+        hard_weak_triggers=[False, False, False],
+    )
+
+    assert result == ["neutral", "strong", "strong"]
+
+
+def test_smooth_environment_states_keeps_transition_neutral_between_weak_and_strong() -> None:
+    result = _smooth_environment_states(
+        raw_states=["weak", "strong", "strong"],
+        hard_strong_triggers=[False, False, False],
+        hard_weak_triggers=[False, False, False],
+    )
+
+    assert result == ["weak", "neutral", "strong"]
+
+
+def test_collapse_single_day_neutral_islands_fills_same_side_weak_gap() -> None:
+    result = _collapse_single_day_neutral_islands(["weak", "neutral", "weak"])
+
+    assert result == ["weak", "weak", "weak"]
+
+
+def test_collapse_single_day_neutral_islands_keeps_transition_between_strong_and_weak() -> None:
+    result = _collapse_single_day_neutral_islands(["strong", "neutral", "weak"])
+
+    assert result == ["strong", "neutral", "weak"]
+
+
+def test_box_volume_component_uses_right_to_left_pivot_order_for_q() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-01-01", periods=65, freq="B"),
+            "open": [100.0] * 65,
+            "high": [100.0] * 65,
+            "low": [100.0] * 65,
+            "close": [100.0] * 65,
+            "vol": [1000.0] * 65,
+        }
+    )
+    phase_high_values = [110.0] * 60
+    phase_low_values = [90.0] * 60
+    phase_high_values[10] = 120.0
+    phase_high_values[45] = 118.0
+    phase_low_values[20] = 80.0
+    phase_low_values[50] = 82.0
+    frame.loc[5:, "high"] = phase_high_values
+    frame.loc[5:, "low"] = phase_low_values
+    frame.loc[64, "open"] = 101.0
+    frame.loc[64, "close"] = 101.5
+
+    result = _box_volume_component(frame)
+
+    assert result["Q"] == "low_first"
+    assert result["phase"] == "weak_box"
+
+
+def test_box_volume_component_returns_zero_for_high_first_else_branch() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-01-01", periods=65, freq="B"),
+            "open": [100.0] * 65,
+            "high": [100.0] * 65,
+            "low": [100.0] * 65,
+            "close": [100.0] * 65,
+            "vol": [1000.0] * 65,
+        }
+    )
+    phase_high_values = [110.0] * 60
+    phase_low_values = [90.0] * 60
+    phase_high_values[45] = 120.0
+    phase_low_values[15] = 80.0
+    frame.loc[5:, "high"] = phase_high_values
+    frame.loc[5:, "low"] = phase_low_values
+    frame.loc[39, "vol"] = 5000.0
+    frame.loc[39, "open"] = 80.0
+    frame.loc[64, "open"] = 101.0
+    frame.loc[64, "close"] = 102.0
+
+    result = _box_volume_component(frame)
+
+    assert result["Q"] == "high_first"
+    assert result["zone"] == "risk"
+    assert result["score"] == -1.0
+
+
+def test_box_volume_component_returns_zero_for_weak_first_else_branch() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-01-01", periods=65, freq="B"),
+            "open": [100.0] * 65,
+            "high": [100.0] * 65,
+            "low": [100.0] * 65,
+            "close": [100.0] * 65,
+            "vol": [1000.0] * 65,
+        }
+    )
+    phase_high_values = [110.0] * 60
+    phase_low_values = [90.0] * 60
+    phase_low_values[45] = 80.0
+    phase_high_values[15] = 120.0
+    frame.loc[5:, "high"] = phase_high_values
+    frame.loc[5:, "low"] = phase_low_values
+    frame.loc[39, "vol"] = 5000.0
+    frame.loc[39, "open"] = 130.0
+    frame.loc[64, "open"] = 150.0
+    frame.loc[64, "close"] = 151.0
+
+    result = _box_volume_component(frame)
+
+    assert result["Q"] == "low_first"
+    assert result["zone"] == "neutral"
+    assert result["score"] == 0.0
+
+
+def test_score_based_environment_state_uses_combined_thresholds() -> None:
+    assert _score_based_environment_state(combined_total=19.0) == "strong"
+    assert _score_based_environment_state(combined_total=8.0) == "neutral"
+    assert _score_based_environment_state(combined_total=-10.0) == "weak"
+
+
+def test_diagnostic_macd_environment_state_treats_m7_as_neutral() -> None:
+    score = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M7_uptrend_exhausting"},
+    }
+
+    assert _diagnostic_macd_environment_state(score) == "neutral"
+
+
+def test_diagnostic_macd_environment_state_requires_structure_or_risk_for_m8_and_m9() -> None:
+    m8_neutral = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M8_above_water_dead_cross"},
+    }
+    m8_weak = {
+        "box_volume": {"zone": "risk"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M8_above_water_dead_cross"},
+    }
+    m9_neutral = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S5_strong"},
+        "macd": {"state": "M9_pullback"},
+    }
+    m9_weak = {
+        "box_volume": {"zone": "opportunity"},
+        "trend": {"state": "S6_strong_to_weak_initial"},
+        "macd": {"state": "M9_pullback"},
+    }
+
+    assert _diagnostic_macd_environment_state(m8_neutral) == "neutral"
+    assert _diagnostic_macd_environment_state(m8_weak) == "weak"
+    assert _diagnostic_macd_environment_state(m9_neutral) == "neutral"
+    assert _diagnostic_macd_environment_state(m9_weak) == "weak"
+
+
+def test_vote_based_environment_state_uses_three_dimension_majority() -> None:
+    sse_score = {
+        "box_volume": {"zone": "opportunity", "score": 1.0},
+        "trend": {"state": "S5_strong", "score": 4.0},
+        "macd": {"state": "M7_uptrend_exhausting", "score": -1.0},
+    }
+    cn2000_score = {
+        "box_volume": {"zone": "opportunity", "score": 1.0},
+        "trend": {"state": "S5_strong", "score": 4.0},
+        "macd": {"state": "M6_top_divergence_setup", "score": 1.0},
+    }
+
+    assert _vote_based_environment_state(sse_score=sse_score, cn2000_score=cn2000_score) == "strong"
+
+
+def test_evaluate_market_environment_returns_score_and_diagnostic_states() -> None:
+    dates = pd.date_range("2026-01-05", periods=120, freq="B")
+    sse = pd.DataFrame(
+        {
+            "ts_code": ["000001.SH"] * len(dates),
+            "trade_date": dates,
+            "open": [100.0 + i * 0.8 for i in range(len(dates))],
+            "high": [101.0 + i * 0.8 for i in range(len(dates))],
+            "low": [99.0 + i * 0.8 for i in range(len(dates))],
+            "close": [100.5 + i * 0.8 for i in range(len(dates))],
+            "vol": [1000.0 + i * 8 for i in range(len(dates))],
+        }
+    )
+    cn2000 = sse.assign(ts_code="399303.SZ", close=[130.0 + i * 1.1 for i in range(len(dates))])
+
+    result = evaluate_market_environment(
+        pick_date=dates[-1].strftime("%Y-%m-%d"),
+        sse_history=sse,
+        cn2000_history=cn2000,
+    )
+
+    assert result["state"] == result["score_based_state"]
+    assert "rule_based_state" in result
+    assert "vote_based_state" in result
+    assert "score_thresholds" in result
+    assert result["score_based_total"] == result["total_score"]
