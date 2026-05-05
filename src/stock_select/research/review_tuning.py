@@ -603,17 +603,30 @@ def _segment_avg_return(segment: dict[str, object], target_field: str) -> float 
 
 
 def _is_layering_direction_correct(segments: list[dict[str, object]], target_field: str) -> bool:
-    verdict_avgs = {
-        str(segment.get("segment_value") or "").upper(): _segment_avg_return(segment, target_field)
-        for segment in segments
-        if segment.get("segment_type") == "verdict"
-    }
-    pass_avg = verdict_avgs.get("PASS")
-    watch_avg = verdict_avgs.get("WATCH")
-    fail_avg = verdict_avgs.get("FAIL")
-    if pass_avg is None or watch_avg is None or fail_avg is None:
+    ordered_layers: list[tuple[str, float]] = []
+    for verdict in ("PASS", "WATCH", "FAIL"):
+        matching = next(
+            (
+                segment
+                for segment in segments
+                if segment.get("segment_type") == "verdict"
+                and str(segment.get("segment_value") or "").upper() == verdict
+            ),
+            None,
+        )
+        if matching is None:
+            continue
+        avg_value = _segment_avg_return(matching, target_field)
+        if avg_value is None:
+            continue
+        ordered_layers.append((verdict, avg_value))
+
+    if len(ordered_layers) < 2:
         return False
-    return pass_avg > watch_avg and watch_avg >= fail_avg
+    return all(
+        earlier_value > later_value or math.isclose(earlier_value, later_value)
+        for (_, earlier_value), (_, later_value) in zip(ordered_layers, ordered_layers[1:])
+    )
 
 
 def _count_populated_verdict_layers(segments: list[dict[str, object]], target_field: str) -> int:
@@ -631,6 +644,10 @@ def _count_populated_verdict_layers(segments: list[dict[str, object]], target_fi
         if matching is not None and _segment_avg_return(matching, target_field) is not None:
             populated_layers += 1
     return populated_layers
+
+
+def _has_full_verdict_layers(segments: list[dict[str, object]], target_field: str) -> bool:
+    return _count_populated_verdict_layers(segments, target_field) >= 3
 
 
 def _find_metric(
@@ -665,7 +682,10 @@ def _metric_coverage_rank(metric: dict[str, object] | None) -> int:
     return 0
 
 
-def _choose_active_total_score_metric(group: dict[str, object]) -> tuple[str, dict[str, object]] | None:
+def _choose_active_total_score_metric(
+    group: dict[str, object],
+    segments: list[dict[str, object]],
+) -> tuple[str, dict[str, object]] | None:
     candidates: list[tuple[int, int, str, dict[str, object]]] = []
     for target_field in RETURN_FIELDS:
         metric = _find_metric(group, score_field="total_score", target_field=target_field)
@@ -673,6 +693,10 @@ def _choose_active_total_score_metric(group: dict[str, object]) -> tuple[str, di
             continue
         coverage_rank = _metric_coverage_rank(metric)
         if coverage_rank <= 0:
+            continue
+        if _metric_signal(metric) is None:
+            continue
+        if _count_populated_verdict_layers(segments, target_field) < 2:
             continue
         pair_count = int(metric.get("pair_count") or 0)
         candidates.append((coverage_rank, pair_count, target_field, metric))
@@ -699,12 +723,12 @@ def _collect_reviewer_rework_methods(
             continue
         if int(group.get("sample_count") or 0) < 10 or group.get("conclusion_strength") == "insufficient":
             continue
-        active_metric = _choose_active_total_score_metric(group)
+        scoped_segments = _scope_segments(segments, group)
+        active_metric = _choose_active_total_score_metric(group, scoped_segments)
         if active_metric is None:
             continue
         target_field, metric = active_metric
-        scoped_segments = _scope_segments(segments, group)
-        if _count_populated_verdict_layers(scoped_segments, target_field) < 2:
+        if not _has_full_verdict_layers(scoped_segments, target_field):
             continue
         signal = _metric_signal(metric)
         if signal is None or signal >= 0:
@@ -728,8 +752,9 @@ def classify_scope_decision(
 ) -> RecommendationDecision | None:
     total_signal = _metric_signal(total_score_metric)
     layering_ok = _is_layering_direction_correct(segments, target_field)
+    full_verdict_layers = _has_full_verdict_layers(segments, target_field)
 
-    if allow_reviewer_rework and total_signal is not None and total_signal < 0 and not layering_ok:
+    if allow_reviewer_rework and full_verdict_layers and total_signal is not None and total_signal < 0 and not layering_ok:
         method = _normalize_category_value(group.get("method")) or "default"
         environment_state = _normalize_category_value(group.get("environment_state")) or "unknown"
         return RecommendationDecision(
@@ -812,30 +837,23 @@ def build_recommendations(
             continue
 
         scoped_segments = _scope_segments(segments, group)
-        active_total_score_metric = _choose_active_total_score_metric(group)
+        active_total_score_metric = _choose_active_total_score_metric(group, scoped_segments)
         if active_total_score_metric is None:
+            has_any_verdict_layers = any(
+                _count_populated_verdict_layers(scoped_segments, target_field) >= 2 for target_field in RETURN_FIELDS
+            )
+            reason = "insufficient_coverage" if has_any_verdict_layers else "insufficient_verdict_layers"
             excluded.append(
                 {
                     "scope": _format_scope_label(group),
                     "group_key": group.get("group_key"),
-                    "reason": "insufficient_coverage",
+                    "reason": reason,
                     "sample_count": sample_count,
                 }
             )
             continue
 
         target_field, total_score_metric = active_total_score_metric
-        if _count_populated_verdict_layers(scoped_segments, target_field) < 2:
-            excluded.append(
-                {
-                    "scope": _format_scope_label(group),
-                    "group_key": group.get("group_key"),
-                    "reason": "insufficient_verdict_layers",
-                    "sample_count": sample_count,
-                }
-            )
-            continue
-
         method = _normalize_category_value(group.get("method")) or "default"
         decision = classify_scope_decision(
             group,
