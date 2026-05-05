@@ -734,14 +734,6 @@ def _collect_usable_total_score_horizons(
     return candidates
 
 
-def _horizons_conflict(horizons: list[UsableHorizon]) -> bool:
-    if len(horizons) < 2:
-        return False
-    sign_set = {"non_negative" if horizon.signal >= 0 else "negative" for horizon in horizons}
-    layering_set = {horizon.layering_ok for horizon in horizons}
-    return len(sign_set) > 1 or len(layering_set) > 1
-
-
 def _choose_best_horizon(horizons: list[UsableHorizon]) -> UsableHorizon | None:
     if not horizons:
         return None
@@ -792,12 +784,19 @@ def _collect_reviewer_rework_methods(
         if int(group.get("sample_count") or 0) < 10 or group.get("conclusion_strength") == "insufficient":
             continue
         scoped_segments = _scope_segments(segments, group)
+        general_horizons = _collect_usable_total_score_horizons(
+            group,
+            scoped_segments,
+            require_full_verdict_layers=False,
+        )
+        if _horizons_conflict(group, scoped_segments, general_horizons):
+            continue
         reviewer_horizons = _collect_usable_total_score_horizons(
             group,
             scoped_segments,
             require_full_verdict_layers=True,
         )
-        if _horizons_conflict(reviewer_horizons):
+        if _horizons_conflict(group, scoped_segments, reviewer_horizons):
             continue
         reviewer_horizon = _choose_best_horizon(reviewer_horizons)
         if reviewer_horizon is None:
@@ -883,6 +882,37 @@ def classify_scope_decision(
     return None
 
 
+def _provisional_positive_action_type(
+    group: dict[str, object],
+    segments: list[dict[str, object]],
+    horizon: UsableHorizon,
+) -> str | None:
+    decision = classify_scope_decision(
+        group,
+        segments,
+        horizon=horizon,
+        allow_reviewer_rework=False,
+    )
+    if decision is None:
+        return None
+    if decision.action_type in {"threshold_only", "weights_and_thresholds"}:
+        return decision.action_type
+    return None
+
+
+def _horizons_conflict(
+    group: dict[str, object],
+    segments: list[dict[str, object]],
+    horizons: list[UsableHorizon],
+) -> bool:
+    if len(horizons) < 2:
+        return False
+    sign_set = {"non_negative" if horizon.signal >= 0 else "negative" for horizon in horizons}
+    layering_set = {horizon.layering_ok for horizon in horizons}
+    positive_action_set = {_provisional_positive_action_type(group, segments, horizon) for horizon in horizons}
+    return len(sign_set) > 1 or len(layering_set) > 1 or len(positive_action_set) > 1
+
+
 def build_recommendations(
     correlations: dict[str, list[dict[str, object]]],
     segments: list[dict[str, object]],
@@ -913,13 +943,26 @@ def build_recommendations(
             scoped_segments,
             require_full_verdict_layers=False,
         )
+        if _horizons_conflict(group, scoped_segments, general_horizons):
+            excluded.append(
+                {
+                    "scope": _format_scope_label(group),
+                    "group_key": group.get("group_key"),
+                    "reason": "conflicting_horizons",
+                    "sample_count": sample_count,
+                }
+            )
+            continue
+
         reviewer_horizon = _choose_reviewer_rework_horizon(group, scoped_segments)
         if general_horizons and not _horizons_conflict(
+            group,
+            scoped_segments,
             _collect_usable_total_score_horizons(
                 group,
                 scoped_segments,
                 require_full_verdict_layers=True,
-            )
+            ),
         ):
             method = _normalize_category_value(group.get("method")) or "default"
             reviewer_decision = classify_scope_decision(
@@ -952,17 +995,6 @@ def build_recommendations(
                     "scope": _format_scope_label(group),
                     "group_key": group.get("group_key"),
                     "reason": reason,
-                    "sample_count": sample_count,
-                }
-            )
-            continue
-
-        if _horizons_conflict(general_horizons):
-            excluded.append(
-                {
-                    "scope": _format_scope_label(group),
-                    "group_key": group.get("group_key"),
-                    "reason": "conflicting_horizons",
                     "sample_count": sample_count,
                 }
             )

@@ -632,7 +632,7 @@ def test_build_recommendations_uses_two_layer_horizon_for_general_threshold_deci
     assert "ret3_pct" in result["recommendations"][0]["reason"]
 
 
-def test_build_recommendations_uses_stricter_horizon_for_reviewer_rework_aggregation() -> None:
+def test_build_recommendations_excludes_conflicting_general_horizons_before_reviewer_rework() -> None:
     correlations = {
         "groups": [
             {
@@ -752,9 +752,9 @@ def test_build_recommendations_uses_stricter_horizon_for_reviewer_rework_aggrega
 
     result = build_recommendations(correlations, segments)
 
-    assert len(result["recommendations"]) == 2
-    assert {item["action_type"] for item in result["recommendations"]} == {"reviewer_rework"}
-    assert all("ret5_pct" in item["reason"] for item in result["recommendations"])
+    assert result["recommendations"] == []
+    assert len(result["excluded"]) == 2
+    assert {item["reason"] for item in result["excluded"]} == {"conflicting_horizons"}
 
 
 def test_build_recommendations_excludes_scope_when_usable_horizons_conflict() -> None:
@@ -884,6 +884,92 @@ def test_build_recommendations_requires_pass_to_be_strictly_above_watch() -> Non
 
     assert result["recommendations"] == []
     assert result["excluded"][0]["reason"] == "no_clear_recommendation"
+
+
+def test_build_recommendations_excludes_scope_when_usable_horizons_imply_different_positive_actions() -> None:
+    correlations = {
+        "groups": [
+            {
+                "group_key": "method:b2|environment_state:neutral",
+                "scope_type": "method_environment_state",
+                "method": "b2",
+                "environment_state": "neutral",
+                "sample_count": 26,
+                "conclusion_strength": "weak",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 26,
+                        "coverage_strength": "strong",
+                        "pearson_r": 0.10,
+                        "spearman_r": 0.08,
+                    },
+                    {
+                        "score_field": "price_position",
+                        "target_field": "ret3_pct",
+                        "pair_count": 26,
+                        "coverage_strength": "strong",
+                        "pearson_r": 0.14,
+                        "spearman_r": 0.12,
+                    },
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret5_pct",
+                        "pair_count": 20,
+                        "coverage_strength": "weak",
+                        "pearson_r": 0.03,
+                        "spearman_r": 0.02,
+                    },
+                    {
+                        "score_field": "price_position",
+                        "target_field": "ret5_pct",
+                        "pair_count": 20,
+                        "coverage_strength": "weak",
+                        "pearson_r": -0.11,
+                        "spearman_r": -0.09,
+                    },
+                ],
+            }
+        ]
+    }
+    segments = [
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": 1.4},
+            "ret5": {"avg": 1.1},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 0.7},
+            "ret5": {"avg": 0.5},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret3": {"avg": 0.1},
+            "ret5": {"avg": 0.1},
+        },
+    ]
+
+    result = build_recommendations(correlations, segments)
+
+    assert result["recommendations"] == []
+    assert result["excluded"][0]["reason"] == "conflicting_horizons"
 
 
 def test_build_recommendations_does_not_trigger_reviewer_rework_from_single_environment() -> None:
