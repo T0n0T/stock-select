@@ -6,6 +6,7 @@ import statistics
 from pathlib import Path
 
 import pandas as pd
+from pandas.errors import EmptyDataError
 
 from stock_select.cli import SHARED_PREPARED_METHODS, _load_prepared_cache_v2
 
@@ -21,6 +22,41 @@ SCORE_FIELDS = (
 CORRELATION_SCORE_FIELDS = ("total_score",) + SCORE_FIELDS
 RETURN_FIELDS = ("ret3_pct", "ret5_pct")
 DEFAULT_TOTAL_BAND_EDGES = (3.5, 4.0, 4.3, 4.6)
+CORRELATION_CSV_COLUMNS = [
+    "group_key",
+    "scope_type",
+    "method",
+    "environment_state",
+    "sample_count",
+    "conclusion_strength",
+    "score_field",
+    "target_field",
+    "pair_count",
+    "coverage_strength",
+    "pearson_r",
+    "spearman_r",
+]
+SEGMENT_CSV_COLUMNS = [
+    "group_key",
+    "scope_type",
+    "method",
+    "environment_state",
+    "segment_type",
+    "segment_value",
+    "sample_count",
+    "ret3_n",
+    "ret3_avg",
+    "ret3_median",
+    "ret3_win_rate",
+    "ret3_max",
+    "ret3_min",
+    "ret5_n",
+    "ret5_avg",
+    "ret5_median",
+    "ret5_win_rate",
+    "ret5_max",
+    "ret5_min",
+]
 
 
 def _load_prepared(method: str, prepared_root: Path, *, end_date: str) -> pd.DataFrame:
@@ -110,6 +146,29 @@ def _coerce_finite_float(value: object) -> float | None:
     return number
 
 
+def _normalize_category_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if pd.isna(value):
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if normalized.lower() == "nan":
+        return None
+    return normalized
+
+
+def read_rows_csv(path: Path) -> list[dict[str, object]]:
+    try:
+        frame = pd.read_csv(path)
+    except EmptyDataError:
+        return []
+    if frame.empty:
+        return []
+    return frame.to_dict("records")
+
+
 def _finite_pairs(
     rows: list[dict[str, object]],
     x_field: str,
@@ -196,9 +255,15 @@ def iter_scoped_rows(
         )
     ]
 
-    methods = sorted({str(row.get("method")) for row in rows if row.get("method") is not None})
+    methods = sorted(
+        {
+            normalized
+            for row in rows
+            if (normalized := _normalize_category_value(row.get("method"))) is not None
+        }
+    )
     for method in methods:
-        scoped_rows = [row for row in rows if row.get("method") == method]
+        scoped_rows = [row for row in rows if _normalize_category_value(row.get("method")) == method]
         groups.append(
             (
                 {
@@ -212,10 +277,18 @@ def iter_scoped_rows(
         )
 
     environment_states = sorted(
-        {str(row.get("environment_state")) for row in rows if row.get("environment_state") is not None}
+        {
+            normalized
+            for row in rows
+            if (normalized := _normalize_category_value(row.get("environment_state"))) is not None
+        }
     )
     for environment_state in environment_states:
-        scoped_rows = [row for row in rows if row.get("environment_state") == environment_state]
+        scoped_rows = [
+            row
+            for row in rows
+            if _normalize_category_value(row.get("environment_state")) == environment_state
+        ]
         groups.append(
             (
                 {
@@ -230,16 +303,18 @@ def iter_scoped_rows(
 
     method_environment_pairs = sorted(
         {
-            (str(row.get("method")), str(row.get("environment_state")))
+            (method, environment_state)
             for row in rows
-            if row.get("method") is not None and row.get("environment_state") is not None
+            if (method := _normalize_category_value(row.get("method"))) is not None
+            and (environment_state := _normalize_category_value(row.get("environment_state"))) is not None
         }
     )
     for method, environment_state in method_environment_pairs:
         scoped_rows = [
             row
             for row in rows
-            if row.get("method") == method and row.get("environment_state") == environment_state
+            if _normalize_category_value(row.get("method")) == method
+            and _normalize_category_value(row.get("environment_state")) == environment_state
         ]
         groups.append(
             (
@@ -282,6 +357,8 @@ def compute_correlations(
     min_samples_strong: int = 30,
     min_samples_weak: int = 10,
 ) -> dict[str, list[dict[str, object]]]:
+    if not rows:
+        return {"groups": []}
     groups: list[dict[str, object]] = []
     for scope, scoped_rows in iter_scoped_rows(rows):
         metrics: list[dict[str, object]] = []
@@ -430,7 +507,8 @@ def build_verdict_segments(
 ) -> list[dict[str, object]]:
     grouped: dict[str, list[dict[str, object]]] = {}
     for row in rows:
-        verdict = str(row.get("verdict") or "").upper()
+        normalized_verdict = _normalize_category_value(row.get("verdict"))
+        verdict = "" if normalized_verdict is None else normalized_verdict.upper()
         if not verdict:
             continue
         grouped.setdefault(verdict, []).append(row)
@@ -469,6 +547,23 @@ def flatten_segment_rows(rows: list[dict[str, object]]) -> list[dict[str, object
             base[f"{prefix}_min"] = stats.get("min")
         flattened_rows.append(base)
     return flattened_rows
+
+
+def flatten_correlation_rows(payload: dict[str, list[dict[str, object]]]) -> list[dict[str, object]]:
+    flattened_rows: list[dict[str, object]] = []
+    for group in payload["groups"]:
+        base = {key: value for key, value in group.items() if key != "metrics"}
+        for metric in group["metrics"]:
+            flattened_rows.append({**base, **metric})
+    return flattened_rows
+
+
+def build_correlation_frame(payload: dict[str, list[dict[str, object]]]) -> pd.DataFrame:
+    return pd.DataFrame(flatten_correlation_rows(payload), columns=CORRELATION_CSV_COLUMNS)
+
+
+def build_segment_frame(rows: list[dict[str, object]]) -> pd.DataFrame:
+    return pd.DataFrame(flatten_segment_rows(rows), columns=SEGMENT_CSV_COLUMNS)
 
 
 def attach_environment_state(

@@ -11,7 +11,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 import pandas as pd
 
-from stock_select.research.review_tuning import compute_correlations
+from stock_select.research.review_tuning import build_correlation_frame, compute_correlations, read_rows_csv
 
 
 DEFAULT_RUNTIME_ROOT = Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
@@ -31,7 +31,7 @@ def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = parse_args()
 
-    rows = pd.read_csv(args.samples).to_dict("records")
+    rows = read_rows_csv(args.samples)
     payload = compute_correlations(
         rows,
         min_samples_strong=args.min_samples_strong,
@@ -42,12 +42,7 @@ def main(args: argparse.Namespace | None = None) -> int:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    flattened_rows = []
-    for group in payload["groups"]:
-        base = {key: value for key, value in group.items() if key != "metrics"}
-        for metric in group["metrics"]:
-            flattened_rows.append({**base, **metric})
-    pd.DataFrame(flattened_rows).to_csv(args.output_dir / "correlations.csv", index=False)
+    build_correlation_frame(payload).to_csv(args.output_dir / "correlations.csv", index=False)
     return 0
 
 

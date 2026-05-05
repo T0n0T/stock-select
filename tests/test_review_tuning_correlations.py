@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -136,3 +137,60 @@ def test_review_tuning_correlations_main_writes_csv(tmp_path: Path) -> None:
     frame = pd.read_csv(output_dir / "correlations.csv")
     assert "group_key" in frame.columns
     assert "score_field" in frame.columns
+
+
+def test_compute_correlations_skips_missing_environment_state_scopes() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": math.nan,
+            "total_score": 4.0,
+            "ret3_pct": 1.0,
+            "ret5_pct": 2.0,
+        }
+    ]
+
+    result = review_tuning.compute_correlations(rows)
+
+    group_keys = [item["group_key"] for item in result["groups"]]
+    assert "environment_state:nan" not in group_keys
+    assert not any(item["scope_type"] == "environment_state" for item in result["groups"])
+
+
+def test_review_tuning_correlations_main_handles_empty_file_with_stable_outputs(tmp_path: Path) -> None:
+    module = _load_review_tuning_correlations_module()
+
+    samples_path = tmp_path / "samples_with_env.csv"
+    samples_path.write_text("", encoding="utf-8")
+
+    output_dir = tmp_path / "output"
+    args = module.parse_args(
+        [
+            "--samples",
+            str(samples_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+
+    payload = json.loads((output_dir / "correlations.json").read_text(encoding="utf-8"))
+    assert payload == {"groups": []}
+
+    frame = pd.read_csv(output_dir / "correlations.csv")
+    assert list(frame.columns) == [
+        "group_key",
+        "scope_type",
+        "method",
+        "environment_state",
+        "sample_count",
+        "conclusion_strength",
+        "score_field",
+        "target_field",
+        "pair_count",
+        "coverage_strength",
+        "pearson_r",
+        "spearman_r",
+    ]
+    assert frame.empty

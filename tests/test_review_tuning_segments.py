@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -182,6 +183,25 @@ def test_compute_segments_orders_total_score_bands_numerically() -> None:
     assert bands == ["<3.5", "3.5-4.0", "4.0-4.3", "4.3-4.6", ">=4.6"]
 
 
+def test_compute_segments_skips_missing_verdict_and_environment_state() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": math.nan,
+            "verdict": math.nan,
+            "total_score": 4.1,
+            "price_position": 4.0,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        }
+    ]
+
+    result = review_tuning.compute_segments(rows)
+
+    assert not any(item["group_key"] == "environment_state:nan" for item in result)
+    assert not any(item["segment_type"] == "verdict" and item["segment_value"] == "NAN" for item in result)
+
+
 def test_review_tuning_segments_main_writes_json(tmp_path: Path) -> None:
     module = _load_review_tuning_segments_module()
 
@@ -257,3 +277,52 @@ def test_review_tuning_segments_main_writes_csv(tmp_path: Path) -> None:
     assert "ret5_min" in frame.columns
     assert "ret3" not in frame.columns
     assert "ret5" not in frame.columns
+
+
+def test_review_tuning_segments_main_handles_header_only_csv_with_stable_outputs(tmp_path: Path) -> None:
+    module = _load_review_tuning_segments_module()
+
+    samples_path = tmp_path / "samples_with_env.csv"
+    samples_path.write_text(
+        "method,environment_state,verdict,total_score,price_position,macd_phase,ret3_pct,ret5_pct\n",
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "output"
+    args = module.parse_args(
+        [
+            "--samples",
+            str(samples_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+
+    payload = json.loads((output_dir / "segments.json").read_text(encoding="utf-8"))
+    assert payload == []
+
+    frame = pd.read_csv(output_dir / "segments.csv")
+    assert list(frame.columns) == [
+        "group_key",
+        "scope_type",
+        "method",
+        "environment_state",
+        "segment_type",
+        "segment_value",
+        "sample_count",
+        "ret3_n",
+        "ret3_avg",
+        "ret3_median",
+        "ret3_win_rate",
+        "ret3_max",
+        "ret3_min",
+        "ret5_n",
+        "ret5_avg",
+        "ret5_median",
+        "ret5_win_rate",
+        "ret5_max",
+        "ret5_min",
+    ]
+    assert frame.empty
