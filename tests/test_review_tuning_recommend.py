@@ -1135,6 +1135,110 @@ def test_build_recommendations_triggers_reviewer_rework_after_repeated_negative_
     assert {item["action_type"] for item in result["recommendations"]} == {"reviewer_rework"}
 
 
+def test_build_recommendations_does_not_trigger_reviewer_rework_for_repeated_negative_evidence_in_same_environment() -> None:
+    correlations = {
+        "groups": [
+            {
+                "group_key": "method:b1|environment_state:strong|bucket:a",
+                "scope_type": "method_environment_state",
+                "method": "b1",
+                "environment_state": "strong",
+                "sample_count": 42,
+                "conclusion_strength": "strong",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 42,
+                        "coverage_strength": "strong",
+                        "pearson_r": -0.19,
+                        "spearman_r": -0.21,
+                    }
+                ],
+            },
+            {
+                "group_key": "method:b1|environment_state: strong |bucket:b",
+                "scope_type": "method_environment_state",
+                "method": "b1",
+                "environment_state": " strong ",
+                "sample_count": 35,
+                "conclusion_strength": "strong",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 35,
+                        "coverage_strength": "strong",
+                        "pearson_r": -0.14,
+                        "spearman_r": -0.16,
+                    }
+                ],
+            },
+        ]
+    }
+    segments = [
+        {
+                "group_key": "method:b1|environment_state:strong|bucket:a",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "strong",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": -0.8},
+        },
+        {
+            "group_key": "method:b1|environment_state:strong|bucket:a",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "strong",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 0.4},
+        },
+        {
+            "group_key": "method:b1|environment_state:strong|bucket:a",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "strong",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret3": {"avg": 0.7},
+        },
+        {
+            "group_key": "method:b1|environment_state: strong |bucket:b",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": " strong ",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": -0.6},
+        },
+        {
+            "group_key": "method:b1|environment_state: strong |bucket:b",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": " strong ",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 0.3},
+        },
+        {
+            "group_key": "method:b1|environment_state: strong |bucket:b",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": " strong ",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret3": {"avg": 0.5},
+        },
+    ]
+
+    result = build_recommendations(correlations, segments)
+
+    assert result["recommendations"] == []
+    assert {item["reason"] for item in result["excluded"]} == {"no_clear_recommendation"}
+
+
 def test_render_recommendation_summary_includes_action_and_next_tasks() -> None:
     payload = {
         "recommendations": [

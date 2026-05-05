@@ -777,7 +777,7 @@ def _collect_reviewer_rework_methods(
     correlations: dict[str, list[dict[str, object]]],
     segments: list[dict[str, object]],
 ) -> set[str]:
-    repeated_negative_counts: dict[str, int] = {}
+    repeated_negative_environments: dict[str, set[str]] = {}
     for group in correlations.get("groups", []):
         if group.get("scope_type") != "method_environment_state":
             continue
@@ -806,10 +806,15 @@ def _collect_reviewer_rework_methods(
         if reviewer_horizon.layering_ok:
             continue
         method = _normalize_category_value(group.get("method"))
-        if method is None:
+        environment_state = _normalize_category_value(group.get("environment_state"))
+        if method is None or environment_state is None:
             continue
-        repeated_negative_counts[method] = repeated_negative_counts.get(method, 0) + 1
-    return {method for method, count in repeated_negative_counts.items() if count >= 2}
+        repeated_negative_environments.setdefault(method, set()).add(environment_state)
+    return {
+        method
+        for method, environment_states in repeated_negative_environments.items()
+        if len(environment_states) >= 2
+    }
 
 
 def classify_scope_decision(
