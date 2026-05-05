@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pandas as pd
 import stock_select.research.review_tuning as review_tuning
 
 
@@ -73,3 +74,36 @@ def test_review_tuning_correlations_main_writes_json(tmp_path: Path) -> None:
     payload = json.loads((output_dir / "correlations.json").read_text(encoding="utf-8"))
     assert "groups" in payload
     assert payload["groups"]
+
+
+def test_review_tuning_correlations_main_writes_csv(tmp_path: Path) -> None:
+    module = _load_review_tuning_correlations_module()
+
+    samples_path = tmp_path / "samples_with_env.csv"
+    samples_path.write_text(
+        "\n".join(
+            [
+                "method,environment_state,total_score,trend_structure,price_position,volume_behavior,previous_abnormal_move,macd_phase,ret3_pct,ret5_pct",
+                "b1,strong,4.2,4,5,4,3,4,1.5,2.5",
+                "b1,strong,3.8,3,4,3,2,3,-0.5,0.5",
+                "b2,weak,4.0,4,4,4,4,4,1.0,2.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "output"
+    args = module.parse_args(
+        [
+            "--samples",
+            str(samples_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+
+    frame = pd.read_csv(output_dir / "correlations.csv")
+    assert "group_key" in frame.columns
+    assert "score_field" in frame.columns

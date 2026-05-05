@@ -347,11 +347,13 @@ def _total_score_band(value: object, edges: tuple[float, ...] = DEFAULT_TOTAL_BA
 
 def _build_segment_payload(
     *,
+    scope: dict[str, object],
     segment_type: str,
     segment_value: str,
     rows: list[dict[str, object]],
 ) -> dict[str, object]:
     return {
+        **scope,
         "segment_type": segment_type,
         "segment_value": segment_value,
         "sample_count": len(rows),
@@ -360,7 +362,12 @@ def _build_segment_payload(
     }
 
 
-def build_score_bucket_segments(rows: list[dict[str, object]], *, field: str) -> list[dict[str, object]]:
+def build_score_bucket_segments(
+    rows: list[dict[str, object]],
+    *,
+    scope: dict[str, object],
+    field: str,
+) -> list[dict[str, object]]:
     grouped: dict[str, list[dict[str, object]]] = {}
     for row in rows:
         bucket = _score_bucket(row.get(field))
@@ -368,12 +375,21 @@ def build_score_bucket_segments(rows: list[dict[str, object]], *, field: str) ->
             continue
         grouped.setdefault(bucket, []).append(row)
     return [
-        _build_segment_payload(segment_type=f"{field}_bucket", segment_value=segment_value, rows=grouped[segment_value])
+        _build_segment_payload(
+            scope=scope,
+            segment_type=f"{field}_bucket",
+            segment_value=segment_value,
+            rows=grouped[segment_value],
+        )
         for segment_value in sorted(grouped)
     ]
 
 
-def build_total_score_band_segments(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def build_total_score_band_segments(
+    rows: list[dict[str, object]],
+    *,
+    scope: dict[str, object],
+) -> list[dict[str, object]]:
     grouped: dict[str, list[dict[str, object]]] = {}
     for row in rows:
         band = _total_score_band(row.get("total_score"))
@@ -381,12 +397,21 @@ def build_total_score_band_segments(rows: list[dict[str, object]]) -> list[dict[
             continue
         grouped.setdefault(band, []).append(row)
     return [
-        _build_segment_payload(segment_type="total_score_band", segment_value=segment_value, rows=grouped[segment_value])
+        _build_segment_payload(
+            scope=scope,
+            segment_type="total_score_band",
+            segment_value=segment_value,
+            rows=grouped[segment_value],
+        )
         for segment_value in sorted(grouped)
     ]
 
 
-def build_verdict_segments(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def build_verdict_segments(
+    rows: list[dict[str, object]],
+    *,
+    scope: dict[str, object],
+) -> list[dict[str, object]]:
     grouped: dict[str, list[dict[str, object]]] = {}
     for row in rows:
         verdict = str(row.get("verdict") or "").upper()
@@ -394,17 +419,23 @@ def build_verdict_segments(rows: list[dict[str, object]]) -> list[dict[str, obje
             continue
         grouped.setdefault(verdict, []).append(row)
     return [
-        _build_segment_payload(segment_type="verdict", segment_value=segment_value, rows=grouped[segment_value])
+        _build_segment_payload(
+            scope=scope,
+            segment_type="verdict",
+            segment_value=segment_value,
+            rows=grouped[segment_value],
+        )
         for segment_value in sorted(grouped)
     ]
 
 
 def compute_segments(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     segments: list[dict[str, object]] = []
-    segments.extend(build_score_bucket_segments(rows, field="price_position"))
-    segments.extend(build_score_bucket_segments(rows, field="macd_phase"))
-    segments.extend(build_total_score_band_segments(rows))
-    segments.extend(build_verdict_segments(rows))
+    for scope, scoped_rows in iter_scoped_rows(rows):
+        segments.extend(build_score_bucket_segments(scoped_rows, scope=scope, field="price_position"))
+        segments.extend(build_score_bucket_segments(scoped_rows, scope=scope, field="macd_phase"))
+        segments.extend(build_total_score_band_segments(scoped_rows, scope=scope))
+        segments.extend(build_verdict_segments(scoped_rows, scope=scope))
     return segments
 
 

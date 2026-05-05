@@ -42,6 +42,12 @@ def main(args: argparse.Namespace | None = None) -> int:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    flattened_rows = []
+    for group in payload["groups"]:
+        base = {key: value for key, value in group.items() if key != "metrics"}
+        for metric in group["metrics"]:
+            flattened_rows.append({**base, **metric})
+    pd.DataFrame(flattened_rows).to_csv(args.output_dir / "correlations.csv", index=False)
     return 0
 
 

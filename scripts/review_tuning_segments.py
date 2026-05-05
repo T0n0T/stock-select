@@ -36,6 +36,7 @@ def main(args: argparse.Namespace | None = None) -> int:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    pd.DataFrame(payload).to_csv(args.output_dir / "segments.csv", index=False)
     return 0
 
 
