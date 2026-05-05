@@ -591,9 +591,20 @@ def _segment_avg_ret3(segment: dict[str, object]) -> float | None:
     return _coerce_finite_float(segment.get("avg_ret3_pct"))
 
 
-def _is_layering_direction_correct(segments: list[dict[str, object]]) -> bool:
+def _segment_avg_return(segment: dict[str, object], target_field: str) -> float | None:
+    prefix = "ret3" if target_field == "ret3_pct" else "ret5"
+    nested_stats = segment.get(prefix)
+    if isinstance(nested_stats, dict):
+        nested_avg = _coerce_finite_float(nested_stats.get("avg"))
+        if nested_avg is not None:
+            return nested_avg
+    flat_key = "avg_ret3_pct" if target_field == "ret3_pct" else "avg_ret5_pct"
+    return _coerce_finite_float(segment.get(flat_key))
+
+
+def _is_layering_direction_correct(segments: list[dict[str, object]], target_field: str) -> bool:
     verdict_avgs = {
-        str(segment.get("segment_value") or "").upper(): _segment_avg_ret3(segment)
+        str(segment.get("segment_value") or "").upper(): _segment_avg_return(segment, target_field)
         for segment in segments
         if segment.get("segment_type") == "verdict"
     }
@@ -603,6 +614,23 @@ def _is_layering_direction_correct(segments: list[dict[str, object]]) -> bool:
     if pass_avg is None or watch_avg is None or fail_avg is None:
         return False
     return pass_avg > watch_avg and watch_avg >= fail_avg
+
+
+def _count_populated_verdict_layers(segments: list[dict[str, object]], target_field: str) -> int:
+    populated_layers = 0
+    for verdict in ("PASS", "WATCH", "FAIL"):
+        matching = next(
+            (
+                segment
+                for segment in segments
+                if segment.get("segment_type") == "verdict"
+                and str(segment.get("segment_value") or "").upper() == verdict
+            ),
+            None,
+        )
+        if matching is not None and _segment_avg_return(matching, target_field) is not None:
+            populated_layers += 1
+    return populated_layers
 
 
 def _find_metric(
@@ -626,6 +654,34 @@ def _metric_signal(metric: dict[str, object] | None) -> float | None:
     return _coerce_finite_float(metric.get("spearman_r"))
 
 
+def _metric_coverage_rank(metric: dict[str, object] | None) -> int:
+    if metric is None:
+        return -1
+    coverage_strength = str(metric.get("coverage_strength") or "").lower()
+    if coverage_strength == "strong":
+        return 2
+    if coverage_strength == "weak":
+        return 1
+    return 0
+
+
+def _choose_active_total_score_metric(group: dict[str, object]) -> tuple[str, dict[str, object]] | None:
+    candidates: list[tuple[int, int, str, dict[str, object]]] = []
+    for target_field in RETURN_FIELDS:
+        metric = _find_metric(group, score_field="total_score", target_field=target_field)
+        if metric is None:
+            continue
+        coverage_rank = _metric_coverage_rank(metric)
+        if coverage_rank <= 0:
+            continue
+        pair_count = int(metric.get("pair_count") or 0)
+        candidates.append((coverage_rank, pair_count, target_field, metric))
+    if not candidates:
+        return None
+    _, _, target_field, metric = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+    return target_field, metric
+
+
 def _scope_segments(segments: list[dict[str, object]], group: dict[str, object]) -> list[dict[str, object]]:
     group_key = group.get("group_key")
     if group_key is None:
@@ -633,28 +689,60 @@ def _scope_segments(segments: list[dict[str, object]], group: dict[str, object])
     return [segment for segment in segments if segment.get("group_key") == group_key]
 
 
+def _collect_reviewer_rework_methods(
+    correlations: dict[str, list[dict[str, object]]],
+    segments: list[dict[str, object]],
+) -> set[str]:
+    repeated_negative_counts: dict[str, int] = {}
+    for group in correlations.get("groups", []):
+        if group.get("scope_type") != "method_environment_state":
+            continue
+        if int(group.get("sample_count") or 0) < 10 or group.get("conclusion_strength") == "insufficient":
+            continue
+        active_metric = _choose_active_total_score_metric(group)
+        if active_metric is None:
+            continue
+        target_field, metric = active_metric
+        scoped_segments = _scope_segments(segments, group)
+        if _count_populated_verdict_layers(scoped_segments, target_field) < 2:
+            continue
+        signal = _metric_signal(metric)
+        if signal is None or signal >= 0:
+            continue
+        if _is_layering_direction_correct(scoped_segments, target_field):
+            continue
+        method = _normalize_category_value(group.get("method"))
+        if method is None:
+            continue
+        repeated_negative_counts[method] = repeated_negative_counts.get(method, 0) + 1
+    return {method for method, count in repeated_negative_counts.items() if count >= 2}
+
+
 def classify_scope_decision(
     group: dict[str, object],
     segments: list[dict[str, object]],
+    *,
+    target_field: str,
+    total_score_metric: dict[str, object],
+    allow_reviewer_rework: bool,
 ) -> RecommendationDecision | None:
-    total_score_metric = _find_metric(group, score_field="total_score")
     total_signal = _metric_signal(total_score_metric)
-    layering_ok = _is_layering_direction_correct(segments)
+    layering_ok = _is_layering_direction_correct(segments, target_field)
 
-    if total_signal is not None and total_signal < 0 and not layering_ok:
+    if allow_reviewer_rework and total_signal is not None and total_signal < 0 and not layering_ok:
         method = _normalize_category_value(group.get("method")) or "default"
         environment_state = _normalize_category_value(group.get("environment_state")) or "unknown"
         return RecommendationDecision(
             action_type="reviewer_rework",
-            reason="total_score correlation is negative and PASS/WATCH/FAIL layering is broken",
+            reason=f"total_score correlation is negative on {target_field} and PASS/WATCH/FAIL layering is broken across environments",
             target_files=[f"src/stock_select/reviewers/{method}.py"],
             next_tasks=[
                 f"review {method} scoring logic for {environment_state} environment samples",
                 "trace which core subscores are inverting expected return ordering",
             ],
             success_criteria=[
-                "total_score correlation returns to non-negative territory",
-                "PASS avg ret3_pct is above WATCH and FAIL after rerun",
+                f"total_score correlation on {target_field} returns to non-negative territory",
+                f"PASS avg {target_field} is above WATCH and FAIL after rerun",
             ],
         )
 
@@ -662,34 +750,36 @@ def classify_scope_decision(
         subscore_signals = [
             _metric_signal(metric)
             for metric in group.get("metrics", [])
-            if metric.get("target_field") == "ret3_pct" and metric.get("score_field") != "total_score"
+            if metric.get("target_field") == target_field
+            and metric.get("score_field") != "total_score"
+            and _metric_coverage_rank(metric) > 0
         ]
         has_inconsistent_subscore = any(signal is not None and signal < 0 for signal in subscore_signals)
         environment_state = _normalize_category_value(group.get("environment_state")) or "unknown"
         if total_signal < 0.05 and has_inconsistent_subscore:
             return RecommendationDecision(
                 action_type="weights_and_thresholds",
-                reason="total_score correlation is non-negative but weak, with inconsistent subscore directions",
+                reason=f"total_score correlation is non-negative but weak on {target_field}, with inconsistent subscore directions",
                 target_files=["src/stock_select/environment_profiles.py"],
                 next_tasks=[
                     f"rebalance subscore weights for {environment_state} environment",
                     "revisit PASS/WATCH/FAIL thresholds after weight changes",
                 ],
                 success_criteria=[
-                    "total_score ret3 correlation strengthens after profile update",
+                    f"total_score {target_field} correlation strengthens after profile update",
                     "subscore directions are aligned with expected return ordering",
                 ],
             )
         return RecommendationDecision(
             action_type="threshold_only",
-            reason="total_score correlation is non-negative and PASS/WATCH/FAIL layering is directionally correct",
+            reason=f"total_score correlation is non-negative on {target_field} and PASS/WATCH/FAIL layering is directionally correct",
             target_files=["src/stock_select/environment_profiles.py"],
             next_tasks=[
                 f"adjust verdict thresholds for {environment_state} environment",
                 "rerun diagnostics to confirm wider PASS/WATCH/FAIL separation",
             ],
             success_criteria=[
-                "PASS avg ret3_pct stays above WATCH and FAIL",
+                f"PASS avg {target_field} stays above WATCH and FAIL",
                 "verdict layers show clearer return separation after threshold tuning",
             ],
         )
@@ -703,6 +793,7 @@ def build_recommendations(
 ) -> dict[str, list[dict[str, object]]]:
     recommendations: list[dict[str, object]] = []
     excluded: list[dict[str, object]] = []
+    reviewer_rework_methods = _collect_reviewer_rework_methods(correlations, segments)
 
     for group in correlations.get("groups", []):
         if group.get("scope_type") != "method_environment_state":
@@ -721,7 +812,38 @@ def build_recommendations(
             continue
 
         scoped_segments = _scope_segments(segments, group)
-        decision = classify_scope_decision(group, scoped_segments)
+        active_total_score_metric = _choose_active_total_score_metric(group)
+        if active_total_score_metric is None:
+            excluded.append(
+                {
+                    "scope": _format_scope_label(group),
+                    "group_key": group.get("group_key"),
+                    "reason": "insufficient_coverage",
+                    "sample_count": sample_count,
+                }
+            )
+            continue
+
+        target_field, total_score_metric = active_total_score_metric
+        if _count_populated_verdict_layers(scoped_segments, target_field) < 2:
+            excluded.append(
+                {
+                    "scope": _format_scope_label(group),
+                    "group_key": group.get("group_key"),
+                    "reason": "insufficient_verdict_layers",
+                    "sample_count": sample_count,
+                }
+            )
+            continue
+
+        method = _normalize_category_value(group.get("method")) or "default"
+        decision = classify_scope_decision(
+            group,
+            scoped_segments,
+            target_field=target_field,
+            total_score_metric=total_score_metric,
+            allow_reviewer_rework=method in reviewer_rework_methods,
+        )
         if decision is None:
             excluded.append(
                 {
