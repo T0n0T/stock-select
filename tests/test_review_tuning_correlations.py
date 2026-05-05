@@ -194,3 +194,26 @@ def test_review_tuning_correlations_main_handles_empty_file_with_stable_outputs(
         "spearman_r",
     ]
     assert frame.empty
+
+
+def test_review_tuning_correlations_main_uses_artifact_dir_defaults(tmp_path: Path) -> None:
+    module = _load_review_tuning_correlations_module()
+
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "smoke"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "samples_with_env.csv").write_text(
+        "\n".join(
+            [
+                "method,environment_state,total_score,trend_structure,price_position,volume_behavior,previous_abnormal_move,macd_phase,ret3_pct,ret5_pct",
+                "b1,strong,4.2,4,5,4,3,4,1.5,2.5",
+                "b1,strong,3.8,3,4,3,2,3,-0.5,0.5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    args = module.parse_args(["--artifact-dir", str(artifact_dir)])
+
+    assert module.main(args) == 0
+    assert (artifact_dir / "correlations.json").exists()
+    assert (artifact_dir / "correlations.csv").exists()

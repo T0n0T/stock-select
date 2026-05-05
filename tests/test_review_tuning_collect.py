@@ -458,3 +458,76 @@ def test_review_tuning_collect_main_writes_samples_csv(tmp_path: Path) -> None:
     frame = pd.read_csv(csv_path)
     assert frame.loc[0, "code"] == "000001.SZ"
     assert frame.loc[0, "ret3_pct"] == 4.0
+
+
+def test_review_tuning_collect_main_uses_artifact_dir_for_output(tmp_path: Path) -> None:
+    module = _load_review_tuning_collect_module()
+
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-10.b2"
+    review_dir.mkdir(parents=True)
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-10",
+                "recommendations": [
+                    {
+                        "code": "000001.SZ",
+                        "method": "b2",
+                        "total_score": 4.2,
+                        "trend_structure": 4.0,
+                        "price_position": 5.0,
+                        "volume_behavior": 3.0,
+                        "previous_abnormal_move": 5.0,
+                        "macd_phase": 4.5,
+                        "verdict": "PASS",
+                    }
+                ],
+                "excluded": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prepared_root = tmp_path / "prepared"
+    prepared_root.mkdir()
+    cli._write_prepared_cache_v2(
+        prepared_root / "2026-04-15.feather",
+        prepared_root / "2026-04-15.meta.json",
+        method="b2",
+        pick_date="2026-04-15",
+        start_date="2026-04-01",
+        end_date="2026-04-15",
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-10", "open": 10.0, "close": 10.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-11", "open": 10.1, "close": 10.2},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-12", "open": 10.2, "close": 10.3},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-13", "open": 10.3, "close": 10.4},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-14", "open": 10.4, "close": 10.5},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-15", "open": 10.5, "close": 10.6},
+            ]
+        ),
+    )
+
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "smoke"
+    args = module.parse_args(
+        [
+            "--methods",
+            "b2",
+            "--start-date",
+            "2026-04-01",
+            "--end-date",
+            "2026-04-30",
+            "--runtime-root",
+            str(runtime_root),
+            "--prepared-root",
+            str(prepared_root),
+            "--artifact-dir",
+            str(artifact_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+    frame = pd.read_csv(artifact_dir / "samples.csv")
+    assert frame.loc[0, "code"] == "000001.SZ"

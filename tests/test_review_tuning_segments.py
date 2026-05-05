@@ -326,3 +326,26 @@ def test_review_tuning_segments_main_handles_header_only_csv_with_stable_outputs
         "ret5_min",
     ]
     assert frame.empty
+
+
+def test_review_tuning_segments_main_uses_artifact_dir_defaults(tmp_path: Path) -> None:
+    module = _load_review_tuning_segments_module()
+
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "smoke"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "samples_with_env.csv").write_text(
+        "\n".join(
+            [
+                "method,environment_state,verdict,total_score,price_position,macd_phase,ret3_pct,ret5_pct",
+                "b1,neutral,PASS,4.3,5,4,2.0,3.0",
+                "b1,neutral,WATCH,3.5,3,2,1.0,0.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    args = module.parse_args(["--artifact-dir", str(artifact_dir)])
+
+    assert module.main(args) == 0
+    assert (artifact_dir / "segments.json").exists()
+    assert (artifact_dir / "segments.csv").exists()

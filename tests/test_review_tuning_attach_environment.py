@@ -148,3 +148,42 @@ def test_review_tuning_attach_environment_main_writes_samples_with_env_csv(
     frame = pd.read_csv(output_dir / "samples_with_env.csv")
     assert frame.loc[0, "environment_state"] == "weak"
     assert frame.loc[1, "environment_state"] == "strong"
+
+
+def test_review_tuning_attach_environment_main_uses_artifact_dir_inputs_and_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_review_tuning_attach_environment_module()
+
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "smoke"
+    artifact_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [{"method": "b1", "pick_date": "2026-04-10", "code": "000001.SZ"}]
+    ).to_csv(artifact_dir / "samples.csv", index=False)
+
+    monkeypatch.setattr(
+        module,
+        "load_environment_history",
+        lambda _runtime_root: [
+            {
+                "start_date": "2026-04-01",
+                "end_date": "2026-04-30",
+                "score_based_state": "weak",
+                "state": "neutral",
+            }
+        ],
+    )
+
+    args = module.parse_args(
+        [
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+            "--artifact-dir",
+            str(artifact_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+    frame = pd.read_csv(artifact_dir / "samples_with_env.csv")
+    assert frame.loc[0, "environment_state"] == "weak"

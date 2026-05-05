@@ -16,11 +16,36 @@ DEFAULT_RUNTIME_ROOT = Path.home() / ".agents" / "skills" / "stock-select" / "ru
 DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "research" / "review_tuning"
 
 
+def _resolve_correlations_path(args: argparse.Namespace) -> Path:
+    if args.correlations is not None:
+        return args.correlations
+    if args.artifact_dir is not None:
+        return args.artifact_dir / "correlations.json"
+    raise ValueError("correlations path is required")
+
+
+def _resolve_segments_path(args: argparse.Namespace) -> Path:
+    if args.segments is not None:
+        return args.segments
+    if args.artifact_dir is not None:
+        return args.artifact_dir / "segments.json"
+    raise ValueError("segments path is required")
+
+
+def _resolve_output_dir(args: argparse.Namespace) -> Path:
+    if args.output_dir is not None:
+        return args.output_dir
+    if args.artifact_dir is not None:
+        return args.artifact_dir
+    return DEFAULT_OUTPUT_DIR
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate review tuning recommendations")
-    parser.add_argument("--correlations", type=Path, required=True)
-    parser.add_argument("--segments", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--correlations", type=Path)
+    parser.add_argument("--segments", type=Path)
+    parser.add_argument("--artifact-dir", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     return parser.parse_args(argv)
 
 
@@ -28,16 +53,17 @@ def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = parse_args()
 
-    correlations = json.loads(args.correlations.read_text(encoding="utf-8"))
-    segments = json.loads(args.segments.read_text(encoding="utf-8"))
+    correlations = json.loads(_resolve_correlations_path(args).read_text(encoding="utf-8"))
+    segments = json.loads(_resolve_segments_path(args).read_text(encoding="utf-8"))
     payload = build_recommendations(correlations, segments)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    (args.output_dir / "recommendations.json").write_text(
+    output_dir = _resolve_output_dir(args)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "recommendations.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (args.output_dir / "summary.md").write_text(
+    (output_dir / "summary.md").write_text(
         render_recommendation_summary(payload),
         encoding="utf-8",
     )

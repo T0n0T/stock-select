@@ -1350,3 +1350,81 @@ def test_review_tuning_recommend_main_writes_json_and_markdown(tmp_path: Path) -
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     assert payload["recommendations"][0]["action_type"] == "threshold_only"
     assert "threshold_only" in summary
+
+
+def test_review_tuning_recommend_main_uses_artifact_dir_defaults(tmp_path: Path) -> None:
+    module = _load_review_tuning_recommend_module()
+
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "smoke"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "correlations.json").write_text(
+        json.dumps(
+            {
+                "groups": [
+                    {
+                        "group_key": "method:b2|environment_state:neutral",
+                        "scope_type": "method_environment_state",
+                        "method": "b2",
+                        "environment_state": "neutral",
+                        "sample_count": 30,
+                        "conclusion_strength": "strong",
+                        "metrics": [
+                            {
+                                "score_field": "total_score",
+                                "target_field": "ret3_pct",
+                                "pair_count": 30,
+                                "coverage_strength": "strong",
+                                "pearson_r": 0.08,
+                                "spearman_r": 0.07,
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "segments.json").write_text(
+        json.dumps(
+            [
+                {
+                    "group_key": "method:b2|environment_state:neutral",
+                    "scope_type": "method_environment_state",
+                    "method": "b2",
+                    "environment_state": "neutral",
+                    "segment_type": "verdict",
+                    "segment_value": "PASS",
+                    "ret3": {"avg": 1.4},
+                },
+                {
+                    "group_key": "method:b2|environment_state:neutral",
+                    "scope_type": "method_environment_state",
+                    "method": "b2",
+                    "environment_state": "neutral",
+                    "segment_type": "verdict",
+                    "segment_value": "WATCH",
+                    "ret3": {"avg": 0.9},
+                },
+                {
+                    "group_key": "method:b2|environment_state:neutral",
+                    "scope_type": "method_environment_state",
+                    "method": "b2",
+                    "environment_state": "neutral",
+                    "segment_type": "verdict",
+                    "segment_value": "FAIL",
+                    "ret3": {"avg": -0.2},
+                },
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    args = module.parse_args(["--artifact-dir", str(artifact_dir)])
+
+    assert module.main(args) == 0
+    assert (artifact_dir / "recommendations.json").exists()
+    assert (artifact_dir / "summary.md").exists()

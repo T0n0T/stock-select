@@ -18,6 +18,14 @@ DEFAULT_PREPARED_ROOT = DEFAULT_RUNTIME_ROOT / "prepared"
 DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "research" / "review_tuning"
 
 
+def _resolve_output_dir(args: argparse.Namespace) -> Path:
+    if args.output_dir is not None:
+        return args.output_dir
+    if args.artifact_dir is not None:
+        return args.artifact_dir
+    return DEFAULT_OUTPUT_DIR
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect review tuning samples into a CSV file")
     parser.add_argument("--methods", nargs="+", required=True)
@@ -25,7 +33,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
     parser.add_argument("--prepared-root", type=Path, default=DEFAULT_PREPARED_ROOT)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--artifact-dir", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     return parser.parse_args(argv)
 
 
@@ -40,8 +49,9 @@ def main(args: argparse.Namespace | None = None) -> int:
         runtime_root=args.runtime_root,
         prepared_root=args.prepared_root,
     )
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_csv(args.output_dir / "samples.csv", index=False)
+    output_dir = _resolve_output_dir(args)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(output_dir / "samples.csv", index=False)
     return 0
 
 
