@@ -65,6 +65,12 @@ mkdir -p ~/.agents/skills/stock-select && cp -R /home/pi/Documents/agents/stock-
 mkdir -p ~/.agents/skills/stock-select-single-stock && cp -R /home/pi/Documents/agents/stock-select/.agents/skills/stock-select-single-stock/. ~/.agents/skills/stock-select-single-stock/
 ```
 
+安装仓库内置的调参诊断 skill `review-tuning-diagnostics` 到 `~/.agents/skills/`：
+
+```bash
+mkdir -p ~/.agents/skills/review-tuning-diagnostics && cp -R /home/pi/Documents/agents/stock-select/.agents/skills/review-tuning-diagnostics/. ~/.agents/skills/review-tuning-diagnostics/
+```
+
 ## 基本用法
 
 常用命令：
@@ -101,6 +107,79 @@ uv run stock-select html zip --method b1 --pick-date YYYY-MM-DD
 uv run stock-select html serve
 uv run stock-select render-html --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...  # compatibility only
 ```
+
+## Review 调参诊断
+
+仓库内新增了一套面向 review 调参的诊断 workflow，目标不是直接改 `src/` 逻辑，而是先把：
+
+- 样本采集
+- 环境贴标
+- 相关性诊断
+- 分段统计
+- 调参建议
+- 调参前后复验
+
+统一成可重复运行的一套 artifacts。
+
+默认产物目录建议使用：
+
+```text
+artifacts/review-tuning/<run-id>/
+```
+
+推荐执行顺序：
+
+```bash
+uv run python scripts/review_tuning_collect.py \
+  --methods b1 b2 dribull hcr \
+  --start-date YYYY-MM-DD \
+  --end-date YYYY-MM-DD \
+  --runtime-root ~/.agents/skills/stock-select/runtime \
+  --prepared-root ~/.agents/skills/stock-select/runtime/prepared \
+  --artifact-dir artifacts/review-tuning/<run-id>
+
+uv run python scripts/review_tuning_attach_environment.py \
+  --artifact-dir artifacts/review-tuning/<run-id> \
+  --runtime-root ~/.agents/skills/stock-select/runtime \
+  --environment-key score_based_state
+
+uv run python scripts/review_tuning_correlations.py \
+  --artifact-dir artifacts/review-tuning/<run-id>
+
+uv run python scripts/review_tuning_segments.py \
+  --artifact-dir artifacts/review-tuning/<run-id>
+
+uv run python scripts/review_tuning_recommend.py \
+  --artifact-dir artifacts/review-tuning/<run-id>
+```
+
+这套流程会生成：
+
+- `samples.csv`
+- `samples_with_env.csv`
+- `correlations.json`
+- `correlations.csv`
+- `segments.json`
+- `segments.csv`
+- `recommendations.json`
+- `summary.md`
+
+如果要做调参前后对比复验，再准备两套 artifact 目录：
+
+```bash
+uv run python scripts/review_tuning_verify.py \
+  --methods b1 b2 dribull hcr \
+  --baseline-artifact-dir artifacts/review-tuning/<baseline-run-id> \
+  --candidate-artifact-dir artifacts/review-tuning/<candidate-run-id> \
+  --artifact-dir artifacts/review-tuning/<verify-run-id>
+```
+
+当前 `verify` 会调用 `scripts/review_top3_stats.py` 的对比逻辑，输出：
+
+- `verification.json`
+- `verification.md`
+
+其中会包含多方法、可选环境过滤下的 top3 指标前后 delta，适合作为 profile/reviewer 调整后的末端复验结果。
 
 ## DSN 读取顺序
 
