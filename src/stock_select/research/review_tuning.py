@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -57,6 +58,15 @@ SEGMENT_CSV_COLUMNS = [
     "ret5_max",
     "ret5_min",
 ]
+
+
+@dataclass(frozen=True)
+class RecommendationDecision:
+    action_type: str
+    reason: str
+    target_files: list[str]
+    next_tasks: list[str]
+    success_criteria: list[str]
 
 
 def _load_prepared(method: str, prepared_root: Path, *, end_date: str) -> pd.DataFrame:
@@ -564,6 +574,204 @@ def build_correlation_frame(payload: dict[str, list[dict[str, object]]]) -> pd.D
 
 def build_segment_frame(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(flatten_segment_rows(rows), columns=SEGMENT_CSV_COLUMNS)
+
+
+def _format_scope_label(group: dict[str, object]) -> str:
+    method = _normalize_category_value(group.get("method")) or "unknown"
+    environment_state = _normalize_category_value(group.get("environment_state")) or "unknown"
+    return f"method={method},environment={environment_state}"
+
+
+def _segment_avg_ret3(segment: dict[str, object]) -> float | None:
+    nested_stats = segment.get("ret3")
+    if isinstance(nested_stats, dict):
+        nested_avg = _coerce_finite_float(nested_stats.get("avg"))
+        if nested_avg is not None:
+            return nested_avg
+    return _coerce_finite_float(segment.get("avg_ret3_pct"))
+
+
+def _is_layering_direction_correct(segments: list[dict[str, object]]) -> bool:
+    verdict_avgs = {
+        str(segment.get("segment_value") or "").upper(): _segment_avg_ret3(segment)
+        for segment in segments
+        if segment.get("segment_type") == "verdict"
+    }
+    pass_avg = verdict_avgs.get("PASS")
+    watch_avg = verdict_avgs.get("WATCH")
+    fail_avg = verdict_avgs.get("FAIL")
+    if pass_avg is None or watch_avg is None or fail_avg is None:
+        return False
+    return pass_avg > watch_avg and watch_avg >= fail_avg
+
+
+def _find_metric(
+    group: dict[str, object],
+    *,
+    score_field: str,
+    target_field: str = "ret3_pct",
+) -> dict[str, object] | None:
+    for metric in group.get("metrics", []):
+        if metric.get("score_field") == score_field and metric.get("target_field") == target_field:
+            return metric
+    return None
+
+
+def _metric_signal(metric: dict[str, object] | None) -> float | None:
+    if metric is None:
+        return None
+    pearson = _coerce_finite_float(metric.get("pearson_r"))
+    if pearson is not None:
+        return pearson
+    return _coerce_finite_float(metric.get("spearman_r"))
+
+
+def _scope_segments(segments: list[dict[str, object]], group: dict[str, object]) -> list[dict[str, object]]:
+    group_key = group.get("group_key")
+    if group_key is None:
+        return []
+    return [segment for segment in segments if segment.get("group_key") == group_key]
+
+
+def classify_scope_decision(
+    group: dict[str, object],
+    segments: list[dict[str, object]],
+) -> RecommendationDecision | None:
+    total_score_metric = _find_metric(group, score_field="total_score")
+    total_signal = _metric_signal(total_score_metric)
+    layering_ok = _is_layering_direction_correct(segments)
+
+    if total_signal is not None and total_signal < 0 and not layering_ok:
+        method = _normalize_category_value(group.get("method")) or "default"
+        environment_state = _normalize_category_value(group.get("environment_state")) or "unknown"
+        return RecommendationDecision(
+            action_type="reviewer_rework",
+            reason="total_score correlation is negative and PASS/WATCH/FAIL layering is broken",
+            target_files=[f"src/stock_select/reviewers/{method}.py"],
+            next_tasks=[
+                f"review {method} scoring logic for {environment_state} environment samples",
+                "trace which core subscores are inverting expected return ordering",
+            ],
+            success_criteria=[
+                "total_score correlation returns to non-negative territory",
+                "PASS avg ret3_pct is above WATCH and FAIL after rerun",
+            ],
+        )
+
+    if total_signal is not None and total_signal >= 0 and layering_ok:
+        subscore_signals = [
+            _metric_signal(metric)
+            for metric in group.get("metrics", [])
+            if metric.get("target_field") == "ret3_pct" and metric.get("score_field") != "total_score"
+        ]
+        has_inconsistent_subscore = any(signal is not None and signal < 0 for signal in subscore_signals)
+        environment_state = _normalize_category_value(group.get("environment_state")) or "unknown"
+        if total_signal < 0.05 and has_inconsistent_subscore:
+            return RecommendationDecision(
+                action_type="weights_and_thresholds",
+                reason="total_score correlation is non-negative but weak, with inconsistent subscore directions",
+                target_files=["src/stock_select/environment_profiles.py"],
+                next_tasks=[
+                    f"rebalance subscore weights for {environment_state} environment",
+                    "revisit PASS/WATCH/FAIL thresholds after weight changes",
+                ],
+                success_criteria=[
+                    "total_score ret3 correlation strengthens after profile update",
+                    "subscore directions are aligned with expected return ordering",
+                ],
+            )
+        return RecommendationDecision(
+            action_type="threshold_only",
+            reason="total_score correlation is non-negative and PASS/WATCH/FAIL layering is directionally correct",
+            target_files=["src/stock_select/environment_profiles.py"],
+            next_tasks=[
+                f"adjust verdict thresholds for {environment_state} environment",
+                "rerun diagnostics to confirm wider PASS/WATCH/FAIL separation",
+            ],
+            success_criteria=[
+                "PASS avg ret3_pct stays above WATCH and FAIL",
+                "verdict layers show clearer return separation after threshold tuning",
+            ],
+        )
+
+    return None
+
+
+def build_recommendations(
+    correlations: dict[str, list[dict[str, object]]],
+    segments: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    recommendations: list[dict[str, object]] = []
+    excluded: list[dict[str, object]] = []
+
+    for group in correlations.get("groups", []):
+        if group.get("scope_type") != "method_environment_state":
+            continue
+
+        sample_count = int(group.get("sample_count") or 0)
+        if sample_count < 10 or group.get("conclusion_strength") == "insufficient":
+            excluded.append(
+                {
+                    "scope": _format_scope_label(group),
+                    "group_key": group.get("group_key"),
+                    "reason": "insufficient_samples",
+                    "sample_count": sample_count,
+                }
+            )
+            continue
+
+        scoped_segments = _scope_segments(segments, group)
+        decision = classify_scope_decision(group, scoped_segments)
+        if decision is None:
+            excluded.append(
+                {
+                    "scope": _format_scope_label(group),
+                    "group_key": group.get("group_key"),
+                    "reason": "no_clear_recommendation",
+                    "sample_count": sample_count,
+                }
+            )
+            continue
+
+        recommendations.append(
+            {
+                "scope": _format_scope_label(group),
+                "group_key": group.get("group_key"),
+                "action_type": decision.action_type,
+                "reason": decision.reason,
+                "target_files": decision.target_files,
+                "next_tasks": decision.next_tasks,
+                "success_criteria": decision.success_criteria,
+            }
+        )
+
+    return {"recommendations": recommendations, "excluded": excluded}
+
+
+def render_recommendation_summary(payload: dict[str, list[dict[str, object]]]) -> str:
+    lines = ["# Review Tuning Recommendations", ""]
+
+    recommendations = payload.get("recommendations", [])
+    if recommendations:
+        lines.append("## Recommendations")
+        for item in recommendations:
+            lines.append(f"- {item['scope']}: `{item['action_type']}`")
+            lines.append(f"  reason: {item['reason']}")
+            lines.append(f"  target_files: {', '.join(item.get('target_files', []))}")
+            lines.append(f"  next_tasks: {', '.join(item.get('next_tasks', []))}")
+            lines.append(f"  success_criteria: {', '.join(item.get('success_criteria', []))}")
+    else:
+        lines.append("## Recommendations")
+        lines.append("- none")
+
+    excluded = payload.get("excluded", [])
+    if excluded:
+        lines.append("")
+        lines.append("## Excluded")
+        for item in excluded:
+            lines.append(f"- {item['scope']}: {item['reason']}")
+
+    return "\n".join(lines) + "\n"
 
 
 def attach_environment_state(
