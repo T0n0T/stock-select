@@ -101,14 +101,25 @@ def attach_environment_state(
     tagged: list[dict[str, object]] = []
     for row in rows:
         pick_date = str(row["pick_date"])
-        matched = next(
-            (
-                item
-                for item in environment_history
-                if str(item["start_date"]) <= pick_date
-                and (item.get("end_date") is None or pick_date <= str(item["end_date"]))
-            ),
-            None,
+        applicable = [
+            item
+            for item in environment_history
+            if str(item["start_date"]) <= pick_date
+            and (item.get("end_date") is None or pick_date <= str(item["end_date"]))
+        ]
+        preferred = [item for item in applicable if bool(item.get("manual_override"))]
+        ranked = preferred or applicable
+        matched = (
+            max(
+                ranked,
+                key=lambda item: (
+                    str(item["start_date"]),
+                    str(item.get("evaluated_at") or item["start_date"]),
+                    bool(item.get("manual_override")),
+                ),
+            )
+            if ranked
+            else None
         )
         tagged.append(
             {

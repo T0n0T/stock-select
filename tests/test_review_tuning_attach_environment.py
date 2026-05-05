@@ -55,6 +55,49 @@ def test_attach_environment_state_uses_unknown_when_no_window_matches() -> None:
     assert tagged[0]["environment_state"] == "unknown"
 
 
+def test_attach_environment_state_prefers_manual_override_for_overlapping_windows() -> None:
+    rows = [{"method": "b2", "pick_date": "2026-04-10", "code": "000001.SZ"}]
+    environment_history = [
+        {
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-30",
+            "evaluated_at": "2026-04-01",
+            "manual_override": False,
+            "score_based_state": "weak",
+            "state": "neutral",
+        },
+        {
+            "start_date": "2026-04-05",
+            "end_date": "2026-04-12",
+            "evaluated_at": "2026-04-10",
+            "manual_override": True,
+            "score_based_state": "strong",
+            "state": "strong",
+        },
+    ]
+
+    tagged = attach_environment_state(rows, environment_history, environment_key="score_based_state")
+
+    assert tagged[0]["environment_state"] == "strong"
+
+
+def test_attach_environment_state_falls_back_to_state_when_score_based_state_missing() -> None:
+    rows = [{"method": "b1", "pick_date": "2026-04-10", "code": "000001.SZ"}]
+    environment_history = [
+        {
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-30",
+            "evaluated_at": "2026-04-01",
+            "manual_override": False,
+            "state": "Neutral",
+        }
+    ]
+
+    tagged = attach_environment_state(rows, environment_history, environment_key="score_based_state")
+
+    assert tagged[0]["environment_state"] == "neutral"
+
+
 def test_review_tuning_attach_environment_main_writes_samples_with_env_csv(
     tmp_path: Path,
     monkeypatch,
