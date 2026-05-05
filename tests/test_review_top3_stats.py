@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from stock_select import cli
 
 
@@ -89,3 +91,104 @@ def test_load_prepared_accepts_v2_prepared_cache(tmp_path: Path) -> None:
     module.PREPARED_DIR = tmp_path
 
     assert sorted(module.load_prepared("b1")["ts_code"].unique()) == ["AAA.SZ"]
+
+
+def test_collect_pass_top_reviews_supports_multiple_methods_and_environment_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_review_top3_stats_module()
+
+    runtime_root = tmp_path / "runtime"
+    reviews_root = runtime_root / "reviews"
+    prepared_root = tmp_path / "prepared"
+    reviews_root.mkdir(parents=True)
+    prepared_root.mkdir()
+
+    for pick_date, method, code, score in [
+        ("2026-04-10", "b1", "000001.SZ", 4.5),
+        ("2026-04-12", "b2", "000002.SZ", 4.3),
+        ("2026-04-22", "b2", "000003.SZ", 4.8),
+    ]:
+        review_dir = reviews_root / f"{pick_date}.{method}"
+        review_dir.mkdir()
+        (review_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "pick_date": pick_date,
+                    "recommendations": [
+                        {"code": code, "total_score": score, "verdict": "PASS"},
+                    ],
+                    "excluded": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    cli._write_prepared_cache_v2(
+        prepared_root / "2026-04-30.feather",
+        prepared_root / "2026-04-30.meta.json",
+        method="b1",
+        pick_date="2026-04-30",
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-10", "open": 10.0, "close": 10.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-11", "open": 10.1, "close": 10.2},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-12", "open": 10.2, "close": 10.3},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-13", "open": 10.3, "close": 10.4},
+                {"ts_code": "000002.SZ", "trade_date": "2026-04-12", "open": 20.0, "close": 20.0},
+                {"ts_code": "000002.SZ", "trade_date": "2026-04-13", "open": 20.1, "close": 20.2},
+                {"ts_code": "000002.SZ", "trade_date": "2026-04-14", "open": 20.2, "close": 20.4},
+                {"ts_code": "000002.SZ", "trade_date": "2026-04-15", "open": 20.3, "close": 20.6},
+                {"ts_code": "000003.SZ", "trade_date": "2026-04-22", "open": 30.0, "close": 30.0},
+                {"ts_code": "000003.SZ", "trade_date": "2026-04-23", "open": 30.1, "close": 30.2},
+                {"ts_code": "000003.SZ", "trade_date": "2026-04-24", "open": 30.2, "close": 30.4},
+                {"ts_code": "000003.SZ", "trade_date": "2026-04-25", "open": 30.3, "close": 30.6},
+            ]
+        ),
+    )
+
+    module.REVIEWS_DIR = reviews_root
+    module.PREPARED_DIR = prepared_root
+    monkeypatch.setattr(
+        module,
+        "load_environment_history",
+        lambda _runtime_root: [
+            {
+                "start_date": "2026-04-01",
+                "end_date": "2026-04-15",
+                "score_based_state": "weak",
+                "state": "neutral",
+            },
+            {
+                "start_date": "2026-04-16",
+                "end_date": "2026-04-30",
+                "score_based_state": "strong",
+                "state": "strong",
+            },
+        ],
+    )
+
+    result = module.collect_review_top3_records(
+        methods=["b1", "b2"],
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+        environment_state="weak",
+    )
+
+    assert result
+    assert all(item["environment_state"] == "weak" for item in result)
+    assert {item["method"] for item in result} == {"b1", "b2"}
+
+
+def test_compare_artifact_dirs_reports_delta() -> None:
+    module = _load_review_top3_stats_module()
+
+    payload = module.compare_top3_metrics(
+        baseline=[{"method": "b2", "avg_ret3_pct": 0.5}],
+        candidate=[{"method": "b2", "avg_ret3_pct": 1.2}],
+    )
+
+    assert payload["rows"][0]["delta_ret3_pct"] == 0.7

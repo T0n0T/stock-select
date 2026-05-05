@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -36,6 +37,16 @@ def _load_artifact_dir(path: Path) -> dict[str, object]:
     }
 
 
+def _load_review_top3_stats_module():
+    script_path = Path(__file__).resolve().with_name("review_top3_stats.py")
+    spec = importlib.util.spec_from_file_location("review_top3_stats", script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Write a minimal review tuning verification shell")
     parser.add_argument("--methods", nargs="+", default=[])
@@ -62,11 +73,20 @@ def main(args: argparse.Namespace | None = None) -> int:
         joined = ", ".join(invalid_inputs)
         _parser_error(args, f"baseline and candidate artifact dirs must exist and be directories: {joined}")
 
+    review_top3_stats = _load_review_top3_stats_module()
+    comparison_payload = review_top3_stats.compare_artifact_dirs(
+        baseline_artifact_dir=args.baseline_artifact_dir,
+        candidate_artifact_dir=args.candidate_artifact_dir,
+        methods=args.methods,
+        environment_state=args.environment_state,
+    )
+
     payload = {
         "methods": args.methods,
         "environment_state": args.environment_state,
         "baseline": _load_artifact_dir(args.baseline_artifact_dir),
         "candidate": _load_artifact_dir(args.candidate_artifact_dir),
+        "comparison": comparison_payload["comparison"],
     }
 
     output_dir = _resolve_output_dir(args)
@@ -86,6 +106,14 @@ def main(args: argparse.Namespace | None = None) -> int:
         summary_lines.append(f"- methods: {', '.join(args.methods)}")
     if args.environment_state:
         summary_lines.append(f"- environment_state: {args.environment_state}")
+    for row in comparison_payload["comparison"]["rows"]:
+        summary_lines.append(
+            "- "
+            f"method={row['method']} "
+            f"environment_state={row.get('environment_state') or 'all'} "
+            f"delta_ret3_pct={row.get('delta_ret3_pct')} "
+            f"delta_ret5_pct={row.get('delta_ret5_pct')}"
+        )
     (output_dir / "verification.md").write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
     return 0
 

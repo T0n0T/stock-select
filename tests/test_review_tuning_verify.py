@@ -40,8 +40,17 @@ def test_review_tuning_verify_main_writes_shell_outputs(tmp_path: Path) -> None:
     candidate_dir = tmp_path / "candidate"
     baseline_dir.mkdir()
     candidate_dir.mkdir()
-    (baseline_dir / "summary.md").write_text("# baseline\n", encoding="utf-8")
-    (candidate_dir / "summary.md").write_text("# candidate\n", encoding="utf-8")
+    for path, ret3 in [(baseline_dir, 0.5), (candidate_dir, 1.2)]:
+        (path / "samples_with_env.csv").write_text(
+            "\n".join(
+                [
+                    "method,pick_date,code,total_score,verdict,ret3_pct,ret5_pct,environment_state",
+                    f"b2,2026-04-10,000001.SZ,4.2,PASS,{ret3},1.0,neutral",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     artifact_dir = tmp_path / "artifacts" / "review-tuning" / "verify"
     args = module.parse_args(
@@ -68,8 +77,8 @@ def test_review_tuning_verify_main_writes_shell_outputs(tmp_path: Path) -> None:
     assert payload["environment_state"] == "neutral"
     assert payload["baseline"]["exists"] is True
     assert payload["candidate"]["exists"] is True
-    assert "baseline" in summary
-    assert "candidate" in summary
+    assert payload["comparison"]["rows"][0]["delta_ret3_pct"] == 0.7
+    assert "delta_ret3_pct" in summary
 
 
 def test_review_tuning_verify_main_fails_for_missing_artifact_dirs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
