@@ -69,6 +69,16 @@ class RecommendationDecision:
     success_criteria: list[str]
 
 
+@dataclass(frozen=True)
+class UsableHorizon:
+    target_field: str
+    metric: dict[str, object]
+    signal: float
+    coverage_rank: int
+    pair_count: int
+    layering_ok: bool
+
+
 def _load_prepared(method: str, prepared_root: Path, *, end_date: str) -> pd.DataFrame:
     normalized_method = method.strip().lower()
     if normalized_method in SHARED_PREPARED_METHODS:
@@ -623,10 +633,15 @@ def _is_layering_direction_correct(segments: list[dict[str, object]], target_fie
 
     if len(ordered_layers) < 2:
         return False
-    return all(
-        earlier_value > later_value or math.isclose(earlier_value, later_value)
-        for (_, earlier_value), (_, later_value) in zip(ordered_layers, ordered_layers[1:])
-    )
+
+    for (earlier_verdict, earlier_value), (_, later_value) in zip(ordered_layers, ordered_layers[1:]):
+        if earlier_verdict == "PASS":
+            if not earlier_value > later_value:
+                return False
+            continue
+        if not (earlier_value > later_value or math.isclose(earlier_value, later_value)):
+            return False
+    return True
 
 
 def _count_populated_verdict_layers(segments: list[dict[str, object]], target_field: str) -> int:
@@ -682,11 +697,13 @@ def _metric_coverage_rank(metric: dict[str, object] | None) -> int:
     return 0
 
 
-def _choose_active_total_score_metric(
+def _collect_usable_total_score_horizons(
     group: dict[str, object],
     segments: list[dict[str, object]],
-) -> tuple[str, dict[str, object]] | None:
-    candidates: list[tuple[int, int, str, dict[str, object]]] = []
+    *,
+    require_full_verdict_layers: bool,
+) -> list[UsableHorizon]:
+    candidates: list[UsableHorizon] = []
     for target_field in RETURN_FIELDS:
         metric = _find_metric(group, score_field="total_score", target_field=target_field)
         if metric is None:
@@ -696,14 +713,65 @@ def _choose_active_total_score_metric(
             continue
         if _metric_signal(metric) is None:
             continue
-        if _count_populated_verdict_layers(segments, target_field) < 2:
+        populated_layers = _count_populated_verdict_layers(segments, target_field)
+        if populated_layers < 2:
+            continue
+        if require_full_verdict_layers and populated_layers < 3:
             continue
         pair_count = int(metric.get("pair_count") or 0)
-        candidates.append((coverage_rank, pair_count, target_field, metric))
-    if not candidates:
+        signal = _metric_signal(metric)
+        assert signal is not None
+        candidates.append(
+            UsableHorizon(
+                target_field=target_field,
+                metric=metric,
+                signal=signal,
+                coverage_rank=coverage_rank,
+                pair_count=pair_count,
+                layering_ok=_is_layering_direction_correct(segments, target_field),
+            )
+        )
+    return candidates
+
+
+def _horizons_conflict(horizons: list[UsableHorizon]) -> bool:
+    if len(horizons) < 2:
+        return False
+    sign_set = {"non_negative" if horizon.signal >= 0 else "negative" for horizon in horizons}
+    layering_set = {horizon.layering_ok for horizon in horizons}
+    return len(sign_set) > 1 or len(layering_set) > 1
+
+
+def _choose_best_horizon(horizons: list[UsableHorizon]) -> UsableHorizon | None:
+    if not horizons:
         return None
-    _, _, target_field, metric = max(candidates, key=lambda item: (item[0], item[1], item[2]))
-    return target_field, metric
+    return max(horizons, key=lambda item: (item.coverage_rank, item.pair_count, item.target_field))
+
+
+def _choose_general_recommendation_horizon(
+    group: dict[str, object],
+    segments: list[dict[str, object]],
+) -> UsableHorizon | None:
+    return _choose_best_horizon(
+        _collect_usable_total_score_horizons(
+            group,
+            segments,
+            require_full_verdict_layers=False,
+        )
+    )
+
+
+def _choose_reviewer_rework_horizon(
+    group: dict[str, object],
+    segments: list[dict[str, object]],
+) -> UsableHorizon | None:
+    return _choose_best_horizon(
+        _collect_usable_total_score_horizons(
+            group,
+            segments,
+            require_full_verdict_layers=True,
+        )
+    )
 
 
 def _scope_segments(segments: list[dict[str, object]], group: dict[str, object]) -> list[dict[str, object]]:
@@ -724,16 +792,19 @@ def _collect_reviewer_rework_methods(
         if int(group.get("sample_count") or 0) < 10 or group.get("conclusion_strength") == "insufficient":
             continue
         scoped_segments = _scope_segments(segments, group)
-        active_metric = _choose_active_total_score_metric(group, scoped_segments)
-        if active_metric is None:
+        reviewer_horizons = _collect_usable_total_score_horizons(
+            group,
+            scoped_segments,
+            require_full_verdict_layers=True,
+        )
+        if _horizons_conflict(reviewer_horizons):
             continue
-        target_field, metric = active_metric
-        if not _has_full_verdict_layers(scoped_segments, target_field):
+        reviewer_horizon = _choose_best_horizon(reviewer_horizons)
+        if reviewer_horizon is None:
             continue
-        signal = _metric_signal(metric)
-        if signal is None or signal >= 0:
+        if reviewer_horizon.signal >= 0:
             continue
-        if _is_layering_direction_correct(scoped_segments, target_field):
+        if reviewer_horizon.layering_ok:
             continue
         method = _normalize_category_value(group.get("method"))
         if method is None:
@@ -746,15 +817,15 @@ def classify_scope_decision(
     group: dict[str, object],
     segments: list[dict[str, object]],
     *,
-    target_field: str,
-    total_score_metric: dict[str, object],
+    horizon: UsableHorizon,
     allow_reviewer_rework: bool,
 ) -> RecommendationDecision | None:
-    total_signal = _metric_signal(total_score_metric)
-    layering_ok = _is_layering_direction_correct(segments, target_field)
+    target_field = horizon.target_field
+    total_signal = horizon.signal
+    layering_ok = horizon.layering_ok
     full_verdict_layers = _has_full_verdict_layers(segments, target_field)
 
-    if allow_reviewer_rework and full_verdict_layers and total_signal is not None and total_signal < 0 and not layering_ok:
+    if allow_reviewer_rework and full_verdict_layers and total_signal < 0 and not layering_ok:
         method = _normalize_category_value(group.get("method")) or "default"
         environment_state = _normalize_category_value(group.get("environment_state")) or "unknown"
         return RecommendationDecision(
@@ -771,7 +842,7 @@ def classify_scope_decision(
             ],
         )
 
-    if total_signal is not None and total_signal >= 0 and layering_ok:
+    if total_signal >= 0 and layering_ok:
         subscore_signals = [
             _metric_signal(metric)
             for metric in group.get("metrics", [])
@@ -837,8 +908,41 @@ def build_recommendations(
             continue
 
         scoped_segments = _scope_segments(segments, group)
-        active_total_score_metric = _choose_active_total_score_metric(group, scoped_segments)
-        if active_total_score_metric is None:
+        general_horizons = _collect_usable_total_score_horizons(
+            group,
+            scoped_segments,
+            require_full_verdict_layers=False,
+        )
+        reviewer_horizon = _choose_reviewer_rework_horizon(group, scoped_segments)
+        if general_horizons and not _horizons_conflict(
+            _collect_usable_total_score_horizons(
+                group,
+                scoped_segments,
+                require_full_verdict_layers=True,
+            )
+        ):
+            method = _normalize_category_value(group.get("method")) or "default"
+            reviewer_decision = classify_scope_decision(
+                group,
+                scoped_segments,
+                horizon=reviewer_horizon,
+                allow_reviewer_rework=reviewer_horizon is not None and method in reviewer_rework_methods,
+            ) if reviewer_horizon is not None else None
+            if reviewer_decision is not None and reviewer_decision.action_type == "reviewer_rework":
+                recommendations.append(
+                    {
+                        "scope": _format_scope_label(group),
+                        "group_key": group.get("group_key"),
+                        "action_type": reviewer_decision.action_type,
+                        "reason": reviewer_decision.reason,
+                        "target_files": reviewer_decision.target_files,
+                        "next_tasks": reviewer_decision.next_tasks,
+                        "success_criteria": reviewer_decision.success_criteria,
+                    }
+                )
+                continue
+
+        if not general_horizons:
             has_any_verdict_layers = any(
                 _count_populated_verdict_layers(scoped_segments, target_field) >= 2 for target_field in RETURN_FIELDS
             )
@@ -853,13 +957,24 @@ def build_recommendations(
             )
             continue
 
-        target_field, total_score_metric = active_total_score_metric
+        if _horizons_conflict(general_horizons):
+            excluded.append(
+                {
+                    "scope": _format_scope_label(group),
+                    "group_key": group.get("group_key"),
+                    "reason": "conflicting_horizons",
+                    "sample_count": sample_count,
+                }
+            )
+            continue
+
+        selected_horizon = _choose_best_horizon(general_horizons)
+        assert selected_horizon is not None
         method = _normalize_category_value(group.get("method")) or "default"
         decision = classify_scope_decision(
             group,
             scoped_segments,
-            target_field=target_field,
-            total_score_metric=total_score_metric,
+            horizon=selected_horizon,
             allow_reviewer_rework=method in reviewer_rework_methods,
         )
         if decision is None:

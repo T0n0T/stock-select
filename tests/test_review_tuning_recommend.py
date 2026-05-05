@@ -563,6 +563,329 @@ def test_build_recommendations_prefers_usable_horizon_over_higher_coverage_but_u
     assert "ret5_pct" in result["recommendations"][0]["reason"]
 
 
+def test_build_recommendations_uses_two_layer_horizon_for_general_threshold_decision_when_other_horizon_is_not_usable() -> None:
+    correlations = {
+        "groups": [
+            {
+                "group_key": "method:b2|environment_state:neutral",
+                "scope_type": "method_environment_state",
+                "method": "b2",
+                "environment_state": "neutral",
+                "sample_count": 24,
+                "conclusion_strength": "weak",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 24,
+                        "coverage_strength": "strong",
+                        "pearson_r": 0.11,
+                        "spearman_r": 0.10,
+                    },
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret5_pct",
+                        "pair_count": 16,
+                        "coverage_strength": "insufficient",
+                        "pearson_r": -0.12,
+                        "spearman_r": -0.11,
+                    },
+                ],
+            }
+        ]
+    }
+    segments = [
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": 1.5},
+            "ret5": {"avg": -0.8},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 0.6},
+            "ret5": {"avg": 0.2},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret5": {"avg": 0.5},
+        },
+    ]
+
+    result = build_recommendations(correlations, segments)
+
+    assert result["recommendations"][0]["action_type"] == "threshold_only"
+    assert "ret3_pct" in result["recommendations"][0]["reason"]
+
+
+def test_build_recommendations_uses_stricter_horizon_for_reviewer_rework_aggregation() -> None:
+    correlations = {
+        "groups": [
+            {
+                "group_key": "method:b1|environment_state:strong",
+                "scope_type": "method_environment_state",
+                "method": "b1",
+                "environment_state": "strong",
+                "sample_count": 24,
+                "conclusion_strength": "weak",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 24,
+                        "coverage_strength": "strong",
+                        "pearson_r": 0.09,
+                        "spearman_r": 0.08,
+                    },
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret5_pct",
+                        "pair_count": 16,
+                        "coverage_strength": "weak",
+                        "pearson_r": -0.13,
+                        "spearman_r": -0.12,
+                    },
+                ],
+            },
+            {
+                "group_key": "method:b1|environment_state:weak",
+                "scope_type": "method_environment_state",
+                "method": "b1",
+                "environment_state": "weak",
+                "sample_count": 22,
+                "conclusion_strength": "weak",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 22,
+                        "coverage_strength": "strong",
+                        "pearson_r": 0.07,
+                        "spearman_r": 0.06,
+                    },
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret5_pct",
+                        "pair_count": 15,
+                        "coverage_strength": "weak",
+                        "pearson_r": -0.14,
+                        "spearman_r": -0.10,
+                    },
+                ],
+            },
+        ]
+    }
+    segments = [
+        {
+            "group_key": "method:b1|environment_state:strong",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "strong",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": 1.2},
+            "ret5": {"avg": -0.7},
+        },
+        {
+            "group_key": "method:b1|environment_state:strong",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "strong",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 0.5},
+            "ret5": {"avg": 0.1},
+        },
+        {
+            "group_key": "method:b1|environment_state:strong",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "strong",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret5": {"avg": 0.6},
+        },
+        {
+            "group_key": "method:b1|environment_state:weak",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "weak",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": 1.0},
+            "ret5": {"avg": -0.5},
+        },
+        {
+            "group_key": "method:b1|environment_state:weak",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "weak",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 0.4},
+            "ret5": {"avg": 0.0},
+        },
+        {
+            "group_key": "method:b1|environment_state:weak",
+            "scope_type": "method_environment_state",
+            "method": "b1",
+            "environment_state": "weak",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret5": {"avg": 0.4},
+        },
+    ]
+
+    result = build_recommendations(correlations, segments)
+
+    assert len(result["recommendations"]) == 2
+    assert {item["action_type"] for item in result["recommendations"]} == {"reviewer_rework"}
+    assert all("ret5_pct" in item["reason"] for item in result["recommendations"])
+
+
+def test_build_recommendations_excludes_scope_when_usable_horizons_conflict() -> None:
+    correlations = {
+        "groups": [
+            {
+                "group_key": "method:b2|environment_state:neutral",
+                "scope_type": "method_environment_state",
+                "method": "b2",
+                "environment_state": "neutral",
+                "sample_count": 24,
+                "conclusion_strength": "weak",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 24,
+                        "coverage_strength": "strong",
+                        "pearson_r": 0.12,
+                        "spearman_r": 0.10,
+                    },
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret5_pct",
+                        "pair_count": 20,
+                        "coverage_strength": "strong",
+                        "pearson_r": -0.11,
+                        "spearman_r": -0.09,
+                    },
+                ],
+            }
+        ]
+    }
+    segments = [
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": 1.5},
+            "ret5": {"avg": -0.7},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 0.7},
+            "ret5": {"avg": 0.1},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret3": {"avg": -0.1},
+            "ret5": {"avg": 0.5},
+        },
+    ]
+
+    result = build_recommendations(correlations, segments)
+
+    assert result["recommendations"] == []
+    assert result["excluded"][0]["reason"] == "conflicting_horizons"
+
+
+def test_build_recommendations_requires_pass_to_be_strictly_above_watch() -> None:
+    correlations = {
+        "groups": [
+            {
+                "group_key": "method:b2|environment_state:neutral",
+                "scope_type": "method_environment_state",
+                "method": "b2",
+                "environment_state": "neutral",
+                "sample_count": 21,
+                "conclusion_strength": "weak",
+                "metrics": [
+                    {
+                        "score_field": "total_score",
+                        "target_field": "ret3_pct",
+                        "pair_count": 21,
+                        "coverage_strength": "weak",
+                        "pearson_r": 0.09,
+                        "spearman_r": 0.08,
+                    }
+                ],
+            }
+        ]
+    }
+    segments = [
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "PASS",
+            "ret3": {"avg": 1.0},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "WATCH",
+            "ret3": {"avg": 1.0},
+        },
+        {
+            "group_key": "method:b2|environment_state:neutral",
+            "scope_type": "method_environment_state",
+            "method": "b2",
+            "environment_state": "neutral",
+            "segment_type": "verdict",
+            "segment_value": "FAIL",
+            "ret3": {"avg": 0.2},
+        },
+    ]
+
+    result = build_recommendations(correlations, segments)
+
+    assert result["recommendations"] == []
+    assert result["excluded"][0]["reason"] == "no_clear_recommendation"
+
+
 def test_build_recommendations_does_not_trigger_reviewer_rework_from_single_environment() -> None:
     correlations = {
         "groups": [
