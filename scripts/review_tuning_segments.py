@@ -11,7 +11,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 import pandas as pd
 
-from stock_select.research.review_tuning import compute_segments
+from stock_select.research.review_tuning import compute_segments, flatten_segment_rows
 
 
 DEFAULT_RUNTIME_ROOT = Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
@@ -36,7 +36,7 @@ def main(args: argparse.Namespace | None = None) -> int:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    pd.DataFrame(payload).to_csv(args.output_dir / "segments.csv", index=False)
+    pd.DataFrame(flatten_segment_rows(payload)).to_csv(args.output_dir / "segments.csv", index=False)
     return 0
 
 

@@ -46,6 +46,33 @@ def test_compute_segments_groups_by_verdict_and_score_band() -> None:
     assert any(item["segment_type"] == "total_score_band" for item in result)
 
 
+def test_compute_segments_buckets_all_score_fields() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.3,
+            "trend_structure": 4.0,
+            "price_position": 5.0,
+            "volume_behavior": 3.0,
+            "previous_abnormal_move": 2.0,
+            "macd_phase": 4.0,
+            "ret3_pct": 2.0,
+            "ret5_pct": 3.0,
+        }
+    ]
+
+    result = review_tuning.compute_segments(rows)
+    segment_types = {item["segment_type"] for item in result}
+
+    assert "trend_structure_bucket" in segment_types
+    assert "price_position_bucket" in segment_types
+    assert "volume_behavior_bucket" in segment_types
+    assert "previous_abnormal_move_bucket" in segment_types
+    assert "macd_phase_bucket" in segment_types
+
+
 def test_compute_segments_includes_scoped_breakdowns() -> None:
     rows = [
         {
@@ -147,3 +174,17 @@ def test_review_tuning_segments_main_writes_csv(tmp_path: Path) -> None:
     frame = pd.read_csv(output_dir / "segments.csv")
     assert "group_key" in frame.columns
     assert "segment_type" in frame.columns
+    assert "ret3_n" in frame.columns
+    assert "ret3_avg" in frame.columns
+    assert "ret3_median" in frame.columns
+    assert "ret3_win_rate" in frame.columns
+    assert "ret3_max" in frame.columns
+    assert "ret3_min" in frame.columns
+    assert "ret5_n" in frame.columns
+    assert "ret5_avg" in frame.columns
+    assert "ret5_median" in frame.columns
+    assert "ret5_win_rate" in frame.columns
+    assert "ret5_max" in frame.columns
+    assert "ret5_min" in frame.columns
+    assert "ret3" not in frame.columns
+    assert "ret5" not in frame.columns

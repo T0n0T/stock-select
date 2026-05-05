@@ -432,11 +432,27 @@ def build_verdict_segments(
 def compute_segments(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     segments: list[dict[str, object]] = []
     for scope, scoped_rows in iter_scoped_rows(rows):
-        segments.extend(build_score_bucket_segments(scoped_rows, scope=scope, field="price_position"))
-        segments.extend(build_score_bucket_segments(scoped_rows, scope=scope, field="macd_phase"))
+        for field in SCORE_FIELDS:
+            segments.extend(build_score_bucket_segments(scoped_rows, scope=scope, field=field))
         segments.extend(build_total_score_band_segments(scoped_rows, scope=scope))
         segments.extend(build_verdict_segments(scoped_rows, scope=scope))
     return segments
+
+
+def flatten_segment_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    flattened_rows: list[dict[str, object]] = []
+    for row in rows:
+        base = {key: value for key, value in row.items() if key not in {"ret3", "ret5"}}
+        for prefix in ("ret3", "ret5"):
+            stats = row.get(prefix) or {}
+            base[f"{prefix}_n"] = stats.get("n")
+            base[f"{prefix}_avg"] = stats.get("avg")
+            base[f"{prefix}_median"] = stats.get("median")
+            base[f"{prefix}_win_rate"] = stats.get("win_rate")
+            base[f"{prefix}_max"] = stats.get("max")
+            base[f"{prefix}_min"] = stats.get("min")
+        flattened_rows.append(base)
+    return flattened_rows
 
 
 def attach_environment_state(
