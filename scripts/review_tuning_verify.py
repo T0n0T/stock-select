@@ -74,15 +74,18 @@ def main(args: argparse.Namespace | None = None) -> int:
         _parser_error(args, f"baseline and candidate artifact dirs must exist and be directories: {joined}")
 
     review_top3_stats = _load_review_top3_stats_module()
-    comparison_payload = review_top3_stats.compare_artifact_dirs(
-        baseline_artifact_dir=args.baseline_artifact_dir,
-        candidate_artifact_dir=args.candidate_artifact_dir,
-        methods=args.methods,
-        environment_state=args.environment_state,
-    )
+    try:
+        comparison_payload = review_top3_stats.compare_artifact_dirs(
+            baseline_artifact_dir=args.baseline_artifact_dir,
+            candidate_artifact_dir=args.candidate_artifact_dir,
+            methods=args.methods,
+            environment_state=args.environment_state,
+        )
+    except ValueError as exc:
+        _parser_error(args, str(exc))
 
     payload = {
-        "methods": args.methods,
+        "methods": comparison_payload["methods"],
         "environment_state": args.environment_state,
         "baseline": _load_artifact_dir(args.baseline_artifact_dir),
         "candidate": _load_artifact_dir(args.candidate_artifact_dir),
@@ -102,8 +105,8 @@ def main(args: argparse.Namespace | None = None) -> int:
         f"- baseline: {args.baseline_artifact_dir}",
         f"- candidate: {args.candidate_artifact_dir}",
     ]
-    if args.methods:
-        summary_lines.append(f"- methods: {', '.join(args.methods)}")
+    if comparison_payload["methods"]:
+        summary_lines.append(f"- methods: {', '.join(comparison_payload['methods'])}")
     if args.environment_state:
         summary_lines.append(f"- environment_state: {args.environment_state}")
     for row in comparison_payload["comparison"]["rows"]:

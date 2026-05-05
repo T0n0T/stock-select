@@ -192,3 +192,109 @@ def test_compare_artifact_dirs_reports_delta() -> None:
     )
 
     assert payload["rows"][0]["delta_ret3_pct"] == 0.7
+
+
+def test_compare_artifact_dirs_does_not_apply_default_date_filter(tmp_path: Path) -> None:
+    module = _load_review_top3_stats_module()
+
+    baseline_dir = tmp_path / "baseline"
+    candidate_dir = tmp_path / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    for path, ret3 in [(baseline_dir, 0.5), (candidate_dir, 1.2)]:
+        (path / "samples_with_env.csv").write_text(
+            "\n".join(
+                [
+                    "method,pick_date,code,total_score,verdict,ret3_pct,ret5_pct,environment_state",
+                    f"b2,2026-05-10,000001.SZ,4.2,PASS,{ret3},1.0,neutral",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    payload = module.compare_artifact_dirs(
+        baseline_artifact_dir=baseline_dir,
+        candidate_artifact_dir=candidate_dir,
+        methods=[],
+    )
+
+    assert payload["comparison"]["rows"][0]["delta_ret3_pct"] == 0.7
+
+
+def test_compare_artifact_dirs_with_empty_methods_uses_all_methods_in_artifact(tmp_path: Path) -> None:
+    module = _load_review_top3_stats_module()
+
+    baseline_dir = tmp_path / "baseline"
+    candidate_dir = tmp_path / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    baseline_lines = [
+        "method,pick_date,code,total_score,verdict,ret3_pct,ret5_pct,environment_state",
+        "b1,2026-05-10,000001.SZ,4.2,PASS,0.5,1.0,neutral",
+        "b2,2026-05-10,000002.SZ,4.0,PASS,0.6,1.1,neutral",
+    ]
+    candidate_lines = [
+        "method,pick_date,code,total_score,verdict,ret3_pct,ret5_pct,environment_state",
+        "b1,2026-05-10,000001.SZ,4.2,PASS,1.5,1.0,neutral",
+        "b2,2026-05-10,000002.SZ,4.0,PASS,1.6,1.1,neutral",
+    ]
+    (baseline_dir / "samples_with_env.csv").write_text("\n".join(baseline_lines) + "\n", encoding="utf-8")
+    (candidate_dir / "samples_with_env.csv").write_text("\n".join(candidate_lines) + "\n", encoding="utf-8")
+
+    payload = module.compare_artifact_dirs(
+        baseline_artifact_dir=baseline_dir,
+        candidate_artifact_dir=candidate_dir,
+        methods=[],
+    )
+
+    assert {row["method"] for row in payload["comparison"]["rows"]} == {"b1", "b2"}
+
+
+def test_collect_review_top3_records_fails_cleanly_when_environment_filter_requires_missing_labels(
+    tmp_path: Path,
+) -> None:
+    module = _load_review_top3_stats_module()
+
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    (artifact_dir / "samples.csv").write_text(
+        "\n".join(
+            [
+                "method,pick_date,code,total_score,verdict,ret3_pct,ret5_pct",
+                "b2,2026-05-10,000001.SZ,4.2,PASS,0.5,1.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        module.collect_review_top3_records(
+            methods=[],
+            start_date=None,
+            end_date=None,
+            environment_state="neutral",
+            artifact_dir=artifact_dir,
+        )
+
+    assert "environment_state" in str(excinfo.value)
+
+
+def test_collect_review_top3_records_fails_cleanly_when_artifact_files_are_missing(
+    tmp_path: Path,
+) -> None:
+    module = _load_review_top3_stats_module()
+
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+
+    with pytest.raises(ValueError) as excinfo:
+        module.collect_review_top3_records(
+            methods=[],
+            start_date=None,
+            end_date=None,
+            artifact_dir=artifact_dir,
+        )
+
+    assert "samples_with_env.csv" in str(excinfo.value)

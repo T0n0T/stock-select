@@ -102,3 +102,70 @@ def test_review_tuning_verify_main_fails_for_missing_artifact_dirs(tmp_path: Pat
     assert excinfo.value.code == 2
     assert "must exist and be directories" in capsys.readouterr().err
     assert not (artifact_dir / "verification.json").exists()
+
+
+def test_review_tuning_verify_main_fails_cleanly_when_artifact_files_are_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_review_tuning_verify_module()
+
+    baseline_dir = tmp_path / "baseline"
+    candidate_dir = tmp_path / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+
+    args = module.parse_args(
+        [
+            "--baseline-artifact-dir",
+            str(baseline_dir),
+            "--candidate-artifact-dir",
+            str(candidate_dir),
+        ]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(args)
+
+    assert excinfo.value.code == 2
+    assert "samples_with_env.csv" in capsys.readouterr().err
+
+
+def test_review_tuning_verify_main_fails_cleanly_for_environment_filter_without_labels(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_review_tuning_verify_module()
+
+    baseline_dir = tmp_path / "baseline"
+    candidate_dir = tmp_path / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    for path in (baseline_dir, candidate_dir):
+        (path / "samples.csv").write_text(
+            "\n".join(
+                [
+                    "method,pick_date,code,total_score,verdict,ret3_pct,ret5_pct",
+                    "b2,2026-05-10,000001.SZ,4.2,PASS,0.5,1.0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    args = module.parse_args(
+        [
+            "--environment-state",
+            "neutral",
+            "--baseline-artifact-dir",
+            str(baseline_dir),
+            "--candidate-artifact-dir",
+            str(candidate_dir),
+        ]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(args)
+
+    assert excinfo.value.code == 2
+    assert "environment_state" in capsys.readouterr().err

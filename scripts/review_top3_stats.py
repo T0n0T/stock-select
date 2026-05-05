@@ -44,6 +44,13 @@ TOP3_DELTA_FIELDS = {
 }
 
 
+def _parser_error(args: argparse.Namespace, message: str) -> "Never":
+    parser = getattr(args, "_parser", None)
+    if parser is not None:
+        parser.error(message)
+    raise SystemExit(message)
+
+
 def collect_pass_top_reviews(summary: dict, *, top_n: int = 3) -> list[dict]:
     candidates = summary.get("recommendations", []) + summary.get("excluded", [])
     passes = [item for item in candidates if str(item.get("verdict", "")).upper() == "PASS"]
@@ -166,17 +173,26 @@ def _record_score(row: dict[str, object]) -> float | None:
     return _coerce_float(row.get("total_score", row.get("score")))
 
 
-def _load_artifact_rows(artifact_dir: Path) -> list[dict[str, object]]:
+def _load_artifact_rows(artifact_dir: Path) -> tuple[list[dict[str, object]], set[str]]:
     for name in ("samples_with_env.csv", "samples.csv"):
         path = artifact_dir / name
         if path.exists():
             frame = pd.read_csv(path)
             if frame.empty:
-                return []
-            return frame.to_dict("records")
-    raise FileNotFoundError(
+                return [], set(str(column) for column in frame.columns)
+            return frame.to_dict("records"), set(str(column) for column in frame.columns)
+    raise ValueError(
         f"Expected samples_with_env.csv or samples.csv under artifact dir: {artifact_dir}"
     )
+
+
+def _infer_methods_from_rows(rows: list[dict[str, object]]) -> list[str]:
+    methods = {
+        _normalize_method(str(row.get("method", "")))
+        for row in rows
+        if _normalize_method(str(row.get("method", "")))
+    }
+    return sorted(methods)
 
 
 def _select_top3_records_from_rows(
@@ -305,10 +321,16 @@ def collect_review_top3_records(
 ) -> list[dict[str, object]]:
     normalized_methods = [_normalize_method(method) for method in methods]
     if artifact_dir is not None:
-        rows = _load_artifact_rows(artifact_dir)
+        rows, columns = _load_artifact_rows(artifact_dir)
+        if environment_state is not None and "environment_state" not in columns:
+            raise ValueError(
+                f"Artifact rows under {artifact_dir} do not include environment_state; "
+                "cannot apply --environment-state filter."
+            )
+        selected_methods = normalized_methods or _infer_methods_from_rows(rows)
         return _select_top3_records_from_rows(
             rows,
-            methods=normalized_methods,
+            methods=selected_methods,
             start_date=start_date,
             end_date=end_date,
             environment_state=environment_state,
@@ -414,15 +436,35 @@ def compare_artifact_dirs(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, object]:
+    baseline_rows, baseline_columns = _load_artifact_rows(baseline_artifact_dir)
+    candidate_rows, candidate_columns = _load_artifact_rows(candidate_artifact_dir)
+    if environment_state is not None:
+        missing_labels = [
+            str(path)
+            for path, columns in (
+                (baseline_artifact_dir, baseline_columns),
+                (candidate_artifact_dir, candidate_columns),
+            )
+            if "environment_state" not in columns
+        ]
+        if missing_labels:
+            joined = ", ".join(missing_labels)
+            raise ValueError(
+                "environment_state filter requires artifact rows with environment_state labels: "
+                f"{joined}"
+            )
+    selected_methods = methods or sorted(
+        set(_infer_methods_from_rows(baseline_rows)) | set(_infer_methods_from_rows(candidate_rows))
+    )
     baseline_records = collect_review_top3_records(
-        methods=methods,
+        methods=selected_methods,
         start_date=start_date,
         end_date=end_date,
         environment_state=environment_state,
         artifact_dir=baseline_artifact_dir,
     )
     candidate_records = collect_review_top3_records(
-        methods=methods,
+        methods=selected_methods,
         start_date=start_date,
         end_date=end_date,
         environment_state=environment_state,
@@ -431,7 +473,7 @@ def compare_artifact_dirs(
     baseline_metrics = summarize_top3_metrics(baseline_records)
     candidate_metrics = summarize_top3_metrics(candidate_records)
     return {
-        "methods": [_normalize_method(method) for method in methods],
+        "methods": [_normalize_method(method) for method in selected_methods],
         "environment_state": _normalize_environment_state(environment_state),
         "baseline": {
             "path": str(baseline_artifact_dir),
@@ -557,49 +599,60 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--method", "-m", help="Single method alias kept for backward compatibility")
     parser.add_argument("--methods", nargs="+", help="Method names to include")
-    parser.add_argument("--start", "--start-date", dest="start_date", default=DEFAULT_START_DATE)
-    parser.add_argument("--end", "--end-date", dest="end_date", default=DEFAULT_END_DATE)
+    parser.add_argument("--start", "--start-date", dest="start_date")
+    parser.add_argument("--end", "--end-date", dest="end_date")
     parser.add_argument("--environment-state")
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--baseline-artifact-dir", type=Path)
     parser.add_argument("--candidate-artifact-dir", type=Path)
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--prepared-root", type=Path)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    setattr(args, "_parser", parser)
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    methods = args.methods or ([args.method] if args.method else ["hcr"])
+    compare_mode = args.baseline_artifact_dir is not None or args.candidate_artifact_dir is not None
+    methods = args.methods or ([args.method] if args.method else ([] if compare_mode else ["hcr"]))
 
-    if args.baseline_artifact_dir is not None or args.candidate_artifact_dir is not None:
+    if compare_mode:
         if args.baseline_artifact_dir is None or args.candidate_artifact_dir is None:
-            raise SystemExit("Both --baseline-artifact-dir and --candidate-artifact-dir are required.")
-        payload = compare_artifact_dirs(
-            baseline_artifact_dir=args.baseline_artifact_dir,
-            candidate_artifact_dir=args.candidate_artifact_dir,
-            methods=methods,
-            environment_state=args.environment_state,
-            start_date=args.start_date,
-            end_date=args.end_date,
-        )
+            _parser_error(args, "Both --baseline-artifact-dir and --candidate-artifact-dir are required.")
+        try:
+            payload = compare_artifact_dirs(
+                baseline_artifact_dir=args.baseline_artifact_dir,
+                candidate_artifact_dir=args.candidate_artifact_dir,
+                methods=methods,
+                environment_state=args.environment_state,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
+        except ValueError as exc:
+            _parser_error(args, str(exc))
         _print_comparison_summary(payload)
         return 0
 
-    records = collect_review_top3_records(
-        methods=methods,
-        start_date=args.start_date,
-        end_date=args.end_date,
-        environment_state=args.environment_state,
-        artifact_dir=args.artifact_dir,
-        runtime_root=args.runtime_root,
-        prepared_root=args.prepared_root,
-    )
+    start_date = args.start_date or DEFAULT_START_DATE
+    end_date = args.end_date or DEFAULT_END_DATE
+    try:
+        records = collect_review_top3_records(
+            methods=methods,
+            start_date=start_date,
+            end_date=end_date,
+            environment_state=args.environment_state,
+            artifact_dir=args.artifact_dir,
+            runtime_root=args.runtime_root,
+            prepared_root=args.prepared_root,
+        )
+    except ValueError as exc:
+        _parser_error(args, str(exc))
     _print_records_summary(
         records,
         methods=methods,
-        start_date=args.start_date,
-        end_date=args.end_date,
+        start_date=start_date,
+        end_date=end_date,
         environment_state=args.environment_state,
     )
     return 0
