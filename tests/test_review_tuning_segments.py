@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import stock_select.research.review_tuning as review_tuning
 
 
@@ -349,3 +350,15 @@ def test_review_tuning_segments_main_uses_artifact_dir_defaults(tmp_path: Path) 
     assert module.main(args) == 0
     assert (artifact_dir / "segments.json").exists()
     assert (artifact_dir / "segments.csv").exists()
+
+
+def test_review_tuning_segments_main_requires_samples_or_artifact_dir(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_review_tuning_segments_module()
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(module.parse_args([]))
+
+    assert excinfo.value.code == 2
+    assert "either --artifact-dir or --samples is required" in capsys.readouterr().err

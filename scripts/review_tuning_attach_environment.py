@@ -18,12 +18,19 @@ DEFAULT_RUNTIME_ROOT = Path.home() / ".agents" / "skills" / "stock-select" / "ru
 DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "research" / "review_tuning"
 
 
+def _parser_error(args: argparse.Namespace, message: str) -> "Never":
+    parser = getattr(args, "_parser", None)
+    if parser is not None:
+        parser.error(message)
+    raise SystemExit(message)
+
+
 def _resolve_samples_path(args: argparse.Namespace) -> Path:
     if args.samples is not None:
         return args.samples
     if args.artifact_dir is not None:
         return args.artifact_dir / "samples.csv"
-    raise ValueError("samples path is required")
+    _parser_error(args, "either --artifact-dir or --samples is required")
 
 
 def _resolve_output_dir(args: argparse.Namespace) -> Path:
@@ -41,7 +48,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--environment-key", default="score_based_state")
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.artifact_dir is None and args.samples is None:
+        parser.error("either --artifact-dir or --samples is required")
+    setattr(args, "_parser", parser)
+    return args
 
 
 def main(args: argparse.Namespace | None = None) -> int:

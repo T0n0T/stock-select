@@ -16,12 +16,19 @@ DEFAULT_RUNTIME_ROOT = Path.home() / ".agents" / "skills" / "stock-select" / "ru
 DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "research" / "review_tuning"
 
 
+def _parser_error(args: argparse.Namespace, message: str) -> "Never":
+    parser = getattr(args, "_parser", None)
+    if parser is not None:
+        parser.error(message)
+    raise SystemExit(message)
+
+
 def _resolve_correlations_path(args: argparse.Namespace) -> Path:
     if args.correlations is not None:
         return args.correlations
     if args.artifact_dir is not None:
         return args.artifact_dir / "correlations.json"
-    raise ValueError("correlations path is required")
+    _parser_error(args, "either --artifact-dir or both --correlations and --segments are required")
 
 
 def _resolve_segments_path(args: argparse.Namespace) -> Path:
@@ -29,7 +36,7 @@ def _resolve_segments_path(args: argparse.Namespace) -> Path:
         return args.segments
     if args.artifact_dir is not None:
         return args.artifact_dir / "segments.json"
-    raise ValueError("segments path is required")
+    _parser_error(args, "either --artifact-dir or both --correlations and --segments are required")
 
 
 def _resolve_output_dir(args: argparse.Namespace) -> Path:
@@ -46,7 +53,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--segments", type=Path)
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.artifact_dir is None and (args.correlations is None or args.segments is None):
+        parser.error("either --artifact-dir or both --correlations and --segments are required")
+    setattr(args, "_parser", parser)
+    return args
 
 
 def main(args: argparse.Namespace | None = None) -> int:

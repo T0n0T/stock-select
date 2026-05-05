@@ -5,6 +5,7 @@ from stock_select.research.review_tuning import attach_environment_state
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def _load_review_tuning_attach_environment_module():
@@ -187,3 +188,15 @@ def test_review_tuning_attach_environment_main_uses_artifact_dir_inputs_and_outp
     assert module.main(args) == 0
     frame = pd.read_csv(artifact_dir / "samples_with_env.csv")
     assert frame.loc[0, "environment_state"] == "weak"
+
+
+def test_review_tuning_attach_environment_main_requires_samples_or_artifact_dir(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_review_tuning_attach_environment_module()
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(module.parse_args([]))
+
+    assert excinfo.value.code == 2
+    assert "either --artifact-dir or --samples is required" in capsys.readouterr().err

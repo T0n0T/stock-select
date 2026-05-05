@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _load_review_tuning_verify_module():
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "review_tuning_verify.py"
@@ -68,3 +70,26 @@ def test_review_tuning_verify_main_writes_shell_outputs(tmp_path: Path) -> None:
     assert payload["candidate"]["exists"] is True
     assert "baseline" in summary
     assert "candidate" in summary
+
+
+def test_review_tuning_verify_main_fails_for_missing_artifact_dirs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    module = _load_review_tuning_verify_module()
+
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "verify"
+    args = module.parse_args(
+        [
+            "--baseline-artifact-dir",
+            str(tmp_path / "baseline"),
+            "--candidate-artifact-dir",
+            str(tmp_path / "candidate"),
+            "--artifact-dir",
+            str(artifact_dir),
+        ]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(args)
+
+    assert excinfo.value.code == 2
+    assert "must exist and be directories" in capsys.readouterr().err
+    assert not (artifact_dir / "verification.json").exists()

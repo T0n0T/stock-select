@@ -13,6 +13,13 @@ DEFAULT_RUNTIME_ROOT = Path.home() / ".agents" / "skills" / "stock-select" / "ru
 DEFAULT_OUTPUT_DIR = DEFAULT_RUNTIME_ROOT / "research" / "review_tuning"
 
 
+def _parser_error(args: argparse.Namespace, message: str) -> "Never":
+    parser = getattr(args, "_parser", None)
+    if parser is not None:
+        parser.error(message)
+    raise SystemExit(message)
+
+
 def _resolve_output_dir(args: argparse.Namespace) -> Path:
     if args.output_dir is not None:
         return args.output_dir
@@ -37,12 +44,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--candidate-artifact-dir", type=Path, required=True)
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    setattr(args, "_parser", parser)
+    return args
 
 
 def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = parse_args()
+
+    invalid_inputs = [
+        str(path)
+        for path in (args.baseline_artifact_dir, args.candidate_artifact_dir)
+        if not path.is_dir()
+    ]
+    if invalid_inputs:
+        joined = ", ".join(invalid_inputs)
+        _parser_error(args, f"baseline and candidate artifact dirs must exist and be directories: {joined}")
 
     payload = {
         "methods": args.methods,

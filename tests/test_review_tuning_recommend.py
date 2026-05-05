@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from stock_select.research.review_tuning import build_recommendations, render_recommendation_summary
 
 
@@ -1428,3 +1430,15 @@ def test_review_tuning_recommend_main_uses_artifact_dir_defaults(tmp_path: Path)
     assert module.main(args) == 0
     assert (artifact_dir / "recommendations.json").exists()
     assert (artifact_dir / "summary.md").exists()
+
+
+def test_review_tuning_recommend_main_requires_artifact_dir_or_explicit_inputs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_review_tuning_recommend_module()
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(module.parse_args([]))
+
+    assert excinfo.value.code == 2
+    assert "either --artifact-dir or both --correlations and --segments are required" in capsys.readouterr().err
