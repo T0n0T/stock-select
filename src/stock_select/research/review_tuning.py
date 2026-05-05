@@ -287,11 +287,17 @@ def compute_correlations(
         metrics: list[dict[str, object]] = []
         for score_field in CORRELATION_SCORE_FIELDS:
             for target_field in RETURN_FIELDS:
+                pair_count = len(_finite_pairs(scoped_rows, score_field, target_field))
                 metrics.append(
                     {
                         "score_field": score_field,
                         "target_field": target_field,
-                        "pair_count": len(_finite_pairs(scoped_rows, score_field, target_field)),
+                        "pair_count": pair_count,
+                        "coverage_strength": _classify_conclusion_strength(
+                            pair_count,
+                            min_samples_strong=min_samples_strong,
+                            min_samples_weak=min_samples_weak,
+                        ),
                         "pearson_r": safe_pearson(scoped_rows, score_field, target_field),
                         "spearman_r": safe_spearman(scoped_rows, score_field, target_field),
                     }
@@ -328,7 +334,7 @@ def _score_bucket(value: object) -> str | None:
     numeric_value = _coerce_finite_float(value)
     if numeric_value is None:
         return None
-    rounded = int(round(numeric_value))
+    rounded = math.floor(numeric_value + 0.5)
     bounded = max(1, min(5, rounded))
     return str(bounded)
 
@@ -343,6 +349,15 @@ def _total_score_band(value: object, edges: tuple[float, ...] = DEFAULT_TOTAL_BA
         if left <= numeric_value < right:
             return f"{left:.1f}-{right:.1f}"
     return f">={edges[-1]:.1f}"
+
+
+def _ordered_total_score_band_labels(
+    edges: tuple[float, ...] = DEFAULT_TOTAL_BAND_EDGES,
+) -> list[str]:
+    labels = [f"<{edges[0]:.1f}"]
+    labels.extend(f"{left:.1f}-{right:.1f}" for left, right in zip(edges, edges[1:]))
+    labels.append(f">={edges[-1]:.1f}")
+    return labels
 
 
 def _build_segment_payload(
@@ -403,7 +418,8 @@ def build_total_score_band_segments(
             segment_value=segment_value,
             rows=grouped[segment_value],
         )
-        for segment_value in sorted(grouped)
+        for segment_value in _ordered_total_score_band_labels()
+        if segment_value in grouped
     ]
 
 

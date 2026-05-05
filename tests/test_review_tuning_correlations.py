@@ -43,6 +43,35 @@ def test_compute_correlations_marks_small_groups_as_insufficient() -> None:
     assert "spearman_r" in result["groups"][0]["metrics"][0]
 
 
+def test_compute_correlations_adds_metric_level_coverage_strength() -> None:
+    rows = [
+        {
+            "method": "b2",
+            "environment_state": "weak",
+            "total_score": 4.0,
+            "ret3_pct": 1.0,
+            "ret5_pct": 2.0,
+        },
+        {
+            "method": "b2",
+            "environment_state": "weak",
+            "total_score": 3.0,
+            "ret3_pct": -1.0,
+            "ret5_pct": -2.0,
+        },
+    ]
+
+    result = review_tuning.compute_correlations(rows, min_samples_strong=3, min_samples_weak=2)
+
+    metric = next(
+        item
+        for item in result["groups"][0]["metrics"]
+        if item["score_field"] == "total_score" and item["target_field"] == "ret3_pct"
+    )
+    assert metric["pair_count"] == 2
+    assert metric["coverage_strength"] == "weak"
+
+
 def test_review_tuning_correlations_main_writes_json(tmp_path: Path) -> None:
     module = _load_review_tuning_correlations_module()
 

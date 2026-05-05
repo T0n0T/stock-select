@@ -73,6 +73,56 @@ def test_compute_segments_buckets_all_score_fields() -> None:
     assert "macd_phase_bucket" in segment_types
 
 
+def test_compute_segments_uses_half_up_score_buckets_for_half_points() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 1.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 2.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 3.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 4.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+    ]
+
+    result = review_tuning.compute_segments(rows)
+    buckets = [
+        item["segment_value"]
+        for item in result
+        if item["scope_type"] == "overall" and item["segment_type"] == "price_position_bucket"
+    ]
+
+    assert buckets == ["2", "3", "4", "5"]
+
+
 def test_compute_segments_includes_scoped_breakdowns() -> None:
     rows = [
         {
@@ -111,6 +161,25 @@ def test_compute_segments_includes_scoped_breakdowns() -> None:
         for item in result
     )
     assert all("group_key" in item for item in result)
+
+
+def test_compute_segments_orders_total_score_bands_numerically() -> None:
+    rows = [
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 3.4, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 3.5, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 4.1, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 4.4, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 4.6, "ret3_pct": 1.0, "ret5_pct": 1.0},
+    ]
+
+    result = review_tuning.compute_segments(rows)
+    bands = [
+        item["segment_value"]
+        for item in result
+        if item["scope_type"] == "overall" and item["segment_type"] == "total_score_band"
+    ]
+
+    assert bands == ["<3.5", "3.5-4.0", "4.0-4.3", "4.3-4.6", ">=4.6"]
 
 
 def test_review_tuning_segments_main_writes_json(tmp_path: Path) -> None:
