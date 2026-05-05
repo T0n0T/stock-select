@@ -1,0 +1,364 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import math
+from pathlib import Path
+
+import pandas as pd
+import pytest
+import stock_select.research.review_tuning as review_tuning
+
+
+def _load_review_tuning_segments_module():
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "review_tuning_segments.py"
+    spec = importlib.util.spec_from_file_location("review_tuning_segments", script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_compute_segments_groups_by_verdict_and_score_band() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.3,
+            "price_position": 5.0,
+            "ret3_pct": 2.0,
+            "ret5_pct": 3.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "WATCH",
+            "total_score": 3.5,
+            "price_position": 3.0,
+            "ret3_pct": 1.0,
+            "ret5_pct": 0.0,
+        },
+    ]
+
+    result = review_tuning.compute_segments(rows)
+
+    assert any(item["segment_type"] == "verdict" and item["segment_value"] == "PASS" for item in result)
+    assert any(item["segment_type"] == "total_score_band" for item in result)
+
+
+def test_compute_segments_buckets_all_score_fields() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.3,
+            "trend_structure": 4.0,
+            "price_position": 5.0,
+            "volume_behavior": 3.0,
+            "previous_abnormal_move": 2.0,
+            "macd_phase": 4.0,
+            "ret3_pct": 2.0,
+            "ret5_pct": 3.0,
+        }
+    ]
+
+    result = review_tuning.compute_segments(rows)
+    segment_types = {item["segment_type"] for item in result}
+
+    assert "trend_structure_bucket" in segment_types
+    assert "price_position_bucket" in segment_types
+    assert "volume_behavior_bucket" in segment_types
+    assert "previous_abnormal_move_bucket" in segment_types
+    assert "macd_phase_bucket" in segment_types
+
+
+def test_compute_segments_uses_half_up_score_buckets_for_half_points() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 1.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 2.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 3.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.0,
+            "price_position": 4.5,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        },
+    ]
+
+    result = review_tuning.compute_segments(rows)
+    buckets = [
+        item["segment_value"]
+        for item in result
+        if item["scope_type"] == "overall" and item["segment_type"] == "price_position_bucket"
+    ]
+
+    assert buckets == ["2", "3", "4", "5"]
+
+
+def test_compute_segments_includes_scoped_breakdowns() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "total_score": 4.3,
+            "price_position": 5.0,
+            "macd_phase": 4.0,
+            "ret3_pct": 2.0,
+            "ret5_pct": 3.0,
+        },
+        {
+            "method": "b2",
+            "environment_state": "weak",
+            "verdict": "WATCH",
+            "total_score": 3.5,
+            "price_position": 3.0,
+            "macd_phase": 2.0,
+            "ret3_pct": 1.0,
+            "ret5_pct": 0.0,
+        },
+    ]
+
+    result = review_tuning.compute_segments(rows)
+
+    assert any(item["scope_type"] == "method" and item["method"] == "b1" for item in result)
+    assert any(
+        item["scope_type"] == "environment_state" and item["environment_state"] == "neutral"
+        for item in result
+    )
+    assert any(
+        item["scope_type"] == "method_environment_state"
+        and item["method"] == "b1"
+        and item["environment_state"] == "neutral"
+        for item in result
+    )
+    assert all("group_key" in item for item in result)
+
+
+def test_compute_segments_orders_total_score_bands_numerically() -> None:
+    rows = [
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 3.4, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 3.5, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 4.1, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 4.4, "ret3_pct": 1.0, "ret5_pct": 1.0},
+        {"method": "b1", "environment_state": "neutral", "verdict": "PASS", "total_score": 4.6, "ret3_pct": 1.0, "ret5_pct": 1.0},
+    ]
+
+    result = review_tuning.compute_segments(rows)
+    bands = [
+        item["segment_value"]
+        for item in result
+        if item["scope_type"] == "overall" and item["segment_type"] == "total_score_band"
+    ]
+
+    assert bands == ["<3.5", "3.5-4.0", "4.0-4.3", "4.3-4.6", ">=4.6"]
+
+
+def test_compute_segments_skips_missing_verdict_and_environment_state() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": math.nan,
+            "verdict": math.nan,
+            "total_score": 4.1,
+            "price_position": 4.0,
+            "ret3_pct": 1.0,
+            "ret5_pct": 1.0,
+        }
+    ]
+
+    result = review_tuning.compute_segments(rows)
+
+    assert not any(item["group_key"] == "environment_state:nan" for item in result)
+    assert not any(item["segment_type"] == "verdict" and item["segment_value"] == "NAN" for item in result)
+
+
+def test_review_tuning_segments_main_writes_json(tmp_path: Path) -> None:
+    module = _load_review_tuning_segments_module()
+
+    samples_path = tmp_path / "samples_with_env.csv"
+    samples_path.write_text(
+        "\n".join(
+            [
+                "method,environment_state,verdict,total_score,price_position,macd_phase,ret3_pct,ret5_pct",
+                "b1,neutral,PASS,4.3,5,4,2.0,3.0",
+                "b1,neutral,WATCH,3.5,3,2,1.0,0.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "output"
+    args = module.parse_args(
+        [
+            "--samples",
+            str(samples_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+
+    payload = json.loads((output_dir / "segments.json").read_text(encoding="utf-8"))
+    assert any(item["segment_type"] == "verdict" for item in payload)
+
+
+def test_review_tuning_segments_main_writes_csv(tmp_path: Path) -> None:
+    module = _load_review_tuning_segments_module()
+
+    samples_path = tmp_path / "samples_with_env.csv"
+    samples_path.write_text(
+        "\n".join(
+            [
+                "method,environment_state,verdict,total_score,price_position,macd_phase,ret3_pct,ret5_pct",
+                "b1,neutral,PASS,4.3,5,4,2.0,3.0",
+                "b1,neutral,WATCH,3.5,3,2,1.0,0.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "output"
+    args = module.parse_args(
+        [
+            "--samples",
+            str(samples_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+
+    frame = pd.read_csv(output_dir / "segments.csv")
+    assert "group_key" in frame.columns
+    assert "segment_type" in frame.columns
+    assert "ret3_n" in frame.columns
+    assert "ret3_avg" in frame.columns
+    assert "ret3_median" in frame.columns
+    assert "ret3_win_rate" in frame.columns
+    assert "ret3_max" in frame.columns
+    assert "ret3_min" in frame.columns
+    assert "ret5_n" in frame.columns
+    assert "ret5_avg" in frame.columns
+    assert "ret5_median" in frame.columns
+    assert "ret5_win_rate" in frame.columns
+    assert "ret5_max" in frame.columns
+    assert "ret5_min" in frame.columns
+    assert "ret3" not in frame.columns
+    assert "ret5" not in frame.columns
+
+
+def test_review_tuning_segments_main_handles_header_only_csv_with_stable_outputs(tmp_path: Path) -> None:
+    module = _load_review_tuning_segments_module()
+
+    samples_path = tmp_path / "samples_with_env.csv"
+    samples_path.write_text(
+        "method,environment_state,verdict,total_score,price_position,macd_phase,ret3_pct,ret5_pct\n",
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "output"
+    args = module.parse_args(
+        [
+            "--samples",
+            str(samples_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert module.main(args) == 0
+
+    payload = json.loads((output_dir / "segments.json").read_text(encoding="utf-8"))
+    assert payload == []
+
+    frame = pd.read_csv(output_dir / "segments.csv")
+    assert list(frame.columns) == [
+        "group_key",
+        "scope_type",
+        "method",
+        "environment_state",
+        "segment_type",
+        "segment_value",
+        "sample_count",
+        "ret3_n",
+        "ret3_avg",
+        "ret3_median",
+        "ret3_win_rate",
+        "ret3_max",
+        "ret3_min",
+        "ret5_n",
+        "ret5_avg",
+        "ret5_median",
+        "ret5_win_rate",
+        "ret5_max",
+        "ret5_min",
+    ]
+    assert frame.empty
+
+
+def test_review_tuning_segments_main_uses_artifact_dir_defaults(tmp_path: Path) -> None:
+    module = _load_review_tuning_segments_module()
+
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "smoke"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "samples_with_env.csv").write_text(
+        "\n".join(
+            [
+                "method,environment_state,verdict,total_score,price_position,macd_phase,ret3_pct,ret5_pct",
+                "b1,neutral,PASS,4.3,5,4,2.0,3.0",
+                "b1,neutral,WATCH,3.5,3,2,1.0,0.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    args = module.parse_args(["--artifact-dir", str(artifact_dir)])
+
+    assert module.main(args) == 0
+    assert (artifact_dir / "segments.json").exists()
+    assert (artifact_dir / "segments.csv").exists()
+
+
+def test_review_tuning_segments_main_requires_samples_or_artifact_dir(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_review_tuning_segments_module()
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(module.parse_args([]))
+
+    assert excinfo.value.code == 2
+    assert "either --artifact-dir or --samples is required" in capsys.readouterr().err
