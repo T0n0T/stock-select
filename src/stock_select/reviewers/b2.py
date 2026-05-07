@@ -6,6 +6,7 @@ import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.environment_profiles import MethodEnvironmentProfile
+from stock_select.indicators import compute_macd
 from stock_select.review_orchestrator import (
     compute_method_total_score,
     describe_macd_trend_state,
@@ -48,6 +49,7 @@ def review_b2_symbol_history(
 
     weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
     daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], pick_date)
+    strong_negative_macd_guard = _resolve_strong_negative_macd_guard(frame)
 
     if profile is not None and profile.state == "weak":
         weak_result = _score_b2_weak_bundle(
@@ -192,6 +194,7 @@ def review_b2_symbol_history(
         if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
         else None,
         profile=profile,
+        strong_negative_macd_guard=strong_negative_macd_guard,
     )
     elastic_watch, elastic_watch_reason = infer_b2_elastic_watch(
         verdict=verdict,
@@ -784,7 +787,16 @@ def infer_b2_verdict(
     close_above_ma25_pct: float | None = None,
     ma25_above_zxdkx_pct: float | None = None,
     profile: MethodEnvironmentProfile | None = None,
+    strong_negative_macd_guard: bool = True,
 ) -> str:
+    strong_negative_macd_guard_required = bool(
+        profile is not None
+        and profile.state == "strong"
+        and price_position >= 4.0
+        and trend_structure == 4.0
+        and volume_behavior >= 5.0
+    )
+
     if signal_type == "distribution_risk":
         if (
             macd_phase >= 4.5
@@ -811,6 +823,8 @@ def infer_b2_verdict(
         )
     )
     if strong_macd_setup:
+        if strong_negative_macd_guard_required and not strong_negative_macd_guard:
+            return "WATCH"
         return "PASS"
 
     overheat_extension = (
@@ -854,6 +868,8 @@ def infer_b2_verdict(
     ):
         strong_trend_start_mid_macd_setup = False
     if strong_trend_start_mid_macd_setup:
+        if strong_negative_macd_guard_required and not strong_negative_macd_guard:
+            return "WATCH"
         return "PASS"
 
     if (
@@ -888,6 +904,22 @@ def infer_b2_verdict(
     ):
         return "PASS"
 
+    strong_b3_early_mid_macd_upgrade = (
+        profile is not None
+        and profile.state == "strong"
+        and signal in {"B3", "B3+"}
+        and signal_type in {"rebound", "trend_start"}
+        and trend_structure == 4.0
+        and price_position >= 4.0
+        and volume_behavior >= 4.0
+        and previous_abnormal_move >= 3.0
+        and 3.0 <= macd_phase < 3.8
+        and total_score >= 4.0
+        and not overheat_extension
+    )
+    if strong_b3_early_mid_macd_upgrade:
+        return "PASS"
+
     b3_upgrade_signal = signal in {"B3", "B3+"}
     b3_upgrade_setup = (
         b3_upgrade_signal
@@ -903,6 +935,8 @@ def infer_b2_verdict(
         )
     )
     if b3_upgrade_setup:
+        if strong_negative_macd_guard_required and not strong_negative_macd_guard:
+            return "WATCH"
         return "PASS"
 
     if total_score >= 3.3:
@@ -1235,6 +1269,34 @@ def _score_b2_macd_phase(
     daily_trend: Any,
 ) -> float:
     return map_macd_phase_score(method="b2", history_len=len(frame), weekly_trend=weekly_trend, daily_trend=daily_trend)
+
+
+def _strong_negative_macd_half_peak_guard(*, macd_hist: float, recent_peak: float) -> bool:
+    if recent_peak <= 0.0:
+        return True
+    if macd_hist >= 0.0:
+        return True
+    return abs(macd_hist) < (recent_peak * 0.5)
+
+
+def _resolve_strong_negative_macd_guard(frame: pd.DataFrame) -> bool:
+    macd = compute_macd(frame[["close"]].astype(float))
+    hist = pd.to_numeric(macd["macd_hist"], errors="coerce").dropna().reset_index(drop=True)
+    if hist.empty:
+        return True
+    latest_hist = float(hist.iloc[-1])
+    if latest_hist >= 0.0:
+        return True
+
+    negative_run: list[float] = []
+    for value in reversed(hist.tolist()):
+        value_f = float(value)
+        if value_f < 0.0:
+            negative_run.append(abs(value_f))
+            continue
+        break
+    recent_peak = max(negative_run) if negative_run else abs(latest_hist)
+    return _strong_negative_macd_half_peak_guard(macd_hist=latest_hist, recent_peak=recent_peak)
 
 
 def _build_b2_comment(*, weekly_trend: Any, daily_trend: Any, verdict: str) -> str:

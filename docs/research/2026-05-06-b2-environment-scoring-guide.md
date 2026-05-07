@@ -161,6 +161,52 @@ neutral 环境优先看下面三件事：
 - `trend_structure = aggressive`
 - `previous_abnormal_move = lenient`
 
+### 当前 review 条件
+
+当前 strong `b2` 的 baseline review 重点不在“深回踩确认”，而在“右侧确认是否仍然健康”。
+
+当前可以直接推到 `PASS` 的主要路径有三类：
+
+- 高位强确认路径：
+  - `macd_phase >= 4.5`
+  - `previous_abnormal_move >= 5`
+  - `trend_structure >= 3`
+  - `price_position >= 2`
+  - `volume_behavior >= 2`
+  - `total_score >= 3.6`
+- `trend_start` 中高 MACD 路径：
+  - `signal_type = trend_start`
+  - `trend_structure >= 4`
+  - `previous_abnormal_move >= 5`
+  - `price_position >= 3`
+  - `volume_behavior >= 3`
+  - `total_score >= pass_threshold`
+  - `macd_phase >= 4.2`
+  - 或 `macd_phase >= 3.5 且 price_position = 5`
+- `B3 / B3+` 提前升级路径：
+  - `signal in {B3, B3+}`
+  - `signal_type in {trend_start, rebound}`
+  - `trend_structure = 4`
+  - `price_position >= 4`
+  - `volume_behavior >= 4`
+  - `previous_abnormal_move >= 3`
+  - `3.0 <= macd_phase < 3.8`
+  - `total_score >= 4.0`
+  - 且不能落入过热扩张区
+
+当前 strong 下还有两条重要的防守约束：
+
+- 负 MACD guard 只对“高位且量能过热”的票生效：
+  - `trend_structure = 4`
+  - `price_position >= 4`
+  - `volume_behavior >= 5`
+  - 如果最新 `MACD hist < 0`，则要求 `abs(latest_hist) < 近期负柱波峰 * 0.5`
+  - 否则 `PASS -> WATCH`
+- `overheat_extension` 仍然保留：
+  - `close_above_ma25_pct >= 10`
+  - 或 `ma25_above_zxdkx_pct >= 15`
+  - 命中后不直接升 `PASS`
+
 ### 调试重点
 
 - 强环境下先看 `macd_phase` 是否能把真正右侧启动和伪突破分开
@@ -173,6 +219,29 @@ neutral 环境优先看下面三件事：
 - MACD 处于强确认区
 - 前期异动后未被明显破坏
 - 更能接受启动确认而不是等待深回踩
+
+### 当前希望筛到的 PASS 典型特征
+
+当前 strong `PASS` 更希望筛到下面两类票，而不是简单把所有高分右侧票都抬进来：
+
+- 右侧确认但不过热的 `B2 trend_start`
+  - `trend_structure = 4`
+  - `price_position = 5`
+  - `previous_abnormal_move = 5`
+  - `macd_phase` 高但结构健康
+  - `volume_behavior` 以 `3 / 4` 为佳，不希望默认把 `5` 视为更优
+- 具备弹性的 `B3 / B3+`
+  - 尤其是 `rebound` 型 `B3`
+  - `trend_structure = 4`
+  - `price_position >= 4`
+  - `previous_abnormal_move >= 5`
+  - `3.0 <= macd_phase < 3.8` 时可以提前升级
+
+当前 strong 下不希望进入 `PASS` 头部的典型形态是：
+
+- `B2 + trend_start + volume_behavior = 5 + macd_phase` 高位
+- 价格和均线关系已经明显扩张，但量价仍在加速
+- 这类票不一定不能做，但更像“末端追高风险”，不应天然排在 strong `PASS top3` 前列
 
 ## 五、后续调参时的统一检查顺序
 
