@@ -46,6 +46,7 @@ def review_b2_symbol_history(
     volume = frame["vol"].astype(float) if "vol" in frame.columns else frame["volume"].astype(float)
     ma25 = close.rolling(window=25, min_periods=25).mean()
     zxdq, zxdkx = _resolve_zx_lines(frame)
+    support_slopes = _compute_recent_support_slopes(zxdq=zxdq, zxdkx=zxdkx)
 
     weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], pick_date)
     daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], pick_date)
@@ -193,6 +194,7 @@ def review_b2_symbol_history(
         ma25_above_zxdkx_pct=(float(ma25.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
         if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
         else None,
+        zxdq_5d_slope_pct=support_slopes.get("zxdq_5d"),
         profile=profile,
         strong_negative_macd_guard=strong_negative_macd_guard,
     )
@@ -262,6 +264,7 @@ def _score_b2_weak_bundle(
     signal: str | None,
     profile: MethodEnvironmentProfile,
 ) -> dict[str, object]:
+    support_slopes = _compute_recent_support_slopes(zxdq=zxdq, zxdkx=zxdkx)
     trend_structure = _score_b2_trend_structure(
         close=close,
         low=low,
@@ -323,6 +326,7 @@ def _score_b2_weak_bundle(
         ma25_above_zxdkx_pct=(float(ma25.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
         if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
         else None,
+        zxdq_5d_slope_pct=support_slopes.get("zxdq_5d"),
         profile=profile,
     )
     relaunch_override = _infer_b2_weak_relaunch_override(
@@ -786,6 +790,7 @@ def infer_b2_verdict(
     signal_type: str,
     close_above_ma25_pct: float | None = None,
     ma25_above_zxdkx_pct: float | None = None,
+    zxdq_5d_slope_pct: float | None = None,
     profile: MethodEnvironmentProfile | None = None,
     strong_negative_macd_guard: bool = True,
 ) -> str:
@@ -882,6 +887,7 @@ def infer_b2_verdict(
         and previous_abnormal_move >= 5.0
         and 3.8 <= macd_phase < 4.2
         and total_score >= 4.0
+        and (zxdq_5d_slope_pct is None or zxdq_5d_slope_pct >= 0.0)
         and not overheat_extension
     ):
         return "PASS"
@@ -900,6 +906,22 @@ def infer_b2_verdict(
             price_position >= 4.0
             or signal in {"B3", "B3+"}
         )
+        and (zxdq_5d_slope_pct is None or zxdq_5d_slope_pct >= 0.0)
+        and not overheat_extension
+    ):
+        return "PASS"
+
+    if (
+        profile is not None
+        and profile.state == "neutral"
+        and signal == "B3"
+        and signal_type == "trend_start"
+        and trend_structure == 4.0
+        and price_position == 4.0
+        and volume_behavior == 3.0
+        and previous_abnormal_move >= 5.0
+        and total_score <= 4.28
+        and 4.2 <= macd_phase <= 4.42
         and not overheat_extension
     ):
         return "PASS"

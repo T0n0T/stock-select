@@ -1365,6 +1365,48 @@ def test_b2_verdict_keeps_neutral_strong_macd_rebound_as_watch() -> None:
     assert verdict == "WATCH"
 
 
+def test_b2_verdict_neutral_rebound_pass_requires_non_negative_zxdq_slope() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.72,
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.4,
+        signal="B2",
+        signal_type="rebound",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        zxdq_5d_slope_pct=-0.2,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_verdict_neutral_rebound_pass_keeps_non_negative_zxdq_slope() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.72,
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.4,
+        signal="B2",
+        signal_type="rebound",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        zxdq_5d_slope_pct=0.2,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "PASS"
+
+
 def test_b2_verdict_uses_environment_profile_thresholds_for_same_setup() -> None:
     profile_weak = get_method_environment_profile(method="b2", state="weak")
     profile_strong = get_method_environment_profile(method="b2", state="strong")
@@ -1451,6 +1493,46 @@ def test_b2_verdict_keeps_neutral_trend_start_high_price_mid_macd_as_watch() -> 
         previous_abnormal_move=5.0,
         macd_phase=3.68,
         signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_verdict_upgrades_neutral_b3_trend_start_watch_a_slice_to_pass() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=4.28,
+        trend_structure=4.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.42,
+        signal="B3",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_b2_verdict_keeps_neutral_b3_trend_start_watch_a_slice_as_watch_above_macd_cap() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=4.28,
+        trend_structure=4.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.46,
+        signal="B3",
         signal_type="trend_start",
         close_above_ma25_pct=4.0,
         ma25_above_zxdkx_pct=8.0,
