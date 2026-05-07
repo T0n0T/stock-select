@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.reviewers.b2 import (
     infer_b2_elastic_watch,
@@ -300,6 +301,942 @@ def test_b2_review_uses_environment_profile_for_extension_zone_price_position() 
     assert weak_review["total_score"] < strong_review["total_score"]
 
 
+def test_b2_review_dispatches_to_weak_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._score_b2_weak_bundle",
+        lambda **kwargs: (
+            captured.setdefault("called", kwargs),
+            {
+                "trend_structure": 2.0,
+                "price_position": 2.0,
+                "volume_behavior": 3.0,
+                "previous_abnormal_move": 3.0,
+                "macd_phase": 2.5,
+                "total_score": 2.8,
+                "signal_type": "rebound",
+                "verdict": "FAIL",
+                "elastic_watch": False,
+                "elastic_watch_reason": None,
+                "watch_score": None,
+                "watch_tier": None,
+            },
+        )[1],
+    )
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert captured["called"]
+    assert review["verdict"] == "FAIL"
+
+
+def test_b2_weak_bundle_produces_defensive_scores_for_right_side_start() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["price_position"] <= 3.0
+    assert result["trend_structure"] <= 4.0
+    assert result["verdict"] in {"WATCH", "FAIL"}
+
+
+def test_b2_weak_bundle_promotes_safe_relaunch_a_to_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "rebound")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.6)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "PASS"
+
+
+def test_b2_weak_bundle_promotes_safe_relaunch_b_only_to_watch_a(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.8},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-A"
+
+
+def test_b2_weak_bundle_does_not_promote_safe_relaunch_when_redundancy_too_high(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 6.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] != "PASS"
+
+
+def test_b2_weak_bundle_downgrades_safe_relaunch_a_trend_start_to_watch_b(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "trend_start")
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-B"
+
+
+def test_b2_weak_bundle_downgrades_high_macd_safe_relaunch_a_to_watch_b(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "rebound")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.34)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-B"
+
+
+def test_b2_weak_bundle_keeps_negative_zxdq_slope_safe_relaunch_a_as_watch_a(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "rebound")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.72)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_slopes",
+        lambda **_kwargs: {"zxdkx_5d": 0.8, "zxdq_5d": -1.6},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-A"
+
+
+def test_b2_weak_bundle_downgrades_b3_safe_relaunch_a_to_watch_b(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "rebound")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.6)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_slopes",
+        lambda **_kwargs: {"zxdkx_5d": 0.8, "zxdq_5d": -0.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B3",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-B"
+
+
+def test_b2_weak_bundle_downgrades_trend_start_negative_zxdq_watch_a_to_watch_b(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "trend_start")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.42)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_slopes",
+        lambda **_kwargs: {"zxdkx_5d": 0.4, "zxdq_5d": -0.4},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_positions",
+        lambda **_kwargs: {"close_vs_ma25": 3.0, "close_vs_zxdq": 2.0, "close_vs_zxdkx": 6.0},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-B"
+
+
+def test_b2_weak_bundle_downgrades_rebound_below_ma25_and_zxdq_to_watch_b(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "rebound")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.72)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_slopes",
+        lambda **_kwargs: {"zxdkx_5d": 1.0, "zxdq_5d": -1.8},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_positions",
+        lambda **_kwargs: {"close_vs_ma25": -3.5, "close_vs_zxdq": -3.6, "close_vs_zxdkx": 6.9},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-B"
+
+
+def test_b2_weak_bundle_keeps_trend_start_safe_relaunch_a_out_of_watch_a(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "trend_start")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.76)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_slopes",
+        lambda **_kwargs: {"zxdkx_5d": 2.4, "zxdq_5d": 0.6},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_positions",
+        lambda **_kwargs: {"close_vs_ma25": 4.1, "close_vs_zxdq": 2.4, "close_vs_zxdkx": 14.3},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-B"
+
+
+def test_b2_weak_bundle_keeps_b3_rebound_safe_relaunch_a_out_of_watch_a(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    monkeypatch.setattr("stock_select.reviewers.b2.infer_signal_type", lambda **_kwargs: "rebound")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.72)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_slopes",
+        lambda **_kwargs: {"zxdkx_5d": 1.7, "zxdq_5d": -1.6},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_recent_support_positions",
+        lambda **_kwargs: {"close_vs_ma25": -3.6, "close_vs_zxdq": -3.6, "close_vs_zxdkx": 6.9},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_a",
+        lambda **_kwargs: {"matched": True, "quality": "clean", "redundancy_pct": 3.2},
+    )
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._detect_b2_weak_safe_relaunch_b",
+        lambda **_kwargs: {"matched": False, "quality": None, "redundancy_pct": None},
+    )
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_weak_bundle"])._score_b2_weak_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B3",
+        profile=profile_weak,
+    )
+
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] == "WATCH-B"
+
+
+def test_b2_review_dispatches_to_neutral_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._score_b2_neutral_bundle",
+        lambda **kwargs: (
+            captured.setdefault("called", kwargs),
+            {
+                "trend_structure": 4.0,
+                "price_position": 3.0,
+                "volume_behavior": 3.0,
+                "previous_abnormal_move": 4.0,
+                "macd_phase": 3.6,
+                "total_score": 3.8,
+                "signal_type": "trend_start",
+                "verdict": "WATCH",
+                "elastic_watch": False,
+                "elastic_watch_reason": None,
+                "watch_score": 52.0,
+                "watch_tier": "WATCH-B",
+            },
+        )[1],
+    )
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+        profile=profile_neutral,
+    )
+
+    assert captured["called"]
+    assert review["verdict"] == "WATCH"
+    assert review["watch_tier"] == "WATCH-B"
+
+
+def test_b2_neutral_bundle_keeps_right_side_start_out_of_pass() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_neutral_bundle"])._score_b2_neutral_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_neutral,
+    )
+
+    assert result["price_position"] <= 4.0
+    assert result["verdict"] in {"WATCH", "FAIL"}
+
+
+def test_b2_neutral_bundle_promotes_mid_box_confirmation_to_watch_a() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+    history = _constructive_b2_history()
+    frame = history.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"])
+    frame = frame.loc[frame["trade_date"] <= pd.Timestamp("2026-04-30")].sort_values("trade_date").reset_index(drop=True)
+    close = frame["close"].astype(float)
+    open_ = frame["open"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    volume = frame["vol"].astype(float)
+    ma25 = close.rolling(window=25, min_periods=25).mean()
+    from stock_select.reviewers.b2 import _resolve_zx_lines
+
+    zxdq, zxdkx = _resolve_zx_lines(frame)
+    weekly_trend = classify_weekly_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+    daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], "2026-04-30")
+
+    result = __import__("stock_select.reviewers.b2", fromlist=["_score_b2_neutral_bundle"])._score_b2_neutral_bundle(
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+        volume=volume,
+        ma25=ma25,
+        zxdq=zxdq,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        signal="B2",
+        profile=profile_neutral,
+    )
+
+    assert result["price_position"] == 4.0
+    assert result["verdict"] == "WATCH"
+    assert result["watch_tier"] in {"WATCH-A", "WATCH-B"}
+
+
+def test_b2_neutral_bundle_does_not_pass_high_macd_price4_combo() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=4.25,
+        trend_structure=4.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.38,
+        signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_neutral_bundle_promotes_price4_mid_macd_confirmation_to_pass() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=4.12,
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.84,
+        signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_b2_neutral_bundle_promotes_rebound_pullback_near_anchor_to_pass() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.54,
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.6,
+        signal="B2",
+        signal_type="rebound",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_b2_neutral_bundle_keeps_rebound_pullback_breakout_volume_as_watch() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.66,
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=5.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.6,
+        signal="B2",
+        signal_type="rebound",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_neutral_bundle_keeps_b2_pullback_price3_as_watch() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.54,
+        trend_structure=3.0,
+        price_position=3.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.6,
+        signal="B2",
+        signal_type="rebound",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_neutral_bundle_keeps_b3_pullback_price3_as_pass() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.69,
+        trend_structure=3.0,
+        price_position=3.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.6,
+        signal="B3",
+        signal_type="rebound",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_b2_neutral_bundle_keeps_pullback_volume4_as_watch() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.78,
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.6,
+        signal="B3",
+        signal_type="rebound",
+        close_above_ma25_pct=3.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_trend_structure_uses_environment_profile_to_downgrade_neutral_trend_window() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    close = _series([10.0] * 60 + [10.2, 10.4, 10.6, 10.8, 11.0])
+    low = close * 0.995
+    ma25 = _series([9.8] * 60 + [10.0, 10.1, 10.2, 10.3, 10.4])
+    zxdkx = _series([9.4] * 60 + [9.6, 9.7, 9.8, 9.9, 10.0])
+    weekly_trend = type("Trend", (), {"phase": "rising", "is_top_divergence": False})()
+    daily_trend = type(
+        "Trend",
+        (),
+        {"phase": "rising", "is_top_divergence": False, "is_rising_initial": True},
+    )()
+
+    neutral_score = _score_b2_trend_structure(
+        close=close,
+        low=low,
+        ma25=ma25,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        profile=profile_neutral,
+    )
+    strong_score = _score_b2_trend_structure(
+        close=close,
+        low=low,
+        ma25=ma25,
+        zxdkx=zxdkx,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        profile=profile_strong,
+    )
+
+    assert neutral_score == 4.0
+    assert strong_score == 5.0
+
+
 def test_b2_verdict_keeps_trend_start_mid_macd_as_watch_when_ma25_too_far_above_zxdkx() -> None:
     assert (
         infer_b2_verdict(
@@ -348,6 +1285,137 @@ def test_b2_verdict_passes_strong_macd_and_constructive_wash() -> None:
         )
         == "PASS"
     )
+
+
+def test_b2_verdict_keeps_weak_strong_macd_rebound_as_watch() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+
+    verdict = infer_b2_verdict(
+        total_score=3.72,
+        trend_structure=3.0,
+        price_position=2.0,
+        volume_behavior=2.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.5,
+        signal="B2",
+        signal_type="rebound",
+        profile=profile_weak,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_verdict_keeps_neutral_strong_macd_rebound_as_watch() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=3.72,
+        trend_structure=3.0,
+        price_position=2.0,
+        volume_behavior=2.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.5,
+        signal="B2",
+        signal_type="rebound",
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_verdict_uses_environment_profile_thresholds_for_same_setup() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+
+    weak_verdict = infer_b2_verdict(
+        total_score=4.02,
+        trend_structure=4.0,
+        price_position=5.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.6,
+        signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_weak,
+    )
+    strong_verdict = infer_b2_verdict(
+        total_score=4.02,
+        trend_structure=4.0,
+        price_position=5.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.6,
+        signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_strong,
+    )
+
+    assert weak_verdict == "WATCH"
+    assert strong_verdict == "PASS"
+
+
+def test_b2_verdict_keeps_weak_trend_start_high_price_mid_macd_as_watch() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+
+    verdict = infer_b2_verdict(
+        total_score=4.32,
+        trend_structure=4.0,
+        price_position=5.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.68,
+        signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_weak,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_verdict_keeps_weak_strong_macd_trend_start_as_watch() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+
+    verdict = infer_b2_verdict(
+        total_score=4.34,
+        trend_structure=4.0,
+        price_position=4.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.5,
+        signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_weak,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b2_verdict_keeps_neutral_trend_start_high_price_mid_macd_as_watch() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+
+    verdict = infer_b2_verdict(
+        total_score=4.18,
+        trend_structure=4.0,
+        price_position=5.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.68,
+        signal="B2",
+        signal_type="trend_start",
+        close_above_ma25_pct=4.0,
+        ma25_above_zxdkx_pct=8.0,
+        profile=profile_neutral,
+    )
+
+    assert verdict == "WATCH"
 
 
 def test_b2_verdict_keeps_strong_structure_with_good_mid_macd_as_watch() -> None:
@@ -444,6 +1512,24 @@ def test_b2_verdict_does_not_upgrade_b3_trend_start_below_score_boundary() -> No
         )
         == "WATCH"
     )
+
+
+def test_b2_verdict_keeps_weak_b3_trend_start_as_watch() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+
+    verdict = infer_b2_verdict(
+        total_score=4.2,
+        trend_structure=4.0,
+        price_position=5.0,
+        volume_behavior=2.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.9,
+        signal="B3",
+        signal_type="trend_start",
+        profile=profile_weak,
+    )
+
+    assert verdict == "WATCH"
 
 
 def test_b2_verdict_keeps_distribution_risk_out_of_b3_upgrade_even_with_strong_scores() -> None:
@@ -652,6 +1738,60 @@ def test_b2_previous_abnormal_move_rewards_constructive_wash_without_damage() ->
     assert _score_b2_previous_abnormal_move(open_=open_, close=close, low=low, volume=volume) == 5.0
 
 
+def test_b2_previous_abnormal_move_uses_environment_profile_to_penalize_weak_shallow_wash() -> None:
+    profile_weak = get_method_environment_profile(method="b2", state="weak")
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    open_ = _series([10.0] * 92 + [100.0, 92.0, 94.0, 96.0])
+    close = _series([10.0] * 92 + [100.0, 92.0, 94.0, 96.0])
+    low = _series([9.8] * 92 + [100.0, 91.0, 93.0, 95.0])
+    volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
+
+    weak_score = _score_b2_previous_abnormal_move(
+        open_=open_,
+        close=close,
+        low=low,
+        volume=volume,
+        profile=profile_weak,
+    )
+    strong_score = _score_b2_previous_abnormal_move(
+        open_=open_,
+        close=close,
+        low=low,
+        volume=volume,
+        profile=profile_strong,
+    )
+
+    assert weak_score == 3.0
+    assert strong_score == 5.0
+
+
+def test_b2_previous_abnormal_move_uses_environment_profile_to_leniently_reward_strong_pullback() -> None:
+    profile_neutral = get_method_environment_profile(method="b2", state="neutral")
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    open_ = _series([10.0] * 92 + [100.0, 70.0, 72.0, 74.0])
+    close = _series([10.0] * 92 + [100.0, 71.0, 73.0, 75.0])
+    low = _series([9.8] * 92 + [100.0, 66.0, 68.0, 70.0])
+    volume = _series([1000.0] * 92 + [9000.0, 2000.0, 1800.0, 1600.0])
+
+    neutral_score = _score_b2_previous_abnormal_move(
+        open_=open_,
+        close=close,
+        low=low,
+        volume=volume,
+        profile=profile_neutral,
+    )
+    strong_score = _score_b2_previous_abnormal_move(
+        open_=open_,
+        close=close,
+        low=low,
+        volume=volume,
+        profile=profile_strong,
+    )
+
+    assert neutral_score == 5.0
+    assert strong_score == 3.0
+
+
 def test_b2_previous_abnormal_move_uses_redundant_price_and_body_low() -> None:
     open_ = _series([10.0] * 92 + [100.0, 96.0, 95.0, 94.0])
     close = _series([10.0] * 92 + [100.0, 96.0, 95.0, 94.0])
@@ -754,6 +1894,20 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
     assert "日线MACD" in review["comment"]
     assert "wave" not in review["comment"]
     assert "三浪" not in review["comment"]
+
+
+def test_b2_review_uses_profile_weighted_total_score() -> None:
+    history = _constructive_b2_history()
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+        profile=get_method_environment_profile(method="b2", state="strong"),
+    )
+
+    assert review["total_score"] == 4.38
 
 
 def test_b2_review_does_not_apply_macd_verdict_gate(monkeypatch) -> None:

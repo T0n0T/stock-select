@@ -6,6 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from stock_select.environment_profiles import get_method_environment_profile
+from stock_select.review_protocol import compute_b2_weighted_total_for_profile
 
 
 @pytest.mark.parametrize(
@@ -43,6 +44,14 @@ def test_b2_strong_profile_favors_macd_and_trend() -> None:
     assert profile.signal_weight == 0.15
 
 
+def test_b2_neutral_profile_rebalances_toward_price_and_volume() -> None:
+    profile = get_method_environment_profile(method="b2", state="neutral")
+
+    assert profile.weights["price_position"] > profile.weights["macd_phase"]
+    assert profile.weights["volume_behavior"] > 0.0
+    assert profile.weights["trend_structure"] >= 0.16
+
+
 def test_retrieved_profile_mutation_does_not_affect_fresh_lookup() -> None:
     profile = get_method_environment_profile(method="b2", state="weak")
     profile.weights["macd_phase"] = 9.99
@@ -62,3 +71,32 @@ def test_get_method_environment_profile_rejects_unsupported_method() -> None:
 def test_get_method_environment_profile_rejects_unsupported_state() -> None:
     with pytest.raises(ValueError, match="Unsupported environment profile method"):
         get_method_environment_profile(method="b1", state="panic")
+
+
+def test_b2_profiles_produce_distinct_weighted_totals_for_same_scores() -> None:
+    scores = {
+        "trend_structure": 4.0,
+        "price_position": 5.0,
+        "volume_behavior": 3.0,
+        "previous_abnormal_move": 5.0,
+        "macd_phase": 4.5,
+    }
+    weak = compute_b2_weighted_total_for_profile(
+        scores,
+        profile=get_method_environment_profile(method="b2", state="weak"),
+        signal="B2",
+    )
+    neutral = compute_b2_weighted_total_for_profile(
+        scores,
+        profile=get_method_environment_profile(method="b2", state="neutral"),
+        signal="B2",
+    )
+    strong = compute_b2_weighted_total_for_profile(
+        scores,
+        profile=get_method_environment_profile(method="b2", state="strong"),
+        signal="B2",
+    )
+
+    assert weak < strong
+    assert neutral != weak
+    assert neutral != strong
