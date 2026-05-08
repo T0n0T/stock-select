@@ -59,12 +59,75 @@ def _raise_if_out_of_order_insertion(intervals: list[dict[str, object]], *, pick
         raise ValueError(f"Out-of-order market environment insertion is not supported for pick_date {pick_date}.")
 
 
+def _insert_environment_interval(
+    intervals: list[dict[str, object]],
+    *,
+    new_interval: dict[str, object],
+) -> list[dict[str, object]]:
+    ordered = [dict(interval) for interval in intervals]
+    insert_index = 0
+    start_date = str(new_interval["start_date"])
+    while insert_index < len(ordered) and str(ordered[insert_index]["start_date"]) < start_date:
+        insert_index += 1
+
+    if insert_index < len(ordered):
+        next_start = str(ordered[insert_index]["start_date"])
+        new_interval["end_date"] = str((pd.Timestamp(next_start) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+    else:
+        new_interval["end_date"] = None
+
+    ordered.insert(insert_index, new_interval)
+    return ordered
+
+
 def write_environment_history(runtime_root: Path, intervals: list[dict[str, object]]) -> Path:
     path = _history_path(runtime_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     validated_intervals = [interval.to_dict() for interval in (MarketEnvironmentInterval.from_payload(item) for item in intervals)]
     path.write_text(json.dumps({"intervals": validated_intervals}, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def build_environment_history_for_dates(
+    pick_dates: list[str],
+    evaluator: Callable[[str], dict[str, object]],
+) -> list[dict[str, object]]:
+    ordered_dates = sorted({str(pick_date) for pick_date in pick_dates if str(pick_date).strip()})
+    if not ordered_dates:
+        return []
+
+    evaluations = [(pick_date, evaluator(pick_date)) for pick_date in ordered_dates]
+    intervals: list[dict[str, object]] = []
+
+    for index, (pick_date, evaluation) in enumerate(evaluations):
+        state = str(evaluation.get("score_based_state") or evaluation["state"]).lower()
+        next_pick_date = evaluations[index + 1][0] if index + 1 < len(evaluations) else None
+        end_date = (
+            str((pd.Timestamp(next_pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+            if next_pick_date is not None
+            else pick_date
+        )
+
+        interval = {
+            "state": state,
+            "start_date": pick_date,
+            "end_date": end_date,
+            "evaluated_at": str(evaluation.get("evaluate_date") or pick_date),
+            "source": str(evaluation.get("source") or "scheduled"),
+            "manual_override": False,
+            "reason": None if evaluation.get("reason") is None else str(evaluation.get("reason")),
+        }
+
+        if intervals and intervals[-1]["state"] == state:
+            intervals[-1]["end_date"] = end_date
+            intervals[-1]["evaluated_at"] = interval["evaluated_at"]
+            intervals[-1]["source"] = interval["source"]
+            intervals[-1]["reason"] = interval["reason"]
+            continue
+
+        intervals.append(interval)
+
+    return intervals
 
 
 def resolve_market_environment(runtime_root: Path, *, pick_date: str) -> dict[str, object]:
@@ -103,10 +166,10 @@ def ensure_market_environment(
         if str(exc) != no_interval_message or evaluation_loader is None:
             raise
         intervals = load_environment_history(runtime_root)
-        _raise_if_out_of_order_insertion(intervals, pick_date=pick_date)
         evaluation = evaluation_loader()
-        intervals.append(
-            {
+        intervals = _insert_environment_interval(
+            intervals,
+            new_interval={
                 "state": evaluation["state"],
                 "start_date": pick_date,
                 "end_date": None,
@@ -114,7 +177,7 @@ def ensure_market_environment(
                 "source": evaluation.get("source", "scheduled"),
                 "manual_override": False,
                 "reason": evaluation.get("reason"),
-            }
+            },
         )
         write_environment_history(runtime_root, intervals)
         return resolve_market_environment(runtime_root, pick_date=pick_date)
@@ -498,20 +561,14 @@ def _apply_environment_state_machine(
         return raw_state
     if previous_state == raw_state:
         return raw_state
-    if previous_state == "weak" and raw_state == "strong":
-        return "neutral"
-    if previous_state == "strong" and raw_state == "weak":
-        return "neutral"
     if raw_state == "neutral":
+        if previous_state in {"strong", "weak"} and consecutive_raw_counts["neutral"] < 2:
+            return previous_state
         return "neutral"
     if raw_state == "strong":
-        if hard_strong_trigger or consecutive_raw_counts["strong"] >= 2:
-            return "strong"
-        return previous_state if previous_state == "strong" else "neutral"
+        return "strong"
     if raw_state == "weak":
-        if hard_weak_trigger or consecutive_raw_counts["weak"] >= 2:
-            return "weak"
-        return previous_state if previous_state == "weak" else "neutral"
+        return "weak"
     return raw_state
 
 
