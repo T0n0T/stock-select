@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from stock_select import cli
 from stock_select.cli import app
-from stock_select.market_environment import write_environment_history
+from stock_select.market_environment import load_environment_history, write_environment_history
 
 
 def _dribull_trend_stats(*, total_symbols: int, eligible: int, selected: int) -> dict[str, int]:
@@ -3460,6 +3460,98 @@ def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, mon
     assert result.exit_code == 0
     assert calls
     assert calls[0][1]["pick_date"] == "2026-05-19"
+
+
+def test_screen_backfills_historical_environment_before_existing_future_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "state": "neutral",
+                "start_date": "2026-04-01",
+                "end_date": None,
+                "evaluated_at": "2026-04-01",
+                "source": "scheduled",
+                "manual_override": False,
+                "reason": "future interval",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_evaluate_market_environment_for_pick_date",
+        lambda **kwargs: {
+            "state": "weak",
+            "evaluate_date": kwargs["pick_date"],
+            "source": "scheduled",
+            "reason": "historical gap backfill",
+        },
+    )
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ", "000002.SZ", "000002.SZ"],
+                "trade_date": ["2025-12-24", "2025-12-25", "2025-12-24", "2025-12-25"],
+                "open": [10.0, 10.1, 12.0, 12.1],
+                "high": [10.3, 10.4, 12.4, 12.5],
+                "low": [9.8, 9.9, 11.8, 11.9],
+                "close": [10.2, 10.3, 12.2, 12.3],
+                "vol": [1000.0, 1100.0, 900.0, 950.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_call_prepare_screen_data", lambda market, reporter=None: market.assign(turnover_n=100.0))
+    monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared, pick_date, config: ([], _b1_screen_stats(total_symbols=2, eligible=0, selected=0)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2025-12-25",
+            "--runtime-root",
+            str(tmp_path),
+            "--dsn",
+            "postgresql://example",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert load_environment_history(tmp_path) == [
+        {
+            "state": "weak",
+            "start_date": "2025-12-25",
+            "end_date": "2026-03-31",
+            "evaluated_at": "2025-12-25",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "historical gap backfill",
+        },
+        {
+            "state": "neutral",
+            "start_date": "2026-04-01",
+            "end_date": None,
+            "evaluated_at": "2026-04-01",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "future interval",
+        },
+    ]
 
 
 def test_run_calls_ensure_market_environment_for_eod_screen_step(

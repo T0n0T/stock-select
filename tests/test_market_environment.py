@@ -19,6 +19,7 @@ from stock_select.market_environment import (
     _combine_environment_state,
     _macd_component,
     _vote_based_environment_state,
+    build_environment_history_for_dates,
     ensure_market_environment,
     evaluate_market_environment,
     load_environment_history,
@@ -75,6 +76,62 @@ def test_load_environment_history_rejects_invalid_json_text(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="Invalid environment history payload"):
         load_environment_history(tmp_path)
+
+
+def test_build_environment_history_for_dates_compacts_sorted_unique_pick_dates() -> None:
+    calls: list[str] = []
+    states = {
+        "2026-04-01": "weak",
+        "2026-04-02": "weak",
+        "2026-04-03": "strong",
+        "2026-04-07": "weak",
+    }
+
+    def fake_evaluator(pick_date: str) -> dict[str, object]:
+        calls.append(pick_date)
+        return {
+            "state": states[pick_date],
+            "score_based_state": states[pick_date],
+            "evaluate_date": pick_date,
+            "reason": f"state on {pick_date}",
+            "source": "scheduled",
+        }
+
+    intervals = build_environment_history_for_dates(
+        ["2026-04-03", "2026-04-01", "2026-04-02", "2026-04-02", "2026-04-07"],
+        fake_evaluator,
+    )
+
+    assert calls == ["2026-04-01", "2026-04-02", "2026-04-03", "2026-04-07"]
+    assert intervals == [
+        {
+            "state": "weak",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-02",
+            "evaluated_at": "2026-04-02",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "state on 2026-04-02",
+        },
+        {
+            "state": "strong",
+            "start_date": "2026-04-03",
+            "end_date": "2026-04-06",
+            "evaluated_at": "2026-04-03",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "state on 2026-04-03",
+        },
+        {
+            "state": "weak",
+            "start_date": "2026-04-07",
+            "end_date": "2026-04-07",
+            "evaluated_at": "2026-04-07",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "state on 2026-04-07",
+        },
+    ]
 
 
 def test_resolve_market_environment_returns_interval_covering_pick_date(tmp_path: Path) -> None:
@@ -270,7 +327,7 @@ def test_ensure_market_environment_malformed_history_does_not_trigger_loader(tmp
     assert called["value"] is False
 
 
-def test_ensure_market_environment_rejects_out_of_order_creation_before_future_interval(tmp_path: Path) -> None:
+def test_ensure_market_environment_inserts_historical_interval_before_future_interval(tmp_path: Path) -> None:
     write_environment_history(
         tmp_path,
         [
@@ -294,13 +351,39 @@ def test_ensure_market_environment_rejects_out_of_order_creation_before_future_i
             "state": "weak",
             "evaluate_date": "2026-05-12",
             "source": "scheduled",
-            "reason": "should not be used",
+            "reason": "backfilled historical gap",
         }
 
-    with pytest.raises(ValueError, match="Out-of-order market environment insertion is not supported for pick_date 2026-05-12"):
-        ensure_market_environment(tmp_path, pick_date="2026-05-12", evaluation_loader=fake_loader)
+    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-12", evaluation_loader=fake_loader)
 
-    assert called["value"] is False
+    assert resolved == {
+        "state": "weak",
+        "interval_start": "2026-05-12",
+        "interval_end": "2026-05-18",
+        "reason": "backfilled historical gap",
+        "source": "scheduled",
+    }
+    assert called["value"] is True
+    assert load_environment_history(tmp_path) == [
+        {
+            "state": "weak",
+            "start_date": "2026-05-12",
+            "end_date": "2026-05-18",
+            "evaluated_at": "2026-05-12",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "backfilled historical gap",
+        },
+        {
+            "state": "strong",
+            "start_date": "2026-05-19",
+            "end_date": None,
+            "evaluated_at": "2026-05-19",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "broad rally",
+        },
+    ]
 
 
 def test_override_market_environment_closes_previous_interval(tmp_path: Path) -> None:
@@ -1021,7 +1104,7 @@ def test_compute_raw_environment_state_downgrades_single_day_strong_when_monthly
     assert result == "neutral"
 
 
-def test_apply_environment_state_machine_blocks_direct_weak_to_strong_jump() -> None:
+def test_apply_environment_state_machine_allows_direct_weak_to_strong_jump() -> None:
     result = _apply_environment_state_machine(
         previous_state="weak",
         raw_state="strong",
@@ -1030,10 +1113,10 @@ def test_apply_environment_state_machine_blocks_direct_weak_to_strong_jump() -> 
         hard_weak_trigger=False,
     )
 
-    assert result == "neutral"
+    assert result == "strong"
 
 
-def test_apply_environment_state_machine_blocks_direct_strong_to_weak_jump() -> None:
+def test_apply_environment_state_machine_allows_direct_strong_to_weak_jump() -> None:
     result = _apply_environment_state_machine(
         previous_state="strong",
         raw_state="weak",
@@ -1042,19 +1125,59 @@ def test_apply_environment_state_machine_blocks_direct_strong_to_weak_jump() -> 
         hard_weak_trigger=True,
     )
 
-    assert result == "neutral"
+    assert result == "weak"
 
 
-def test_apply_environment_state_machine_promotes_neutral_to_strong_after_confirmation() -> None:
+def test_apply_environment_state_machine_promotes_neutral_to_strong_without_confirmation() -> None:
     result = _apply_environment_state_machine(
         previous_state="neutral",
         raw_state="strong",
-        consecutive_raw_counts={"strong": 2, "neutral": 0, "weak": 0},
+        consecutive_raw_counts={"strong": 1, "neutral": 0, "weak": 0},
         hard_strong_trigger=False,
         hard_weak_trigger=False,
     )
 
     assert result == "strong"
+
+
+def test_apply_environment_state_machine_delays_strong_to_neutral_until_second_neutral_day() -> None:
+    first = _apply_environment_state_machine(
+        previous_state="strong",
+        raw_state="neutral",
+        consecutive_raw_counts={"strong": 0, "neutral": 1, "weak": 0},
+        hard_strong_trigger=False,
+        hard_weak_trigger=False,
+    )
+    second = _apply_environment_state_machine(
+        previous_state="strong",
+        raw_state="neutral",
+        consecutive_raw_counts={"strong": 0, "neutral": 2, "weak": 0},
+        hard_strong_trigger=False,
+        hard_weak_trigger=False,
+    )
+
+    assert first == "strong"
+    assert second == "neutral"
+
+
+def test_apply_environment_state_machine_delays_weak_to_neutral_until_second_neutral_day() -> None:
+    first = _apply_environment_state_machine(
+        previous_state="weak",
+        raw_state="neutral",
+        consecutive_raw_counts={"strong": 0, "neutral": 1, "weak": 0},
+        hard_strong_trigger=False,
+        hard_weak_trigger=False,
+    )
+    second = _apply_environment_state_machine(
+        previous_state="weak",
+        raw_state="neutral",
+        consecutive_raw_counts={"strong": 0, "neutral": 2, "weak": 0},
+        hard_strong_trigger=False,
+        hard_weak_trigger=False,
+    )
+
+    assert first == "weak"
+    assert second == "neutral"
 
 
 def test_smooth_environment_states_backfills_single_day_neutral_before_confirmed_strong() -> None:
@@ -1067,14 +1190,24 @@ def test_smooth_environment_states_backfills_single_day_neutral_before_confirmed
     assert result == ["neutral", "strong", "strong"]
 
 
-def test_smooth_environment_states_keeps_transition_neutral_between_weak_and_strong() -> None:
+def test_smooth_environment_states_switches_directly_between_weak_and_strong() -> None:
     result = _smooth_environment_states(
         raw_states=["weak", "strong", "strong"],
         hard_strong_triggers=[False, False, False],
         hard_weak_triggers=[False, False, False],
     )
 
-    assert result == ["weak", "neutral", "strong"]
+    assert result == ["weak", "strong", "strong"]
+
+
+def test_smooth_environment_states_requires_two_neutral_days_before_leaving_strong() -> None:
+    result = _smooth_environment_states(
+        raw_states=["strong", "neutral", "neutral"],
+        hard_strong_triggers=[False, False, False],
+        hard_weak_triggers=[False, False, False],
+    )
+
+    assert result == ["strong", "strong", "neutral"]
 
 
 def test_collapse_single_day_neutral_islands_fills_same_side_weak_gap() -> None:

@@ -208,8 +208,18 @@ def _evaluate_market_environment_for_pick_date(
     start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=180)).strftime("%Y-%m-%d")
     if reporter:
         reporter.emit("market-env", "fetch index history")
-    sse_history = fetch_index_history(connection, symbol="000001.SH", start_date=start_date, end_date=pick_date)
-    cn2000_history = fetch_index_history(connection, symbol="399303.SZ", start_date=start_date, end_date=pick_date)
+    sse_history = _fetch_index_history_with_fallback(
+        connection,
+        symbol="000001.SH",
+        start_date=start_date,
+        end_date=pick_date,
+    )
+    cn2000_history = _fetch_index_history_with_fallback(
+        connection,
+        symbol="399303.SZ",
+        start_date=start_date,
+        end_date=pick_date,
+    )
     del runtime_root
     return evaluate_market_environment(
         pick_date=pick_date,
@@ -243,6 +253,69 @@ def _should_include_llm_review_task(review: dict[str, object], threshold: float 
 
 def _connect(dsn: str):
     return psycopg.connect(dsn)
+
+
+def _fetch_dataframe(
+    connection,
+    query: str,
+    params: dict[str, object],
+) -> pd.DataFrame:
+    with connection.cursor() as cursor:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        columns = [str(column[0]).lower() for column in (cursor.description or [])]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _fetch_index_history_from_daily_index(
+    connection,
+    *,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    query = """
+        SELECT ts_code, trade_date, open, high, low, close, vol
+        FROM daily_index
+        WHERE ts_code = %(symbol)s
+          AND trade_date BETWEEN %(start_date)s AND %(end_date)s
+        ORDER BY trade_date ASC
+    """
+    return _fetch_dataframe(
+        connection,
+        query,
+        {
+            "symbol": symbol,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+    )
+
+
+def _fetch_index_history_with_fallback(
+    connection,
+    *,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    try:
+        return fetch_index_history(
+            connection,
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except psycopg.errors.UndefinedTable:
+        rollback = getattr(connection, "rollback", None)
+        if callable(rollback):
+            rollback()
+        return _fetch_index_history_from_daily_index(
+            connection,
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
 
 def _resolve_cli_dsn(dsn: str | None) -> str:
@@ -349,6 +422,21 @@ def _resolve_review_environment_context(
     except ValueError:
         return None, None
     return resolved_environment, profile
+
+
+def _review_baseline_kwargs(
+    *,
+    method: str,
+    candidate: dict[str, object],
+    profile,
+) -> dict[str, object]:
+    normalized_method = method.lower()
+    kwargs: dict[str, object] = {}
+    if normalized_method == "b2":
+        kwargs["signal"] = candidate.get("signal")
+    if profile is not None and normalized_method in {"b1", "b2"}:
+        kwargs["profile"] = profile
+    return kwargs
 
 
 def _build_review_task_extra_context(
@@ -2043,6 +2131,7 @@ def _review_impl(
             history=history,
             chart_path=str(chart_path),
             **({"signal": candidate.get("signal")} if method.lower() == "b2" else {}),
+            **({"profile": profile} if profile is not None else {}),
         )
         review = build_review_result(
             code=code,
@@ -2180,6 +2269,7 @@ def _review_intraday_impl(
             history=history,
             chart_path=str(chart_path),
             **({"signal": candidate.get("signal")} if method.lower() == "b2" else {}),
+            **({"profile": profile} if profile is not None else {}),
         )
         review = build_review_result(
             code=code,
@@ -2599,6 +2689,7 @@ def _analyze_symbol_impl(
             history=history,
             chart_path=str(chart_path),
             signal=signal,
+            profile=profile,
         )
         selected_as_candidate = signal is not None
     else:
