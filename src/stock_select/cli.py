@@ -20,9 +20,12 @@ from stock_select.analysis import classify_daily_macd_trend, classify_weekly_mac
 from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.market_environment import (
     ensure_market_environment,
+    environment_history_exists,
     evaluate_market_environment,
     load_environment_history,
+    load_environment_history_snapshot,
     override_market_environment,
+    rebuild_environment_history,
     resolve_market_environment,
 )
 from stock_select.reviewers import review_b2_symbol_history
@@ -341,7 +344,7 @@ def market_env_show(
 def market_env_history(
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
 ) -> None:
-    typer.echo(json.dumps({"intervals": load_environment_history(runtime_root)}, ensure_ascii=False, indent=2))
+    typer.echo(json.dumps(load_environment_history_snapshot(runtime_root), ensure_ascii=False, indent=2))
 
 
 @market_env_app.command("override")
@@ -358,6 +361,62 @@ def market_env_override(
         reason=reason,
     )
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _load_pick_dates_from_samples(samples_path: Path) -> list[str]:
+    frame = pd.read_csv(samples_path)
+    if "pick_date" not in frame.columns:
+        raise typer.BadParameter(f"samples file missing pick_date column: {samples_path}")
+    pick_dates = sorted({str(value).strip() for value in frame["pick_date"].tolist() if str(value).strip()})
+    if not pick_dates:
+        raise typer.BadParameter(f"no pick_date values found in {samples_path}")
+    return pick_dates
+
+
+@market_env_app.command("rebuild")
+def market_env_rebuild(
+    artifact_dir: Path = typer.Option(..., "--artifact-dir"),
+    runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    dsn: str | None = typer.Option(None, "--dsn"),
+    overwrite: bool = typer.Option(False, "--overwrite"),
+) -> None:
+    samples_path = artifact_dir / "samples.csv"
+    pick_dates = _load_pick_dates_from_samples(samples_path)
+    if environment_history_exists(runtime_root) and not overwrite:
+        raise typer.BadParameter(
+            f"environment history already exists: {runtime_root / 'environment' / 'history.jsonl'}; rerun with --overwrite"
+        )
+    start_date = str((pd.Timestamp(pick_dates[0]) - pd.Timedelta(days=180)).strftime("%Y-%m-%d"))
+    end_date = pick_dates[-1]
+    connection = _connect(_resolve_cli_dsn(dsn))
+    try:
+        sse_history = _fetch_index_history_with_fallback(
+            connection,
+            symbol="000001.SH",
+            start_date=start_date,
+            end_date=end_date,
+        )
+        cn2000_history = _fetch_index_history_with_fallback(
+            connection,
+            symbol="399303.SZ",
+            start_date=start_date,
+            end_date=end_date,
+        )
+    finally:
+        close = getattr(connection, "close", None)
+        if callable(close):
+            close()
+    try:
+        path = rebuild_environment_history(
+            runtime_root=runtime_root,
+            pick_dates=pick_dates,
+            sse_history=sse_history,
+            cn2000_history=cn2000_history,
+            overwrite=overwrite,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(str(path))
 
 
 def _candidate_payload_matches_screen_version(payload: dict[str, object], *, method: str) -> bool:
