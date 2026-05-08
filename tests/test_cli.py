@@ -3348,13 +3348,16 @@ def test_market_env_history_prints_intervals(tmp_path: Path) -> None:
         tmp_path,
         [
             {
+                "pick_date": "2026-05-05",
                 "state": "neutral",
-                "start_date": "2026-05-05",
-                "end_date": "2026-05-11",
-                "evaluated_at": "2026-05-05",
+                "score_based_state": "neutral",
+                "rule_based_state": "neutral",
+                "vote_based_state": "neutral",
+                "evaluate_date": "2026-05-05",
                 "source": "scheduled",
-                "manual_override": False,
                 "reason": "range",
+                "total_score": 0.0,
+                "score_based_total": 0.0,
             }
         ],
     )
@@ -3362,6 +3365,7 @@ def test_market_env_history_prints_intervals(tmp_path: Path) -> None:
     result = runner.invoke(app, ["market-env", "history", "--runtime-root", str(tmp_path)])
 
     assert result.exit_code == 0
+    assert '"daily"' in result.stdout
     assert '"intervals"' in result.stdout
     assert '"state": "neutral"' in result.stdout
 
@@ -3400,9 +3404,11 @@ def test_market_env_override_writes_manual_interval(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
+    assert (tmp_path / "environment" / "daily" / "2026-05-19.weak.json").exists()
     assert '"state": "weak"' in result.stdout
     assert (tmp_path / "environment" / "history.jsonl").exists()
     history = json.loads((tmp_path / "environment" / "latest.json").read_text(encoding="utf-8"))
+    assert history["daily"][-1]["state"] == "weak"
     assert history["intervals"][-1]["state"] == "weak"
     assert history["intervals"][-1]["source"] == "manual_override"
     assert history["intervals"][-1]["manual_override"] is True
@@ -3445,20 +3451,48 @@ def test_market_env_rebuild_writes_dual_history_files(tmp_path: Path, monkeypatc
         captured["overwrite"] = overwrite
         path = runtime_root / "environment"
         path.mkdir(parents=True, exist_ok=True)
+        daily_dir = path / "daily"
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        (daily_dir / "2026-04-01.weak.json").write_text(
+            json.dumps(
+                {
+                    "pick_date": "2026-04-01",
+                    "state": "weak",
+                    "score_based_state": "weak",
+                    "rule_based_state": "weak",
+                    "vote_based_state": "weak",
+                    "evaluate_date": "2026-04-01",
+                    "source": "backfill",
+                    "reason": "backfilled",
+                    "total_score": 0.0,
+                    "score_based_total": 0.0,
+                    "manual_override": False,
+                }
+            ),
+            encoding="utf-8",
+        )
         (path / "history.jsonl").write_text(
-            '{"state":"weak","start_date":"2026-04-01","end_date":"2026-04-03","evaluated_at":"2026-04-03","source":"backfill","manual_override":false,"reason":"backfilled"}\n',
+            '{"pick_date":"2026-04-01","state":"weak","score_based_state":"weak","rule_based_state":"weak","vote_based_state":"weak","evaluate_date":"2026-04-01","source":"backfill","reason":"backfilled","total_score":0.0,"score_based_total":0.0,"manual_override":false}\n',
             encoding="utf-8",
         )
         latest = path / "latest.json"
         latest.write_text(
             json.dumps(
                 {
+                    "daily": [
+                        {
+                            "pick_date": "2026-04-01",
+                            "state": "weak",
+                            "source": "backfill",
+                            "reason": "backfilled",
+                        }
+                    ],
                     "intervals": [
                         {
                             "state": "weak",
                             "start_date": "2026-04-01",
-                            "end_date": "2026-04-03",
-                            "evaluated_at": "2026-04-03",
+                            "end_date": None,
+                            "evaluated_at": "2026-04-01",
                             "source": "backfill",
                             "manual_override": False,
                             "reason": "backfilled",
@@ -3490,6 +3524,7 @@ def test_market_env_rebuild_writes_dual_history_files(tmp_path: Path, monkeypatc
     assert result.exit_code == 0
     assert captured["pick_dates"] == ["2026-04-01", "2026-04-03"]
     assert captured["overwrite"] is True
+    assert (tmp_path / "environment" / "daily" / "2026-04-01.weak.json").exists()
     assert (tmp_path / "environment" / "history.jsonl").exists()
     assert (tmp_path / "environment" / "latest.json").exists()
 
@@ -3505,12 +3540,20 @@ def test_market_env_rebuild_rejects_existing_history_without_overwrite(
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir(parents=True, exist_ok=True)
     (environment_dir / "history.jsonl").write_text(
-        '{"state":"neutral","start_date":"2026-04-01","end_date":null,"evaluated_at":"2026-04-01","source":"scheduled","manual_override":false,"reason":"range"}\n',
+        '{"pick_date":"2026-04-01","state":"neutral","score_based_state":"neutral","rule_based_state":"neutral","vote_based_state":"neutral","evaluate_date":"2026-04-01","source":"scheduled","reason":"range","total_score":0.0,"score_based_total":0.0,"manual_override":false}\n',
         encoding="utf-8",
     )
     (environment_dir / "latest.json").write_text(
         json.dumps(
             {
+                "daily": [
+                    {
+                        "pick_date": "2026-04-01",
+                        "state": "neutral",
+                        "source": "scheduled",
+                        "reason": "range",
+                    }
+                ],
                 "intervals": [
                     {
                         "state": "neutral",

@@ -1,255 +1,300 @@
-# 市场环境历史存储与重建命令设计
+# 市场环境每日文件与聚合历史设计
 
 ## 背景
 
-当前市场环境历史默认落盘为 `runtime/environment/history.json`，格式是整份 JSON：
+当前市场环境历史已经从旧的单文件 `history.json` 迁移为：
 
-```json
-{
-  "intervals": [
-    ...
-  ]
-}
-```
+- `runtime/environment/history.jsonl`
+- `runtime/environment/latest.json`
 
-这个格式有两个问题：
+但这套实现仍然不满足两个核心需求：
 
-1. 程序每次写入都需要整份重写，机器主存储不够轻量。
-2. 用户虽然可以直接打开查看，但它同时承担“人类阅读”和“程序主存储”两种职责，后续如果要扩展或做更细粒度的持久化，约束较多。
+1. 人工观察需求  
+   现在没有“按交易日落盘”的环境文件，用户不能直接按日期查看某一天的完整环境评估结果。
 
-另外，当前主 CLI 没有重建环境历史的入口。若环境判定逻辑发生变化，普通 `stock-select run ...` 只会在缺失区间时补写，不会自动按新逻辑重算历史；用户需要依赖单独脚本完成重建。
+2. 机器读取需求  
+   当前 `history.jsonl` 实际上保存的是压缩后的区间历史，而不是每日记录。这不利于后续按日期、按状态进行研究和筛选，也不符合“机器快速读取每日环境事实”的目标。
 
-本设计的目标是：
+因此，本次设计要把环境持久化改造成“三层结构”：
 
-- 提供主 CLI 的环境历史重建入口。
-- 将环境历史改为“双层存储”。
-- 保持人类查看直观，同时提升程序读写效率。
-- 不保留旧 `history.json` 的兼容包袱。
+- 每日文件：给人看
+- 每日聚合文件：给机器读
+- 概览快照：给快速总览和 CLI 输出
 
 ## 目标与非目标
 
 ### 目标
 
-- 新增 `stock-select market-env rebuild` 子命令。
-- 新环境历史只认两份文件：
-  - `runtime/environment/history.jsonl`
-  - `runtime/environment/latest.json`
-- 所有环境历史读写逻辑统一收口到 `stock_select.market_environment`。
-- 普通 `run/screen` 在需要补写环境区间时，同步写出两份新文件。
-- `market-env history` 默认输出 `latest.json` 的完整视图。
+- 为每个交易日生成一份环境评估文件，即使连续多天状态相同也照样落盘。
+- 每日文件名包含日期和环境类型，便于人工观察。
+- `history.jsonl` 改为保存每日记录，而不是区间记录。
+- `latest.json` 同时提供：
+  - 每日状态概览
+  - 压缩后的连续区间概览
+- 普通 `run/screen`、`market-env override`、`market-env rebuild` 使用统一的持久化入口。
 
 ### 非目标
 
-- 不兼容读取旧的 `runtime/environment/history.json`。
-- 不在本次引入按年/月分片。
-- 不在本次引入 append-only 增量写入协议。
-- 不修改市场环境判定规则本身。
+- 本次不引入 SQLite / DuckDB。
+- 本次不引入按月或按年分片。
+- 本次不修改市场环境评分逻辑。
+- 本次不引入旧格式兼容层。
 
-## 用户场景
+## 文件布局
 
-### 场景 1：查看当前环境历史
-
-用户执行：
-
-```bash
-stock-select market-env history
-```
-
-期望：
-
-- 看到完整的区间列表。
-- 输出结构与当前排查习惯接近，适合直接阅读。
-
-### 场景 2：普通 run 自动补写缺失区间
-
-用户执行：
-
-```bash
-stock-select run --method b2 --pick-date 2026-05-08
-```
-
-若 `pick_date` 对应环境区间缺失，系统应：
-
-- 计算当前 `pick_date` 的市场环境。
-- 将新区间写入内存中的 interval 列表。
-- 同步写出 `history.jsonl` 与 `latest.json`。
-
-若已有覆盖该日期的区间，则不重写环境历史。
-
-### 场景 3：规则变化后整份重建
-
-用户执行：
-
-```bash
-stock-select market-env rebuild --artifact-dir artifacts/review-tuning/foo --overwrite
-```
-
-期望：
-
-- 按当前规则整份重建环境历史。
-- 若目标文件已存在且未显式传入 `--overwrite`，则拒绝覆盖。
-
-## 存储设计
-
-### 文件布局
-
-新格式固定为：
+环境目录调整为：
 
 ```text
 runtime/
   environment/
+    daily/
+      2026-05-08.weak.json
+      2026-05-09.weak.json
+      2026-05-12.strong.json
     history.jsonl
     latest.json
 ```
 
-### `history.jsonl`
+三类文件职责如下：
 
-机器主存储，按行保存区间记录。每一行都是一条完整 JSON 对象，例如：
+- `daily/*.json`
+  - 每个交易日一份完整环境评估结果
+  - 主要给人观察和排查
+- `history.jsonl`
+  - 每日聚合记录
+  - 主要给机器快速顺序读取
+- `latest.json`
+  - 当前完整概览快照
+  - 同时包含每日视图和压缩区间视图
 
-```json
-{"state":"strong","start_date":"2026-05-12","end_date":"2026-05-18","evaluated_at":"2026-05-12","source":"scheduled","manual_override":false,"reason":"broad rally"}
-{"state":"weak","start_date":"2026-05-19","end_date":null,"evaluated_at":"2026-05-19","source":"manual_override","manual_override":true,"reason":"manual caution"}
+## 每日文件设计
+
+### 命名规则
+
+每日文件命名固定为：
+
+```text
+YYYY-MM-DD.<state>.json
 ```
 
-选择 JSONL 的原因：
+例如：
 
-- 一行一条记录，diff 更容易阅读。
-- 逐行解析简单，适合作为程序主存储。
-- 相比整份 JSON，对“数据记录集合”的语义更直接。
+- `2026-05-08.weak.json`
+- `2026-05-09.neutral.json`
+- `2026-05-12.strong.json`
 
-### `latest.json`
+### 内容结构
 
-人类可读快照，保存当前完整视图：
+每日文件保存当天完整评估 payload，而不是只存一个简写状态。示例：
 
 ```json
 {
+  "pick_date": "2026-05-08",
+  "state": "weak",
+  "score_based_state": "weak",
+  "rule_based_state": "neutral",
+  "vote_based_state": "weak",
+  "evaluate_date": "2026-05-08",
+  "source": "scheduled",
+  "reason": "...",
+  "total_score": -6.0,
+  "score_based_total": -6.0,
+  "score_thresholds": {
+    "strong": 10.0,
+    "weak": -4.0
+  },
+  "indices": {
+    "sse": { "...": "..." },
+    "cn2000": { "...": "..." }
+  },
+  "monthly_bias": {
+    "sse": "...",
+    "cn2000": "..."
+  }
+}
+```
+
+### 每日文件写入语义
+
+- 即使前后两天状态相同，也每天各写一份文件。
+- 同一 `pick_date` 如果重算并得到不同状态：
+  - 删除旧文件
+  - 写入新状态文件
+
+## `history.jsonl` 设计
+
+### 语义
+
+`history.jsonl` 保存“每日记录”，不再保存压缩后的区间记录。
+
+每行一条 daily evaluation 的核心字段。示例：
+
+```json
+{"pick_date":"2026-05-08","state":"weak","score_based_state":"weak","rule_based_state":"neutral","vote_based_state":"weak","evaluate_date":"2026-05-08","source":"scheduled","reason":"...","total_score":-6.0,"score_based_total":-6.0}
+```
+
+### 保存字段
+
+建议至少保存：
+
+- `pick_date`
+- `state`
+- `score_based_state`
+- `rule_based_state`
+- `vote_based_state`
+- `evaluate_date`
+- `source`
+- `reason`
+- `total_score`
+- `score_based_total`
+
+不要求在 `history.jsonl` 中重复保存完整嵌套 payload，因为完整细节已经存在每日文件中。
+
+### 使用方式
+
+- 机器需要按日期和状态快速读取时，优先读 `history.jsonl`
+- `resolve_market_environment(...)` 从 `history.jsonl` 读取 daily records，再在内存中压缩为 intervals
+
+## `latest.json` 设计
+
+`latest.json` 不再只是区间快照，而是完整概览快照：
+
+```json
+{
+  "daily": [
+    {
+      "pick_date": "2026-05-08",
+      "state": "weak",
+      "source": "scheduled",
+      "reason": "..."
+    }
+  ],
   "intervals": [
-    ...
+    {
+      "state": "weak",
+      "start_date": "2026-05-08",
+      "end_date": "2026-05-09",
+      "evaluated_at": "2026-05-09",
+      "source": "scheduled",
+      "reason": "..."
+    }
   ]
 }
 ```
 
-选择保留该快照的原因：
+其中：
 
-- 用户直接打开文件即可看到完整历史。
-- 保持与当前 `market-env history` 输出模型一致。
-- 降低排查门槛，不需要手动从 JSONL 重建完整结构。
+- `daily`
+  - 只保留便于快速概览的关键字段
+- `intervals`
+  - 由 daily 记录压缩得到
+  - 供人工快速看连续状态区间
 
-## 读写语义
+## 读取规则
 
-### 读取规则
+### `load_environment_history(runtime_root)`
 
-读取逻辑不再兼容旧 `history.json`。
+- 从 `history.jsonl` 读取 daily records
+- 返回每日记录列表
 
-统一规则如下：
+### `resolve_market_environment(runtime_root, pick_date=...)`
 
-- `load_environment_history(runtime_root)`：从 `history.jsonl` 读取并返回 interval 列表。
-- `resolve_market_environment(...)`：基于 `load_environment_history(...)` 返回的 interval 列表解析指定 `pick_date`。
-- `ensure_market_environment(...)`：若已存在覆盖 `pick_date` 的区间，直接复用；若不存在则评估并落盘。
-- `market-env history`：优先读取 `latest.json` 输出。如果 `latest.json` 缺失或损坏，直接报错，不尝试回退旧格式。
+- 从 `history.jsonl` 读取 daily records
+- 按日期排序
+- 在内存中压缩出连续区间
+- 再解析指定 `pick_date` 命中的区间
 
-说明：
+### `market-env history`
 
-- 程序内部主读取依赖 `history.jsonl`，保证“主存储只有一份语义来源”。
-- `latest.json` 作为面向人的快照，不参与区间解析逻辑。
+- 默认输出 `latest.json`
 
-### 写入规则
+### 人工排查
 
-所有写路径统一经过 `write_environment_history(runtime_root, intervals)`。
+- 看某一天细节：打开 `daily/YYYY-MM-DD.<state>.json`
+- 看整体概览：打开 `latest.json`
 
-该函数负责：
+## 写入规则
 
-1. 将传入 interval 列表校验并归一化为 `MarketEnvironmentInterval`。
-2. 生成 `history.jsonl` 内容。
-3. 生成 `latest.json` 内容。
-4. 使用临时文件写入后原子替换目标文件，避免残缺文件。
+### 统一持久化入口
 
-两份文件的写入语义为：
+所有写入都应收口到一套 helper，负责同时更新：
 
-- `history.jsonl`：整份重写，不做增量 append。
-- `latest.json`：整份重写。
+- `daily/`
+- `history.jsonl`
+- `latest.json`
 
-本次不做 append-only 的原因：
+### 普通 `run/screen`
 
-- 当前环境历史体量很小，整份重写成本可以忽略。
-- 整份重写逻辑最简单，也最容易保持两份文件一致。
-- 未来如需升级为 append-only，可只改写入实现，不改 CLI 与外部接口。
+若目标日尚无 daily 文件：
 
-### 一致性要求
+1. 评估当天环境
+2. 写入 `daily/YYYY-MM-DD.<state>.json`
+3. 更新 `history.jsonl`
+4. 重建 `latest.json`
 
-对调用方保证：
+若目标日已有 daily 文件：
 
-- 调用 `write_environment_history(...)` 成功后，两份文件必须同时处于同一版本。
-- 任一目标文件若写入失败，最终不应留下部分写入的坏文件。
+- 默认直接复用，不重写
+
+### `market-env override`
+
+1. 删除同日期已有 daily 文件
+2. 写入新的 `daily/YYYY-MM-DD.<state>.json`
+3. 在 `history.jsonl` 中替换该日期记录
+4. 重建 `latest.json`
+
+### `market-env rebuild --artifact-dir ... --overwrite`
+
+1. 清空并重建 `daily/`
+2. 对 `samples.csv` 中的每个 `pick_date` 重新评估
+3. 逐日写入 daily 文件
+4. 全量重写 `history.jsonl`
+5. 全量重写 `latest.json`
+
+## 区间压缩规则
+
+`latest.json["intervals"]` 以及 `resolve_market_environment(...)` 使用相同压缩逻辑：
+
+- daily records 按 `pick_date` 排序
+- 连续相同 `state` 压缩成一个 interval
+- interval 字段包括：
+  - `state`
+  - `start_date`
+  - `end_date`
+  - `evaluated_at`
+  - `source`
+  - `reason`
+
+其中：
+
+- `end_date` 是该连续状态最后一个交易日
+- `evaluated_at` 取该 interval 最后一天的 `evaluate_date`
 
 ## CLI 设计
 
-### 新增子命令
+本次不增加新的 CLI 子命令，仅调整已有行为。
 
-主 CLI 新增：
+### `market-env history`
 
-```bash
-stock-select market-env rebuild
-```
+- 继续保留原命令
+- 底层改为输出新的 `latest.json`
 
-参数设计：
+### `market-env override`
+
+- 接口保持不变
+- 底层改为更新 daily / jsonl / latest 三类文件
+
+### `market-env rebuild`
+
+- 继续保留
+- 输入保持为：
 
 ```bash
 stock-select market-env rebuild --artifact-dir <dir> --overwrite
-stock-select market-env rebuild --artifact-dir <dir> --runtime-root <path> --dsn <dsn> --overwrite
 ```
 
-规则：
-
-- `--artifact-dir` 必填，且目录下必须存在 `samples.csv`。
-- `--runtime-root` 默认保持现状。
-- `--dsn` 用于数据库连接，解析规则沿用现有 CLI。
-- `--overwrite` 为显式覆盖开关。
-
-### `--overwrite` 语义
-
-重建命令的覆盖规则如下：
-
-- 若 `environment/history.jsonl` 或 `environment/latest.json` 任一已存在，且未传 `--overwrite`，命令失败。
-- 传入 `--overwrite` 后，允许整份重建并覆盖两份文件。
-
-### 现有命令行为
-
-- `market-env show`：接口不变。
-- `market-env history`：接口不变，但底层改为从 `latest.json` 输出。
-- `market-env override`：接口不变，但写入落到新双层格式。
-- `run` / `screen`：接口不变，不新增 `--overwrite`。
-
-## 与现有脚本的关系
-
-当前单独脚本 `scripts/review_tuning_backfill_environment_history.py` 已能从样本文件构建环境历史。
-
-本次调整：
-
-- 将其核心逻辑下沉为可复用函数。
-- `market-env rebuild` 复用该实现。
-- 脚本保留，但只作为薄封装入口，避免主 CLI 与脚本各维护一套逻辑。
-
-这样可以避免：
-
-- 参数行为漂移。
-- 一个入口支持新存储、另一个入口忘记同步。
-
-## 错误处理
-
-### 文件不存在
-
-- `load_environment_history(...)` 在 `history.jsonl` 不存在时返回空列表。
-- `market-env history` 在 `latest.json` 不存在时应报明确错误，提示用户先运行 `run` 或 `market-env rebuild`。
-
-### 文件格式错误
-
-- `history.jsonl` 某一行不是合法 JSON，或字段无法转成 `MarketEnvironmentInterval`，抛出明确的 `ValueError`。
-- `latest.json` 不是合法 JSON，或缺失 `intervals` 数组，`market-env history` 直接报错。
-
-### 重建覆盖冲突
-
-- 重建命令发现目标文件已存在但未传 `--overwrite`，直接失败并给出明确提示。
+- 从 `<artifact-dir>/samples.csv` 中提取 `pick_date`
+- 重建三类环境文件
 
 ## 测试计划
 
@@ -257,48 +302,56 @@ stock-select market-env rebuild --artifact-dir <dir> --runtime-root <path> --dsn
 
 新增或调整测试覆盖：
 
-- `write_environment_history(...)` 同时写出 `history.jsonl` 与 `latest.json`。
-- `load_environment_history(...)` 能从 `history.jsonl` 正确恢复 interval 列表。
-- `resolve_market_environment(...)` 在新格式上行为不变。
-- `ensure_market_environment(...)` 在首次补写时会生成两份文件。
-- `override_market_environment(...)` 会同步更新两份文件。
-- `history.jsonl` 非法行会触发明确异常。
+- 每日文件会按 `YYYY-MM-DD.<state>.json` 命名
+- 每次写入会同步生成：
+  - `daily/*.json`
+  - `history.jsonl`
+  - `latest.json`
+- `load_environment_history(...)` 从 `history.jsonl` 读取 daily records
+- `resolve_market_environment(...)` 能从 daily records 正确压缩出 intervals
+- `override_market_environment(...)` 会替换当日 daily 文件并重建聚合文件
 
 ### CLI 单测
 
 新增或调整测试覆盖：
 
-- `market-env history` 输出 `latest.json` 中的完整区间结构。
-- `market-env rebuild --artifact-dir ... --overwrite` 成功写出新格式。
-- 目标文件已存在且未传 `--overwrite` 时拒绝执行。
+- `market-env history` 输出新的 `latest.json`
+- `market-env rebuild --artifact-dir ... --overwrite` 会重建 `daily/`
+- 普通 `screen/run` 首次补写环境时会生成当天 daily 文件
+- 已有同日 daily 文件时，普通 `run` 默认不重写
 
-### 回归测试
+### 脚本测试
 
-- 普通 `screen` 调用 `ensure_market_environment(...)` 时，首次补写后的环境目录为新双文件格式。
-- 现有依赖 `load_environment_history(...)` 和 `resolve_market_environment(...)` 的脚本/CLI 流程继续正常工作。
+调整 `scripts/review_tuning_backfill_environment_history.py` 的测试，验证：
+
+- 通过 artifact 目录重建时，会写出 daily 文件集
+- 未传 `--overwrite` 且已有环境历史时仍会拒绝覆盖
 
 ## 实施顺序
 
-1. 为新存储格式和新 CLI 命令编写失败测试。
-2. 在 `market_environment` 中引入 JSONL/快照读写 helper。
-3. 修改 `load_environment_history`、`write_environment_history`、`ensure_market_environment`、`override_market_environment` 使用新格式。
-4. 在主 CLI 中新增 `market-env rebuild`。
-5. 让 `scripts/review_tuning_backfill_environment_history.py` 复用相同实现。
-6. 运行目标测试与 smoke check，确认 `run`、`market-env history`、`market-env rebuild` 行为符合预期。
+1. 先写失败测试，定义新的 daily/jsonl/latest 预期。
+2. 引入 daily record 序列化/反序列化 helper。
+3. 将 `history.jsonl` 从 interval 记录改为 daily 记录。
+4. 加入从 daily records 生成 `latest.json` 的 helper。
+5. 修改 `ensure_market_environment(...)`、`override_market_environment(...)`、`rebuild_environment_history(...)` 统一走新持久化入口。
+6. 运行目标测试与 smoke check。
 
 ## 方案取舍总结
 
 本方案选择：
 
-- 程序主存储：`history.jsonl`
-- 人类可读快照：`latest.json`
-- 主 CLI 提供重建命令：`market-env rebuild`
-- 不兼容旧 `history.json`
+- 人类观察面：`daily/YYYY-MM-DD.<state>.json`
+- 机器读取面：`history.jsonl`
+- 概览面：`latest.json`
 
 放弃的方案包括：
 
-- 继续使用单文件 `history.json`
-- 只写 JSONL、不提供直观快照
-- 直接引入按月/按年分片
+- 仅保留 `history.jsonl + latest.json`
+- 使用 SQLite 作为机器主读取层
+- 只在状态变化日落文件
 
-原因是当前方案在“直观性、实现复杂度、读写效率、后续可演进性”之间更均衡，且能以最小改动覆盖当前真实需求。
+原因是当前目标优先级是：
+
+1. 每日都有可直接观察的环境文件
+2. 机器仍有一份简单快速的聚合读取文件
+3. 不额外引入新的数据库技术栈

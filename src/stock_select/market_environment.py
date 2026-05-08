@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 
@@ -30,6 +35,10 @@ def _environment_dir(runtime_root: Path) -> Path:
     return runtime_root / "environment"
 
 
+def _daily_dir(runtime_root: Path) -> Path:
+    return _environment_dir(runtime_root) / "daily"
+
+
 def _history_jsonl_path(runtime_root: Path) -> Path:
     return _environment_dir(runtime_root) / "history.jsonl"
 
@@ -38,39 +47,200 @@ def _latest_snapshot_path(runtime_root: Path) -> Path:
     return _environment_dir(runtime_root) / "latest.json"
 
 
+def _lock_path(runtime_root: Path) -> Path:
+    return _environment_dir(runtime_root) / ".lock"
+
+
 def environment_history_exists(runtime_root: Path) -> bool:
     return _history_jsonl_path(runtime_root).exists() or _latest_snapshot_path(runtime_root).exists()
 
 
 def _write_text_atomic(path: Path, content: str) -> None:
-    tmp_path = path.with_name(f"{path.name}.tmp")
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
     tmp_path.write_text(content, encoding="utf-8")
     tmp_path.replace(path)
 
 
-def _load_interval_models(runtime_root: Path) -> list[MarketEnvironmentInterval]:
+@contextmanager
+def _locked_environment(runtime_root: Path):
+    environment_dir = _environment_dir(runtime_root)
+    environment_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = _lock_path(runtime_root)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _require_daily_payload(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid environment history payload.")
+    required_str_fields = (
+        "pick_date",
+        "state",
+        "score_based_state",
+        "rule_based_state",
+        "vote_based_state",
+        "evaluate_date",
+        "source",
+        "reason",
+    )
+    for field in required_str_fields:
+        if not isinstance(payload.get(field), str):
+            raise ValueError("Invalid environment history payload.")
+    for field in ("total_score", "score_based_total"):
+        value = payload.get(field)
+        if not isinstance(value, int | float):
+            raise ValueError("Invalid environment history payload.")
+    manual_override = payload.get("manual_override", False)
+    if not isinstance(manual_override, bool):
+        raise ValueError("Invalid environment history payload.")
+    return {
+        "pick_date": str(payload["pick_date"]),
+        "state": str(payload["state"]),
+        "score_based_state": str(payload["score_based_state"]),
+        "rule_based_state": str(payload["rule_based_state"]),
+        "vote_based_state": str(payload["vote_based_state"]),
+        "evaluate_date": str(payload["evaluate_date"]),
+        "source": str(payload["source"]),
+        "reason": str(payload["reason"]),
+        "total_score": float(payload["total_score"]),
+        "score_based_total": float(payload["score_based_total"]),
+        "manual_override": manual_override,
+    }
+
+
+def _normalize_daily_record(record: dict[str, object]) -> dict[str, object]:
+    normalized = _require_daily_payload(record)
+    return normalized
+
+
+def _daily_record_from_evaluation(
+    *,
+    pick_date: str,
+    evaluation: dict[str, object],
+    source: str | None = None,
+) -> dict[str, object]:
+    state = str(evaluation["state"])
+    return {
+        "pick_date": pick_date,
+        "state": state,
+        "score_based_state": str(evaluation.get("score_based_state") or state),
+        "rule_based_state": str(evaluation.get("rule_based_state") or state),
+        "vote_based_state": str(evaluation.get("vote_based_state") or state),
+        "evaluate_date": str(evaluation.get("evaluate_date") or pick_date),
+        "source": str(source or evaluation.get("source") or "scheduled"),
+        "reason": str(evaluation.get("reason") or ""),
+        "total_score": float(evaluation.get("total_score") or 0.0),
+        "score_based_total": float(evaluation.get("score_based_total") or evaluation.get("total_score") or 0.0),
+        "manual_override": bool(source == "manual_override" or evaluation.get("manual_override") is True),
+    }
+
+
+def _records_from_interval_payloads(intervals: list[dict[str, object]]) -> list[dict[str, object]]:
+    expanded: dict[str, dict[str, object]] = {}
+    for payload in intervals:
+        interval = MarketEnvironmentInterval.from_payload(payload)
+        end_date = interval.end_date or interval.start_date
+        for date in pd.date_range(interval.start_date, end_date, freq="D"):
+            pick_date = date.strftime("%Y-%m-%d")
+            candidate = {
+                "pick_date": pick_date,
+                "state": interval.state,
+                "score_based_state": interval.state,
+                "rule_based_state": interval.state,
+                "vote_based_state": interval.state,
+                "evaluate_date": interval.evaluated_at,
+                "source": interval.source,
+                "reason": interval.reason or "",
+                "total_score": 0.0,
+                "score_based_total": 0.0,
+                "manual_override": interval.manual_override or interval.source == "manual",
+            }
+            existing = expanded.get(pick_date)
+            if existing is None:
+                expanded[pick_date] = candidate
+                continue
+            if bool(candidate["manual_override"]) and not bool(existing["manual_override"]):
+                expanded[pick_date] = candidate
+                continue
+            if bool(existing["manual_override"]) and not bool(candidate["manual_override"]):
+                continue
+            expanded[pick_date] = candidate
+    return [expanded[pick_date] for pick_date in sorted(expanded)]
+
+
+def _coerce_daily_records(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    if not records:
+        return []
+    first = records[0]
+    if "pick_date" in first:
+        return [_normalize_daily_record(item) for item in records]
+    if "start_date" in first:
+        return _records_from_interval_payloads(records)
+    raise ValueError("Invalid environment history payload.")
+
+
+def _load_daily_records(runtime_root: Path) -> list[dict[str, object]]:
     path = _history_jsonl_path(runtime_root)
     if not path.exists():
         return []
-    intervals: list[MarketEnvironmentInterval] = []
+    records: list[dict[str, object]] = []
     try:
         for raw_line in path.read_text(encoding="utf-8").splitlines():
             line = raw_line.strip()
             if not line:
                 continue
             payload = json.loads(line)
-            if not isinstance(payload, dict):
-                raise ValueError("Invalid environment history payload.")
-            intervals.append(MarketEnvironmentInterval.from_payload(payload))
+            records.append(_normalize_daily_record(payload))
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         if isinstance(exc, ValueError) and str(exc) == "Invalid environment history payload.":
             raise
         raise ValueError("Invalid environment history payload.") from exc
+    return records
+
+
+def _daily_record_filename(record: dict[str, object]) -> str:
+    return f"{record['pick_date']}.{record['state']}.json"
+
+
+def _build_intervals_from_daily_records(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    ordered = sorted(records, key=lambda item: str(item["pick_date"]))
+    if not ordered:
+        return []
+    intervals: list[dict[str, object]] = []
+    for record in ordered:
+        pick_date = str(record["pick_date"])
+        state = str(record["state"])
+        source = str(record["source"])
+        reason = str(record["reason"])
+        evaluate_date = str(record["evaluate_date"])
+        if intervals and intervals[-1]["state"] == state:
+            intervals[-1]["end_date"] = pick_date
+            intervals[-1]["evaluated_at"] = evaluate_date
+            intervals[-1]["source"] = source
+            intervals[-1]["reason"] = reason
+            continue
+        intervals.append(
+            {
+                "state": state,
+                "start_date": pick_date,
+                "end_date": pick_date,
+                "evaluated_at": evaluate_date,
+                "source": source,
+                "manual_override": bool(record.get("manual_override")),
+                "reason": reason,
+            }
+        )
+    if intervals:
+        intervals[-1]["end_date"] = None
     return intervals
 
 
 def load_environment_history(runtime_root: Path) -> list[dict[str, object]]:
-    return [interval.to_dict() for interval in _load_interval_models(runtime_root)]
+    return _build_intervals_from_daily_records(_load_daily_records(runtime_root))
 
 
 def load_environment_history_snapshot(runtime_root: Path) -> dict[str, object]:
@@ -83,11 +253,27 @@ def load_environment_history_snapshot(runtime_root: Path) -> dict[str, object]:
         raise ValueError("Invalid environment history snapshot payload.") from exc
     if not isinstance(payload, dict):
         raise ValueError("Invalid environment history snapshot payload.")
+    daily = payload.get("daily")
     intervals = payload.get("intervals")
-    if not isinstance(intervals, list):
+    if not isinstance(daily, list) or not isinstance(intervals, list):
         raise ValueError("Invalid environment history snapshot payload.")
+    validated_daily: list[dict[str, object]] = []
+    for item in daily:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid environment history snapshot payload.")
+        for field in ("pick_date", "state", "source", "reason"):
+            if not isinstance(item.get(field), str):
+                raise ValueError("Invalid environment history snapshot payload.")
+        validated_daily.append(
+            {
+                "pick_date": str(item["pick_date"]),
+                "state": str(item["state"]),
+                "source": str(item["source"]),
+                "reason": str(item["reason"]),
+            }
+        )
     validated_intervals = [interval.to_dict() for interval in (MarketEnvironmentInterval.from_payload(item) for item in intervals)]
-    return {"intervals": validated_intervals}
+    return {"daily": validated_daily, "intervals": validated_intervals}
 
 
 def _raise_if_out_of_order_insertion(intervals: list[dict[str, object]], *, pick_date: str) -> None:
@@ -116,21 +302,50 @@ def _insert_environment_interval(
     return ordered
 
 
-def write_environment_history(runtime_root: Path, intervals: list[dict[str, object]]) -> Path:
-    validated_intervals = [interval.to_dict() for interval in (MarketEnvironmentInterval.from_payload(item) for item in intervals)]
+def _write_environment_history_unlocked(runtime_root: Path, records: list[dict[str, object]]) -> Path:
+    validated_records = sorted(_coerce_daily_records(records), key=lambda item: str(item["pick_date"]))
     environment_dir = _environment_dir(runtime_root)
     environment_dir.mkdir(parents=True, exist_ok=True)
+    daily_dir = _daily_dir(runtime_root)
+    daily_dir.mkdir(parents=True, exist_ok=True)
     history_path = _history_jsonl_path(runtime_root)
     latest_path = _latest_snapshot_path(runtime_root)
+    for path in daily_dir.glob("*.json"):
+        path.unlink()
+    for record in validated_records:
+        _write_text_atomic(
+            daily_dir / _daily_record_filename(record),
+            json.dumps(record, ensure_ascii=False, indent=2),
+        )
     history_content = "\n".join(
-        json.dumps(interval, ensure_ascii=False, separators=(",", ":")) for interval in validated_intervals
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in validated_records
     )
     if history_content:
         history_content += "\n"
-    latest_content = json.dumps({"intervals": validated_intervals}, ensure_ascii=False, indent=2)
+    latest_content = json.dumps(
+        {
+            "daily": [
+                {
+                    "pick_date": str(item["pick_date"]),
+                    "state": str(item["state"]),
+                    "source": str(item["source"]),
+                    "reason": str(item["reason"]),
+                }
+                for item in validated_records
+            ],
+            "intervals": _build_intervals_from_daily_records(validated_records),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
     _write_text_atomic(history_path, history_content)
     _write_text_atomic(latest_path, latest_content)
     return latest_path
+
+
+def write_environment_history(runtime_root: Path, records: list[dict[str, object]]) -> Path:
+    with _locked_environment(runtime_root):
+        return _write_environment_history_unlocked(runtime_root, records)
 
 
 def rebuild_environment_history(
@@ -146,17 +361,15 @@ def rebuild_environment_history(
     latest_path = _latest_snapshot_path(runtime_root)
     if (history_path.exists() or latest_path.exists()) and not overwrite:
         raise ValueError(f"environment history already exists: {history_path}; rerun with --overwrite")
-    intervals = build_environment_history_for_dates(
-        pick_dates,
-        lambda pick_date: evaluate_market_environment(
+    records: list[dict[str, object]] = []
+    for pick_date in sorted({str(item) for item in pick_dates if str(item).strip()}):
+        evaluation = evaluate_market_environment(
             pick_date=pick_date,
             sse_history=sse_history,
             cn2000_history=cn2000_history,
-        ),
-    )
-    for interval in intervals:
-        interval["source"] = source
-    return write_environment_history(runtime_root, intervals)
+        )
+        records.append(_daily_record_from_evaluation(pick_date=pick_date, evaluation=evaluation, source=source))
+    return write_environment_history(runtime_root, records)
 
 
 def build_environment_history_for_dates(
@@ -204,7 +417,9 @@ def build_environment_history_for_dates(
 def resolve_market_environment(runtime_root: Path, *, pick_date: str) -> dict[str, object]:
     applicable_intervals = [
         interval
-        for interval in _load_interval_models(runtime_root)
+        for interval in (
+            MarketEnvironmentInterval.from_payload(item) for item in _build_intervals_from_daily_records(_load_daily_records(runtime_root))
+        )
         if interval.start_date <= pick_date and (interval.end_date is None or pick_date <= interval.end_date)
     ]
     if applicable_intervals:
@@ -230,67 +445,66 @@ def ensure_market_environment(
     pick_date: str,
     evaluation_loader: Callable[[], dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    no_interval_message = f"No market environment interval covers pick_date {pick_date}."
-    try:
-        return resolve_market_environment(runtime_root, pick_date=pick_date)
-    except ValueError as exc:
-        if str(exc) != no_interval_message or evaluation_loader is None:
-            raise
-        intervals = load_environment_history(runtime_root)
+    with _locked_environment(runtime_root):
+        records = _load_daily_records(runtime_root)
+        if any(str(record["pick_date"]) == pick_date for record in records):
+            return resolve_market_environment(runtime_root, pick_date=pick_date)
+        no_interval_message = f"No market environment interval covers pick_date {pick_date}."
+        try:
+            resolved = resolve_market_environment(runtime_root, pick_date=pick_date)
+        except ValueError as exc:
+            if str(exc) != no_interval_message or evaluation_loader is None:
+                raise
+            evaluation = evaluation_loader()
+            records.append(_daily_record_from_evaluation(pick_date=pick_date, evaluation=evaluation))
+            _write_environment_history_unlocked(runtime_root, records)
+            return resolve_market_environment(runtime_root, pick_date=pick_date)
+        if evaluation_loader is None:
+            return resolved
         evaluation = evaluation_loader()
-        intervals = _insert_environment_interval(
-            intervals,
-            new_interval={
-                "state": evaluation["state"],
-                "start_date": pick_date,
-                "end_date": None,
-                "evaluated_at": evaluation["evaluate_date"],
-                "source": evaluation.get("source", "scheduled"),
-                "manual_override": False,
-                "reason": evaluation.get("reason"),
-            },
-        )
-        write_environment_history(runtime_root, intervals)
+        records.append(_daily_record_from_evaluation(pick_date=pick_date, evaluation=evaluation))
+        _write_environment_history_unlocked(runtime_root, records)
         return resolve_market_environment(runtime_root, pick_date=pick_date)
 
 
 def override_market_environment(runtime_root: Path, *, pick_date: str, state: str, reason: str) -> dict[str, object]:
-    intervals = load_environment_history(runtime_root)
-    _raise_if_out_of_order_insertion(intervals, pick_date=pick_date)
-    new_interval = {
-        "state": state,
-        "start_date": pick_date,
-        "end_date": None,
-        "evaluated_at": pick_date,
-        "source": "manual_override",
-        "manual_override": True,
-        "reason": reason,
-    }
-    if intervals and intervals[-1].get("end_date") is None:
-        last_start_date = str(intervals[-1]["start_date"])
-        if last_start_date == pick_date:
-            intervals[-1] = new_interval
-            write_environment_history(runtime_root, intervals)
-            return new_interval
-        if last_start_date < pick_date:
-            intervals[-1]["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
-            intervals.append(new_interval)
-            write_environment_history(runtime_root, intervals)
-            return new_interval
-    for index in range(len(intervals) - 1, -1, -1):
-        interval = intervals[index]
-        if interval["start_date"] <= pick_date <= str(interval["end_date"]):
-            if interval["start_date"] == pick_date:
-                intervals[index] = new_interval
-                write_environment_history(runtime_root, intervals)
+    with _locked_environment(runtime_root):
+        intervals = load_environment_history(runtime_root)
+        _raise_if_out_of_order_insertion(intervals, pick_date=pick_date)
+        new_interval = {
+            "state": state,
+            "start_date": pick_date,
+            "end_date": None,
+            "evaluated_at": pick_date,
+            "source": "manual_override",
+            "manual_override": True,
+            "reason": reason,
+        }
+        if intervals and intervals[-1].get("end_date") is None:
+            last_start_date = str(intervals[-1]["start_date"])
+            if last_start_date == pick_date:
+                intervals[-1] = new_interval
+                _write_environment_history_unlocked(runtime_root, intervals)
                 return new_interval
-            interval["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
-            intervals.append(new_interval)
-            write_environment_history(runtime_root, intervals)
-            return new_interval
-    intervals.append(new_interval)
-    write_environment_history(runtime_root, intervals)
-    return new_interval
+            if last_start_date < pick_date:
+                intervals[-1]["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+                intervals.append(new_interval)
+                _write_environment_history_unlocked(runtime_root, intervals)
+                return new_interval
+        for index in range(len(intervals) - 1, -1, -1):
+            interval = intervals[index]
+            if interval["start_date"] <= pick_date <= str(interval["end_date"]):
+                if interval["start_date"] == pick_date:
+                    intervals[index] = new_interval
+                    _write_environment_history_unlocked(runtime_root, intervals)
+                    return new_interval
+                interval["end_date"] = str((pd.Timestamp(pick_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+                intervals.append(new_interval)
+                _write_environment_history_unlocked(runtime_root, intervals)
+                return new_interval
+        intervals.append(new_interval)
+        _write_environment_history_unlocked(runtime_root, intervals)
+        return new_interval
 
 
 def evaluate_market_environment(

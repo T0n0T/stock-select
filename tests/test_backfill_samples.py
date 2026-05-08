@@ -93,12 +93,15 @@ def test_collect_target_trade_dates_raises_when_history_is_insufficient() -> Non
         script.collect_target_trade_dates(trade_dates, end_date="2026-04-28", sample_size=3)
 
 
-def test_plan_backfill_skips_only_dates_with_review_summary(tmp_path: Path) -> None:
+def test_plan_backfill_skips_only_dates_with_review_summary_and_environment_daily(tmp_path: Path) -> None:
     script = _load_script_module()
     runtime_root = tmp_path / "runtime"
     completed_summary = runtime_root / "reviews" / "2026-04-27.b2" / "summary.json"
     completed_summary.parent.mkdir(parents=True, exist_ok=True)
     completed_summary.write_text("{}", encoding="utf-8")
+    environment_daily = runtime_root / "environment" / "daily" / "2026-04-27.neutral.json"
+    environment_daily.parent.mkdir(parents=True, exist_ok=True)
+    environment_daily.write_text("{}", encoding="utf-8")
     candidate_only = runtime_root / "candidates" / "2026-04-28.b2.json"
     candidate_only.parent.mkdir(parents=True, exist_ok=True)
     candidate_only.write_text("{}", encoding="utf-8")
@@ -111,6 +114,43 @@ def test_plan_backfill_skips_only_dates_with_review_summary(tmp_path: Path) -> N
 
     assert plan.completed_dates == ["2026-04-27"]
     assert plan.missing_dates == ["2026-04-28"]
+
+
+def test_plan_backfill_requeues_date_when_review_exists_but_environment_daily_missing(tmp_path: Path) -> None:
+    script = _load_script_module()
+    runtime_root = tmp_path / "runtime"
+    completed_summary = runtime_root / "reviews" / "2026-04-27.b2" / "summary.json"
+    completed_summary.parent.mkdir(parents=True, exist_ok=True)
+    completed_summary.write_text("{}", encoding="utf-8")
+
+    plan = script.plan_backfill(
+        target_dates=["2026-04-27"],
+        runtime_root=runtime_root,
+        method="b2",
+    )
+
+    assert plan.completed_dates == []
+    assert plan.missing_dates == ["2026-04-27"]
+
+
+def test_plan_backfill_skips_date_when_review_and_environment_daily_exist(tmp_path: Path) -> None:
+    script = _load_script_module()
+    runtime_root = tmp_path / "runtime"
+    completed_summary = runtime_root / "reviews" / "2026-04-27.b2" / "summary.json"
+    completed_summary.parent.mkdir(parents=True, exist_ok=True)
+    completed_summary.write_text("{}", encoding="utf-8")
+    environment_daily = runtime_root / "environment" / "daily" / "2026-04-27.neutral.json"
+    environment_daily.parent.mkdir(parents=True, exist_ok=True)
+    environment_daily.write_text("{}", encoding="utf-8")
+
+    plan = script.plan_backfill(
+        target_dates=["2026-04-27"],
+        runtime_root=runtime_root,
+        method="b2",
+    )
+
+    assert plan.completed_dates == ["2026-04-27"]
+    assert plan.missing_dates == []
 
 
 def test_build_run_command_keeps_requested_threshold_and_pick_date() -> None:
