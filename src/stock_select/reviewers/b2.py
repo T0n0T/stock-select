@@ -265,6 +265,15 @@ def _score_b2_weak_bundle(
     profile: MethodEnvironmentProfile,
 ) -> dict[str, object]:
     support_slopes = _compute_recent_support_slopes(zxdq=zxdq, zxdkx=zxdkx)
+    recent_volume = volume.tail(90).dropna()
+    abnormal_gap_pct: float | None = None
+    if not recent_volume.empty:
+        event_idx = int(recent_volume.idxmax())
+        event_open = float(open_.loc[event_idx])
+        event_close = float(close.loc[event_idx])
+        abnormal_price = event_close if event_close >= event_open else event_open
+        if abnormal_price > 0.0:
+            abnormal_gap_pct = (float(close.iloc[-1]) / abnormal_price - 1.0) * 100.0
     trend_structure = _score_b2_trend_structure(
         close=close,
         low=low,
@@ -348,6 +357,36 @@ def _score_b2_weak_bundle(
         current_verdict=verdict,
     )
     verdict = str(relaunch_override.get("verdict") or verdict)
+    watch_score_candidate = score_b2_watch(
+        verdict="WATCH",
+        total_score=total_score,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+        elastic_watch_reason=None,
+        signal=signal,
+        signal_type=signal_type,
+    )
+    if (
+        verdict == "WATCH"
+        and signal == "B2"
+        and signal_type == "rebound"
+        and trend_structure >= 4.0
+        and price_position <= 2.0
+        and volume_behavior >= 4.0
+        and previous_abnormal_move >= 5.0
+        and macd_phase >= 4.34
+        and total_score >= 4.0
+        and total_score <= 4.06
+        and watch_score_candidate is not None
+        and 60.0 <= float(watch_score_candidate) < 70.0
+        and abnormal_gap_pct is not None
+        and abnormal_gap_pct <= 12.0
+        and (support_slopes.get("zxdq_5d") is not None and float(support_slopes["zxdq_5d"]) >= 0.0)
+    ):
+        verdict = "PASS"
     elastic_watch, elastic_watch_reason = infer_b2_elastic_watch(
         verdict=verdict,
         total_score=total_score,
@@ -520,6 +559,30 @@ def _compute_recent_support_positions(
         "close_vs_zxdq": pct(latest_close, latest_zxdq),
         "close_vs_zxdkx": pct(latest_close, latest_zxdkx),
     }
+
+
+def _compute_abnormal_gap_pct(
+    *,
+    open_: pd.Series,
+    close: pd.Series,
+    volume: pd.Series,
+) -> float | None:
+    if len(close) < 2:
+        return None
+
+    recent_volume = volume.tail(90).dropna()
+    if recent_volume.empty:
+        return None
+
+    event_idx = int(recent_volume.idxmax())
+    event_open = float(open_.loc[event_idx])
+    event_close = float(close.loc[event_idx])
+    abnormal_price = event_close if event_close >= event_open else event_open
+    if abnormal_price <= 0.0:
+        return None
+
+    latest_close = float(close.iloc[-1])
+    return (latest_close / abnormal_price - 1.0) * 100.0
 
 
 def _detect_b2_weak_safe_relaunch_a(
