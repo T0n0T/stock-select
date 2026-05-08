@@ -59,33 +59,37 @@ def test_backfill_environment_history_main_writes_runtime_history_from_artifact_
 
     monkeypatch.setattr(module, "fetch_index_history", fake_fetch_index_history)
 
-    def fake_build_environment_history_for_dates(pick_dates, evaluator):
+    def fake_rebuild_environment_history(*, runtime_root, pick_dates, sse_history, cn2000_history, overwrite, source="backfill"):
         captured["pick_dates"] = pick_dates
-        captured["evaluated"] = evaluator("2026-04-01")
-        return [
-            {
-                "state": "weak",
-                "start_date": "2026-04-01",
-                "end_date": "2026-04-03",
-                "evaluated_at": "2026-04-03",
-                "source": "backfill",
-                "manual_override": False,
-                "reason": "backfilled",
-            }
-        ]
+        captured["overwrite"] = overwrite
+        path = runtime_root / "environment"
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "history.jsonl").write_text(
+            '{"state":"weak","start_date":"2026-04-01","end_date":"2026-04-03","evaluated_at":"2026-04-03","source":"backfill","manual_override":false,"reason":"backfilled"}\n',
+            encoding="utf-8",
+        )
+        latest = path / "latest.json"
+        latest.write_text(
+            json.dumps(
+                {
+                    "intervals": [
+                        {
+                            "state": "weak",
+                            "start_date": "2026-04-01",
+                            "end_date": "2026-04-03",
+                            "evaluated_at": "2026-04-03",
+                            "source": "backfill",
+                            "manual_override": False,
+                            "reason": "backfilled",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return latest
 
-    monkeypatch.setattr(module, "build_environment_history_for_dates", fake_build_environment_history_for_dates)
-    monkeypatch.setattr(
-        module,
-        "evaluate_market_environment",
-        lambda **kwargs: {
-            "state": "weak",
-            "score_based_state": "weak",
-            "evaluate_date": kwargs["pick_date"],
-            "reason": f"state on {kwargs['pick_date']}",
-            "source": "scheduled",
-        },
-    )
+    monkeypatch.setattr(module, "rebuild_environment_history", fake_rebuild_environment_history)
 
     runtime_root = tmp_path / "runtime"
     args = module.parse_args(
@@ -101,20 +105,15 @@ def test_backfill_environment_history_main_writes_runtime_history_from_artifact_
 
     assert module.main(args) == 0
     assert captured["pick_dates"] == ["2026-04-01", "2026-04-03"]
-    assert captured["evaluated"] == {
-        "state": "weak",
-        "score_based_state": "weak",
-        "evaluate_date": "2026-04-01",
-        "reason": "state on 2026-04-01",
-        "source": "scheduled",
-    }
+    assert captured["overwrite"] is False
     assert captured["fetches"] == [
         ("000001.SH", "2025-10-03", "2026-04-03"),
         ("399303.SZ", "2025-10-03", "2026-04-03"),
     ]
 
-    history = json.loads((runtime_root / "environment" / "history.json").read_text(encoding="utf-8"))
-    assert history == {
+    latest = json.loads((runtime_root / "environment" / "latest.json").read_text(encoding="utf-8"))
+    assert (runtime_root / "environment" / "history.jsonl").exists()
+    assert latest == {
         "intervals": [
             {
                 "state": "weak",
@@ -131,26 +130,41 @@ def test_backfill_environment_history_main_writes_runtime_history_from_artifact_
 
 def test_backfill_environment_history_main_rejects_existing_history_without_overwrite(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_backfill_environment_history_module()
 
-    samples_path = tmp_path / "samples.csv"
-    pd.DataFrame([{"method": "b2", "pick_date": "2026-04-01", "code": "000001.SZ"}]).to_csv(samples_path, index=False)
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "baseline"
+    artifact_dir.mkdir(parents=True)
+    pd.DataFrame([{"method": "b2", "pick_date": "2026-04-01", "code": "000001.SZ"}]).to_csv(
+        artifact_dir / "samples.csv", index=False
+    )
 
     runtime_root = tmp_path / "runtime"
     environment_dir = runtime_root / "environment"
     environment_dir.mkdir(parents=True)
-    (environment_dir / "history.json").write_text('{"intervals": []}', encoding="utf-8")
+    (environment_dir / "history.jsonl").write_text(
+        '{"state":"neutral","start_date":"2026-04-01","end_date":null,"evaluated_at":"2026-04-01","source":"scheduled","manual_override":false,"reason":"range"}\n',
+        encoding="utf-8",
+    )
 
     args = module.parse_args(
         [
-            "--samples",
-            str(samples_path),
+            "--artifact-dir",
+            str(artifact_dir),
             "--runtime-root",
             str(runtime_root),
             "--dsn",
             "postgresql://example",
         ]
+    )
+
+    monkeypatch.setattr(
+        module,
+        "rebuild_environment_history",
+        lambda **kwargs: (_ for _ in ()).throw(
+            ValueError(f"environment history already exists: {runtime_root / 'environment' / 'history.jsonl'}; rerun with --overwrite")
+        ),
     )
 
     with pytest.raises(SystemExit, match="already exists"):

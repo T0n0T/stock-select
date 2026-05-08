@@ -14,9 +14,8 @@ import psycopg
 
 from stock_select.db_access import fetch_index_history, load_dotenv_value, resolve_dsn
 from stock_select.market_environment import (
-    build_environment_history_for_dates,
-    evaluate_market_environment,
-    write_environment_history,
+    environment_history_exists,
+    rebuild_environment_history,
 )
 
 
@@ -103,15 +102,9 @@ def _fetch_index_history_with_fallback(
 
 
 def _resolve_samples_path(args: argparse.Namespace) -> Path:
-    if args.samples is not None:
-        return args.samples
     if args.artifact_dir is not None:
         return args.artifact_dir / "samples.csv"
-    _parser_error(args, "either --artifact-dir or --samples is required")
-
-
-def _history_path(runtime_root: Path) -> Path:
-    return runtime_root / "environment" / "history.json"
+    _parser_error(args, "--artifact-dir is required")
 
 
 def _load_pick_dates(samples_path: Path) -> list[str]:
@@ -122,15 +115,14 @@ def _load_pick_dates(samples_path: Path) -> list[str]:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Backfill runtime market environment history from review tuning samples")
-    parser.add_argument("--samples", type=Path)
-    parser.add_argument("--artifact-dir", type=Path)
+    parser = argparse.ArgumentParser(
+        description="Backfill runtime market environment history from review tuning artifact directory"
+    )
+    parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
     parser.add_argument("--dsn")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
-    if args.artifact_dir is None and args.samples is None:
-        parser.error("either --artifact-dir or --samples is required")
     setattr(args, "_parser", parser)
     return args
 
@@ -143,10 +135,10 @@ def main(args: argparse.Namespace | None = None) -> int:
     pick_dates = _load_pick_dates(samples_path)
     if not pick_dates:
         raise SystemExit(f"no pick_date values found in {samples_path}")
-
-    history_path = _history_path(args.runtime_root)
-    if history_path.exists() and not args.overwrite:
-        raise SystemExit(f"environment history already exists: {history_path}; rerun with --overwrite")
+    if environment_history_exists(args.runtime_root) and not args.overwrite:
+        raise SystemExit(
+            f"environment history already exists: {args.runtime_root / 'environment' / 'history.jsonl'}; rerun with --overwrite"
+        )
 
     dsn = _resolve_cli_dsn(args.dsn)
     start_date = str((pd.Timestamp(pick_dates[0]) - pd.Timedelta(days=180)).strftime("%Y-%m-%d"))
@@ -171,19 +163,17 @@ def main(args: argparse.Namespace | None = None) -> int:
         if callable(close):
             close()
 
-    intervals = build_environment_history_for_dates(
-        pick_dates,
-        lambda pick_date: evaluate_market_environment(
-            pick_date=pick_date,
+    try:
+        rebuild_environment_history(
+            runtime_root=args.runtime_root,
+            pick_dates=pick_dates,
             sse_history=sse_history,
             cn2000_history=cn2000_history,
-        ),
-    )
-
-    for interval in intervals:
-        interval["source"] = "backfill"
-
-    write_environment_history(args.runtime_root, intervals)
+            overwrite=args.overwrite,
+            source="backfill",
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     return 0
 
 

@@ -96,6 +96,10 @@ uv run stock-select analyze-symbol --method b1 --symbol 002350.SZ --pick-date YY
 uv run stock-select analyze-symbol --method b2 --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select analyze-symbol --method dribull --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select analyze-symbol --method hcr --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select market-env show --pick-date YYYY-MM-DD
+uv run stock-select market-env history
+uv run stock-select market-env override --pick-date YYYY-MM-DD --state weak --reason "manual caution"
+uv run stock-select market-env rebuild --artifact-dir artifacts/review-tuning/<run-id> --overwrite --dsn postgresql://...
 uv run stock-select clean --pick-date YYYY-MM-DD
 uv run stock-select clean --intraday
 uv run stock-select run --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
@@ -107,6 +111,61 @@ uv run stock-select html zip --method b1 --pick-date YYYY-MM-DD
 uv run stock-select html serve
 uv run stock-select render-html --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...  # compatibility only
 ```
+
+## 市场环境命令
+
+`market-env` 用于查看、维护和重建市场环境区间历史。
+
+常用命令：
+
+```bash
+uv run stock-select market-env show --pick-date YYYY-MM-DD
+uv run stock-select market-env history
+uv run stock-select market-env override --pick-date YYYY-MM-DD --state weak --reason "manual caution"
+uv run stock-select market-env rebuild --artifact-dir artifacts/review-tuning/<run-id> --overwrite --dsn postgresql://...
+```
+
+说明：
+
+- `market-env show`
+  - 查看某个 `pick_date` 命中的环境区间
+- `market-env history`
+  - 输出当前完整环境历史
+- `market-env override`
+  - 从指定 `pick_date` 起手动覆盖环境状态
+  - `--state` 建议使用 `strong` / `neutral` / `weak`
+- `market-env rebuild`
+  - 按当前规则整份重建环境历史
+  - 输入是一个包含 `samples.csv` 的 artifact 目录
+  - 如果目标文件已存在，必须显式传 `--overwrite`
+
+`market-env rebuild` 的典型场景：
+
+- 你修改了市场环境判定逻辑，想按新规则重算整段历史
+- 你已经有一份 `review_tuning_collect.py` 产出的 `samples.csv`
+- 你希望让后续 `review_tuning_attach_environment.py`、`run`、`review` 都使用同一份最新环境历史
+
+当前环境历史的落盘格式为：
+
+```text
+~/.agents/skills/stock-select/runtime/environment/history.jsonl
+~/.agents/skills/stock-select/runtime/environment/latest.json
+```
+
+其中：
+
+- `history.jsonl`
+  - 程序主存储
+  - 每行一条环境区间记录
+- `latest.json`
+  - 人类可读快照
+  - `market-env history` 默认读取这份文件输出
+
+注意：
+
+- 普通 `uv run stock-select run --method ... --pick-date ...` 只会在目标日缺少环境区间时补写，不会整份重建历史
+- 如果你改了环境规则，应该显式执行 `market-env rebuild ... --overwrite`
+- 新版本不再使用旧的 `runtime/environment/history.json`
 
 ## Review 调参诊断
 

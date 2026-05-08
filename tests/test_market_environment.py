@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -45,6 +46,9 @@ def test_environment_history_round_trip(tmp_path: Path) -> None:
     write_environment_history(tmp_path, intervals)
 
     assert load_environment_history(tmp_path) == intervals
+    assert (tmp_path / "environment" / "history.jsonl").exists()
+    latest = json.loads((tmp_path / "environment" / "latest.json").read_text(encoding="utf-8"))
+    assert latest == {"intervals": intervals}
 
 
 def test_load_environment_history_returns_empty_list_when_missing(tmp_path: Path) -> None:
@@ -54,7 +58,7 @@ def test_load_environment_history_returns_empty_list_when_missing(tmp_path: Path
 def test_load_environment_history_rejects_malformed_payload(tmp_path: Path) -> None:
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir(parents=True)
-    (environment_dir / "history.json").write_text('[]', encoding="utf-8")
+    (environment_dir / "history.jsonl").write_text('[]\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid environment history payload"):
         load_environment_history(tmp_path)
@@ -63,7 +67,7 @@ def test_load_environment_history_rejects_malformed_payload(tmp_path: Path) -> N
 def test_load_environment_history_rejects_malformed_interval_entry(tmp_path: Path) -> None:
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir(parents=True)
-    (environment_dir / "history.json").write_text('{"intervals": [1]}', encoding="utf-8")
+    (environment_dir / "history.jsonl").write_text('1\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid environment history payload"):
         load_environment_history(tmp_path)
@@ -72,7 +76,7 @@ def test_load_environment_history_rejects_malformed_interval_entry(tmp_path: Pat
 def test_load_environment_history_rejects_invalid_json_text(tmp_path: Path) -> None:
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir(parents=True)
-    (environment_dir / "history.json").write_text("{", encoding="utf-8")
+    (environment_dir / "history.jsonl").write_text("{\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid environment history payload"):
         load_environment_history(tmp_path)
@@ -308,12 +312,15 @@ def test_ensure_market_environment_creates_and_persists_interval(tmp_path: Path)
             "reason": "indices trend up",
         }
     ]
+    assert (tmp_path / "environment" / "history.jsonl").exists()
+    latest = json.loads((tmp_path / "environment" / "latest.json").read_text(encoding="utf-8"))
+    assert latest["intervals"][0]["state"] == "strong"
 
 
 def test_ensure_market_environment_malformed_history_does_not_trigger_loader(tmp_path: Path) -> None:
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir(parents=True)
-    (environment_dir / "history.json").write_text("{", encoding="utf-8")
+    (environment_dir / "history.jsonl").write_text("{\n", encoding="utf-8")
 
     called = {"value": False}
 

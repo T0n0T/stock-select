@@ -30,28 +30,64 @@ def _environment_dir(runtime_root: Path) -> Path:
     return runtime_root / "environment"
 
 
-def _history_path(runtime_root: Path) -> Path:
-    return _environment_dir(runtime_root) / "history.json"
+def _history_jsonl_path(runtime_root: Path) -> Path:
+    return _environment_dir(runtime_root) / "history.jsonl"
+
+
+def _latest_snapshot_path(runtime_root: Path) -> Path:
+    return _environment_dir(runtime_root) / "latest.json"
+
+
+def environment_history_exists(runtime_root: Path) -> bool:
+    return _history_jsonl_path(runtime_root).exists() or _latest_snapshot_path(runtime_root).exists()
+
+
+def _write_text_atomic(path: Path, content: str) -> None:
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _load_interval_models(runtime_root: Path) -> list[MarketEnvironmentInterval]:
-    path = _history_path(runtime_root)
+    path = _history_jsonl_path(runtime_root)
     if not path.exists():
         return []
+    intervals: list[MarketEnvironmentInterval] = []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid environment history payload.")
+            intervals.append(MarketEnvironmentInterval.from_payload(payload))
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and str(exc) == "Invalid environment history payload.":
+            raise
         raise ValueError("Invalid environment history payload.") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("Invalid environment history payload.")
-    intervals = payload.get("intervals")
-    if not isinstance(intervals, list):
-        raise ValueError("Invalid environment history payload.")
-    return [MarketEnvironmentInterval.from_payload(interval) for interval in intervals]
+    return intervals
 
 
 def load_environment_history(runtime_root: Path) -> list[dict[str, object]]:
     return [interval.to_dict() for interval in _load_interval_models(runtime_root)]
+
+
+def load_environment_history_snapshot(runtime_root: Path) -> dict[str, object]:
+    path = _latest_snapshot_path(runtime_root)
+    if not path.exists():
+        raise ValueError(f"Market environment snapshot not found: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid environment history snapshot payload.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid environment history snapshot payload.")
+    intervals = payload.get("intervals")
+    if not isinstance(intervals, list):
+        raise ValueError("Invalid environment history snapshot payload.")
+    validated_intervals = [interval.to_dict() for interval in (MarketEnvironmentInterval.from_payload(item) for item in intervals)]
+    return {"intervals": validated_intervals}
 
 
 def _raise_if_out_of_order_insertion(intervals: list[dict[str, object]], *, pick_date: str) -> None:
@@ -81,11 +117,46 @@ def _insert_environment_interval(
 
 
 def write_environment_history(runtime_root: Path, intervals: list[dict[str, object]]) -> Path:
-    path = _history_path(runtime_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
     validated_intervals = [interval.to_dict() for interval in (MarketEnvironmentInterval.from_payload(item) for item in intervals)]
-    path.write_text(json.dumps({"intervals": validated_intervals}, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    environment_dir = _environment_dir(runtime_root)
+    environment_dir.mkdir(parents=True, exist_ok=True)
+    history_path = _history_jsonl_path(runtime_root)
+    latest_path = _latest_snapshot_path(runtime_root)
+    history_content = "\n".join(
+        json.dumps(interval, ensure_ascii=False, separators=(",", ":")) for interval in validated_intervals
+    )
+    if history_content:
+        history_content += "\n"
+    latest_content = json.dumps({"intervals": validated_intervals}, ensure_ascii=False, indent=2)
+    _write_text_atomic(history_path, history_content)
+    _write_text_atomic(latest_path, latest_content)
+    return latest_path
+
+
+def rebuild_environment_history(
+    *,
+    runtime_root: Path,
+    pick_dates: list[str],
+    sse_history: pd.DataFrame,
+    cn2000_history: pd.DataFrame,
+    overwrite: bool,
+    source: str = "backfill",
+) -> Path:
+    history_path = _history_jsonl_path(runtime_root)
+    latest_path = _latest_snapshot_path(runtime_root)
+    if (history_path.exists() or latest_path.exists()) and not overwrite:
+        raise ValueError(f"environment history already exists: {history_path}; rerun with --overwrite")
+    intervals = build_environment_history_for_dates(
+        pick_dates,
+        lambda pick_date: evaluate_market_environment(
+            pick_date=pick_date,
+            sse_history=sse_history,
+            cn2000_history=cn2000_history,
+        ),
+    )
+    for interval in intervals:
+        interval["source"] = source
+    return write_environment_history(runtime_root, intervals)
 
 
 def build_environment_history_for_dates(

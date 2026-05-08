@@ -3401,10 +3401,156 @@ def test_market_env_override_writes_manual_interval(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert '"state": "weak"' in result.stdout
-    history = json.loads((tmp_path / "environment" / "history.json").read_text(encoding="utf-8"))
+    assert (tmp_path / "environment" / "history.jsonl").exists()
+    history = json.loads((tmp_path / "environment" / "latest.json").read_text(encoding="utf-8"))
     assert history["intervals"][-1]["state"] == "weak"
     assert history["intervals"][-1]["source"] == "manual_override"
     assert history["intervals"][-1]["manual_override"] is True
+
+
+def test_market_env_rebuild_writes_dual_history_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "run-1"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    samples_path = artifact_dir / "samples.csv"
+    pd.DataFrame(
+        [
+            {"method": "b2", "pick_date": "2026-04-01", "code": "000001.SZ"},
+            {"method": "b2", "pick_date": "2026-04-03", "code": "000002.SZ"},
+        ]
+    ).to_csv(samples_path, index=False)
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "_fetch_index_history_with_fallback",
+        lambda _connection, *, symbol, start_date, end_date: pd.DataFrame(
+            [
+                {
+                    "ts_code": symbol,
+                    "trade_date": "2026-04-01",
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.8,
+                    "close": 10.1,
+                    "vol": 1000.0,
+                }
+            ]
+        ),
+    )
+
+    def fake_rebuild_environment_history(*, runtime_root, pick_dates, sse_history, cn2000_history, overwrite, source="backfill"):
+        captured["pick_dates"] = pick_dates
+        captured["overwrite"] = overwrite
+        path = runtime_root / "environment"
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "history.jsonl").write_text(
+            '{"state":"weak","start_date":"2026-04-01","end_date":"2026-04-03","evaluated_at":"2026-04-03","source":"backfill","manual_override":false,"reason":"backfilled"}\n',
+            encoding="utf-8",
+        )
+        latest = path / "latest.json"
+        latest.write_text(
+            json.dumps(
+                {
+                    "intervals": [
+                        {
+                            "state": "weak",
+                            "start_date": "2026-04-01",
+                            "end_date": "2026-04-03",
+                            "evaluated_at": "2026-04-03",
+                            "source": "backfill",
+                            "manual_override": False,
+                            "reason": "backfilled",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return latest
+
+    monkeypatch.setattr(cli, "rebuild_environment_history", fake_rebuild_environment_history)
+
+    result = runner.invoke(
+        app,
+        [
+            "market-env",
+            "rebuild",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--runtime-root",
+            str(tmp_path),
+            "--dsn",
+            "postgresql://example",
+            "--overwrite",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["pick_dates"] == ["2026-04-01", "2026-04-03"]
+    assert captured["overwrite"] is True
+    assert (tmp_path / "environment" / "history.jsonl").exists()
+    assert (tmp_path / "environment" / "latest.json").exists()
+
+
+def test_market_env_rebuild_rejects_existing_history_without_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    artifact_dir = tmp_path / "artifacts" / "review-tuning" / "run-1"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    samples_path = artifact_dir / "samples.csv"
+    pd.DataFrame([{"method": "b2", "pick_date": "2026-04-01", "code": "000001.SZ"}]).to_csv(samples_path, index=False)
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir(parents=True, exist_ok=True)
+    (environment_dir / "history.jsonl").write_text(
+        '{"state":"neutral","start_date":"2026-04-01","end_date":null,"evaluated_at":"2026-04-01","source":"scheduled","manual_override":false,"reason":"range"}\n',
+        encoding="utf-8",
+    )
+    (environment_dir / "latest.json").write_text(
+        json.dumps(
+            {
+                "intervals": [
+                    {
+                        "state": "neutral",
+                        "start_date": "2026-04-01",
+                        "end_date": None,
+                        "evaluated_at": "2026-04-01",
+                        "source": "scheduled",
+                        "manual_override": False,
+                        "reason": "range",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "rebuild_environment_history",
+        lambda **kwargs: (_ for _ in ()).throw(
+            ValueError(f"environment history already exists: {tmp_path / 'environment' / 'history.jsonl'}; rerun with --overwrite")
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "market-env",
+            "rebuild",
+            "--artifact-dir",
+            str(artifact_dir),
+            "--runtime-root",
+            str(tmp_path),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--overwrite" in result.stderr
 
 
 def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
