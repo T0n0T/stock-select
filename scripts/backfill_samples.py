@@ -100,11 +100,18 @@ def review_summary_path(runtime_root: Path, *, pick_date: str, method: str) -> P
     return runtime_root / "reviews" / f"{pick_date}.{method}" / "summary.json"
 
 
+def environment_daily_exists(runtime_root: Path, *, pick_date: str) -> bool:
+    daily_dir = runtime_root / "environment" / "daily"
+    return any(daily_dir.glob(f"{pick_date}.*.json"))
+
+
 def plan_backfill(*, target_dates: Sequence[str], runtime_root: Path, method: str) -> BackfillPlan:
     completed_dates: list[str] = []
     missing_dates: list[str] = []
     for pick_date in target_dates:
-        if review_summary_path(runtime_root, pick_date=pick_date, method=method).exists():
+        if review_summary_path(runtime_root, pick_date=pick_date, method=method).exists() and environment_daily_exists(
+            runtime_root, pick_date=pick_date
+        ):
             completed_dates.append(pick_date)
             continue
         missing_dates.append(pick_date)

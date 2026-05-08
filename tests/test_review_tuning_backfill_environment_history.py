@@ -64,20 +64,48 @@ def test_backfill_environment_history_main_writes_runtime_history_from_artifact_
         captured["overwrite"] = overwrite
         path = runtime_root / "environment"
         path.mkdir(parents=True, exist_ok=True)
+        daily_dir = path / "daily"
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        (daily_dir / "2026-04-01.weak.json").write_text(
+            json.dumps(
+                {
+                    "pick_date": "2026-04-01",
+                    "state": "weak",
+                    "score_based_state": "weak",
+                    "rule_based_state": "weak",
+                    "vote_based_state": "weak",
+                    "evaluate_date": "2026-04-01",
+                    "source": "backfill",
+                    "reason": "backfilled",
+                    "total_score": 0.0,
+                    "score_based_total": 0.0,
+                    "manual_override": False,
+                }
+            ),
+            encoding="utf-8",
+        )
         (path / "history.jsonl").write_text(
-            '{"state":"weak","start_date":"2026-04-01","end_date":"2026-04-03","evaluated_at":"2026-04-03","source":"backfill","manual_override":false,"reason":"backfilled"}\n',
+            '{"pick_date":"2026-04-01","state":"weak","score_based_state":"weak","rule_based_state":"weak","vote_based_state":"weak","evaluate_date":"2026-04-01","source":"backfill","reason":"backfilled","total_score":0.0,"score_based_total":0.0,"manual_override":false}\n',
             encoding="utf-8",
         )
         latest = path / "latest.json"
         latest.write_text(
             json.dumps(
                 {
+                    "daily": [
+                        {
+                            "pick_date": "2026-04-01",
+                            "state": "weak",
+                            "source": "backfill",
+                            "reason": "backfilled",
+                        }
+                    ],
                     "intervals": [
                         {
                             "state": "weak",
                             "start_date": "2026-04-01",
-                            "end_date": "2026-04-03",
-                            "evaluated_at": "2026-04-03",
+                            "end_date": None,
+                            "evaluated_at": "2026-04-01",
                             "source": "backfill",
                             "manual_override": False,
                             "reason": "backfilled",
@@ -112,14 +140,23 @@ def test_backfill_environment_history_main_writes_runtime_history_from_artifact_
     ]
 
     latest = json.loads((runtime_root / "environment" / "latest.json").read_text(encoding="utf-8"))
+    assert (runtime_root / "environment" / "daily" / "2026-04-01.weak.json").exists()
     assert (runtime_root / "environment" / "history.jsonl").exists()
     assert latest == {
+        "daily": [
+            {
+                "pick_date": "2026-04-01",
+                "state": "weak",
+                "source": "backfill",
+                "reason": "backfilled",
+            }
+        ],
         "intervals": [
             {
                 "state": "weak",
                 "start_date": "2026-04-01",
-                "end_date": "2026-04-03",
-                "evaluated_at": "2026-04-03",
+                "end_date": None,
+                "evaluated_at": "2026-04-01",
                 "source": "backfill",
                 "manual_override": False,
                 "reason": "backfilled",

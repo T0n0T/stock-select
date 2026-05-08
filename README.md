@@ -148,17 +148,22 @@ uv run stock-select market-env rebuild --artifact-dir artifacts/review-tuning/<r
 当前环境历史的落盘格式为：
 
 ```text
+~/.agents/skills/stock-select/runtime/environment/daily/
 ~/.agents/skills/stock-select/runtime/environment/history.jsonl
 ~/.agents/skills/stock-select/runtime/environment/latest.json
 ```
 
 其中：
 
+- `daily/`
+  - 每个交易日一份完整环境评估文件
+  - 文件名格式为 `YYYY-MM-DD.<state>.json`
 - `history.jsonl`
   - 程序主存储
-  - 每行一条环境区间记录
+  - 每行一条每日环境记录
 - `latest.json`
   - 人类可读快照
+  - 同时包含 `daily` 概览和压缩后的 `intervals`
   - `market-env history` 默认读取这份文件输出
 
 注意：

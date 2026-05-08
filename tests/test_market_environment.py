@@ -31,24 +31,58 @@ from stock_select.market_environment import (
 
 
 def test_environment_history_round_trip(tmp_path: Path) -> None:
-    intervals = [
+    daily_records = [
+        {
+            "pick_date": "2026-04-08",
+            "state": "weak",
+            "score_based_state": "weak",
+            "rule_based_state": "neutral",
+            "vote_based_state": "weak",
+            "evaluate_date": "2026-04-08",
+            "source": "scheduled",
+            "reason": "risk-off",
+            "total_score": -6.0,
+            "score_based_total": -6.0,
+        }
+    ]
+
+    write_environment_history(tmp_path, daily_records)
+
+    assert load_environment_history(tmp_path) == [
         {
             "state": "weak",
             "start_date": "2026-04-08",
-            "end_date": "2026-05-11",
+            "end_date": None,
             "evaluated_at": "2026-04-08",
             "source": "scheduled",
             "manual_override": False,
             "reason": "risk-off",
         }
     ]
-
-    write_environment_history(tmp_path, intervals)
-
-    assert load_environment_history(tmp_path) == intervals
+    assert (tmp_path / "environment" / "daily" / "2026-04-08.weak.json").exists()
     assert (tmp_path / "environment" / "history.jsonl").exists()
+    history_lines = (tmp_path / "environment" / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(history_lines[0]) == {**daily_records[0], "manual_override": False}
     latest = json.loads((tmp_path / "environment" / "latest.json").read_text(encoding="utf-8"))
-    assert latest == {"intervals": intervals}
+    assert latest["daily"] == [
+        {
+            "pick_date": "2026-04-08",
+            "state": "weak",
+            "source": "scheduled",
+            "reason": "risk-off",
+        }
+    ]
+    assert latest["intervals"] == [
+        {
+            "state": "weak",
+            "start_date": "2026-04-08",
+            "end_date": None,
+            "evaluated_at": "2026-04-08",
+            "source": "scheduled",
+            "manual_override": False,
+            "reason": "risk-off",
+        }
+    ]
 
 
 def test_load_environment_history_returns_empty_list_when_missing(tmp_path: Path) -> None:
@@ -143,13 +177,16 @@ def test_resolve_market_environment_returns_interval_covering_pick_date(tmp_path
         tmp_path,
         [
             {
+                "pick_date": "2026-05-12",
                 "state": "strong",
-                "start_date": "2026-05-12",
-                "end_date": None,
-                "evaluated_at": "2026-05-12",
+                "score_based_state": "strong",
+                "rule_based_state": "strong",
+                "vote_based_state": "strong",
+                "evaluate_date": "2026-05-12",
                 "source": "scheduled",
-                "manual_override": False,
                 "reason": "broad rally",
+                "total_score": 12.0,
+                "score_based_total": 12.0,
             }
         ],
     )
@@ -166,13 +203,28 @@ def test_resolve_market_environment_matches_boundary_dates(tmp_path: Path) -> No
         tmp_path,
         [
             {
+                "pick_date": "2026-04-08",
                 "state": "weak",
-                "start_date": "2026-04-08",
-                "end_date": "2026-05-11",
-                "evaluated_at": "2026-04-08",
+                "score_based_state": "weak",
+                "rule_based_state": "neutral",
+                "vote_based_state": "weak",
+                "evaluate_date": "2026-04-08",
                 "source": "scheduled",
-                "manual_override": False,
                 "reason": "risk-off",
+                "total_score": -5.0,
+                "score_based_total": -5.0,
+            },
+            {
+                "pick_date": "2026-05-11",
+                "state": "weak",
+                "score_based_state": "weak",
+                "rule_based_state": "neutral",
+                "vote_based_state": "weak",
+                "evaluate_date": "2026-05-11",
+                "source": "scheduled",
+                "reason": "risk-off",
+                "total_score": -5.5,
+                "score_based_total": -5.5,
             }
         ],
     )
@@ -181,7 +233,7 @@ def test_resolve_market_environment_matches_boundary_dates(tmp_path: Path) -> No
 
     assert resolved["state"] == "weak"
     assert resolved["interval_start"] == "2026-04-08"
-    assert resolved["interval_end"] == "2026-05-11"
+    assert resolved["interval_end"] is None
 
 
 def test_resolve_market_environment_prefers_newer_overlapping_interval(tmp_path: Path) -> None:
@@ -270,10 +322,50 @@ def test_ensure_market_environment_reuses_existing_interval(tmp_path: Path) -> N
         called["value"] = True
         return {}
 
-    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-12", evaluation_loader=fake_loader)
+    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-05", evaluation_loader=fake_loader)
 
     assert resolved["state"] == "neutral"
     assert called["value"] is False
+
+
+def test_ensure_market_environment_writes_missing_daily_record_even_when_interval_already_covers_day(tmp_path: Path) -> None:
+    write_environment_history(
+        tmp_path,
+        [
+            {
+                "pick_date": "2026-05-05",
+                "state": "neutral",
+                "score_based_state": "neutral",
+                "rule_based_state": "neutral",
+                "vote_based_state": "neutral",
+                "evaluate_date": "2026-05-05",
+                "source": "scheduled",
+                "reason": "range-bound",
+                "total_score": 0.0,
+                "score_based_total": 0.0,
+            }
+        ],
+    )
+
+    def fake_loader() -> dict[str, object]:
+        return {
+            "evaluate_date": "2026-05-12",
+            "state": "neutral",
+            "score_based_state": "neutral",
+            "rule_based_state": "neutral",
+            "vote_based_state": "neutral",
+            "total_score": 0.0,
+            "score_based_total": 0.0,
+            "reason": "range-bound",
+            "source": "scheduled",
+        }
+
+    resolved = ensure_market_environment(tmp_path, pick_date="2026-05-12", evaluation_loader=fake_loader)
+
+    assert resolved["state"] == "neutral"
+    assert (tmp_path / "environment" / "daily" / "2026-05-12.neutral.json").exists()
+    history_lines = (tmp_path / "environment" / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"pick_date":"2026-05-12"' in line for line in history_lines)
 
 
 def test_ensure_market_environment_creates_and_persists_interval(tmp_path: Path) -> None:
@@ -312,8 +404,24 @@ def test_ensure_market_environment_creates_and_persists_interval(tmp_path: Path)
             "reason": "indices trend up",
         }
     ]
+    assert (tmp_path / "environment" / "daily" / "2026-05-19.strong.json").exists()
     assert (tmp_path / "environment" / "history.jsonl").exists()
+    history_lines = (tmp_path / "environment" / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(history_lines[0]) == {
+        "pick_date": "2026-05-19",
+        "state": "strong",
+        "score_based_state": "strong",
+        "rule_based_state": "strong",
+        "vote_based_state": "strong",
+        "evaluate_date": "2026-05-19",
+        "source": "scheduled",
+        "reason": "indices trend up",
+        "total_score": 8.5,
+        "score_based_total": 8.5,
+        "manual_override": False,
+    }
     latest = json.loads((tmp_path / "environment" / "latest.json").read_text(encoding="utf-8"))
+    assert latest["daily"][0]["state"] == "strong"
     assert latest["intervals"][0]["state"] == "strong"
 
 
@@ -366,7 +474,7 @@ def test_ensure_market_environment_inserts_historical_interval_before_future_int
     assert resolved == {
         "state": "weak",
         "interval_start": "2026-05-12",
-        "interval_end": "2026-05-18",
+        "interval_end": "2026-05-12",
         "reason": "backfilled historical gap",
         "source": "scheduled",
     }
@@ -375,7 +483,7 @@ def test_ensure_market_environment_inserts_historical_interval_before_future_int
         {
             "state": "weak",
             "start_date": "2026-05-12",
-            "end_date": "2026-05-18",
+            "end_date": "2026-05-12",
             "evaluated_at": "2026-05-12",
             "source": "scheduled",
             "manual_override": False,
