@@ -110,7 +110,7 @@ def fetch_index_window(
 ) -> pd.DataFrame:
     query = """
         SELECT ts_code, trade_date, open, high, low, close, vol
-        FROM index_daily_market
+        FROM daily_index
         WHERE trade_date BETWEEN %(start_date)s AND %(end_date)s
     """
     params: dict[str, object] = {
@@ -133,7 +133,7 @@ def fetch_index_history(
 ) -> pd.DataFrame:
     query = """
         SELECT ts_code, trade_date, open, high, low, close, vol
-        FROM index_daily_market
+        FROM daily_index
         WHERE ts_code = %(symbol)s
           AND trade_date BETWEEN %(start_date)s AND %(end_date)s
         ORDER BY trade_date ASC
