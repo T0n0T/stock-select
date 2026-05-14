@@ -17,6 +17,7 @@ import psycopg
 import typer
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
+from stock_select.analysis.macd_wave_score import score_macd_review_context_from_history
 from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.market_environment import (
     ensure_market_environment,
@@ -449,13 +450,22 @@ def _load_summary_payload(summary_path: Path) -> dict[str, object]:
 
 
 def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: str) -> dict[str, str]:
+    normalized_method = method.lower()
+    if normalized_method == "b2":
+        score = score_macd_review_context_from_history(
+            history,
+            method="b2",
+            signal="",
+        )
+        return score.review_context
+
     trend_input = history[["trade_date", "close"]].copy()
     weekly_trend = classify_weekly_macd_trend(trend_input, pick_date)
     daily_trend = classify_daily_macd_trend(trend_input, pick_date)
     combo_ok = _is_review_trend_combo_ok(weekly_trend=weekly_trend, daily_trend=daily_trend)
     weekly_context = f"确定性识别结果：{describe_macd_trend_state('周线', weekly_trend)}；原因：{weekly_trend.reason}。"
     daily_context = f"确定性识别结果：{describe_macd_trend_state('日线', daily_trend)}；原因：{daily_trend.reason}。"
-    combo_context = f"组合判定：{'符合' if combo_ok else '不符合'} {method.lower()} 候选要求。"
+    combo_context = f"组合判定：{'符合' if combo_ok else '不符合'} {normalized_method} 候选要求。"
     return {
         "weekly_wave_context": weekly_context,
         "daily_wave_context": daily_context,
@@ -2699,6 +2709,11 @@ def _analyze_symbol_impl(
 
     result_dir = runtime_root / "ad_hoc" / f"{resolved_pick_date}.{method}.{normalized_symbol}"
     result_dir.mkdir(parents=True, exist_ok=True)
+    _resolved_environment, profile = _resolve_review_environment_context(
+        runtime_root=runtime_root,
+        pick_date=resolved_pick_date,
+        method=method.lower(),
+    )
 
     if reporter:
         reporter.emit("analyze-symbol", f"symbol={normalized_symbol}")

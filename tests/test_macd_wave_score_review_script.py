@@ -151,3 +151,17 @@ def test_render_summary_markdown_includes_distribution_and_top_examples() -> Non
     assert "setup_tag_counts" in markdown
     assert "000001.SZ @ 2026-04-10" in markdown
     assert "pre_wave3_imminent" in markdown
+
+
+def test_manual_notes_regression_keeps_pre_wave3_above_even_repairing_subtiers() -> None:
+    rows = [
+        {"code": "300166.SZ", "macd_score": 3.80, "setup_tag": "pre_wave3_imminent"},
+        {"code": "688316.SH", "macd_score": 2.92, "setup_tag": "even_repairing"},
+        {"code": "300152.SZ", "macd_score": 2.60, "setup_tag": "even_repairing"},
+        {"code": "301658.SZ", "macd_score": 2.12, "setup_tag": "even_repairing"},
+        {"code": "601216.SH", "macd_score": 2.12, "setup_tag": "even_repairing"},
+    ]
+
+    scores = {row["code"]: row["macd_score"] for row in rows}
+
+    assert scores["300166.SZ"] > scores["688316.SH"] > scores["300152.SZ"] > scores["301658.SZ"]

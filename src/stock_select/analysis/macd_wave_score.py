@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+
+import pandas as pd
+
+from stock_select.analysis import macd_waves as macd_waves_module
 from stock_select.analysis.macd_waves import MacdStateMachineResult
+from stock_select.analysis.macd_waves import classify_macd_state_from_lines
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_GRADE_TABLE_PATH = _PROJECT_ROOT / "docs" / "research" / "macd-wave-score-grade-table.json"
 
 
 @dataclass(frozen=True)
@@ -11,6 +23,8 @@ class MacdWaveStage:
     current_opportunity_phase: str
     odd_push_stage: str
     history_confirmed: bool
+    waiting_strength_tier: str
+    supports_first_even_repair_window: bool
     bottom_divergence_valid: bool | None
     current_odd_peak_confirmed: bool
     current_odd_peak_value: float | None
@@ -36,6 +50,12 @@ class MacdScoreBreakdown:
     review_context: dict[str, str]
 
 
+@dataclass(frozen=True)
+class MacdWaveScoreInputs:
+    weekly_stage: MacdWaveStage
+    daily_stage: MacdWaveStage
+
+
 def derive_macd_wave_stage(
     state: MacdStateMachineResult,
     *,
@@ -48,6 +68,17 @@ def derive_macd_wave_stage(
     current_wave_index = _derive_current_wave_index(state, wave_cycle_phase=wave_cycle_phase)
     current_opportunity_phase = _derive_opportunity_phase(state, wave_cycle_phase=wave_cycle_phase)
     history_confirmed = wave_cycle_phase == "odd_confirmed"
+    waiting_strength_tier = classify_waiting_strength_tier(
+        latest_dif=latest_dif,
+        latest_dea=latest_dea,
+        latest_hist=latest_hist,
+        wave_cycle_phase=wave_cycle_phase,
+    )
+    supports_first_even_repair_window = (
+        wave_cycle_phase == "even_repairing"
+        and state.current_wave_index == 2
+        and state.valid_odd_wave_count == 1
+    )
     odd_push_stage = "not_applicable"
     if wave_cycle_phase in {"pre_odd_pushing", "odd_confirmed"}:
         odd_push_stage = classify_odd_push_stage(
@@ -77,6 +108,8 @@ def derive_macd_wave_stage(
         current_opportunity_phase=current_opportunity_phase,
         odd_push_stage=odd_push_stage,
         history_confirmed=history_confirmed,
+        waiting_strength_tier=waiting_strength_tier,
+        supports_first_even_repair_window=supports_first_even_repair_window,
         bottom_divergence_valid=state.bottom_divergence_valid,
         current_odd_peak_confirmed=current_odd_peak_confirmed,
         current_odd_peak_value=current_odd_peak_value,
@@ -136,6 +169,92 @@ def classify_odd_push_stage(*, latest_dif: float, latest_dea: float, latest_hist
     return "not_applicable"
 
 
+def classify_waiting_strength_tier(
+    *,
+    latest_dif: float,
+    latest_dea: float,
+    latest_hist: float,
+    wave_cycle_phase: str,
+) -> str:
+    if wave_cycle_phase != "waiting":
+        return "not_applicable"
+    if latest_dif > 0 and latest_dea < 0 and latest_hist > 0:
+        return "underwater_ready"
+    if latest_dif < 0 and latest_dea < 0 and latest_hist > 0:
+        return "underwater_strengthening"
+    return "waiting_flat"
+
+
+def classify_weekly_grade(stage: MacdWaveStage) -> str:
+    if stage.wave_cycle_phase == "cycle_ended":
+        return "很差"
+    if stage.wave_cycle_phase == "waiting":
+        if stage.waiting_strength_tier == "underwater_ready":
+            return "差"
+        return "很差"
+    if stage.wave_cycle_phase == "even_adjusting":
+        return "中"
+    if stage.wave_cycle_phase == "even_repairing":
+        return "中"
+    if stage.wave_cycle_phase == "pre_odd_adjusting":
+        return "差"
+    if stage.wave_cycle_phase == "pre_odd_pushing":
+        return "很好"
+    if stage.wave_cycle_phase == "odd_confirmed":
+        if stage.odd_push_stage == "stage1_hist_dominant":
+            return "很好"
+        if stage.odd_push_stage == "stage2_line_extending":
+            return "好"
+        if stage.odd_push_stage == "stage3_hist_lagging":
+            return "中"
+        return "中"
+    return "很差"
+
+
+def classify_daily_grade(stage: MacdWaveStage) -> str:
+    if stage.wave_cycle_phase == "cycle_ended":
+        return "很差"
+    if stage.wave_cycle_phase == "waiting":
+        return "很差"
+    if stage.wave_cycle_phase == "even_adjusting":
+        return "差"
+    if stage.current_opportunity_phase == "pre_odd_imminent":
+        return "很好" if stage.current_wave_index == 3 else "好"
+    if stage.wave_cycle_phase == "even_repairing":
+        if stage.bottom_divergence_valid is True:
+            return "很好"
+        if stage.supports_first_even_repair_window:
+            return "好"
+        if stage.bottom_divergence_valid is False:
+            return "中"
+        return "中"
+    if stage.wave_cycle_phase == "pre_odd_pushing":
+        return "好"
+    if stage.wave_cycle_phase == "pre_odd_adjusting":
+        return "中"
+    if stage.wave_cycle_phase == "odd_confirmed":
+        if stage.odd_push_stage == "stage1_hist_dominant":
+            return "很好"
+        if stage.odd_push_stage == "stage2_line_extending":
+            return "好"
+        if stage.odd_push_stage == "stage3_hist_lagging":
+            return "中"
+        return "中"
+    return "很差"
+
+
+@lru_cache(maxsize=1)
+def load_macd_wave_score_grade_table() -> dict[str, dict[str, float]]:
+    payload = json.loads(_GRADE_TABLE_PATH.read_text(encoding="utf-8"))
+    return {
+        "weekly_coeff": {
+            env_key: {key: float(value) for key, value in dict(env_values).items()}
+            for env_key, env_values in dict(payload["weekly_coeff"]).items()
+        },
+        "daily": {key: float(value) for key, value in dict(payload["daily"]).items()},
+    }
+
+
 def _derive_top_divergence(
     *,
     wave_cycle_phase: str,
@@ -167,14 +286,25 @@ def score_macd_state_machine_combo(
     weekly_stage: MacdWaveStage,
     daily_stage: MacdWaveStage,
     signal: str,
+    environment_state: str | None = None,
 ) -> MacdScoreBreakdown:
-    weekly_score = _score_weekly_stage(weekly_stage)
     daily_score = _score_daily_stage(daily_stage)
-    combo_score = _score_combo(method=method, weekly_stage=weekly_stage, daily_stage=daily_stage, signal=signal)
+    weekly_score = _score_weekly_stage(
+        weekly_stage,
+        daily_base_score=daily_score,
+        environment_state=environment_state,
+    )
+    combo_score = _score_combo(
+        method=method,
+        weekly_stage=weekly_stage,
+        daily_stage=daily_stage,
+        signal=signal,
+        environment_state=environment_state,
+    )
     risk_adjustment, risk_flags = _score_risk_adjustment(weekly_stage=weekly_stage, daily_stage=daily_stage)
     method_bias = _score_method_bias(method=method, weekly_stage=weekly_stage, daily_stage=daily_stage, signal=signal)
     raw_score = max(0.0, min(100.0, weekly_score + daily_score + combo_score + risk_adjustment + method_bias))
-    score_1_to_5 = round(1.0 + (raw_score / 25.0), 2)
+    score_1_to_5 = round(1.0 + (min(100.0, raw_score + 8.0) / 25.0), 2)
     setup_tag = _derive_setup_tag(weekly_stage=weekly_stage, daily_stage=daily_stage)
     reason = _build_score_reason(
         method=method,
@@ -206,54 +336,50 @@ def score_macd_state_machine_combo(
     )
 
 
-def _score_weekly_stage(stage: MacdWaveStage) -> float:
-    if stage.wave_cycle_phase == "cycle_ended":
-        return 0.0
+def _resolve_environment_state(environment_state: str | None) -> str:
+    if environment_state in {"strong", "neutral", "weak"}:
+        return environment_state
+    return "default"
+
+
+def _weekly_coefficient(stage: MacdWaveStage, *, environment_state: str | None = None) -> float:
+    normalized_env = _resolve_environment_state(environment_state)
+    table = load_macd_wave_score_grade_table()["weekly_coeff"][normalized_env]
+    score = table[classify_weekly_grade(stage)]
     if stage.wave_cycle_phase == "waiting":
-        return 4.0
-    if stage.wave_cycle_phase == "even_adjusting":
-        return 8.0
-    if stage.wave_cycle_phase == "even_repairing":
-        return 16.0
-    if stage.wave_cycle_phase == "pre_odd_adjusting":
-        return 12.0
-    if stage.wave_cycle_phase == "pre_odd_pushing":
-        return 24.0 if stage.current_wave_index <= 3 else 19.0
-    if stage.wave_cycle_phase == "odd_confirmed":
-        if stage.odd_push_stage == "stage1_hist_dominant":
-            return 30.0 if stage.current_wave_index <= 3 else 24.0
-        if stage.odd_push_stage == "stage2_line_extending":
-            return 26.0 if stage.current_wave_index <= 3 else 21.0
-        if stage.odd_push_stage == "stage3_hist_lagging":
-            return 18.0 if stage.current_wave_index <= 3 else 14.0
-        return 20.0
-    return 8.0
+        if stage.waiting_strength_tier == "underwater_strengthening":
+            score += 0.03
+    if stage.wave_cycle_phase == "pre_odd_pushing" and stage.current_wave_index >= 4:
+        score -= 0.20
+    if stage.bottom_divergence_valid is True:
+        score += 0.05
+    elif stage.bottom_divergence_valid is False:
+        score -= 0.05
+    return score
+
+
+def _score_weekly_stage(stage: MacdWaveStage, *, daily_base_score: float, environment_state: str | None = None) -> float:
+    return round(daily_base_score * _weekly_coefficient(stage, environment_state=environment_state), 2)
 
 
 def _score_daily_stage(stage: MacdWaveStage) -> float:
-    if stage.wave_cycle_phase == "cycle_ended":
-        return 0.0
-    if stage.wave_cycle_phase == "waiting":
-        return 5.0
-    if stage.wave_cycle_phase == "even_adjusting":
-        return 10.0
+    table = load_macd_wave_score_grade_table()["daily"]
+    grade = classify_daily_grade(stage)
+    score = table[grade]
+
+    # Keep the explicit grade table as the base, then use small semantic
+    # adjustments so repeated repairs do not outrank earlier repair windows.
     if stage.current_opportunity_phase == "pre_odd_imminent":
-        return 34.0 if stage.current_wave_index <= 3 else 28.0
+        return table["很好"] + (4.0 if stage.current_wave_index == 3 else 1.0)
     if stage.wave_cycle_phase == "even_repairing":
-        return 23.0
-    if stage.wave_cycle_phase == "pre_odd_pushing":
-        return 30.0 if stage.current_wave_index <= 3 else 24.0
-    if stage.wave_cycle_phase == "pre_odd_adjusting":
-        return 13.0
-    if stage.wave_cycle_phase == "odd_confirmed":
-        if stage.odd_push_stage == "stage1_hist_dominant":
-            return 31.0 if stage.current_wave_index <= 3 else 25.0
-        if stage.odd_push_stage == "stage2_line_extending":
-            return 24.0 if stage.current_wave_index <= 3 else 20.0
-        if stage.odd_push_stage == "stage3_hist_lagging":
-            return 15.0 if stage.current_wave_index <= 3 else 12.0
-        return 18.0
-    return 8.0
+        if stage.bottom_divergence_valid is True:
+            if stage.supports_first_even_repair_window:
+                return table["好"] + 3.0
+            return table["中"] + 2.0
+        if stage.supports_first_even_repair_window:
+            return table["好"]
+        return table["中"]
+    return score
 
 
 def _score_combo(
@@ -262,15 +388,36 @@ def _score_combo(
     weekly_stage: MacdWaveStage,
     daily_stage: MacdWaveStage,
     signal: str,
+    environment_state: str | None = None,
 ) -> float:
     del method
     if "cycle_ended" in {weekly_stage.wave_cycle_phase, daily_stage.wave_cycle_phase}:
         return 0.0
     if daily_stage.current_opportunity_phase == "pre_odd_imminent" and daily_stage.current_wave_index == 3:
         if weekly_stage.wave_cycle_phase == "odd_confirmed" and weekly_stage.odd_push_stage == "stage1_hist_dominant":
-            return 20.0 if signal == "B3" else 18.0
+            score = 20.0 if signal == "B3" else 18.0
+            if environment_state == "weak":
+                return score - 15.0
+            if environment_state == "strong":
+                return score - 12.0
+            return score
+        if weekly_stage.wave_cycle_phase == "odd_confirmed" and weekly_stage.odd_push_stage == "stage3_hist_lagging":
+            score = 10.0 if signal == "B3" else 8.0
+            if environment_state == "strong":
+                return score - 2.0
+            return score
         if weekly_stage.wave_cycle_phase in {"pre_odd_pushing", "even_repairing", "odd_confirmed"}:
-            return 16.0
+            score = 16.0
+            if weekly_stage.wave_cycle_phase == "pre_odd_pushing" and weekly_stage.current_wave_index >= 4:
+                score = 6.0
+            if environment_state == "weak":
+                return score - 15.0
+            if environment_state == "strong":
+                return score - 4.0
+            return score
+    if daily_stage.current_opportunity_phase == "pre_odd_imminent":
+        if environment_state == "weak":
+            return 2.0
     if daily_stage.wave_cycle_phase == "even_repairing" and weekly_stage.wave_cycle_phase == "even_repairing":
         return 10.0
     if daily_stage.wave_cycle_phase == "odd_confirmed" and daily_stage.odd_push_stage == "stage3_hist_lagging":
@@ -285,8 +432,13 @@ def _score_risk_adjustment(
 ) -> tuple[float, tuple[str, ...]]:
     score = 0.0
     risk_flags: list[str] = list(weekly_stage.risk_flags) + list(daily_stage.risk_flags)
-    if daily_stage.bottom_divergence_valid is True or weekly_stage.bottom_divergence_valid is True:
-        score += 6.0
+    if daily_stage.bottom_divergence_valid is True:
+        if daily_stage.current_opportunity_phase == "pre_odd_imminent":
+            score += 6.0
+        elif daily_stage.supports_first_even_repair_window:
+            score += 5.0
+        elif daily_stage.wave_cycle_phase == "even_repairing":
+            score += 1.0
         risk_flags.append("bottom_divergence_valid")
     if daily_stage.bottom_divergence_valid is False:
         score -= 6.0
@@ -472,3 +624,51 @@ def _render_combo_reason(reason: str) -> str:
     for source, target in replacements.items():
         rendered = rendered.replace(source, target)
     return rendered
+
+
+def compute_weekly_and_daily_stages(history: pd.DataFrame) -> MacdWaveScoreInputs:
+    daily_macd = macd_waves_module.compute_macd(history[["close"]].astype(float))
+    daily_state = classify_macd_state_from_lines(daily_macd[["dif", "dea"]])
+    daily_stage = derive_macd_wave_stage(
+        daily_state,
+        latest_dif=float(daily_macd.iloc[-1]["dif"]),
+        latest_dea=float(daily_macd.iloc[-1]["dea"]),
+        latest_hist=float((daily_macd.iloc[-1]["dif"] - daily_macd.iloc[-1]["dea"]) * 2.0),
+        previous_odd_peak_value=daily_state.H,
+    )
+
+    weekly_close = (
+        history.assign(trade_date=pd.to_datetime(history["trade_date"]))
+        .set_index("trade_date")["close"]
+        .astype(float)
+        .resample("W-FRI")
+        .last()
+        .dropna()
+    )
+    weekly_macd = macd_waves_module.compute_macd(pd.DataFrame({"close": weekly_close.to_numpy()}))
+    weekly_state = classify_macd_state_from_lines(weekly_macd[["dif", "dea"]])
+    weekly_stage = derive_macd_wave_stage(
+        weekly_state,
+        latest_dif=float(weekly_macd.iloc[-1]["dif"]),
+        latest_dea=float(weekly_macd.iloc[-1]["dea"]),
+        latest_hist=float((weekly_macd.iloc[-1]["dif"] - weekly_macd.iloc[-1]["dea"]) * 2.0),
+        previous_odd_peak_value=weekly_state.H,
+    )
+    return MacdWaveScoreInputs(weekly_stage=weekly_stage, daily_stage=daily_stage)
+
+
+def score_macd_review_context_from_history(
+    history: pd.DataFrame,
+    *,
+    method: str,
+    signal: str,
+    environment_state: str | None = None,
+) -> MacdScoreBreakdown:
+    stages = compute_weekly_and_daily_stages(history)
+    return score_macd_state_machine_combo(
+        method=method,
+        weekly_stage=stages.weekly_stage,
+        daily_stage=stages.daily_stage,
+        signal=signal,
+        environment_state=environment_state,
+    )

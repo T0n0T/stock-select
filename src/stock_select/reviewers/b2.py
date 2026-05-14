@@ -5,6 +5,7 @@ from typing import Any
 import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
+from stock_select.analysis.macd_wave_score import score_macd_review_context_from_history
 from stock_select.environment_profiles import MethodEnvironmentProfile
 from stock_select.indicators import compute_macd
 from stock_select.review_orchestrator import (
@@ -16,6 +17,104 @@ from stock_select.review_orchestrator import (
 from stock_select.review_protocol import compute_b2_weighted_total_for_profile
 from stock_select.review_protocol import infer_signal_type
 from stock_select.strategies.b1 import compute_zx_lines
+
+
+def _resolve_b2_daily_state_hint(*, weekly_trend: Any, daily_trend: Any) -> str:
+    daily_stage = str(getattr(daily_trend, "wave_stage", "") or "")
+    weekly_stage = str(getattr(weekly_trend, "wave_stage", "") or "")
+    daily_phase = str(getattr(daily_trend, "phase", "") or "")
+    phase_index = int(getattr(daily_trend, "phase_index", 0) or 0)
+
+    if daily_phase == "falling":
+        if "背离" in daily_stage:
+            return "even_adjusting_invalid_divergence"
+        return "even_adjusting"
+    if phase_index >= 5:
+        return "late_odd_wave"
+    if daily_phase == "rising" and daily_stage in {"分歧", "背离", "强势转分歧", "分歧转背离"}:
+        return "odd_stage3"
+    if weekly_stage in {"分歧", "背离", "强势转分歧", "分歧转背离"}:
+        return "odd_stage3"
+    return "healthy_breakout"
+
+
+def _compute_b2_overheat_penalty(
+    *,
+    close: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    daily_state_hint: str,
+    signal: str | None = None,
+    price_position: float | None = None,
+    profile: MethodEnvironmentProfile | None = None,
+) -> float:
+    state = profile.state if profile is not None else "neutral"
+    if state == "weak":
+        return 0.0
+    if state == "strong":
+        if signal not in {"B3", "B3+"}:
+            return 0.0
+        if price_position is None or float(price_position) < 5.0:
+            return 0.0
+    params = {
+        "strong": {
+            "sideways_window": 10,
+            "sideways_amp_pct": 15.0,
+            "runup_window": 30,
+            "runup_gain_pct": 50.0,
+            "sideways_penalty": 0.15,
+            "runup_penalty": 0.10,
+            "risk_bonus": 0.15,
+        },
+        "neutral": {
+            "sideways_window": 10,
+            "sideways_amp_pct": 13.0,
+            "runup_window": 30,
+            "runup_gain_pct": 45.0,
+            "sideways_penalty": 0.20,
+            "runup_penalty": 0.25,
+            "risk_bonus": 0.15,
+        },
+    }.get(state, {
+        "sideways_window": 10,
+        "sideways_amp_pct": 13.0,
+        "runup_window": 30,
+        "runup_gain_pct": 45.0,
+        "sideways_penalty": 0.20,
+        "runup_penalty": 0.25,
+        "risk_bonus": 0.15,
+    })
+
+    penalty = 0.0
+    close_vals = close.dropna().astype(float)
+    high_vals = high.dropna().astype(float)
+    low_vals = low.dropna().astype(float)
+
+    if len(high_vals) >= params["sideways_window"] and len(low_vals) >= params["sideways_window"]:
+        recent_high = float(high_vals.tail(params["sideways_window"]).max())
+        recent_low = float(low_vals.tail(params["sideways_window"]).min())
+        if recent_low > 0.0:
+            amp_pct = (recent_high / recent_low - 1.0) * 100.0
+            if amp_pct <= params["sideways_amp_pct"]:
+                penalty += params["sideways_penalty"]
+
+    if len(close_vals) >= params["runup_window"]:
+        start_close = float(close_vals.iloc[-params["runup_window"]])
+        latest_close = float(close_vals.iloc[-1])
+        if start_close > 0.0:
+            gain_pct = (latest_close / start_close - 1.0) * 100.0
+            if gain_pct >= params["runup_gain_pct"]:
+                penalty += params["runup_penalty"]
+
+    if penalty > 0.0 and daily_state_hint in {
+        "odd_stage3",
+        "late_odd_wave",
+        "even_adjusting",
+        "even_adjusting_invalid_divergence",
+    }:
+        penalty += params["risk_bonus"]
+
+    return round(penalty, 2)
 
 
 def review_b2_symbol_history(
@@ -157,7 +256,8 @@ def review_b2_symbol_history(
             volume=volume,
             profile=profile,
         )
-    macd_phase = _score_b2_macd_phase(frame, weekly_trend=weekly_trend, daily_trend=daily_trend)
+    macd_phase = _score_b2_macd_phase(frame, signal=signal, profile=profile)
+    daily_state_hint = _resolve_b2_daily_state_hint(weekly_trend=weekly_trend, daily_trend=daily_trend)
 
     scores = {
         "trend_structure": trend_structure,
@@ -166,11 +266,21 @@ def review_b2_symbol_history(
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
     }
-    total_score = (
+    base_total_score = (
         compute_b2_weighted_total_for_profile(scores, profile=profile, signal=signal)
         if profile is not None
         else compute_method_total_score("b2", scores, signal=signal)
     )
+    overheat_penalty = _compute_b2_overheat_penalty(
+        close=close,
+        high=high,
+        low=low,
+        daily_state_hint=daily_state_hint,
+        signal=signal,
+        price_position=price_position,
+        profile=profile,
+    )
+    total_score = round(max(1.0, float(base_total_score) - overheat_penalty), 2)
     signal_type = infer_signal_type(
         latest_close=float(close.iloc[-1]),
         latest_open=float(open_.iloc[-1]),
@@ -301,8 +411,8 @@ def _score_b2_weak_bundle(
     )
     macd_phase = _score_b2_macd_phase(
         pd.DataFrame({"trade_date": range(len(close)), "close": close}),
-        weekly_trend=weekly_trend,
-        daily_trend=daily_trend,
+        signal=signal,
+        profile=profile,
     )
     scores = {
         "trend_structure": trend_structure,
@@ -311,7 +421,18 @@ def _score_b2_weak_bundle(
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
     }
-    total_score = compute_b2_weighted_total_for_profile(scores, profile=profile, signal=signal)
+    base_total_score = compute_b2_weighted_total_for_profile(scores, profile=profile, signal=signal)
+    daily_state_hint = _resolve_b2_daily_state_hint(weekly_trend=weekly_trend, daily_trend=daily_trend)
+    overheat_penalty = _compute_b2_overheat_penalty(
+        close=close,
+        high=high,
+        low=low,
+        daily_state_hint=daily_state_hint,
+        signal=signal,
+        price_position=price_position,
+        profile=profile,
+    )
+    total_score = round(max(1.0, float(base_total_score) - overheat_penalty), 2)
     signal_type = infer_signal_type(
         latest_close=float(close.iloc[-1]),
         latest_open=float(open_.iloc[-1]),
@@ -762,8 +883,8 @@ def _score_b2_neutral_bundle(
     )
     macd_phase = _score_b2_macd_phase(
         pd.DataFrame({"trade_date": range(len(close)), "close": close}),
-        weekly_trend=weekly_trend,
-        daily_trend=daily_trend,
+        signal=signal,
+        profile=profile,
     )
     scores = {
         "trend_structure": trend_structure,
@@ -772,7 +893,18 @@ def _score_b2_neutral_bundle(
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
     }
-    total_score = compute_b2_weighted_total_for_profile(scores, profile=profile, signal=signal)
+    base_total_score = compute_b2_weighted_total_for_profile(scores, profile=profile, signal=signal)
+    daily_state_hint = _resolve_b2_daily_state_hint(weekly_trend=weekly_trend, daily_trend=daily_trend)
+    overheat_penalty = _compute_b2_overheat_penalty(
+        close=close,
+        high=high,
+        low=low,
+        daily_state_hint=daily_state_hint,
+        signal=signal,
+        price_position=price_position,
+        profile=profile,
+    )
+    total_score = round(max(1.0, float(base_total_score) - overheat_penalty), 2)
     signal_type = infer_signal_type(
         latest_close=float(close.iloc[-1]),
         latest_open=float(open_.iloc[-1]),
@@ -1350,10 +1482,16 @@ def _score_b2_previous_abnormal_move(
 def _score_b2_macd_phase(
     frame: pd.DataFrame,
     *,
-    weekly_trend: Any,
-    daily_trend: Any,
+    signal: str | None,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> float:
-    return map_macd_phase_score(method="b2", history_len=len(frame), weekly_trend=weekly_trend, daily_trend=daily_trend)
+    score = score_macd_review_context_from_history(
+        frame,
+        method="b2",
+        signal=signal or "",
+        environment_state=profile.state if profile is not None else None,
+    )
+    return score.score_1_to_5
 
 
 def _strong_negative_macd_half_peak_guard(*, macd_hist: float, recent_peak: float) -> bool:

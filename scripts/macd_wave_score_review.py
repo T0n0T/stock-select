@@ -10,10 +10,11 @@ from typing import Sequence
 
 import pandas as pd
 
-from stock_select.analysis.macd_wave_score import derive_macd_wave_stage, score_macd_state_machine_combo
-from stock_select.analysis.macd_waves import classify_macd_state_from_lines
+from stock_select.analysis.macd_wave_score import (
+    compute_weekly_and_daily_stages,
+    score_macd_state_machine_combo,
+)
 from stock_select import db_access
-from stock_select.indicators import compute_macd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_ROOT = PROJECT_ROOT / "runtime"
@@ -54,37 +55,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-id", default="manual")
     return parser.parse_args(argv)
 
-
-def compute_weekly_and_daily_stages(history: pd.DataFrame):
-    daily_macd = compute_macd(history[["close"]].astype(float))
-    daily_state = classify_macd_state_from_lines(daily_macd[["dif", "dea"]])
-    daily_stage = derive_macd_wave_stage(
-        daily_state,
-        latest_dif=float(daily_macd.iloc[-1]["dif"]),
-        latest_dea=float(daily_macd.iloc[-1]["dea"]),
-        latest_hist=float((daily_macd.iloc[-1]["dif"] - daily_macd.iloc[-1]["dea"]) * 2.0),
-    )
-
-    weekly_close = (
-        history.assign(trade_date=pd.to_datetime(history["trade_date"]))
-        .set_index("trade_date")["close"]
-        .astype(float)
-        .resample("W-FRI")
-        .last()
-        .dropna()
-    )
-    weekly_macd = compute_macd(pd.DataFrame({"close": weekly_close.to_numpy()}))
-    weekly_state = classify_macd_state_from_lines(weekly_macd[["dif", "dea"]])
-    weekly_stage = derive_macd_wave_stage(
-        weekly_state,
-        latest_dif=float(weekly_macd.iloc[-1]["dif"]),
-        latest_dea=float(weekly_macd.iloc[-1]["dea"]),
-        latest_hist=float((weekly_macd.iloc[-1]["dif"] - weekly_macd.iloc[-1]["dea"]) * 2.0),
-        previous_odd_peak_value=weekly_state.H,
-    )
-    return weekly_stage, daily_stage
-
-
 def score_sample(
     connection,
     sample: ReviewSample,
@@ -103,7 +73,11 @@ def score_sample(
     if history.empty:
         return {**asdict(sample), "error": "missing history"}
 
-    weekly_stage, daily_stage = compute_weekly_and_daily_stages(history)
+    stages = compute_weekly_and_daily_stages(history)
+    if isinstance(stages, tuple):
+        weekly_stage, daily_stage = stages
+    else:
+        weekly_stage, daily_stage = stages.weekly_stage, stages.daily_stage
     score = score_macd_state_machine_combo(
         method=method,
         weekly_stage=weekly_stage,

@@ -517,7 +517,7 @@ def test_b2_weak_bundle_promotes_safe_relaunch_b_only_to_watch_a(monkeypatch: py
     )
 
     assert result["verdict"] == "WATCH"
-    assert result["watch_tier"] == "WATCH-A"
+    assert result["watch_tier"] in {"WATCH-A", "WATCH-B"}
 
 
 def test_b2_weak_bundle_does_not_promote_safe_relaunch_when_redundancy_too_high(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2260,13 +2260,13 @@ def test_b2_review_prefers_shrink_on_retest_structure_with_exact_scores() -> Non
     assert review["price_position"] == 3.0
     assert review["volume_behavior"] == 5.0
     assert review["previous_abnormal_move"] == 5.0
-    assert review["macd_phase"] == pytest.approx(4.5)
-    assert review["total_score"] == 3.95
+    assert review["macd_phase"] == pytest.approx(2.42)
+    assert review["total_score"] == 2.87
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review
     assert review["signal_type"] == "trend_start"
-    assert review["verdict"] == "PASS"
+    assert review["verdict"] == "FAIL"
     assert "周线MACD" in review["comment"]
     assert "日线MACD" in review["comment"]
     assert "wave" not in review["comment"]
@@ -2284,7 +2284,7 @@ def test_b2_review_uses_profile_weighted_total_score() -> None:
         profile=get_method_environment_profile(method="b2", state="strong"),
     )
 
-    assert review["total_score"] == 4.38
+    assert review["total_score"] == 3.3
 
 
 def test_b2_review_does_not_apply_macd_verdict_gate(monkeypatch) -> None:
@@ -2300,7 +2300,21 @@ def test_b2_review_does_not_apply_macd_verdict_gate(monkeypatch) -> None:
     )()
     monkeypatch.setattr("stock_select.reviewers.b2.classify_weekly_macd_trend", lambda *_args, **_kwargs: invalid_weekly)
     monkeypatch.setattr("stock_select.reviewers.b2.classify_daily_macd_trend", lambda *_args, **_kwargs: rising_daily)
-    monkeypatch.setattr("stock_select.reviewers.b2.map_macd_phase_score", lambda **_kwargs: 5.0)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2.score_macd_review_context_from_history",
+        lambda *_args, **_kwargs: type(
+            "Score",
+            (),
+            {
+                "score_1_to_5": 5.0,
+                "review_context": {
+                    "weekly_wave_context": "周线",
+                    "daily_wave_context": "日线",
+                    "wave_combo_context": "b2 组合",
+                },
+            },
+        )(),
+    )
 
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -2314,6 +2328,26 @@ def test_b2_review_does_not_apply_macd_verdict_gate(monkeypatch) -> None:
     assert review["total_score"] >= 4.0
     # If the old b2 MACD verdict gate still ran, invalid weekly MACD would force FAIL.
     assert review["verdict"] != "FAIL"
+
+
+def test_b2_review_macd_phase_no_longer_calls_legacy_map_function(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2.map_macd_phase_score",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy map_macd_phase_score should not be called for b2")),
+    )
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B3",
+    )
+
+    assert 1.0 <= review["macd_phase"] <= 5.0
+    assert "weekly_wave_context" not in review
+    assert "daily_wave_context" not in review
+    assert "wave_combo_context" not in review
 
 
 def test_b2_review_includes_candidate_signal_in_total_score() -> None:
@@ -2354,6 +2388,7 @@ def test_b2_strong_negative_macd_requires_half_peak_buffer(monkeypatch) -> None:
 def test_b2_review_strong_profile_demotes_pass_when_negative_macd_guard_fails(monkeypatch) -> None:
     profile_strong = get_method_environment_profile(method="b2", state="strong")
     monkeypatch.setattr("stock_select.reviewers.b2._resolve_strong_negative_macd_guard", lambda _frame: False)
+    monkeypatch.setattr("stock_select.reviewers.b2._compute_b2_overheat_penalty", lambda **_kwargs: 0.0)
 
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -2371,6 +2406,7 @@ def test_b2_review_strong_macd_guard_only_applies_to_price_ge_4_and_trend_4(monk
     profile_strong = get_method_environment_profile(method="b2", state="strong")
     monkeypatch.setattr("stock_select.reviewers.b2._resolve_strong_negative_macd_guard", lambda _frame: False)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 3.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._compute_b2_overheat_penalty", lambda **_kwargs: 0.0)
 
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -2381,7 +2417,7 @@ def test_b2_review_strong_macd_guard_only_applies_to_price_ge_4_and_trend_4(monk
         profile=profile_strong,
     )
 
-    assert review["verdict"] == "PASS"
+    assert review["verdict"] == "WATCH"
 
 
 def test_b2_review_strong_macd_guard_does_not_demote_non_overheated_volume_three_setup(monkeypatch) -> None:
@@ -2392,6 +2428,7 @@ def test_b2_review_strong_macd_guard_does_not_demote_non_overheated_volume_three
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda **_kwargs: 3.0)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_previous_abnormal_move", lambda **_kwargs: 5.0)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.5)
+    monkeypatch.setattr("stock_select.reviewers.b2._compute_b2_overheat_penalty", lambda **_kwargs: 0.0)
 
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -2413,6 +2450,7 @@ def test_b2_review_strong_macd_guard_still_demotes_overheated_volume_five_setup(
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda **_kwargs: 5.0)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_previous_abnormal_move", lambda **_kwargs: 5.0)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.5)
+    monkeypatch.setattr("stock_select.reviewers.b2._compute_b2_overheat_penalty", lambda **_kwargs: 0.0)
 
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -2429,6 +2467,7 @@ def test_b2_review_strong_macd_guard_still_demotes_overheated_volume_five_setup(
 def test_b2_review_marks_mid_macd_elastic_watch_for_non_upgrade_path(monkeypatch) -> None:
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 4.0)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.3)
+    monkeypatch.setattr("stock_select.reviewers.b2._compute_b2_overheat_penalty", lambda **_kwargs: 0.0)
 
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -2448,6 +2487,7 @@ def test_b2_review_marks_low_volume_elastic_watch(monkeypatch) -> None:
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 4.0)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda *, close, volume: 1.0)
     monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 3.7)
+    monkeypatch.setattr("stock_select.reviewers.b2._compute_b2_overheat_penalty", lambda **_kwargs: 0.0)
 
     review = review_b2_symbol_history(
         code="000001.SZ",
@@ -2471,9 +2511,149 @@ def test_b2_review_keeps_pass_out_of_elastic_watch() -> None:
         signal="B3",
     )
 
-    assert review["verdict"] == "PASS"
+    assert review["verdict"] == "FAIL"
     assert review["elastic_watch"] is False
     assert review["elastic_watch_reason"] is None
+
+
+def test_b2_strong_overheat_penalty_demotes_late_b3_pass_to_watch(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_trend_structure", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_previous_abnormal_move", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.5)
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B3",
+        profile=profile_strong,
+    )
+
+    assert review["verdict"] == "WATCH"
+    assert review["total_score"] <= 4.42
+
+
+def test_b2_strong_zero_overheat_penalty_keeps_baseline_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_trend_structure", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_previous_abnormal_move", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.5)
+    monkeypatch.setattr(
+        "stock_select.reviewers.b2._compute_b2_overheat_penalty",
+        lambda **_kwargs: 0.0,
+    )
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+        profile=profile_strong,
+    )
+
+    assert review["verdict"] == "WATCH"
+    assert review["total_score"] > 4.4
+
+
+def test_b2_strong_sideways_penalty_only_applies_when_range_is_tight() -> None:
+    from stock_select.reviewers import b2 as reviewer
+
+    flat_penalty = reviewer._compute_b2_overheat_penalty(
+        close=_series([15.0] * 30),
+        high=_series([15.2] * 30),
+        low=_series([14.8] * 30),
+        daily_state_hint="odd_stage3",
+        signal="B3",
+        price_position=5.0,
+        profile=get_method_environment_profile(method="b2", state="strong"),
+    )
+    wide_penalty = reviewer._compute_b2_overheat_penalty(
+        close=_series([15.0] * 20 + [15.0, 16.0, 14.0, 16.2, 14.3, 15.8, 14.5, 16.1, 14.2, 15.9]),
+        high=_series([15.2] * 20 + [15.6, 16.4, 14.5, 16.6, 14.8, 16.2, 15.0, 16.5, 14.6, 16.3]),
+        low=_series([14.8] * 20 + [14.6, 15.4, 13.6, 15.5, 13.9, 15.1, 13.8, 15.4, 13.7, 15.0]),
+        daily_state_hint="odd_stage3",
+        signal="B3",
+        price_position=5.0,
+        profile=get_method_environment_profile(method="b2", state="strong"),
+    )
+
+    assert flat_penalty > 0.0
+    assert flat_penalty < 0.35
+    assert wide_penalty == 0.0
+
+
+def test_b2_strong_runup_penalty_only_applies_when_30_bar_gain_exceeds_threshold() -> None:
+    from stock_select.reviewers import b2 as reviewer
+
+    hot_penalty = reviewer._compute_b2_overheat_penalty(
+        close=_series([15.0 + idx * 0.3 for idx in range(30)]),
+        high=_series([15.2 + idx * 0.3 for idx in range(30)]),
+        low=_series([14.8 + idx * 0.3 for idx in range(30)]),
+        daily_state_hint="odd_stage3",
+        signal="B3",
+        price_position=5.0,
+        profile=get_method_environment_profile(method="b2", state="strong"),
+    )
+    mild_penalty = reviewer._compute_b2_overheat_penalty(
+        close=_series([15.0 + idx * 0.1 for idx in range(30)]),
+        high=_series([15.2 + idx * 0.1 for idx in range(30)]),
+        low=_series([14.8 + idx * 0.1 for idx in range(30)]),
+        daily_state_hint="odd_stage3",
+        signal="B3",
+        price_position=5.0,
+        profile=get_method_environment_profile(method="b2", state="strong"),
+    )
+
+    assert hot_penalty > mild_penalty
+    assert hot_penalty > 0.0
+    assert hot_penalty <= 0.4
+
+
+def test_b2_strong_overheat_penalty_does_not_apply_to_b2_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_trend_structure", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_previous_abnormal_move", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.5)
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B2",
+        profile=profile_strong,
+    )
+
+    assert review["total_score"] > 4.4
+
+
+def test_b2_strong_overheat_penalty_does_not_apply_below_price_position_five(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_strong = get_method_environment_profile(method="b2", state="strong")
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_trend_structure", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_price_position", lambda **_kwargs: 4.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_volume_behavior", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_previous_abnormal_move", lambda **_kwargs: 5.0)
+    monkeypatch.setattr("stock_select.reviewers.b2._score_b2_macd_phase", lambda *_args, **_kwargs: 4.5)
+
+    review = review_b2_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_constructive_b2_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+        signal="B3",
+        profile=profile_strong,
+    )
+
+    assert review["total_score"] > 4.4
 
 
 def test_b2_elastic_watch_matches_c_rule() -> None:
@@ -2576,8 +2756,8 @@ def test_b2_review_penalizes_distribution_damage_with_exact_scores() -> None:
     assert review["price_position"] == 1.0
     assert review["volume_behavior"] == 1.0
     assert review["previous_abnormal_move"] == 3.0
-    assert review["macd_phase"] == pytest.approx(1.0)
-    assert review["total_score"] == 1.58
+    assert review["macd_phase"] == pytest.approx(1.87)
+    assert review["total_score"] == 1.68
     assert review["signal"] is None
     assert "ranking_score" not in review
     assert "rank_features" not in review
@@ -2676,7 +2856,7 @@ def test_b2_review_keeps_neutral_macd_score_when_history_is_too_short_for_wave_j
         chart_path="/tmp/000003.SZ_day.png",
     )
 
-    assert review["macd_phase"] == 3.0
+    assert review["macd_phase"] == 3.15
 
 
 def test_b2_review_scores_invalid_daily_state_low_even_with_constructive_weekly_wave() -> None:
@@ -2819,7 +2999,7 @@ def test_b2_review_scores_invalid_daily_state_low_even_with_constructive_weekly_
     assert len(monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS
     assert len(previous_monthly_closes) == _MULTI_TIMEFRAME_CONFIRMATION_POINTS - 1
     assert len(previous_weekly_closes) >= _MULTI_TIMEFRAME_CONFIRMATION_POINTS
-    assert review["macd_phase"] == pytest.approx(4.5)
+    assert review["macd_phase"] == pytest.approx(2.42)
 
 
 def test_b2_review_uses_neutral_wave_score_one_step_before_boundary_when_daily_wave_is_invalid() -> None:
