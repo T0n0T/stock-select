@@ -64,7 +64,7 @@ def test_dribull_review_uses_trend_state_macd_mapping(monkeypatch: pytest.Monkey
 
     assert b2_review["macd_phase"] == 5.0
     assert dribull_review["macd_phase"] == 5.0
-    assert "日线MACD上升浪（上升初期）" in dribull_review["comment"]
+    assert "日线MACD上升浪（一浪强势、上升初期）" in dribull_review["comment"]
     assert "wave" not in dribull_review["comment"]
 
 def test_dribull_review_keeps_marginal_score_as_watch(monkeypatch: pytest.MonkeyPatch) -> None:

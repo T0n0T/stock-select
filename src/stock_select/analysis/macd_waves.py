@@ -43,12 +43,366 @@ class MacdTrendState:
     transition_warnings: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class MacdStateMachineResult:
+    current_state: str
+    current_wave_index: int
+    valid_odd_wave_count: int
+    H: float | None
+    L: float | None
+    baseline_H: float | None
+    pre_odd_macd_max: float | None
+    current_wave_macd_max: float | None
+    current_even_macd_min: float | None
+    current_even_L: float | None
+    prev_even_L: float | None
+    even_repair_started: bool
+    golden_cross_imminent: bool
+    bottom_divergence_valid: bool | None
+    events: tuple[str, ...]
+    reason: str
+
+
 def classify_daily_macd_trend(frame: pd.DataFrame, pick_date: str) -> MacdTrendState:
     working = _slice_to_pick(frame, pick_date)
     if working.empty or "close" not in working.columns:
         return _invalid_trend_state("missing daily close history", len(working))
     macd = compute_macd(working[["close"]].astype(float))
-    return _classify_macd_trend_from_lines(macd[["dif", "dea"]])
+    return _classify_macd_trend_with_state_machine_from_lines(macd[["dif", "dea"]])
+
+
+def classify_macd_state_from_lines(lines: pd.DataFrame) -> MacdStateMachineResult:
+    working = lines.copy().reset_index(drop=True)
+    if not {"dif", "dea"}.issubset(working.columns):
+        return _invalid_state_machine_result("missing MACD line columns")
+
+    working["dif"] = pd.to_numeric(working["dif"], errors="coerce")
+    working["dea"] = pd.to_numeric(working["dea"], errors="coerce")
+    working = working.dropna(subset=["dif", "dea"]).reset_index(drop=True)
+    if len(working) < _MIN_TREND_PERIODS:
+        return _invalid_state_machine_result("insufficient MACD history")
+
+    macd = ((working["dif"] - working["dea"]) * 2.0).astype(float).reset_index(drop=True)
+    dif = working["dif"].astype(float).reset_index(drop=True)
+    dea = working["dea"].astype(float).reset_index(drop=True)
+
+    state = "waiting_underwater"
+    current_wave_index = 0
+    valid_odd_wave_count = 0
+    H: float | None = None
+    L: float | None = None
+    baseline_H: float | None = None
+    pre_odd_macd_max: float | None = None
+    pre_odd_dead_crossed = False
+    current_wave_macd_max: float | None = None
+    current_even_macd_min: float | None = None
+    current_even_L: float | None = None
+    prev_even_L: float | None = None
+    even_repair_started = False
+    golden_cross_imminent = False
+    bottom_divergence_valid: bool | None = None
+    events: list[str] = []
+    reason = "waiting for underwater golden cross"
+    has_prior_completed_red_segment = False
+    positive_segment_active = False
+
+    def end_cycle(end_reason: str) -> None:
+        nonlocal state
+        nonlocal current_wave_index
+        nonlocal H
+        nonlocal L
+        nonlocal baseline_H
+        nonlocal pre_odd_macd_max
+        nonlocal pre_odd_dead_crossed
+        nonlocal current_wave_macd_max
+        nonlocal current_even_macd_min
+        nonlocal current_even_L
+        nonlocal even_repair_started
+        nonlocal golden_cross_imminent
+        nonlocal bottom_divergence_valid
+        nonlocal reason
+
+        if state != "waiting_underwater" and not events[-1:] == ["cycle_ended"]:
+            events.append("cycle_ended")
+        state = "waiting_underwater"
+        current_wave_index = 0
+        H = None
+        L = None
+        baseline_H = None
+        pre_odd_macd_max = None
+        pre_odd_dead_crossed = False
+        current_wave_macd_max = None
+        current_even_macd_min = None
+        current_even_L = None
+        even_repair_started = False
+        golden_cross_imminent = False
+        bottom_divergence_valid = None
+        reason = end_reason
+
+    def confirm_odd_wave(confirm_reason: str) -> None:
+        nonlocal state
+        nonlocal current_wave_index
+        nonlocal valid_odd_wave_count
+        nonlocal current_wave_macd_max
+        nonlocal reason
+
+        state = "odd_wave_forming"
+        current_wave_index = 1 if current_wave_index == 0 else current_wave_index + 1
+        if current_wave_index % 2 == 0:
+            current_wave_index += 1
+        valid_odd_wave_count += 1
+        current_wave_macd_max = pre_odd_macd_max
+        reason = confirm_reason
+        events.append("odd_wave_confirmed")
+
+    def start_even_wave(start_reason: str) -> None:
+        nonlocal state
+        nonlocal current_wave_index
+        nonlocal current_even_macd_min
+        nonlocal current_even_L
+        nonlocal even_repair_started
+        nonlocal golden_cross_imminent
+        nonlocal bottom_divergence_valid
+        nonlocal reason
+
+        state = "even_wave_forming"
+        current_wave_index += 1
+        current_even_macd_min = curr_macd
+        current_even_L = None
+        even_repair_started = False
+        golden_cross_imminent = False
+        bottom_divergence_valid = None
+        reason = start_reason
+        events.append("even_wave_started")
+
+    def roll_even_adjustment_segment() -> None:
+        nonlocal current_even_macd_min
+        nonlocal current_even_L
+        nonlocal prev_even_L
+        nonlocal even_repair_started
+        nonlocal golden_cross_imminent
+        nonlocal bottom_divergence_valid
+
+        if current_even_macd_min is not None:
+            prev_even_L = current_even_macd_min
+        current_even_macd_min = None
+        current_even_L = None
+        even_repair_started = False
+        golden_cross_imminent = False
+        bottom_divergence_valid = None
+
+    def start_pre_odd_adjustment(adjust_reason: str) -> None:
+        nonlocal state
+        nonlocal H
+        nonlocal baseline_H
+        nonlocal pre_odd_dead_crossed
+        nonlocal current_even_macd_min
+        nonlocal current_even_L
+        nonlocal even_repair_started
+        nonlocal golden_cross_imminent
+        nonlocal bottom_divergence_valid
+        nonlocal reason
+
+        state = "pre_odd_adjusting"
+        current_even_macd_min = curr_macd
+        current_even_L = None
+        even_repair_started = False
+        golden_cross_imminent = False
+        bottom_divergence_valid = None
+        if pre_odd_macd_max is not None and pre_odd_macd_max > 0.0:
+            H = pre_odd_macd_max
+            baseline_H = pre_odd_macd_max
+            events.append("pre_odd_failed_rebase_H")
+        pre_odd_dead_crossed = False
+        reason = adjust_reason
+
+    def update_even_repair_flags(idx: int, curr_macd: float, curr_dea: float) -> None:
+        nonlocal even_repair_started
+        nonlocal bottom_divergence_valid
+        nonlocal reason
+
+        recent_negative_contracting = (
+            idx >= 3
+            and float(macd.iloc[idx - 2]) <= 0.0
+            and float(macd.iloc[idx - 1]) <= 0.0
+            and curr_macd <= 0.0
+            and abs(curr_macd) < abs(float(macd.iloc[idx - 1])) < abs(float(macd.iloc[idx - 2]))
+        )
+        first_negative_rebound_after_even_low = (
+            idx >= 2
+            and float(macd.iloc[idx - 1]) <= 0.0
+            and curr_macd <= 0.0
+            and curr_macd > float(macd.iloc[idx - 1])
+            and float(macd.iloc[idx - 1]) <= float(macd.iloc[idx - 2])
+        )
+        if (
+            current_even_macd_min is not None
+            and (recent_negative_contracting or first_negative_rebound_after_even_low)
+            and curr_macd <= 0.0
+            and curr_dea > 0.0
+        ):
+            even_repair_started = True
+            if prev_even_L is not None:
+                bottom_divergence_valid = current_even_macd_min > prev_even_L
+            reason = "even wave repair started"
+            events.append("even_repair_started")
+
+    for idx in range(1, len(working)):
+        prev_macd = float(macd.iloc[idx - 1])
+        curr_macd = float(macd.iloc[idx])
+        prev_dif = float(dif.iloc[idx - 1])
+        curr_dif = float(dif.iloc[idx])
+        curr_dea = float(dea.iloc[idx])
+        prev_dea = float(dea.iloc[idx - 1])
+
+        if _is_positive_macd_peak(macd, idx - 1):
+            H = prev_macd
+        if _is_nonpositive_macd_valley(macd, idx - 1):
+            L = prev_macd
+            if state in {"even_wave_forming", "pre_odd_adjusting"}:
+                current_even_L = prev_macd
+
+        underwater_golden_cross = prev_dif <= prev_dea and curr_dif > curr_dea and curr_dif < 0.0 and curr_dea < 0.0
+        above_golden_cross = prev_dif <= prev_dea and curr_dif > curr_dea and curr_dea > 0.0 and curr_macd > 0.0
+        dead_cross_event = prev_macd > 0.0 and curr_macd <= 0.0 and prev_dif > prev_dea
+        dea_reentered_underwater = prev_dea > 0.0 and curr_dea <= 0.0
+        dea_crossed_above_zero = prev_dea <= 0.0 and curr_dea > 0.0
+
+        if curr_macd > 0.0:
+            positive_segment_active = True
+        elif positive_segment_active and curr_macd <= 0.0:
+            has_prior_completed_red_segment = True
+            positive_segment_active = False
+
+        if dea_reentered_underwater and state not in {"waiting_underwater", "pre_wave1_pushing"}:
+            end_cycle("dea crossed below zero")
+            continue
+
+        if state == "waiting_underwater":
+            if underwater_golden_cross:
+                reason = "underwater golden cross observed while waiting for dea above zero"
+                events.append("underwater_gc_observed")
+            if dea_crossed_above_zero:
+                if not has_prior_completed_red_segment:
+                    state = "odd_wave_forming"
+                    current_wave_index = 1
+                    valid_odd_wave_count += 1
+                    current_wave_macd_max = curr_macd
+                    reason = "first dea-above-zero push without prior red peak counts as wave1"
+                    events.append("odd_wave_confirmed")
+                else:
+                    state = "pre_wave1_pushing"
+                    baseline_H = H
+                    pre_odd_macd_max = curr_macd
+                    reason = "dea crossed above zero and started pre wave1 push"
+                    events.append("pre_wave1_started")
+            continue
+
+        if state in {"pre_wave1_pushing", "pre_odd_pushing"}:
+            pre_odd_macd_max = curr_macd if pre_odd_macd_max is None else max(pre_odd_macd_max, curr_macd)
+            if baseline_H is not None and pre_odd_macd_max > baseline_H:
+                confirm_odd_wave("pre odd wave confirmed by macd_max above baseline_H")
+                continue
+            if dead_cross_event:
+                if baseline_H is None and pre_odd_macd_max is not None:
+                    confirm_odd_wave("pre odd wave confirmed because no prior baseline_H exists")
+                    start_even_wave("valid odd wave ended with above-water dead cross")
+                    continue
+                if state == "pre_wave1_pushing" and dea_reentered_underwater:
+                    end_cycle("pre wave1 failed adjustment invalidated by dea below zero")
+                    continue
+                if state == "pre_odd_pushing":
+                    start_pre_odd_adjustment("pre odd failed and entered above-zero adjustment")
+                    continue
+                pre_odd_dead_crossed = True
+                if state == "pre_wave1_pushing":
+                    reason = "pre wave1 failed to exceed baseline_H"
+                continue
+            if state == "pre_wave1_pushing" and pre_odd_dead_crossed and dea_reentered_underwater:
+                end_cycle("pre wave1 failed adjustment invalidated by dea below zero")
+                continue
+            if curr_macd <= 0.0 and curr_dea > 0.0 and prev_macd > curr_macd:
+                start_pre_odd_adjustment("pre odd failed and entered above-zero adjustment")
+            continue
+
+        if state == "pre_odd_adjusting":
+            current_even_macd_min = curr_macd if current_even_macd_min is None else min(current_even_macd_min, curr_macd)
+            golden_cross_imminent = False
+            update_even_repair_flags(idx, curr_macd, curr_dea)
+            if above_golden_cross:
+                if current_even_macd_min is not None:
+                    prev_even_L = current_even_macd_min
+                even_repair_started = False
+                golden_cross_imminent = False
+                bottom_divergence_valid = None
+                state = "pre_odd_pushing"
+                baseline_H = H
+                pre_odd_macd_max = curr_macd
+                pre_odd_dead_crossed = False
+                reason = "above-water golden cross starts next pre odd push"
+                events.append("pre_odd_repush_started")
+            continue
+
+        if state == "odd_wave_forming":
+            current_wave_macd_max = curr_macd if current_wave_macd_max is None else max(current_wave_macd_max, curr_macd)
+            if dead_cross_event:
+                start_even_wave("valid odd wave ended with above-water dead cross")
+            continue
+
+        if state == "even_wave_forming":
+            current_even_macd_min = curr_macd if current_even_macd_min is None else min(current_even_macd_min, curr_macd)
+            golden_cross_imminent = False
+            if (
+                current_even_macd_min is not None
+                and curr_macd <= 0.0
+                and curr_dea > 0.0
+            ):
+                update_even_repair_flags(idx, curr_macd, curr_dea)
+            if (
+                even_repair_started
+                and curr_dea > 0.0
+                and curr_macd < 0.0
+                and abs(curr_macd) <= 0.02
+            ):
+                golden_cross_imminent = True
+                reason = "golden cross imminent after even-wave repair"
+                if not events[-1:] == ["golden_cross_imminent"]:
+                    events.append("golden_cross_imminent")
+            if above_golden_cross:
+                roll_even_adjustment_segment()
+                state = "pre_odd_pushing"
+                baseline_H = H
+                pre_odd_macd_max = curr_macd
+                pre_odd_dead_crossed = False
+                reason = "even wave ended with above-water golden cross"
+                events.append("pre_odd_started")
+            continue
+
+    if _is_positive_macd_peak(macd, len(working) - 1):
+        H = float(macd.iloc[-1])
+    if _is_nonpositive_macd_valley(macd, len(working) - 1):
+        L = float(macd.iloc[-1])
+        if state == "even_wave_forming":
+            current_even_L = float(macd.iloc[-1])
+
+    return MacdStateMachineResult(
+        current_state=state,
+        current_wave_index=current_wave_index,
+        valid_odd_wave_count=valid_odd_wave_count,
+        H=_round_optional(H),
+        L=_round_optional(L),
+        baseline_H=_round_optional(baseline_H),
+        pre_odd_macd_max=_round_optional(pre_odd_macd_max),
+        current_wave_macd_max=_round_optional(current_wave_macd_max),
+        current_even_macd_min=_round_optional(current_even_macd_min),
+        current_even_L=_round_optional(current_even_L),
+        prev_even_L=_round_optional(prev_even_L),
+        even_repair_started=even_repair_started,
+        golden_cross_imminent=golden_cross_imminent,
+        bottom_divergence_valid=bottom_divergence_valid,
+        events=tuple(events),
+        reason=reason,
+    )
 
 
 def classify_weekly_macd_trend(frame: pd.DataFrame, pick_date: str) -> MacdTrendState:
@@ -58,7 +412,38 @@ def classify_weekly_macd_trend(frame: pd.DataFrame, pick_date: str) -> MacdTrend
     weekly_close = working.set_index("trade_date")["close"].astype(float).resample("W-FRI").last().dropna()
     weekly_close = weekly_close.loc[weekly_close.index <= pd.Timestamp(pick_date)]
     macd = compute_macd(pd.DataFrame({"close": weekly_close.to_numpy()}))
-    return _classify_macd_trend_from_lines(macd[["dif", "dea"]])
+    return _classify_macd_trend_with_state_machine_from_lines(macd[["dif", "dea"]])
+
+
+def _classify_macd_trend_with_state_machine_from_lines(lines: pd.DataFrame) -> MacdTrendState:
+    legacy = _classify_macd_trend_from_lines(lines)
+    state = classify_macd_state_from_lines(lines)
+    if state.current_state == "invalid":
+        return legacy
+    if not state.events and state.current_wave_index <= 0:
+        return legacy
+
+    phase, direction, phase_index, wave_stage = _map_state_machine_trend_fields(state)
+    if phase == "invalid":
+        return legacy
+    wave_stage = _resolve_state_machine_wave_stage(state_stage=wave_stage, legacy_stage=legacy.wave_stage)
+
+    metrics = dict(legacy.metrics)
+    metrics.update(_state_machine_metrics(state))
+    return MacdTrendState(
+        phase=phase,
+        direction=direction,
+        is_rising_initial=_is_state_machine_rising_initial(state, phase_index=phase_index),
+        is_top_divergence=_is_state_machine_top_divergence(state=state, legacy=legacy),
+        bars_in_phase=legacy.bars_in_phase,
+        phase_index=phase_index,
+        reason=state.reason,
+        metrics=metrics,
+        wave_label=_wave_label(phase_index),
+        wave_direction="rising" if phase_index % 2 == 1 and phase_index > 0 else "falling" if phase_index > 0 else "neutral",
+        wave_stage=wave_stage,
+        transition_warnings=_state_machine_transition_warnings(state, legacy=legacy),
+    )
 
 
 def _classify_macd_trend_from_lines(lines: pd.DataFrame) -> MacdTrendState:
@@ -310,6 +695,85 @@ def _detect_stage_transition(lines: pd.DataFrame, *, current_stage: str, phase: 
 
     return warnings
 
+
+def _map_state_machine_trend_fields(state: MacdStateMachineResult) -> tuple[str, str, int, str]:
+    wave_index = int(state.current_wave_index or 0)
+    if state.current_state == "odd_wave_forming":
+        wave_index = wave_index if wave_index > 0 else 1
+        return "rising", "rising", wave_index, "启动"
+    if state.current_state == "even_wave_forming":
+        wave_index = wave_index if wave_index > 0 else 2
+        stage = "金叉临近" if state.golden_cross_imminent else "修复" if state.even_repair_started else "调整"
+        return "falling", "falling", wave_index, stage
+    if state.current_state in {"pre_odd_pushing", "pre_wave1_pushing"}:
+        next_wave = 1 if wave_index <= 0 else wave_index + 1
+        if next_wave % 2 == 0:
+            next_wave += 1
+        return "rising", "rising", next_wave, "预启动"
+    if state.current_state == "pre_odd_adjusting":
+        wave_index = wave_index if wave_index > 0 else 2
+        stage = "修复" if state.even_repair_started else "调整"
+        return "falling", "falling", wave_index, stage
+    if state.current_state == "waiting_underwater":
+        return "idle", "neutral", 0, "等待启动"
+    return "invalid", "neutral", 0, ""
+
+
+def _resolve_state_machine_wave_stage(*, state_stage: str, legacy_stage: str) -> str:
+    if state_stage in {"修复", "金叉临近", "等待启动"}:
+        return state_stage
+    return legacy_stage or state_stage
+
+
+def _state_machine_metrics(state: MacdStateMachineResult) -> dict[str, float | int | bool | str]:
+    metrics: dict[str, float | int | bool | str] = {
+        "state_machine_state": state.current_state,
+        "state_machine_wave_index": state.current_wave_index,
+        "state_machine_valid_odd_wave_count": state.valid_odd_wave_count,
+        "even_repair_started": state.even_repair_started,
+        "golden_cross_imminent": state.golden_cross_imminent,
+        "state_machine_reason": state.reason,
+    }
+    optional_values: dict[str, float | bool | None] = {
+        "H": state.H,
+        "L": state.L,
+        "baseline_H": state.baseline_H,
+        "pre_odd_macd_max": state.pre_odd_macd_max,
+        "current_wave_macd_max": state.current_wave_macd_max,
+        "current_even_macd_min": state.current_even_macd_min,
+        "current_even_L": state.current_even_L,
+        "prev_even_L": state.prev_even_L,
+        "bottom_divergence_valid": state.bottom_divergence_valid,
+    }
+    for key, value in optional_values.items():
+        if value is not None:
+            metrics[key] = value
+    return metrics
+
+
+def _is_state_machine_rising_initial(state: MacdStateMachineResult, *, phase_index: int) -> bool:
+    if state.current_state in {"pre_odd_pushing", "pre_wave1_pushing"}:
+        return True
+    return state.current_state == "odd_wave_forming" and phase_index in {1, 3}
+
+
+def _is_state_machine_top_divergence(*, state: MacdStateMachineResult, legacy: MacdTrendState) -> bool:
+    if state.current_state != "odd_wave_forming":
+        return False
+    return bool(legacy.is_top_divergence)
+
+
+def _state_machine_transition_warnings(state: MacdStateMachineResult, *, legacy: MacdTrendState) -> tuple[str, ...]:
+    warnings = list(legacy.transition_warnings)
+    if state.golden_cross_imminent:
+        warnings.append("金叉临近，奇数浪可能启动")
+    if state.bottom_divergence_valid is True:
+        warnings.append("偶数浪底背离有效")
+    if state.bottom_divergence_valid is False:
+        warnings.append("偶数浪底背离无效")
+    return tuple(dict.fromkeys(warnings))
+
+
 def _invalid_trend_state(reason: str, periods: int) -> MacdTrendState:
     return MacdTrendState(
         phase="invalid",
@@ -321,6 +785,47 @@ def _invalid_trend_state(reason: str, periods: int) -> MacdTrendState:
         reason=reason,
         metrics={"periods": periods},
     )
+
+
+def _invalid_state_machine_result(reason: str) -> MacdStateMachineResult:
+    return MacdStateMachineResult(
+        current_state="invalid",
+        current_wave_index=0,
+        valid_odd_wave_count=0,
+        H=None,
+        L=None,
+        baseline_H=None,
+        pre_odd_macd_max=None,
+        current_wave_macd_max=None,
+        current_even_macd_min=None,
+        current_even_L=None,
+        prev_even_L=None,
+        even_repair_started=False,
+        golden_cross_imminent=False,
+        bottom_divergence_valid=None,
+        events=(),
+        reason=reason,
+    )
+
+
+def _is_positive_macd_peak(macd: pd.Series, idx: int) -> bool:
+    if idx <= 0 or idx >= len(macd) - 1:
+        return False
+    value = float(macd.iloc[idx])
+    return value > 0.0 and value >= float(macd.iloc[idx - 1]) and value >= float(macd.iloc[idx + 1])
+
+
+def _is_nonpositive_macd_valley(macd: pd.Series, idx: int) -> bool:
+    if idx <= 0 or idx >= len(macd) - 1:
+        return False
+    value = float(macd.iloc[idx])
+    return value <= 0.0 and value <= float(macd.iloc[idx - 1]) and value <= float(macd.iloc[idx + 1])
+
+
+def _round_optional(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 6)
 
 
 def classify_weekly_macd_wave(frame: pd.DataFrame, pick_date: str) -> MacdWaveClassification:
@@ -518,5 +1023,3 @@ def _bars_since_hist_peak(hist: pd.Series) -> int:
         return -1
     peak_idx = int(hist.abs().idxmax())
     return int(len(hist) - 1 - peak_idx)
-
-

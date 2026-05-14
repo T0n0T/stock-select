@@ -164,7 +164,7 @@ def test_fetch_symbol_history_uses_symbol_and_date_window() -> None:
     }
 
 
-def test_fetch_index_history_uses_index_market_table() -> None:
+def test_fetch_index_history_uses_daily_index_table() -> None:
     connection = FakeConnection(
         rows=[("000001.SH", "2026-04-01", 3200.0, 3220.0, 3190.0, 3215.0, 4_200_000.0)],
         columns=["TS_CODE", "TRADE_DATE", "OPEN", "HIGH", "LOW", "CLOSE", "VOL"],
@@ -189,7 +189,7 @@ def test_fetch_index_history_uses_index_market_table() -> None:
         }
     ]
     query, params = connection.cursor_obj.executed[0]
-    assert "FROM index_daily_market" in query
+    assert "FROM daily_index" in query
     assert params == {
         "symbol": "000001.SH",
         "start_date": "2026-04-01",
@@ -240,7 +240,7 @@ def test_fetch_index_window_filters_index_symbols() -> None:
     )
 
     query, params = connection.cursor_obj.executed[0]
-    assert "FROM index_daily_market" in query
+    assert "FROM daily_index" in query
     assert "ts_code = ANY(%(symbols)s)" in query
     assert params == {
         "start_date": "2026-04-01",

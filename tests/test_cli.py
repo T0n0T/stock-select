@@ -786,7 +786,7 @@ def test_analyze_symbol_impl_writes_result_under_ad_hoc_runtime(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path, signal=None: {
+        lambda code, pick_date, history, chart_path, signal=None, profile=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -898,7 +898,7 @@ def test_analyze_symbol_impl_uses_explicit_pick_date_and_fetches_history(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path, signal=None: {
+        lambda code, pick_date, history, chart_path, signal=None, profile=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -1214,7 +1214,7 @@ def test_analyze_symbol_impl_normalizes_symbol_in_runtime_path(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path, signal=None: {
+        lambda code, pick_date, history, chart_path, signal=None, profile=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -1301,7 +1301,7 @@ def test_analyze_symbol_impl_writes_baseline_review_even_when_signal_is_null(
     monkeypatch.setattr(
         cli,
         "review_b2_symbol_history",
-        lambda code, pick_date, history, chart_path, signal=None: {
+        lambda code, pick_date, history, chart_path, signal=None, profile=None: {
             "code": code,
             "pick_date": pick_date,
             "chart_path": chart_path,
@@ -5024,11 +5024,7 @@ def test_review_b1_tasks_include_wave_context(tmp_path: Path, monkeypatch: pytes
     assert any(word in task["wave_combo_context"] for word in ("符合", "不符合"))
 
 
-@pytest.mark.parametrize("method", ["b1", "b2"])
-def test_build_wave_task_context_uses_macd_trend_language(
-    method: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_build_wave_task_context_uses_macd_trend_language_for_b1(monkeypatch: pytest.MonkeyPatch) -> None:
     history = pd.DataFrame(
         {
             "trade_date": pd.bdate_range(end="2026-04-01", periods=10),
@@ -5056,16 +5052,132 @@ def test_build_wave_task_context_uses_macd_trend_language(
         ),
     )
 
-    context = cli._build_wave_task_context(history, "2026-04-01", method=method)
+    context = cli._build_wave_task_context(history, "2026-04-01", method="b1")
 
     assert "周线MACD上升浪" in context["weekly_wave_context"]
     assert "日线MACD上升浪" in context["daily_wave_context"]
     assert "上升初期" in context["daily_wave_context"]
-    assert f"符合 {method} 候选要求" in context["wave_combo_context"]
+    assert "符合 b1 候选要求" in context["wave_combo_context"]
     combined = " ".join(context.values())
     assert "wave1" not in combined
     assert "wave4_end" not in combined
     assert "三浪" not in combined
+
+
+def test_build_wave_task_context_uses_fix14_wave_context_for_b2(monkeypatch: pytest.MonkeyPatch) -> None:
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(start="2026-01-01", periods=22),
+            "close": [10.0] * 22,
+        }
+    )
+    monkeypatch.setattr(
+        cli,
+        "score_macd_review_context_from_history",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            review_context={
+                "weekly_wave_context": "周线，三浪确认，柱体主导强化阶段",
+                "daily_wave_context": "日线，预备三浪金叉临近，左侧底背离有效",
+                "wave_combo_context": "b2 组合：预备三浪金叉临近；周线强化配合日线启动",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "classify_weekly_macd_trend",
+        lambda _history, _pick_date: SimpleNamespace(
+            phase="rising",
+            is_rising_initial=False,
+            is_top_divergence=False,
+            reason="legacy weekly trend should not drive b2 task context",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "classify_daily_macd_trend",
+        lambda _history, _pick_date: SimpleNamespace(
+            phase="falling",
+            is_rising_initial=False,
+            is_top_divergence=False,
+            reason="legacy daily trend should not drive b2 task context",
+        ),
+    )
+
+    context = cli._build_wave_task_context(history, "2026-01-30", method="b2")
+
+    assert "周线" in context["weekly_wave_context"]
+    assert "日线" in context["daily_wave_context"]
+    assert "b2" in context["wave_combo_context"]
+    assert "预备" in context["daily_wave_context"] or "修复" in context["daily_wave_context"]
+    assert "legacy weekly trend should not drive b2 task context" not in context["weekly_wave_context"]
+    assert "legacy daily trend should not drive b2 task context" not in context["daily_wave_context"]
+    assert "符合 b2 候选要求" not in context["wave_combo_context"]
+
+
+def test_build_wave_task_context_includes_state_machine_wave_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(start="2026-01-01", periods=22),
+            "close": [10.0] * 22,
+        }
+    )
+    lines = pd.DataFrame(
+        {
+            "dif": [
+                0.20,
+                0.24,
+                0.20,
+                -0.30,
+                -0.20,
+                -0.08,
+                0.12,
+                0.26,
+                0.34,
+                0.22,
+                0.12,
+                0.03,
+                0.07,
+                0.18,
+                0.32,
+                0.44,
+                0.54,
+                0.42,
+                0.28,
+                0.10,
+                0.04,
+                0.09,
+            ],
+            "dea": [
+                0.10,
+                0.11,
+                0.12,
+                -0.28,
+                -0.22,
+                -0.10,
+                0.06,
+                0.13,
+                0.20,
+                0.22,
+                0.18,
+                0.12,
+                0.10,
+                0.11,
+                0.18,
+                0.26,
+                0.36,
+                0.42,
+                0.36,
+                0.18,
+                0.11,
+                0.12,
+            ],
+        }
+    )
+    monkeypatch.setattr("stock_select.analysis.macd_waves.compute_macd", lambda _frame: lines)
+
+    context = cli._build_wave_task_context(history, "2026-01-30", method="b2")
+
+    assert "偶数浪修复" in context["daily_wave_context"]
 
 
 def test_prompt_b1_requires_weekly_and_daily_trend_language() -> None:
