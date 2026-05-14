@@ -30,8 +30,8 @@ def test_all_supported_method_environment_profiles_resolve(method: str, state: s
 def test_b1_weak_profile_raises_price_position_weight() -> None:
     profile = get_method_environment_profile(method="b1", state="weak")
 
-    assert profile.weights["price_position"] > profile.weights["trend_structure"]
-    assert profile.pass_threshold >= 4.0
+    assert profile.weights["trend_structure"] > profile.weights["price_position"]
+    assert profile.pass_threshold > 4.1
     assert profile.signal_weight is None
 
 

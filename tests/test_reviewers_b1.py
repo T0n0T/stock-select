@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -293,6 +295,259 @@ def test_b1_review_uses_environment_profile_for_price_position_scoring() -> None
     assert weak_review["price_position"] == 4.0
     assert strong_review["price_position"] == 3.0
     assert weak_review["total_score"] > strong_review["total_score"]
+
+
+def test_b1_review_uses_environment_profile_for_verdict_thresholds() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(end="2026-04-30", periods=130),
+            "open": [10.0] * 120 + [8.7, 8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.45, 9.5],
+            "high": [10.2] * 120 + [9.0, 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.65, 9.7, 9.75],
+            "low": [9.8] * 120 + [8.6, 8.7, 8.8, 8.9, 9.0, 9.05, 9.1, 9.15, 9.18, 9.2],
+            "close": [10.0] * 120 + [8.8, 8.9, 9.0, 9.1, 9.2, 9.3, 9.4, 9.45, 9.5, 9.55],
+            "vol": [900.0] * 130,
+        }
+    )
+
+    review = review_b1_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["verdict"] in {"WATCH", "FAIL"}
+    assert review["verdict"] != "PASS"
+    assert review["total_score"] < profile.pass_threshold
+
+
+def test_b1_weak_profile_caps_even_high_score_setups_below_pass() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=4.45,
+        volume_behavior=4.0,
+        signal_type="rebound",
+        trend_structure=4.0,
+        price_position=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.9,
+        close_above_ma25_pct=-4.0,
+        ma25_above_zxdkx_pct=8.0,
+        close_above_zxdq_pct=-6.0,
+        day_pct=-1.0,
+        profile=profile,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b1_review_weak_profile_caps_high_score_setup_below_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+    history = _constructive_b1_history()
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 5.0)
+    monkeypatch.setattr(
+        b1_reviewer,
+        "classify_weekly_macd_trend",
+        lambda frame, pick_date: type(
+            "Trend",
+            (),
+            {
+                "phase": "rising",
+                "is_rising_initial": False,
+                "is_top_divergence": False,
+                "phase_index": 3,
+                "wave_stage": "强势",
+                "metrics": {"dif": 1.0, "dea": 0.8, "previous_spread": 0.1, "hist_change_rate": 1.0},
+                "transition_warnings": (),
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "classify_daily_macd_trend",
+        lambda frame, pick_date: type(
+            "Trend",
+            (),
+            {
+                "phase": "falling",
+                "is_rising_initial": False,
+                "is_top_divergence": False,
+                "phase_index": 2,
+                "wave_stage": "强势",
+                "metrics": {"dif": 0.1, "dea": 0.2, "previous_spread": -0.1, "hist_change_rate": 0.6},
+                "transition_warnings": (),
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_has_recent_daily_macd_death_cross",
+        lambda frame: False,
+    )
+
+    review = review_b1_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["total_score"] > profile.pass_threshold
+    assert review["signal_type"] in {"rebound", "trend_start"}
+    assert review["verdict"] == "WATCH"
+
+
+def test_b1_weak_profile_restores_pass_for_zxdkx_repair_whitelist() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=4.4,
+        volume_behavior=5.0,
+        signal_type="rebound",
+        trend_structure=4.0,
+        price_position=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.84,
+        close_above_ma25_pct=-6.0,
+        ma25_above_zxdkx_pct=8.0,
+        close_above_zxdq_pct=-6.0,
+        day_pct=-1.0,
+        close_above_zxdkx_pct=1.5,
+        profile=profile,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_b1_weak_profile_restores_pass_for_zxdkx_repair_whitelist_with_price_position_four() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    verdict = b1_reviewer.infer_b1_verdict(
+        total_score=4.18,
+        volume_behavior=4.0,
+        signal_type="rebound",
+        trend_structure=4.0,
+        price_position=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.88,
+        close_above_ma25_pct=-4.98,
+        ma25_above_zxdkx_pct=6.83,
+        close_above_zxdkx_pct=1.51,
+        close_above_zxdq_pct=-5.2,
+        day_pct=-0.3,
+        profile=profile,
+    )
+
+    assert verdict == "PASS"
+
+
+def test_b1_review_weak_whitelist_excludes_weekly_initial_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+    history = _constructive_b1_history()
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.9)
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_resolve_zx_lines",
+        lambda frame: (
+            pd.Series([10.0] * len(frame), index=frame.index),
+            pd.Series([9.4] * len(frame), index=frame.index),
+        ),
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_resolve_series",
+        lambda frame, column, fallback: pd.Series([10.0] * len(frame), index=frame.index)
+        if column == "ma25"
+        else fallback,
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "classify_weekly_macd_trend",
+        lambda frame, pick_date: type(
+            "Trend",
+            (),
+            {
+                "phase": "rising",
+                "phase_index": 1,
+                "wave_stage": "背离",
+                "wave_label": "一浪",
+                "is_rising_initial": True,
+                "is_top_divergence": True,
+                "metrics": {"dif": 1.0, "dea": 0.8, "previous_spread": 0.1, "hist_change_rate": 1.0},
+                "transition_warnings": (),
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "classify_daily_macd_trend",
+        lambda frame, pick_date: type(
+            "Trend",
+            (),
+            {
+                "phase": "falling",
+                "phase_index": 2,
+                "wave_stage": "强势转分歧",
+                "wave_label": "二浪",
+                "is_rising_initial": False,
+                "is_top_divergence": False,
+                "metrics": {"dif": 0.1, "dea": 0.2, "previous_spread": -0.1, "hist_change_rate": 0.6},
+                "transition_warnings": (),
+            },
+        )(),
+    )
+    monkeypatch.setattr(b1_reviewer, "_has_recent_daily_macd_death_cross", lambda frame: False)
+
+    review = review_b1_symbol_history(
+        code="301636.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/301636.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["total_score"] >= 4.18
+    assert review["verdict"] == "WATCH"
+
+
+def test_b1_review_weak_whitelist_allows_real_002452_wave3_divergence_sample() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+    prepared = pd.read_feather(Path("/home/pi/.agents/skills/stock-select/runtime/prepared/2026-04-30.feather"))
+    prepared["trade_date"] = pd.to_datetime(prepared["trade_date"], errors="coerce", format="mixed")
+    history = (
+        prepared[
+            (prepared["ts_code"] == "002452.SZ")
+            & (prepared["trade_date"] <= pd.Timestamp("2026-03-24"))
+        ]
+        .copy()
+        .sort_values("trade_date")
+        .reset_index(drop=True)
+    )
+
+    review = review_b1_symbol_history(
+        code="002452.SZ",
+        pick_date="2026-03-24",
+        history=history,
+        chart_path="/tmp/002452.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["signal_type"] == "rebound"
+    assert review["verdict"] == "PASS"
 
 
 def test_b1_previous_abnormal_move_reuses_b2_event_logic() -> None:
