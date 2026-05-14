@@ -15,7 +15,7 @@ from stock_select.review_orchestrator import (
     is_constructive_macd_trend_combo,
     map_macd_phase_score,
 )
-from stock_select.review_protocol import infer_signal_type
+from stock_select.review_protocol import infer_signal_type, infer_verdict_for_profile
 from stock_select.reviewers.b2 import _score_b2_previous_abnormal_move
 from stock_select.strategies.b1 import compute_zx_lines
 
@@ -89,15 +89,17 @@ def review_b1_symbol_history(
         weekly_trend=weekly_trend,
         daily_trend=daily_trend,
     )
-    total_score = compute_method_total_score(
-        "b1",
-        {
-            "trend_structure": trend_structure,
-            "price_position": price_position,
-            "volume_behavior": volume_behavior,
-            "previous_abnormal_move": previous_abnormal_move,
-            "macd_phase": macd_phase,
-        },
+    score_fields = {
+        "trend_structure": trend_structure,
+        "price_position": price_position,
+        "volume_behavior": volume_behavior,
+        "previous_abnormal_move": previous_abnormal_move,
+        "macd_phase": macd_phase,
+    }
+    total_score = (
+        compute_method_total_score("b1", score_fields)
+        if profile is None
+        else round(sum(float(score_fields[field]) * weight for field, weight in profile.weights.items()), 2)
     )
     signal_type = infer_signal_type(
         latest_close=float(close.iloc[-1]),
@@ -120,13 +122,55 @@ def review_b1_symbol_history(
         ma25_above_zxdkx_pct=(float(ma25.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
         if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
         else None,
+        close_above_zxdkx_pct=(float(close.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
+        if pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
+        else None,
         close_above_zxdq_pct=(float(close.iloc[-1]) / float(zxdq.iloc[-1]) - 1.0) * 100.0
         if pd.notna(zxdq.iloc[-1]) and float(zxdq.iloc[-1]) != 0.0
         else None,
         day_pct=(float(close.iloc[-1]) / float(open_.iloc[-1]) - 1.0) * 100.0
         if float(open_.iloc[-1]) != 0.0
         else None,
+        profile=profile,
     )
+    if (
+        profile is not None
+        and profile.state == "weak"
+        and verdict == "WATCH"
+        and _is_weak_zxdkx_repair_whitelist(
+            signal_type=signal_type,
+            total_score=total_score,
+            trend_structure=trend_structure,
+            price_position=price_position,
+            volume_behavior=volume_behavior,
+            previous_abnormal_move=previous_abnormal_move,
+            macd_phase=macd_phase,
+            close_above_ma25_pct=(float(close.iloc[-1]) / float(ma25.iloc[-1]) - 1.0) * 100.0
+            if pd.notna(ma25.iloc[-1]) and float(ma25.iloc[-1]) != 0.0
+            else None,
+            ma25_above_zxdkx_pct=(float(ma25.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
+            if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
+            else None,
+            close_above_zxdkx_pct=(float(close.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
+            if pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
+            else None,
+            close_above_zxdq_pct=(float(close.iloc[-1]) / float(zxdq.iloc[-1]) - 1.0) * 100.0
+            if pd.notna(zxdq.iloc[-1]) and float(zxdq.iloc[-1]) != 0.0
+            else None,
+            day_pct=(float(close.iloc[-1]) / float(open_.iloc[-1]) - 1.0) * 100.0
+            if float(open_.iloc[-1]) != 0.0
+            else None,
+        )
+        and not _is_weekly_initial_divergence(weekly_trend)
+    ):
+        verdict = "PASS"
+    if (
+        profile is not None
+        and profile.state == "weak"
+        and verdict == "PASS"
+        and _is_weekly_initial_divergence(weekly_trend)
+    ):
+        verdict = "WATCH"
     allow_divergence_pass = verdict == "PASS" and signal_type in {"trend_start", "rebound"}
     verdict = apply_macd_verdict_gate(
         method="b1",
@@ -214,9 +258,13 @@ def infer_b1_verdict(
     macd_phase: float,
     close_above_ma25_pct: float | None = None,
     ma25_above_zxdkx_pct: float | None = None,
+    close_above_zxdkx_pct: float | None = None,
     close_above_zxdq_pct: float | None = None,
     day_pct: float | None = None,
+    profile: MethodEnvironmentProfile | None = None,
 ) -> str:
+    is_weak_profile = profile is not None and profile.state == "weak"
+
     if volume_behavior <= 1.0:
         return "FAIL"
 
@@ -244,7 +292,23 @@ def infer_b1_verdict(
             and (close_above_zxdq_pct is None or close_above_zxdq_pct <= -6.0)
             and (day_pct is None or day_pct <= 1.0)
         )
-        if repair_start_setup:
+        weak_repair_start_whitelist = (
+            is_weak_profile
+            and total_score >= 4.35
+            and trend_structure >= 4.0
+            and 3.0 <= price_position <= 4.0
+            and volume_behavior >= 5.0
+            and previous_abnormal_move >= 5.0
+            and 3.5 <= macd_phase <= 4.0
+            and (close_above_ma25_pct is None or close_above_ma25_pct <= -5.0)
+            and (ma25_above_zxdkx_pct is None or ma25_above_zxdkx_pct >= 6.0)
+            and close_above_zxdkx_pct is not None
+            and 0.0 <= close_above_zxdkx_pct <= 8.0
+            and (day_pct is None or day_pct <= 0.5)
+        )
+        if repair_start_setup and not is_weak_profile:
+            return "PASS"
+        if weak_repair_start_whitelist:
             return "PASS"
         if total_score >= 3.2:
             return "WATCH"
@@ -262,7 +326,26 @@ def infer_b1_verdict(
             and (close_above_zxdq_pct is None or close_above_zxdq_pct <= -5.0)
             and (day_pct is None or day_pct <= 0.5)
         )
-        return "PASS" if rebound_repair_setup else "WATCH"
+        weak_rebound_repair_whitelist = (
+            is_weak_profile
+            and total_score >= 4.18
+            and trend_structure >= 4.0
+            and 3.0 <= price_position <= 4.0
+            and volume_behavior >= 4.0
+            and previous_abnormal_move >= 5.0
+            and 3.8 <= macd_phase <= 4.05
+            and (close_above_ma25_pct is None or close_above_ma25_pct <= -3.0)
+            and (ma25_above_zxdkx_pct is None or ma25_above_zxdkx_pct >= 6.0)
+            and close_above_zxdkx_pct is not None
+            and 0.0 <= close_above_zxdkx_pct <= 8.0
+            and (close_above_zxdq_pct is None or close_above_zxdq_pct <= -5.0)
+            and (day_pct is None or day_pct <= 0.5)
+        )
+        if rebound_repair_setup and not is_weak_profile:
+            return "PASS"
+        if weak_rebound_repair_whitelist:
+            return "PASS"
+        return "WATCH"
     elastic_rebound_watch = (
         signal_type == "rebound"
         and total_score >= 3.0
@@ -563,7 +646,7 @@ def _score_b1_macd_phase(
     if weekly_macd.above_water and weekly_macd.improving:
         return 5.0
     if weekly_macd.above_water:
-        return 4.0
+        return 3.0
     return 4.0
 
 
@@ -638,6 +721,62 @@ def _has_recent_daily_macd_death_cross(frame: pd.DataFrame) -> bool:
         return False
     death_cross = (dif.shift(1) >= dea.shift(1)) & (dif < dea)
     return bool(death_cross.tail(3).fillna(False).any())
+
+
+def _is_weekly_initial_divergence(weekly_trend: Any) -> bool:
+    return bool(
+        str(getattr(weekly_trend, "phase", "")) == "rising"
+        and int(getattr(weekly_trend, "phase_index", 0) or 0) <= 1
+        and bool(getattr(weekly_trend, "is_rising_initial", False))
+        and bool(getattr(weekly_trend, "is_top_divergence", False))
+    )
+
+
+def _is_weak_zxdkx_repair_whitelist(
+    *,
+    signal_type: str,
+    total_score: float,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+    close_above_ma25_pct: float | None,
+    ma25_above_zxdkx_pct: float | None,
+    close_above_zxdkx_pct: float | None,
+    close_above_zxdq_pct: float | None,
+    day_pct: float | None,
+) -> bool:
+    if signal_type == "trend_start":
+        return bool(
+            total_score >= 4.35
+            and trend_structure >= 4.0
+            and 3.0 <= price_position <= 4.0
+            and volume_behavior >= 5.0
+            and previous_abnormal_move >= 5.0
+            and 3.5 <= macd_phase <= 4.0
+            and (close_above_ma25_pct is None or close_above_ma25_pct <= -5.0)
+            and (ma25_above_zxdkx_pct is None or ma25_above_zxdkx_pct >= 6.0)
+            and close_above_zxdkx_pct is not None
+            and 0.0 <= close_above_zxdkx_pct <= 8.0
+            and (day_pct is None or day_pct <= 0.5)
+        )
+    if signal_type == "rebound":
+        return bool(
+            total_score >= 4.18
+            and trend_structure >= 4.0
+            and 3.0 <= price_position <= 4.0
+            and volume_behavior >= 4.0
+            and previous_abnormal_move >= 5.0
+            and 3.8 <= macd_phase <= 4.05
+            and (close_above_ma25_pct is None or close_above_ma25_pct <= -3.0)
+            and (ma25_above_zxdkx_pct is None or ma25_above_zxdkx_pct >= 6.0)
+            and close_above_zxdkx_pct is not None
+            and 0.0 <= close_above_zxdkx_pct <= 8.0
+            and (close_above_zxdq_pct is None or close_above_zxdq_pct <= -5.0)
+            and (day_pct is None or day_pct <= 0.5)
+        )
+    return False
 
 
 def _build_b1_comment(
