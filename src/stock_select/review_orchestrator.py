@@ -471,12 +471,31 @@ def describe_macd_trend_state(label: str, trend: Any) -> str:
         "invalid": "状态无效",
     }.get(phase, "状态无效")
     extras: list[str] = []
+    wave_label = str(getattr(trend, "wave_label", "") or "")
+    if not wave_label:
+        wave_label = _macd_wave_label(int(getattr(trend, "phase_index", 0) or 0))
+    wave_stage = str(getattr(trend, "wave_stage", "") or "")
+    if wave_label or wave_stage:
+        extras.append(f"{wave_label}{wave_stage}")
     if bool(getattr(trend, "is_rising_initial", False)):
         extras.append("上升初期")
     if bool(getattr(trend, "is_top_divergence", False)):
         extras.append("顶背离风险")
     suffix = f"（{'、'.join(extras)}）" if extras else ""
     return f"{label}MACD{phase_text}{suffix}"
+
+
+def _macd_wave_label(phase_index: int) -> str:
+    labels = {
+        1: "一浪",
+        2: "二浪",
+        3: "三浪",
+        4: "四浪",
+        5: "五浪",
+        6: "六浪",
+        7: "七浪",
+    }
+    return labels.get(phase_index, f"第{phase_index}浪" if phase_index > 0 else "")
 
 
 def is_constructive_macd_trend_combo(*, weekly_trend: Any, daily_trend: Any) -> bool:

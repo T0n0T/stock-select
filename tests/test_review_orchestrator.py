@@ -9,6 +9,7 @@ from stock_select.review_orchestrator import (
     compute_method_total_score,
     build_review_payload,
     build_review_result,
+    describe_macd_trend_state,
     map_macd_phase_score,
     merge_review_result,
     normalize_llm_review,
@@ -196,6 +197,12 @@ def test_b2_macd_phase_uses_dual_period_percent_score_for_main_uptrend() -> None
     score = map_macd_phase_score(method="b2", history_len=120, weekly_trend=weekly, daily_trend=daily)
 
     assert score == pytest.approx(5.0)
+
+
+def test_describe_macd_trend_state_includes_state_machine_wave_stage() -> None:
+    trend = _trend("falling", wave_index=2, stage="金叉临近", dif=0.08, dea=0.09)
+
+    assert describe_macd_trend_state("日线", trend) == "日线MACD下跌浪（二浪金叉临近）"
 
 
 def test_b2_macd_phase_rewards_weekly_uptrend_daily_pullback_exhaustion() -> None:
