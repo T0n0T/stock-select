@@ -6,6 +6,7 @@ import pytest
 from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.review_orchestrator import (
     apply_macd_verdict_gate,
+    adjust_b1_macd_phase_score,
     compute_method_total_score,
     build_review_payload,
     build_review_result,
@@ -261,6 +262,122 @@ def test_b1_macd_phase_penalizes_crowded_high_zone() -> None:
     assert score == pytest.approx(3.88)
 
 
+def test_b1_macd_phase_adjusts_for_weak_environment() -> None:
+    assert adjust_b1_macd_phase_score(3.92, environment_state="weak") == pytest.approx(3.67)
+    assert adjust_b1_macd_phase_score(3.96, environment_state="weak") == pytest.approx(4.16)
+
+
+def test_b1_macd_phase_adjusts_for_strong_environment() -> None:
+    assert adjust_b1_macd_phase_score(3.88, environment_state="strong") == pytest.approx(3.98)
+    assert adjust_b1_macd_phase_score(4.08, environment_state="strong") == pytest.approx(3.96)
+
+
+def test_b1_review_symbol_history_uses_profile_state_for_macd_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    import stock_select.reviewers.b1 as b1_reviewers
+    from stock_select.reviewers.b1 import review_b1_symbol_history
+
+    captured: dict[str, object] = {}
+
+    def fake_map_macd_phase_score(**kwargs: object) -> float:
+        captured.update(kwargs)
+        return 3.96
+
+    monkeypatch.setattr(b1_reviewers, "map_macd_phase_score", fake_map_macd_phase_score)
+
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-01-01", periods=160, freq="B"),
+            "open": [10.0 + idx * 0.05 for idx in range(160)],
+            "high": [10.3 + idx * 0.05 for idx in range(160)],
+            "low": [9.8 + idx * 0.05 for idx in range(160)],
+            "close": [10.2 + idx * 0.05 for idx in range(160)],
+            "vol": [1000.0 + idx * 5.0 for idx in range(160)],
+        }
+    )
+
+    review_b1_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=get_method_environment_profile(method="b1", state="strong"),
+    )
+
+    assert captured["environment_state"] == "strong"
+
+
+def test_b1_macd_phase_applies_mid_penalty_for_weekly_top_divergence() -> None:
+    from stock_select.reviewers.b1 import apply_b1_macd_divergence_penalty
+
+    weekly = _trend("rising", divergence=True, wave_index=3, stage="背离")
+    daily = _trend("falling", divergence=False, wave_index=2, stage="强势")
+    history = pd.DataFrame({"close": [10.0, 10.6, 10.2, 10.8, 10.4, 10.9, 10.5, 11.0]})
+
+    score = apply_b1_macd_divergence_penalty(
+        macd_phase=4.08,
+        weekly_trend=weekly,
+        daily_trend=daily,
+        close=history["close"],
+        environment_state="neutral",
+    )
+
+    assert score == pytest.approx(3.58)
+
+
+def test_b1_macd_phase_waives_daily_top_divergence_penalty_when_pullback_keeps_higher_low() -> None:
+    from stock_select.reviewers.b1 import apply_b1_macd_divergence_penalty
+
+    weekly = _trend("rising", divergence=False, wave_index=3, stage="分歧")
+    daily = _trend("rising", divergence=True, wave_index=3, stage="背离")
+    history = pd.DataFrame({"close": [10.0, 10.8, 10.2, 11.0, 10.5, 11.2, 10.7, 11.4]})
+
+    score = apply_b1_macd_divergence_penalty(
+        macd_phase=4.08,
+        weekly_trend=weekly,
+        daily_trend=daily,
+        close=history["close"],
+        environment_state="neutral",
+    )
+
+    assert score == pytest.approx(4.08)
+
+
+def test_b1_macd_phase_penalizes_daily_top_divergence_when_pullback_breaks_prior_low() -> None:
+    from stock_select.reviewers.b1 import apply_b1_macd_divergence_penalty
+
+    weekly = _trend("rising", divergence=False, wave_index=3, stage="分歧")
+    daily = _trend("rising", divergence=True, wave_index=3, stage="背离")
+    history = pd.DataFrame({"close": [10.0, 10.8, 10.2, 11.0, 10.1, 11.2, 9.9, 11.4]})
+
+    score = apply_b1_macd_divergence_penalty(
+        macd_phase=4.08,
+        weekly_trend=weekly,
+        daily_trend=daily,
+        close=history["close"],
+        environment_state="neutral",
+    )
+
+    assert score == pytest.approx(3.58)
+
+
+def test_b1_macd_phase_strong_environment_only_waives_daily_penalty() -> None:
+    from stock_select.reviewers.b1 import apply_b1_macd_divergence_penalty
+
+    weekly = _trend("rising", divergence=True, wave_index=3, stage="背离")
+    daily = _trend("rising", divergence=True, wave_index=3, stage="背离")
+    history = pd.DataFrame({"close": [10.0, 10.8, 10.2, 11.0, 10.5, 11.2, 10.7, 11.4]})
+
+    score = apply_b1_macd_divergence_penalty(
+        macd_phase=4.08,
+        weekly_trend=weekly,
+        daily_trend=daily,
+        close=history["close"],
+        environment_state="strong",
+    )
+
+    assert score == pytest.approx(3.58)
+
+
 def test_build_review_payload_includes_chart_and_rubric() -> None:
     payload = build_review_payload(
         code="000001.SZ",
@@ -304,6 +421,22 @@ def test_build_review_payload_merges_environment_context() -> None:
 
     assert payload["environment_state"] == "weak"
     assert payload["environment_llm_focus"] == "优先高分给回调充分且支撑有效的结构。"
+
+
+def test_build_review_payload_merges_review_focus_context() -> None:
+    payload = build_review_payload(
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        chart_path="/tmp/000001_day.png",
+        rubric_path="references/review-rubric.md",
+        extra_context={
+            "review_focus_context": "当前 review 重点：优先保留结构完整、赔率占优的样本，压制周线后段高位过热。",
+        },
+    )
+
+    assert "review_focus_context" in payload
+    assert "结构完整" in payload["review_focus_context"]
+    assert "高位过热" in payload["review_focus_context"]
 
 
 def test_build_review_result_prefers_llm_review_when_present() -> None:
