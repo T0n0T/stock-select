@@ -88,6 +88,14 @@ def review_b1_symbol_history(
         history_len=len(close),
         weekly_trend=weekly_trend,
         daily_trend=daily_trend,
+        environment_state=profile.state if profile is not None else None,
+    )
+    macd_phase = apply_b1_macd_divergence_penalty(
+        macd_phase=macd_phase,
+        weekly_trend=weekly_trend,
+        daily_trend=daily_trend,
+        close=close,
+        environment_state=profile.state if profile is not None else None,
     )
     score_fields = {
         "trend_structure": trend_structure,
@@ -730,6 +738,53 @@ def _is_weekly_initial_divergence(weekly_trend: Any) -> bool:
         and bool(getattr(weekly_trend, "is_rising_initial", False))
         and bool(getattr(weekly_trend, "is_top_divergence", False))
     )
+
+
+def apply_b1_macd_divergence_penalty(
+    *,
+    macd_phase: float,
+    weekly_trend: Any,
+    daily_trend: Any,
+    close: pd.Series,
+    environment_state: str | None = None,
+) -> float:
+    score = float(macd_phase)
+    normalized_environment = str(environment_state or "").strip().lower()
+
+    if bool(getattr(weekly_trend, "is_top_divergence", False)):
+        score -= 0.5
+
+    if bool(getattr(daily_trend, "is_top_divergence", False)):
+        daily_penalty_waived = _daily_top_divergence_penalty_waived(close=close)
+        if not daily_penalty_waived:
+            score -= 0.5
+
+    return round(max(1.0, min(5.0, score)), 2)
+
+
+def _daily_top_divergence_penalty_waived(*, close: pd.Series) -> bool:
+    previous_low, current_low = _latest_two_pullback_lows(close=close)
+    if previous_low is None or current_low is None:
+        return False
+    return current_low >= previous_low
+
+
+def _latest_two_pullback_lows(*, close: pd.Series) -> tuple[float | None, float | None]:
+    values = pd.to_numeric(close, errors="coerce").dropna().reset_index(drop=True)
+    if len(values) < 5:
+        return None, None
+
+    pivot_lows: list[float] = []
+    for idx in range(1, len(values) - 1):
+        prev_value = float(values.iloc[idx - 1])
+        current_value = float(values.iloc[idx])
+        next_value = float(values.iloc[idx + 1])
+        if current_value <= prev_value and current_value <= next_value:
+            pivot_lows.append(current_value)
+
+    if len(pivot_lows) < 2:
+        return None, None
+    return pivot_lows[-2], pivot_lows[-1]
 
 
 def _is_weak_zxdkx_repair_whitelist(

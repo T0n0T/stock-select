@@ -473,6 +473,31 @@ def _build_wave_task_context(history: pd.DataFrame, pick_date: str, *, method: s
     }
 
 
+def _build_method_review_focus_context(*, method: str, profile) -> str | None:
+    normalized_method = method.lower()
+    method_focus_map = {
+        "b1": (
+            "当前 review 重点：左侧赔率优先，目标是 N 型回调低点而不是右侧追价；"
+            "深度回调不天然扣分，关键看趋势支撑是否仍在；"
+            "周 MACD 红柱质量优先于旧日线 MACD 叙事，重点判断红柱是否有效、是否水上、是否明显衰减或背离。"
+        ),
+        "b2": (
+            "当前 review 重点：PASS 要宁缺毋滥，优先保留结构完整的 trend_start，而不是普通 rebound；"
+            "对周线后段、odd_confirmed_stage3、高阶奇数浪和高位过热样本要主动压分；"
+            "强环境可以更接受右侧确认，但弱环境和中性环境仍要先看位置安全、承接质量与过热风险。"
+        ),
+    }
+    method_focus = method_focus_map.get(normalized_method)
+    if method_focus is None:
+        return None
+    if profile is None:
+        return method_focus
+    environment_focus = str(getattr(profile, "llm_focus", "") or "").strip()
+    if not environment_focus:
+        return method_focus
+    return f"{method_focus} 环境附加重点：{environment_focus}"
+
+
 def _resolve_review_environment_context(
     *,
     runtime_root: Path,
@@ -519,6 +544,9 @@ def _build_review_task_extra_context(
     extra_context: dict[str, object] = {}
     if method.lower() in {"b1", "b2", "dribull"}:
         extra_context.update(_build_wave_task_context(history, pick_date, method=method))
+    review_focus_context = _build_method_review_focus_context(method=method, profile=profile)
+    if review_focus_context:
+        extra_context["review_focus_context"] = review_focus_context
     if resolved_environment is not None and profile is not None:
         extra_context.update(
             {

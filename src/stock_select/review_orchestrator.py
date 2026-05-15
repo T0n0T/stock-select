@@ -60,6 +60,7 @@ def map_macd_phase_score(
     daily_state: DailyMacdState | None = None,
     weekly_wave: Any | None = None,
     daily_recent_death_cross: bool = False,
+    environment_state: str | None = None,
 ) -> float:
     normalized = str(method).strip().lower()
     if normalized in {"b1", "b2", "dribull"} and history_len < 60:
@@ -68,12 +69,15 @@ def map_macd_phase_score(
         return 3.0
 
     if weekly_trend is not None and daily_trend is not None:
-        return _map_macd_trend_phase_score(method=normalized, weekly_trend=weekly_trend, daily_trend=daily_trend)
+        score = _map_macd_trend_phase_score(method=normalized, weekly_trend=weekly_trend, daily_trend=daily_trend)
+        if normalized == "b1":
+            return adjust_b1_macd_phase_score(score, environment_state=environment_state)
+        return score
 
     if normalized == "b1":
         if daily_recent_death_cross:
-            return 2.0
-        return 3.0
+            return adjust_b1_macd_phase_score(2.0, environment_state=environment_state)
+        return adjust_b1_macd_phase_score(3.0, environment_state=environment_state)
 
     if daily_state is None:
         return 3.0
@@ -88,6 +92,48 @@ def map_macd_phase_score(
     if state == "early_recross":
         return 3.0
     return 3.0
+
+
+def adjust_b1_macd_phase_score(score: float, *, environment_state: str | None = None) -> float:
+    normalized_environment = str(environment_state or "").strip().lower()
+    rounded_score = round(max(1.0, min(5.0, float(score))), 2)
+    adjustment_table = {
+        "weak": {
+            3.36: -0.25,
+            3.48: -0.25,
+            3.52: -0.25,
+            3.8: -0.25,
+            3.84: -0.25,
+            3.92: -0.25,
+            3.96: 0.20,
+            4.0: 0.20,
+            4.04: 0.20,
+            4.08: 0.20,
+            4.12: 0.20,
+            4.16: 0.20,
+        },
+        "neutral": {
+            3.84: -0.10,
+            3.92: -0.10,
+            3.96: 0.10,
+            4.0: 0.10,
+            4.04: 0.10,
+            4.08: 0.10,
+            4.12: 0.10,
+            4.16: 0.10,
+        },
+        "strong": {
+            3.88: 0.10,
+            3.96: -0.12,
+            4.0: -0.12,
+            4.04: -0.12,
+            4.08: -0.12,
+            4.12: -0.12,
+            4.16: -0.05,
+        },
+    }
+    adjustment = adjustment_table.get(normalized_environment, {}).get(rounded_score, 0.0)
+    return round(max(1.0, min(5.0, rounded_score + adjustment)), 2)
 
 
 def apply_macd_verdict_gate(

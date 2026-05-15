@@ -85,6 +85,9 @@ def test_b2_prompt_reference_exists_and_preserves_default_json_contract() -> Non
 
     assert "b2" in content.lower()
     assert "output json format must remain identical to the default prompt contract" in content.lower()
+    assert "周线后段" in content
+    assert "高阶奇数浪" in content
+    assert "结构完整" in content
 
 
 def test_b1_prompt_explains_watch_tiers_without_expanding_json_contract() -> None:
@@ -106,6 +109,9 @@ def test_b1_prompt_explains_watch_tiers_without_expanding_json_contract() -> Non
     assert "WATCH-C" in content
     assert "高优先观察" in content
     assert "输出 JSON schema 不新增字段" in content
+    assert "深度回调不天然扣分" in content
+    assert "周 MACD 红柱质量" in content
+    assert "左侧赔率优先" in content
 
 
 def test_prompt_dribull_reference_exists_and_preserves_dedicated_contract() -> None:
@@ -5112,6 +5118,66 @@ def test_build_wave_task_context_uses_fix14_wave_context_for_b2(monkeypatch: pyt
     assert "legacy weekly trend should not drive b2 task context" not in context["weekly_wave_context"]
     assert "legacy daily trend should not drive b2 task context" not in context["daily_wave_context"]
     assert "符合 b2 候选要求" not in context["wave_combo_context"]
+
+
+def test_build_review_task_extra_context_adds_method_specific_review_focus_for_b1() -> None:
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(end="2026-04-01", periods=10),
+            "close": [10.0 + 0.1 * idx for idx in range(10)],
+        }
+    )
+
+    profile = SimpleNamespace(
+        llm_focus="优先高分给回调充分、支撑有效、赔率优先的结构。",
+        state="weak",
+    )
+    resolved_environment = {"state": "weak", "reason": "risk-off"}
+
+    context = cli._build_review_task_extra_context(
+        history=history,
+        pick_date="2026-04-01",
+        method="b1",
+        resolved_environment=resolved_environment,
+        profile=profile,
+    )
+
+    assert context is not None
+    assert "review_focus_context" in context
+    assert "左侧赔率优先" in context["review_focus_context"]
+    assert "深度回调不天然扣分" in context["review_focus_context"]
+    assert "周 MACD 红柱质量" in context["review_focus_context"]
+    assert "优先高分给回调充分、支撑有效、赔率优先的结构。" in context["review_focus_context"]
+
+
+def test_build_review_task_extra_context_adds_method_specific_review_focus_for_b2() -> None:
+    history = pd.DataFrame(
+        {
+            "trade_date": pd.bdate_range(end="2026-04-01", periods=10),
+            "close": [10.0 + 0.1 * idx for idx in range(10)],
+        }
+    )
+
+    profile = SimpleNamespace(
+        llm_focus="中性环境下优先高分给结构完整且没有明显过热的启动样本。",
+        state="neutral",
+    )
+    resolved_environment = {"state": "neutral", "reason": "balanced"}
+
+    context = cli._build_review_task_extra_context(
+        history=history,
+        pick_date="2026-04-01",
+        method="b2",
+        resolved_environment=resolved_environment,
+        profile=profile,
+    )
+
+    assert context is not None
+    assert "review_focus_context" in context
+    assert "PASS 要宁缺毋滥" in context["review_focus_context"]
+    assert "周线后段" in context["review_focus_context"]
+    assert "高阶奇数浪" in context["review_focus_context"]
+    assert "中性环境下优先高分给结构完整且没有明显过热的启动样本。" in context["review_focus_context"]
 
 
 def test_build_wave_task_context_includes_state_machine_wave_stage(monkeypatch: pytest.MonkeyPatch) -> None:
