@@ -2917,7 +2917,8 @@ def _html_serve_impl(
     if reporter:
         reporter.emit("html-serve", f"serve root={root}")
     server = _make_html_http_server(directory=root, host=host, port=port)
-    base_url = f"http://{host}:{port}/"
+    display_host = "localhost" if host == "0.0.0.0" else host
+    base_url = f"http://{display_host}:{port}/"
     return server, base_url
 
 
@@ -3305,7 +3306,7 @@ def html_zip(
 @html_app.command("serve")
 def html_serve(
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
-    host: str = typer.Option("127.0.0.1", "--host"),
+    host: str = typer.Option("0.0.0.0", "--host"),
     port: int = typer.Option(8000, "--port"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
