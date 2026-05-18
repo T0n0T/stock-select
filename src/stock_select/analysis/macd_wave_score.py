@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import lru_cache
+from importlib.resources import files
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +15,7 @@ from stock_select.analysis.macd_waves import classify_macd_state_from_lines
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GRADE_TABLE_PATH = _PROJECT_ROOT / "docs" / "research" / "macd-wave-score-grade-table.json"
+_GRADE_TABLE_RESOURCE = "macd-wave-score-grade-table.json"
 
 
 @dataclass(frozen=True)
@@ -245,7 +247,11 @@ def classify_daily_grade(stage: MacdWaveStage) -> str:
 
 @lru_cache(maxsize=1)
 def load_macd_wave_score_grade_table() -> dict[str, dict[str, float]]:
-    payload = json.loads(_GRADE_TABLE_PATH.read_text(encoding="utf-8"))
+    try:
+        payload_text = files("stock_select.resources").joinpath(_GRADE_TABLE_RESOURCE).read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError):
+        payload_text = _GRADE_TABLE_PATH.read_text(encoding="utf-8")
+    payload = json.loads(payload_text)
     return {
         "weekly_coeff": {
             env_key: {key: float(value) for key, value in dict(env_values).items()}

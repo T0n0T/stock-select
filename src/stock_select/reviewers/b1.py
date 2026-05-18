@@ -20,6 +20,11 @@ from stock_select.reviewers.b2 import _score_b2_previous_abnormal_move
 from stock_select.strategies.b1 import compute_zx_lines
 
 _APPROX_TOLERANCE = 0.05
+_B1_HIGH_RETURN_SCORE_COMBOS = {
+    "rebound|T3|P3|V4|A5|M3.5",
+    "distribution_risk|T2|P4|V4|A5|M4.0",
+    "trend_start|T4|P3|V4|A5|M3.5",
+}
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,7 @@ def review_b1_symbol_history(
     daily_trend = classify_daily_macd_trend(frame[["trade_date", "close"]], pick_date)
     weekly_macd = _classify_b1_weekly_macd_context(frame)
     daily_recent_death_cross = _has_recent_daily_macd_death_cross(frame)
+    daily_dif, daily_dea = _resolve_daily_macd_lines(frame)
     macd_phase = map_macd_phase_score(
         method="b1",
         history_len=len(close),
@@ -109,6 +115,14 @@ def review_b1_symbol_history(
         if profile is None
         else round(sum(float(score_fields[field]) * weight for field, weight in profile.weights.items()), 2)
     )
+    effective_environment_state = str(profile.state if profile is not None else "neutral")
+    environment_gate = _compute_b1_environment_gate(
+        close=close,
+        ma25=ma25,
+        dif=daily_dif,
+        dea=daily_dea,
+        profile=profile,
+    )
     signal_type = infer_signal_type(
         latest_close=float(close.iloc[-1]),
         latest_open=float(open_.iloc[-1]),
@@ -116,69 +130,32 @@ def review_b1_symbol_history(
         volume_behavior=volume_behavior,
         price_position=price_position,
     )
-    verdict = infer_b1_verdict(
-        total_score=total_score,
-        volume_behavior=volume_behavior,
+    family_result = _classify_b1_pass_family(
         signal_type=signal_type,
         trend_structure=trend_structure,
         price_position=price_position,
+        volume_behavior=volume_behavior,
         previous_abnormal_move=previous_abnormal_move,
         macd_phase=macd_phase,
-        close_above_ma25_pct=(float(close.iloc[-1]) / float(ma25.iloc[-1]) - 1.0) * 100.0
-        if pd.notna(ma25.iloc[-1]) and float(ma25.iloc[-1]) != 0.0
-        else None,
-        ma25_above_zxdkx_pct=(float(ma25.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
-        if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
-        else None,
-        close_above_zxdkx_pct=(float(close.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
-        if pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
-        else None,
-        close_above_zxdq_pct=(float(close.iloc[-1]) / float(zxdq.iloc[-1]) - 1.0) * 100.0
-        if pd.notna(zxdq.iloc[-1]) and float(zxdq.iloc[-1]) != 0.0
-        else None,
-        day_pct=(float(close.iloc[-1]) / float(open_.iloc[-1]) - 1.0) * 100.0
-        if float(open_.iloc[-1]) != 0.0
-        else None,
-        profile=profile,
     )
-    if (
-        profile is not None
-        and profile.state == "weak"
-        and verdict == "WATCH"
-        and _is_weak_zxdkx_repair_whitelist(
-            signal_type=signal_type,
-            total_score=total_score,
-            trend_structure=trend_structure,
-            price_position=price_position,
-            volume_behavior=volume_behavior,
-            previous_abnormal_move=previous_abnormal_move,
-            macd_phase=macd_phase,
-            close_above_ma25_pct=(float(close.iloc[-1]) / float(ma25.iloc[-1]) - 1.0) * 100.0
-            if pd.notna(ma25.iloc[-1]) and float(ma25.iloc[-1]) != 0.0
-            else None,
-            ma25_above_zxdkx_pct=(float(ma25.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
-            if pd.notna(ma25.iloc[-1]) and pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
-            else None,
-            close_above_zxdkx_pct=(float(close.iloc[-1]) / float(zxdkx.iloc[-1]) - 1.0) * 100.0
-            if pd.notna(zxdkx.iloc[-1]) and float(zxdkx.iloc[-1]) != 0.0
-            else None,
-            close_above_zxdq_pct=(float(close.iloc[-1]) / float(zxdq.iloc[-1]) - 1.0) * 100.0
-            if pd.notna(zxdq.iloc[-1]) and float(zxdq.iloc[-1]) != 0.0
-            else None,
-            day_pct=(float(close.iloc[-1]) / float(open_.iloc[-1]) - 1.0) * 100.0
-            if float(open_.iloc[-1]) != 0.0
-            else None,
-        )
-        and not _is_weekly_initial_divergence(weekly_trend)
-    ):
-        verdict = "PASS"
-    if (
-        profile is not None
-        and profile.state == "weak"
-        and verdict == "PASS"
-        and _is_weekly_initial_divergence(weekly_trend)
-    ):
-        verdict = "WATCH"
+    high_return_combo = _classify_b1_high_return_combo(
+        signal_type=signal_type,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+    )
+    exact_combo_pass_allowed = _is_b1_exact_combo_pass_allowed(
+        combo_key=high_return_combo["combo_key"],
+        environment_state=effective_environment_state,
+    )
+    verdict = "PASS" if high_return_combo["match_type"] == "exact" and exact_combo_pass_allowed else _infer_b1_family_verdict(
+        family=family_result["family"],
+        tier=family_result["tier"],
+        environment_state=effective_environment_state,
+        total_score=total_score,
+    )
     allow_divergence_pass = verdict == "PASS" and signal_type in {"trend_start", "rebound"}
     verdict = apply_macd_verdict_gate(
         method="b1",
@@ -186,6 +163,15 @@ def review_b1_symbol_history(
         weekly_trend=weekly_trend,
         daily_trend=daily_trend,
         allow_divergence_pass=allow_divergence_pass,
+    )
+    if high_return_combo["match_type"] == "exact" and exact_combo_pass_allowed:
+        verdict = "PASS"
+    verdict = _apply_b1_environment_verdict_gate(
+        high_return_match=high_return_combo["match_type"],
+        family=family_result["family"],
+        environment_state=effective_environment_state,
+        current_verdict=verdict,
+        gate_flags=list(environment_gate["triggered_flags"]),
     )
     watch_reason = infer_b1_watch_reason(
         verdict=verdict,
@@ -228,6 +214,13 @@ def review_b1_symbol_history(
         else None,
     )
     watch_tier = infer_b1_watch_tier(verdict=verdict, watch_reason=watch_reason, watch_score=watch_score)
+    score_layer = _score_b1_layer(
+        verdict=verdict,
+        environment_state=effective_environment_state,
+        score_combo_key=high_return_combo["combo_key"],
+        gate_flags=list(environment_gate.get("triggered_flags", [])),
+        high_return_match=high_return_combo["match_type"],
+    )
 
     return {
         "code": code,
@@ -241,10 +234,24 @@ def review_b1_symbol_history(
         "macd_phase": macd_phase,
         "total_score": total_score,
         "signal_type": signal_type,
+        "score_combo_key": high_return_combo["combo_key"],
+        "high_return_combo_match": high_return_combo["match_type"],
+        "pass_family": family_result["family"],
+        "pass_family_tier": family_result["tier"],
         "verdict": verdict,
+        "gate_flags": list(environment_gate.get("triggered_flags", [])),
+        "gate_cooldown_active": environment_gate.get("cooldown_active"),
+        "gate_below_ma25": environment_gate.get("below_ma25"),
+        "gate_runup_pct": environment_gate.get("runup_pct"),
+        "gate_sideways_amplitude_pct": environment_gate.get("sideways_amplitude_pct"),
+        "gate_drawdown_pct": environment_gate.get("drawdown_pct"),
+        "gate_weekly_slope_26w": environment_gate.get("weekly_slope_26w"),
+        "gate_weekly_macd_cooldown_active": environment_gate.get("weekly_macd_cooldown_active"),
         "watch_reason": watch_reason,
         "watch_score": watch_score,
         "watch_tier": watch_tier,
+        "score_layer": score_layer["score_layer"],
+        "score_layer_score": score_layer["score_layer_score"],
         "comment": _build_b1_comment(
             weekly_trend=weekly_trend,
             daily_trend=daily_trend,
@@ -658,6 +665,445 @@ def _score_b1_macd_phase(
     return 4.0
 
 
+def _format_b1_bucket(value: float) -> str:
+    rounded = round(float(value))
+    return str(int(max(1, min(5, rounded))))
+
+
+def _format_b1_macd_bucket(value: float) -> str:
+    bucket = round(float(value) * 2.0) / 2.0
+    bounded = max(1.0, min(5.0, bucket))
+    return f"{bounded:.1f}"
+
+
+def _build_b1_score_combo_key(
+    *,
+    signal_type: str,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+) -> str:
+    return (
+        f"{signal_type}|"
+        f"T{_format_b1_bucket(trend_structure)}|"
+        f"P{_format_b1_bucket(price_position)}|"
+        f"V{_format_b1_bucket(volume_behavior)}|"
+        f"A{_format_b1_bucket(previous_abnormal_move)}|"
+        f"M{_format_b1_macd_bucket(macd_phase)}"
+    )
+
+
+def _classify_b1_high_return_combo(
+    *,
+    signal_type: str,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+) -> dict[str, str]:
+    combo_key = _build_b1_score_combo_key(
+        signal_type=signal_type,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+    )
+    match_type = "exact" if combo_key in _B1_HIGH_RETURN_SCORE_COMBOS else _classify_b1_high_return_core_combo(combo_key)
+    return {"combo_key": combo_key, "match_type": match_type}
+
+
+def _classify_b1_high_return_core_combo(combo_key: str) -> str:
+    parts = combo_key.split("|")
+    if len(parts) != 6:
+        return "none"
+    signal_type, trend, price, volume, abnormal, macd = parts
+    if abnormal != "A5":
+        return "none"
+    if (
+        signal_type == "distribution_risk"
+        and trend == "T2"
+        and price in {"P3", "P4"}
+        and volume in {"V4", "V5"}
+        and macd == "M4.0"
+    ):
+        return "dist_core"
+    if (
+        signal_type == "rebound"
+        and trend == "T3"
+        and price in {"P2", "P3"}
+        and volume == "V4"
+        and macd in {"M3.5", "M4.0"}
+    ):
+        return "rebound_core"
+    if (
+        signal_type == "trend_start"
+        and trend == "T4"
+        and price in {"P3", "P4"}
+        and volume == "V4"
+        and macd in {"M3.5", "M4.0"}
+    ):
+        return "trend_core"
+    return "none"
+
+
+def _is_b1_exact_combo_pass_allowed(*, combo_key: str, environment_state: str) -> bool:
+    state = environment_state.lower()
+    if combo_key not in _B1_HIGH_RETURN_SCORE_COMBOS:
+        return False
+    if state == "neutral":
+        return True
+    if state == "strong":
+        return combo_key == "trend_start|T4|P3|V4|A5|M3.5"
+    if state == "weak":
+        return combo_key == "distribution_risk|T2|P4|V4|A5|M4.0"
+    return False
+
+
+def _score_b1_layer(
+    *,
+    verdict: str,
+    environment_state: str,
+    score_combo_key: str,
+    gate_flags: list[str],
+    high_return_match: str = "none",
+) -> dict[str, float | str | None]:
+    state = environment_state.lower()
+    flags = set(gate_flags)
+    layer_score = 0.0
+    layer: str | None = None
+
+    pass_scores = {
+        ("neutral", "distribution_risk|T2|P4|V4|A5|M4.0"): 95.0,
+        ("neutral", "rebound|T3|P3|V4|A5|M3.5"): 90.0,
+        ("neutral", "trend_start|T4|P3|V4|A5|M3.5"): 78.0,
+        ("strong", "trend_start|T4|P3|V4|A5|M3.5"): 82.0,
+        ("weak", "distribution_risk|T2|P4|V4|A5|M4.0"): 84.0,
+    }
+    watch_scores = {
+        ("strong", "trend_start|T4|P3|V4|A5|M3.5"): 76.0,
+        ("neutral", "distribution_risk|T2|P4|V4|A5|M4.0"): 72.0,
+        ("neutral", "rebound|T3|P3|V4|A5|M3.5"): 70.0,
+        ("weak", "distribution_risk|T2|P4|V4|A5|M4.0"): 72.0,
+    }
+
+    if verdict == "PASS":
+        layer_score = pass_scores.get((state, score_combo_key), 70.0)
+        if "runup_over_limit" in flags:
+            layer_score -= 8.0
+        if "below_ma25" in flags:
+            layer_score -= 6.0
+        if layer_score >= 88.0:
+            layer = "PASS-A"
+        elif layer_score >= 80.0:
+            layer = "PASS-B"
+        else:
+            layer = "PASS-C"
+    elif verdict == "WATCH":
+        layer_score = watch_scores.get((state, score_combo_key), 50.0)
+        core_watch_scores = {
+            ("neutral", "dist_core"): 62.0,
+            ("neutral", "rebound_core"): 70.0,
+            ("neutral", "trend_core"): 70.0,
+            ("strong", "trend_core"): 74.0,
+            ("weak", "rebound_core"): 58.0,
+        }
+        layer_score = max(layer_score, core_watch_scores.get((state, high_return_match), 0.0))
+        if "runup_over_limit" in flags:
+            layer_score += 2.0
+        if "below_ma25" in flags:
+            layer_score -= 4.0
+        if layer_score >= 70.0:
+            layer = "WATCH-A"
+        elif layer_score >= 55.0:
+            layer = "WATCH-B"
+        else:
+            layer = "WATCH-C"
+
+    return {"score_layer": layer, "score_layer_score": round(layer_score, 2) if layer is not None else None}
+
+
+def _classify_b1_pass_family(
+    *,
+    signal_type: str,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+) -> dict[str, str | None]:
+    if (
+        signal_type == "rebound"
+        and 3.0 <= trend_structure <= 4.0
+        and price_position == 3.0
+        and volume_behavior >= 4.0
+        and previous_abnormal_move >= 5.0
+        and 3.3 <= macd_phase <= 3.8
+    ):
+        return {"family": "rebound", "tier": "core"}
+    if (
+        signal_type == "rebound"
+        and 3.0 <= trend_structure <= 4.0
+        and 2.0 <= price_position <= 4.0
+        and volume_behavior >= 3.0
+        and previous_abnormal_move >= 4.0
+        and 3.0 <= macd_phase <= 4.0
+    ):
+        return {"family": "rebound", "tier": "near"}
+
+    if (
+        signal_type == "distribution_risk"
+        and 2.0 <= trend_structure <= 3.0
+        and price_position == 4.0
+        and volume_behavior >= 4.0
+        and previous_abnormal_move >= 5.0
+        and 3.6 <= macd_phase <= 4.2
+    ):
+        return {"family": "distribution", "tier": "core"}
+    if (
+        signal_type == "distribution_risk"
+        and 2.0 <= trend_structure <= 3.0
+        and 3.0 <= price_position <= 5.0
+        and volume_behavior >= 3.0
+        and previous_abnormal_move >= 4.0
+        and 3.2 <= macd_phase <= 4.3
+    ):
+        return {"family": "distribution", "tier": "near"}
+
+    if (
+        signal_type == "trend_start"
+        and 4.0 <= trend_structure <= 5.0
+        and price_position == 3.0
+        and volume_behavior >= 4.0
+        and previous_abnormal_move >= 5.0
+        and 3.3 <= macd_phase <= 3.8
+    ):
+        return {"family": "trend_start", "tier": "core"}
+    if (
+        signal_type == "trend_start"
+        and trend_structure >= 4.0
+        and 3.0 <= price_position <= 4.0
+        and volume_behavior >= 3.0
+        and previous_abnormal_move >= 4.0
+        and 3.1 <= macd_phase <= 4.0
+    ):
+        return {"family": "trend_start", "tier": "near"}
+
+    return {"family": None, "tier": "none"}
+
+
+def _infer_b1_family_verdict(
+    *,
+    family: str | None,
+    tier: str,
+    environment_state: str,
+    total_score: float,
+) -> str:
+    if family is None or tier == "none":
+        return "FAIL"
+    return "WATCH"
+
+
+def _apply_b1_environment_verdict_gate(
+    *,
+    high_return_match: str = "none",
+    family: str | None,
+    environment_state: str,
+    current_verdict: str,
+    gate_flags: list[str],
+) -> str:
+    if current_verdict != "PASS":
+        return current_verdict
+
+    state = environment_state.lower()
+    if "runup_over_limit" in gate_flags:
+        return "WATCH"
+    if high_return_match == "exact" and state in {"neutral", "weak"} and "below_ma25" in gate_flags:
+        return "WATCH"
+    return current_verdict
+
+
+def _compute_b1_environment_gate(
+    *,
+    close: pd.Series,
+    ma25: pd.Series,
+    dif: pd.Series,
+    dea: pd.Series,
+    profile: MethodEnvironmentProfile | None = None,
+    trade_dates: pd.Series | None = None,
+    weekly_dif: pd.Series | None = None,
+    weekly_dea: pd.Series | None = None,
+) -> dict[str, Any]:
+    state = str(profile.state if profile is not None else "neutral").lower()
+    cooldown_days = 4 if state == "weak" else 2
+    cooldown_active = False
+    below_ma25 = bool(close.iloc[-1] < ma25.iloc[-1]) if len(close) and len(ma25) else False
+    runup_pct = _compute_b1_30d_runup_pct(close=close)
+    sideways_amplitude_pct = _compute_b1_sideways_amplitude_pct(close=close)
+    weekly_slope_26w = _compute_b1_weekly_slope_26w(close=close, trade_dates=trade_dates)
+    weekly_macd_cooldown_active = _compute_b1_weekly_macd_cooldown_active(
+        close=close,
+        trade_dates=trade_dates,
+        weekly_dif=weekly_dif,
+        weekly_dea=weekly_dea,
+    )
+
+    runup_limit = _resolve_b1_runup_limit(environment_state=state)
+    sideways_limit = 20.0
+    weekly_slope_limit = 0.2
+
+    if len(dif) >= 2 and len(dea) >= 2:
+        death_cross = ((dif.shift(1) >= dea.shift(1)) & (dif < dea)).fillna(False)
+        golden_cross = ((dif.shift(1) <= dea.shift(1)) & (dif > dea)).fillna(False)
+        death_indexes = [int(index) for index, value in enumerate(death_cross.tolist()) if value]
+        golden_indexes = [int(index) for index, value in enumerate(golden_cross.tolist()) if value]
+        latest_death_index = death_indexes[-1] if death_indexes else None
+        latest_golden_index = golden_indexes[-1] if golden_indexes else None
+        if latest_death_index is not None:
+            if latest_golden_index is None or latest_golden_index < latest_death_index:
+                bars_since_death_cross = len(dif) - 1 - latest_death_index
+                cooldown_active = bars_since_death_cross < cooldown_days
+
+    triggered_flags: list[str] = []
+    if cooldown_active:
+        triggered_flags.append("cooldown_active")
+    if weekly_macd_cooldown_active:
+        triggered_flags.append("weekly_macd_cooldown_active")
+    if weekly_slope_26w is not None and weekly_slope_26w <= weekly_slope_limit:
+        triggered_flags.append("weekly_slope_not_rising")
+    if below_ma25:
+        triggered_flags.append("below_ma25")
+    if runup_pct is not None and runup_pct >= runup_limit:
+        triggered_flags.append("runup_over_limit")
+    if sideways_amplitude_pct is not None and sideways_amplitude_pct <= sideways_limit:
+        triggered_flags.append("sideways_tight_range")
+
+    return {
+        "score_penalty": round(
+            (0.15 if below_ma25 else 0.0)
+            + (0.2 if runup_pct is not None and runup_pct >= runup_limit else 0.0)
+            + (0.15 if sideways_amplitude_pct is not None and sideways_amplitude_pct <= sideways_limit else 0.0),
+            2,
+        ),
+        "cooldown_active": cooldown_active,
+        "cooldown_reason": "recent_death_cross_cooldown" if cooldown_active else None,
+        "runup_pct": runup_pct,
+        "drawdown_pct": None,
+        "below_ma25": below_ma25,
+        "sideways_amplitude_pct": sideways_amplitude_pct,
+        "weekly_slope_26w": weekly_slope_26w,
+        "weekly_macd_cooldown_active": weekly_macd_cooldown_active,
+        "triggered_flags": triggered_flags,
+    }
+
+
+def _compute_b1_30d_runup_pct(*, close: pd.Series) -> float | None:
+    values = pd.to_numeric(close, errors="coerce").dropna().tail(30)
+    if values.empty:
+        return None
+    trailing_high = float(values.max())
+    trailing_low = float(values.min())
+    if trailing_low <= 0.0:
+        return None
+    return round((trailing_high / trailing_low - 1.0) * 100.0, 2)
+
+
+def _resolve_b1_runup_limit(*, environment_state: str) -> float:
+    state = environment_state.lower()
+    if state == "strong":
+        return 60.0
+    if state == "weak":
+        return 80.0
+    return 70.0
+
+
+def _compute_b1_sideways_amplitude_pct(*, close: pd.Series) -> float | None:
+    values = pd.to_numeric(close, errors="coerce").dropna().tail(10)
+    if len(values) < 5:
+        return None
+    latest_high = float(values.max())
+    latest_low = float(values.min())
+    if latest_low <= 0.0:
+        return None
+    return round((latest_high / latest_low - 1.0) * 100.0, 2)
+
+
+def _compute_b1_weekly_slope_26w(*, close: pd.Series, trade_dates: pd.Series | None = None) -> float | None:
+    if trade_dates is None or len(close) != len(trade_dates):
+        return None
+    weekly_close = (
+        pd.DataFrame({"trade_date": pd.to_datetime(trade_dates, errors="coerce"), "close": pd.to_numeric(close, errors="coerce")})
+        .dropna(subset=["trade_date", "close"])
+        .set_index("trade_date")["close"]
+        .resample("W-FRI")
+        .last()
+        .dropna()
+        .tail(26)
+    )
+    if len(weekly_close) < 26:
+        return None
+    start = float(weekly_close.iloc[0])
+    end = float(weekly_close.iloc[-1])
+    if start <= 0.0:
+        return None
+    return round((end / start - 1.0) * 100.0 / 25.0, 3)
+
+
+def _compute_b1_weekly_macd_cooldown_active(
+    *,
+    close: pd.Series,
+    trade_dates: pd.Series | None = None,
+    weekly_dif: pd.Series | None = None,
+    weekly_dea: pd.Series | None = None,
+) -> bool:
+    if weekly_dif is None or weekly_dea is None:
+        if trade_dates is None or len(close) != len(trade_dates):
+            return False
+        weekly_close = (
+            pd.DataFrame({"trade_date": pd.to_datetime(trade_dates, errors="coerce"), "close": pd.to_numeric(close, errors="coerce")})
+            .dropna(subset=["trade_date", "close"])
+            .set_index("trade_date")["close"]
+            .resample("W-FRI")
+            .last()
+            .dropna()
+        )
+        if len(weekly_close) < 2:
+            return False
+        weekly_macd = compute_macd(pd.DataFrame({"close": weekly_close.to_numpy()}))
+        weekly_dif = pd.to_numeric(weekly_macd["dif"], errors="coerce")
+        weekly_dea = pd.to_numeric(weekly_macd["dea"], errors="coerce")
+    dif = pd.to_numeric(weekly_dif, errors="coerce").reset_index(drop=True)
+    dea = pd.to_numeric(weekly_dea, errors="coerce").reset_index(drop=True)
+    if len(dif) < 2 or len(dea) < 2:
+        return False
+    death_cross = ((dif.shift(1) >= dea.shift(1)) & (dif < dea)).fillna(False)
+    golden_cross = ((dif.shift(1) <= dea.shift(1)) & (dif > dea)).fillna(False)
+    death_indexes = [int(index) for index, value in enumerate(death_cross.tolist()) if value]
+    golden_indexes = [int(index) for index, value in enumerate(golden_cross.tolist()) if value]
+    latest_death_index = death_indexes[-1] if death_indexes else None
+    latest_golden_index = golden_indexes[-1] if golden_indexes else None
+    if latest_death_index is None:
+        return False
+    if latest_golden_index is not None and latest_golden_index > latest_death_index:
+        return False
+    bars_since_death_cross = len(dif) - 1 - latest_death_index
+    return bars_since_death_cross < 2
+
+
+def _resolve_daily_macd_lines(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    if {"dif", "dea"}.issubset(frame.columns):
+        dif = pd.to_numeric(frame["dif"], errors="coerce")
+        dea = pd.to_numeric(frame["dea"], errors="coerce")
+    else:
+        daily_macd = compute_macd(frame[["close"]].astype(float))
+        dif = pd.to_numeric(daily_macd["dif"], errors="coerce")
+        dea = pd.to_numeric(daily_macd["dea"], errors="coerce")
+    return dif.reset_index(drop=True), dea.reset_index(drop=True)
+
+
 def _recent_slope_non_negative(series: pd.Series) -> bool:
     clean = pd.to_numeric(series, errors="coerce")
     if len(clean) < 5 or pd.isna(clean.iloc[-1]) or pd.isna(clean.iloc[-5]):
@@ -718,13 +1164,7 @@ def _classify_b1_weekly_macd_context(frame: pd.DataFrame) -> B1WeeklyMacdContext
 
 
 def _has_recent_daily_macd_death_cross(frame: pd.DataFrame) -> bool:
-    if {"dif", "dea"}.issubset(frame.columns):
-        dif = pd.to_numeric(frame["dif"], errors="coerce")
-        dea = pd.to_numeric(frame["dea"], errors="coerce")
-    else:
-        macd = compute_macd(frame[["close"]].astype(float))
-        dif = macd["dif"]
-        dea = macd["dea"]
+    dif, dea = _resolve_daily_macd_lines(frame)
     if len(dif) < 2:
         return False
     death_cross = (dif.shift(1) >= dea.shift(1)) & (dif < dea)

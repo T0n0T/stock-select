@@ -593,6 +593,22 @@ def build_review_result(
         "watch_score": primary.get("watch_score"),
         "watch_tier": primary.get("watch_tier"),
     }
+    b1_layer_fields = {
+        "score_combo_key": primary.get("score_combo_key"),
+        "high_return_combo_match": primary.get("high_return_combo_match"),
+        "pass_family": primary.get("pass_family"),
+        "pass_family_tier": primary.get("pass_family_tier"),
+        "gate_flags": primary.get("gate_flags"),
+        "gate_cooldown_active": primary.get("gate_cooldown_active"),
+        "gate_below_ma25": primary.get("gate_below_ma25"),
+        "gate_runup_pct": primary.get("gate_runup_pct"),
+        "gate_sideways_amplitude_pct": primary.get("gate_sideways_amplitude_pct"),
+        "gate_drawdown_pct": primary.get("gate_drawdown_pct"),
+        "gate_weekly_slope_26w": primary.get("gate_weekly_slope_26w"),
+        "gate_weekly_macd_cooldown_active": primary.get("gate_weekly_macd_cooldown_active"),
+        "score_layer": primary.get("score_layer"),
+        "score_layer_score": primary.get("score_layer_score"),
+    }
     return {
         "code": code,
         "pick_date": pick_date,
@@ -605,6 +621,7 @@ def build_review_result(
         "verdict": str(primary.get("verdict", "")),
         "comment": str(primary.get("comment", "")),
         **watch_fields,
+        **{key: value for key, value in b1_layer_fields.items() if value is not None},
     }
 
 
@@ -712,13 +729,16 @@ def summarize_reviews(
     failures: list[dict[str, Any]],
 ) -> dict[str, Any]:
     normalized_method = method.strip().lower()
-    sort_key = lambda item: float(item.get("total_score", 0.0))
+    sort_key = lambda item: (float(item.get("score_layer_score") or 0.0), float(item.get("total_score", 0.0)))
+    def is_recommendation(review: dict[str, Any]) -> bool:
+        if review.get("verdict") != "PASS":
+            return False
+        if normalized_method == "b1":
+            return True
+        return float(review.get("total_score", 0.0)) >= min_score
+
     recommendations = sorted(
-        [
-            review
-            for review in reviews
-            if review.get("verdict") == "PASS" and float(review.get("total_score", 0.0)) >= min_score
-        ],
+        [review for review in reviews if is_recommendation(review)],
         key=sort_key,
         reverse=True,
     )

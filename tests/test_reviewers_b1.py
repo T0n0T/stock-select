@@ -263,6 +263,1000 @@ def test_b1_price_position_keeps_high_position_observable_when_ma25_holds_zxdq()
     assert score == 3.0
 
 
+def test_classify_b1_pass_family_marks_rebound_core() -> None:
+    family = b1_reviewer._classify_b1_pass_family(
+        signal_type="rebound",
+        trend_structure=3.0,
+        price_position=3.0,
+        volume_behavior=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.5,
+    )
+
+    assert family["family"] == "rebound"
+    assert family["tier"] == "core"
+
+
+def test_classify_b1_pass_family_keeps_exact_core_cutoff_values() -> None:
+    family = b1_reviewer._classify_b1_pass_family(
+        signal_type="distribution_risk",
+        trend_structure=3.0,
+        price_position=4.0,
+        volume_behavior=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=4.2,
+    )
+
+    assert family["family"] == "distribution"
+    assert family["tier"] == "core"
+
+
+def test_classify_b1_pass_family_prefers_core_when_core_and_near_both_match() -> None:
+    family = b1_reviewer._classify_b1_pass_family(
+        signal_type="trend_start",
+        trend_structure=4.0,
+        price_position=3.0,
+        volume_behavior=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.3,
+    )
+
+    assert family["family"] == "trend_start"
+    assert family["tier"] == "core"
+
+
+def test_classify_b1_pass_family_marks_distribution_near() -> None:
+    family = b1_reviewer._classify_b1_pass_family(
+        signal_type="distribution_risk",
+        trend_structure=2.0,
+        price_position=5.0,
+        volume_behavior=3.0,
+        previous_abnormal_move=4.0,
+        macd_phase=3.4,
+    )
+
+    assert family["family"] == "distribution"
+    assert family["tier"] == "near"
+
+
+def test_classify_b1_pass_family_returns_none_for_non_template_sample() -> None:
+    family = b1_reviewer._classify_b1_pass_family(
+        signal_type="rebound",
+        trend_structure=2.0,
+        price_position=5.0,
+        volume_behavior=2.0,
+        previous_abnormal_move=2.0,
+        macd_phase=4.6,
+    )
+
+    assert family["family"] is None
+    assert family["tier"] == "none"
+
+
+def test_b1_score_combo_key_uses_discrete_subscores_and_half_point_macd_bucket() -> None:
+    key = b1_reviewer._build_b1_score_combo_key(
+        signal_type="rebound",
+        trend_structure=3.0,
+        price_position=3.0,
+        volume_behavior=4.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.52,
+    )
+
+    assert key == "rebound|T3|P3|V4|A5|M3.5"
+
+
+@pytest.mark.parametrize(
+    ("signal_type", "trend_structure", "price_position", "volume_behavior", "previous_abnormal_move", "macd_phase", "expected_key"),
+    [
+        ("rebound", 3.0, 3.0, 4.0, 5.0, 3.52, "rebound|T3|P3|V4|A5|M3.5"),
+        (
+            "distribution_risk",
+            2.0,
+            4.0,
+            4.0,
+            5.0,
+            3.8,
+            "distribution_risk|T2|P4|V4|A5|M4.0",
+        ),
+        ("trend_start", 4.0, 3.0, 4.0, 5.0, 3.4, "trend_start|T4|P3|V4|A5|M3.5"),
+    ],
+)
+def test_classify_b1_high_return_combo_marks_target_groups_as_exact(
+    signal_type: str,
+    trend_structure: float,
+    price_position: float,
+    volume_behavior: float,
+    previous_abnormal_move: float,
+    macd_phase: float,
+    expected_key: str,
+) -> None:
+    result = b1_reviewer._classify_b1_high_return_combo(
+        signal_type=signal_type,
+        trend_structure=trend_structure,
+        price_position=price_position,
+        volume_behavior=volume_behavior,
+        previous_abnormal_move=previous_abnormal_move,
+        macd_phase=macd_phase,
+    )
+
+    assert result["combo_key"] == expected_key
+    assert result["match_type"] == "exact"
+
+
+def test_b1_environment_allows_all_exact_combos_in_neutral() -> None:
+    for combo_key in b1_reviewer._B1_HIGH_RETURN_SCORE_COMBOS:
+        assert b1_reviewer._is_b1_exact_combo_pass_allowed(
+            combo_key=combo_key,
+            environment_state="neutral",
+        ) is True
+
+
+def test_b1_environment_only_allows_trend_start_exact_combo_in_strong() -> None:
+    assert b1_reviewer._is_b1_exact_combo_pass_allowed(
+        combo_key="trend_start|T4|P3|V4|A5|M3.5",
+        environment_state="strong",
+    ) is True
+    assert b1_reviewer._is_b1_exact_combo_pass_allowed(
+        combo_key="distribution_risk|T2|P4|V4|A5|M4.0",
+        environment_state="strong",
+    ) is False
+    assert b1_reviewer._is_b1_exact_combo_pass_allowed(
+        combo_key="rebound|T3|P3|V4|A5|M3.5",
+        environment_state="strong",
+    ) is False
+
+
+def test_b1_environment_only_allows_distribution_exact_combo_in_weak() -> None:
+    assert b1_reviewer._is_b1_exact_combo_pass_allowed(
+        combo_key="distribution_risk|T2|P4|V4|A5|M4.0",
+        environment_state="weak",
+    ) is True
+    assert b1_reviewer._is_b1_exact_combo_pass_allowed(
+        combo_key="rebound|T3|P3|V4|A5|M3.5",
+        environment_state="weak",
+    ) is False
+    assert b1_reviewer._is_b1_exact_combo_pass_allowed(
+        combo_key="trend_start|T4|P3|V4|A5|M3.5",
+        environment_state="weak",
+    ) is False
+
+
+def test_b1_score_layer_promotes_neutral_distribution_pass_to_pass_a() -> None:
+    layer = b1_reviewer._score_b1_layer(
+        verdict="PASS",
+        environment_state="neutral",
+        score_combo_key="distribution_risk|T2|P4|V4|A5|M4.0",
+        gate_flags=[],
+    )
+
+    assert layer["score_layer"] == "PASS-A"
+    assert layer["score_layer_score"] >= 90.0
+
+
+def test_b1_score_layer_marks_strong_trend_pass_as_pass_b() -> None:
+    layer = b1_reviewer._score_b1_layer(
+        verdict="PASS",
+        environment_state="strong",
+        score_combo_key="trend_start|T4|P3|V4|A5|M3.5",
+        gate_flags=[],
+    )
+
+    assert layer["score_layer"] == "PASS-B"
+
+
+def test_b1_score_layer_promotes_gated_strong_exact_watch_to_watch_a() -> None:
+    layer = b1_reviewer._score_b1_layer(
+        verdict="WATCH",
+        environment_state="strong",
+        score_combo_key="trend_start|T4|P3|V4|A5|M3.5",
+        gate_flags=["runup_over_limit"],
+    )
+
+    assert layer["score_layer"] == "WATCH-A"
+
+
+def test_b1_review_routes_high_return_distribution_combo_to_watch_when_neutral_below_ma25_gate_triggers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    history = _constructive_b1_history()
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 2.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.8)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 3.8)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "distribution_risk")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_compute_b1_environment_gate",
+        lambda **kwargs: {
+            "score_penalty": 0.35,
+            "cooldown_active": True,
+            "cooldown_reason": "recent_death_cross_cooldown",
+            "runup_pct": 58.0,
+            "drawdown_pct": None,
+            "below_ma25": True,
+            "sideways_amplitude_pct": 12.0,
+            "weekly_slope_26w": None,
+            "weekly_macd_cooldown_active": False,
+            "triggered_flags": ["cooldown_active", "below_ma25", "runup_over_limit", "sideways_tight_range"],
+        },
+    )
+
+    review = review_b1_symbol_history(
+        code="000009.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000009.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["score_combo_key"] == "distribution_risk|T2|P4|V4|A5|M4.0"
+    assert review["high_return_combo_match"] == "exact"
+    assert review["verdict"] == "WATCH"
+    assert review["gate_flags"] == ["cooldown_active", "below_ma25", "runup_over_limit", "sideways_tight_range"]
+    assert review["gate_runup_pct"] == 58.0
+    assert review["gate_sideways_amplitude_pct"] == 12.0
+
+
+def test_infer_b1_family_verdict_keeps_trend_start_core_as_watch_before_exact_combo_match() -> None:
+    verdict = b1_reviewer._infer_b1_family_verdict(
+        family="trend_start",
+        tier="core",
+        environment_state="strong",
+        total_score=3.95,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_infer_b1_family_verdict_caps_distribution_core_to_watch_in_strong() -> None:
+    verdict = b1_reviewer._infer_b1_family_verdict(
+        family="distribution",
+        tier="core",
+        environment_state="strong",
+        total_score=4.10,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_infer_b1_family_verdict_caps_all_core_families_below_pass_in_weak() -> None:
+    verdict = b1_reviewer._infer_b1_family_verdict(
+        family="rebound",
+        tier="core",
+        environment_state="weak",
+        total_score=4.50,
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_infer_b1_family_verdict_marks_none_family_as_fail() -> None:
+    verdict = b1_reviewer._infer_b1_family_verdict(
+        family=None,
+        tier="none",
+        environment_state="neutral",
+        total_score=4.80,
+    )
+
+    assert verdict == "FAIL"
+
+
+def test_b1_review_pass_family_routes_rebound_core_to_watch_when_not_exact_combo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    history = _constructive_b1_history()
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 3.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "rebound")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_compute_b1_environment_gate",
+        lambda **kwargs: {
+            "score_penalty": 0.0,
+            "cooldown_active": False,
+            "cooldown_reason": None,
+            "runup_pct": None,
+            "drawdown_pct": None,
+            "below_ma25": False,
+            "triggered_flags": [],
+        },
+    )
+
+    review = review_b1_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000001.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["pass_family"] == "rebound"
+    assert review["pass_family_tier"] == "core"
+    assert review["verdict"] == "WATCH"
+
+
+def test_b1_review_pass_family_defaults_to_neutral_without_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    history = _constructive_b1_history()
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 3.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "rebound")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(b1_reviewer, "compute_method_total_score", lambda method, fields: 3.92)
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_compute_b1_environment_gate",
+        lambda **kwargs: {
+            "score_penalty": 0.0,
+            "cooldown_active": False,
+            "cooldown_reason": None,
+            "runup_pct": None,
+            "drawdown_pct": None,
+            "below_ma25": False,
+            "triggered_flags": [],
+        },
+    )
+
+    review = review_b1_symbol_history(
+        code="000006.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000006.SZ_day.png",
+    )
+
+    assert review["pass_family"] == "rebound"
+    assert review["pass_family_tier"] == "core"
+    assert review["verdict"] == "WATCH"
+
+
+def test_b1_review_pass_family_caps_rebound_core_to_watch_in_weak_even_if_legacy_verdict_would_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+    history = _constructive_b1_history()
+    history.loc[history.index[-1], "open"] = 14.0
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 3.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.1)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.8)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 3.8)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "rebound")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_resolve_series",
+        lambda frame, column, fallback: pd.Series([14.5] * len(frame), index=frame.index)
+        if column == "ma25"
+        else fallback,
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_resolve_zx_lines",
+        lambda frame: (
+            pd.Series([14.8] * len(frame), index=frame.index),
+            pd.Series([13.0] * len(frame), index=frame.index),
+        ),
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_compute_b1_environment_gate",
+        lambda **kwargs: {
+            "score_penalty": 0.0,
+            "cooldown_active": False,
+            "cooldown_reason": None,
+            "runup_pct": None,
+            "drawdown_pct": None,
+            "below_ma25": False,
+            "triggered_flags": [],
+        },
+    )
+
+    review = review_b1_symbol_history(
+        code="000004.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000004.SZ_day.png",
+        profile=profile,
+    )
+
+    legacy_verdict = b1_reviewer.infer_b1_verdict(
+        total_score=review["total_score"],
+        volume_behavior=5.0,
+        signal_type="rebound",
+        trend_structure=4.0,
+        price_position=3.0,
+        previous_abnormal_move=5.1,
+        macd_phase=3.8,
+        close_above_ma25_pct=(13.95 / 14.5 - 1.0) * 100.0,
+        ma25_above_zxdkx_pct=(14.5 / 13.0 - 1.0) * 100.0,
+        close_above_zxdkx_pct=(13.95 / 13.0 - 1.0) * 100.0,
+        close_above_zxdq_pct=(13.95 / 14.8 - 1.0) * 100.0,
+        day_pct=(13.95 / 14.0 - 1.0) * 100.0,
+        profile=profile,
+    )
+
+    assert legacy_verdict == "PASS"
+    assert review["pass_family"] == "rebound"
+    assert review["pass_family_tier"] == "core"
+    assert review["verdict"] == "WATCH"
+
+
+def test_b1_review_pass_family_routes_non_family_sample_to_fail_before_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    history = _constructive_b1_history()
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 2.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 2.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 2.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 4.5)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 4.5)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "rebound")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_compute_b1_environment_gate",
+        lambda **kwargs: {
+            "score_penalty": 0.0,
+            "cooldown_active": False,
+            "cooldown_reason": None,
+            "runup_pct": None,
+            "drawdown_pct": None,
+            "below_ma25": False,
+            "triggered_flags": [],
+        },
+    )
+
+    review = review_b1_symbol_history(
+        code="000002.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000002.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["pass_family"] is None
+    assert review["pass_family_tier"] == "none"
+    assert review["verdict"] == "FAIL"
+
+
+def test_b1_review_pass_family_keeps_core_watch_when_environment_cooldown_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    history = _constructive_b1_history()
+    history.loc[history.index[-1], "open"] = 14.0
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 3.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.8)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 3.8)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "rebound")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_resolve_series",
+        lambda frame, column, fallback: pd.Series([14.5] * len(frame), index=frame.index)
+        if column == "ma25"
+        else fallback,
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_resolve_zx_lines",
+        lambda frame: (
+            pd.Series([14.8] * len(frame), index=frame.index),
+            pd.Series([13.0] * len(frame), index=frame.index),
+        ),
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_compute_b1_environment_gate",
+        lambda **kwargs: {
+            "score_penalty": 0.0,
+            "cooldown_active": True,
+            "cooldown_reason": "recent_death_cross_cooldown",
+            "runup_pct": None,
+            "drawdown_pct": None,
+            "below_ma25": False,
+            "triggered_flags": ["cooldown_active"],
+        },
+    )
+
+    review = review_b1_symbol_history(
+        code="000003.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000003.SZ_day.png",
+        profile=profile,
+    )
+
+    matrix_verdict = b1_reviewer._infer_b1_family_verdict(
+        family=review["pass_family"],
+        tier=review["pass_family_tier"],
+        environment_state=profile.state,
+        total_score=review["total_score"],
+    )
+    legacy_verdict = b1_reviewer.infer_b1_verdict(
+        total_score=review["total_score"],
+        volume_behavior=5.0,
+        signal_type="rebound",
+        trend_structure=4.0,
+        price_position=3.0,
+        previous_abnormal_move=5.0,
+        macd_phase=3.8,
+        close_above_ma25_pct=(13.95 / 14.5 - 1.0) * 100.0,
+        ma25_above_zxdkx_pct=(14.5 / 13.0 - 1.0) * 100.0,
+        close_above_zxdkx_pct=(13.95 / 13.0 - 1.0) * 100.0,
+        close_above_zxdq_pct=(13.95 / 14.8 - 1.0) * 100.0,
+        day_pct=(13.95 / 14.0 - 1.0) * 100.0,
+        profile=profile,
+    )
+
+    assert matrix_verdict == "WATCH"
+    assert legacy_verdict == "PASS"
+    assert review["pass_family"] == "rebound"
+    assert review["pass_family_tier"] == "core"
+    assert review["verdict"] == "WATCH"
+
+
+def test_b1_review_high_return_trend_start_keeps_pass_and_records_below_ma25_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = get_method_environment_profile(method="b1", state="strong")
+    history = _constructive_b1_history()
+    history.loc[history.index[-1], "close"] = 13.0
+    history.loc[history.index[-1], "open"] = 12.9
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 3.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "trend_start")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_resolve_series",
+        lambda frame, column, fallback: pd.Series([14.0] * len(frame), index=frame.index)
+        if column == "ma25"
+        else fallback,
+    )
+    monkeypatch.setattr(
+        b1_reviewer,
+        "compute_macd",
+        lambda frame: pd.DataFrame(
+            {
+                "dif": [0.4, 0.5, 0.55, 0.6],
+                "dea": [0.3, 0.4, 0.48, 0.55],
+                "macd_hist": [0.2, 0.2, 0.14, 0.1],
+            }
+        ),
+    )
+
+    review = review_b1_symbol_history(
+        code="000005.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000005.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["pass_family"] == "trend_start"
+    assert review["pass_family_tier"] == "core"
+    assert review["score_combo_key"] == "trend_start|T4|P3|V4|A5|M3.5"
+    assert review["high_return_combo_match"] == "exact"
+    assert review["verdict"] == "PASS"
+    assert review["signal_type"] == "trend_start"
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=history["close"].astype(float),
+        ma25=pd.Series([14.0] * len(history), index=history.index),
+        dif=pd.Series([0.4, 0.5, 0.55, 0.6]),
+        dea=pd.Series([0.3, 0.4, 0.48, 0.55]),
+        profile=profile,
+    )
+    assert gate["below_ma25"] is True
+    assert "below_ma25" in gate["triggered_flags"]
+    assert review["gate_below_ma25"] is True
+    assert "below_ma25" in review["gate_flags"]
+
+
+def test_b1_environment_verdict_gate_cooldown_is_diagnostic_only() -> None:
+    rebound_verdict = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="rebound",
+        environment_state="neutral",
+        current_verdict="PASS",
+        gate_flags=["cooldown_active"],
+    )
+    distribution_verdict = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="distribution",
+        environment_state="strong",
+        current_verdict="PASS",
+        gate_flags=["cooldown_active"],
+    )
+
+    assert rebound_verdict == "PASS"
+    assert distribution_verdict == "PASS"
+
+
+def test_b1_environment_verdict_gate_below_ma25_does_not_demote_strong_exact_passes() -> None:
+    trend_gate = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="trend_start",
+        environment_state="strong",
+        current_verdict="PASS",
+        gate_flags=["below_ma25"],
+    )
+    rebound_gate = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="rebound",
+        environment_state="strong",
+        current_verdict="PASS",
+        gate_flags=["below_ma25"],
+    )
+
+    assert trend_gate == "PASS"
+    assert rebound_gate == "PASS"
+
+
+def test_b1_environment_verdict_gate_below_ma25_caps_exact_pass_in_neutral() -> None:
+    verdict = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="distribution",
+        environment_state="neutral",
+        current_verdict="PASS",
+        gate_flags=["below_ma25"],
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b1_environment_verdict_gate_below_ma25_caps_rebound_exact_pass_in_neutral() -> None:
+    verdict = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="rebound",
+        environment_state="neutral",
+        current_verdict="PASS",
+        gate_flags=["below_ma25"],
+    )
+
+    assert verdict == "WATCH"
+
+
+def test_b1_compute_environment_gate_strong_cooldown_expires_at_two_bar_boundary() -> None:
+    profile = get_method_environment_profile(method="b1", state="strong")
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=pd.Series([10.0, 10.1, 10.2, 10.3]),
+        ma25=pd.Series([9.5, 9.5, 9.5, 9.5]),
+        dif=pd.Series([0.3, -0.1, -0.2, -0.3]),
+        dea=pd.Series([0.2, 0.0, 0.0, 0.0]),
+        profile=profile,
+    )
+
+    assert gate["cooldown_active"] is False
+    assert "cooldown_active" not in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_weak_cooldown_expires_at_four_bar_boundary() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=pd.Series([10.0, 10.1, 10.2, 10.3, 10.4, 10.5]),
+        ma25=pd.Series([9.5, 9.5, 9.5, 9.5, 9.5, 9.5]),
+        dif=pd.Series([0.3, -0.1, -0.2, -0.2, -0.2, -0.2]),
+        dea=pd.Series([0.2, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        profile=profile,
+    )
+
+    assert gate["cooldown_active"] is False
+    assert "cooldown_active" not in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_golden_cross_cancels_recent_death_cross_cooldown() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=pd.Series([10.0, 10.1, 10.2, 10.3, 10.4]),
+        ma25=pd.Series([9.5, 9.5, 9.5, 9.5, 9.5]),
+        dif=pd.Series([0.3, -0.1, -0.2, 0.1, 0.2]),
+        dea=pd.Series([0.2, 0.0, -0.1, 0.0, 0.05]),
+        profile=profile,
+    )
+
+    assert gate["cooldown_active"] is False
+    assert "cooldown_active" not in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_does_not_set_runup_flag_below_70pct_threshold() -> None:
+    profile = get_method_environment_profile(method="b1", state="strong")
+    close = pd.Series([10.0] * 25 + [10.5, 11.0, 12.0, 13.5, 15.2])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+    )
+
+    assert gate["runup_pct"] == 52.0
+    assert "runup_over_limit" not in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_sets_runup_flag_in_strong_at_60pct_threshold() -> None:
+    profile = get_method_environment_profile(method="b1", state="strong")
+    close = pd.Series([10.0] * 25 + [10.5, 11.0, 12.0, 14.0, 16.2])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+    )
+
+    assert gate["runup_pct"] == 62.0
+    assert "runup_over_limit" in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_uses_80pct_runup_threshold_in_weak() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+    close = pd.Series([10.0] * 25 + [10.2, 11.0, 14.0, 16.0, 17.5])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+    )
+
+    assert gate["runup_pct"] == 75.0
+    assert "runup_over_limit" not in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_sets_runup_flag_in_weak_at_80pct_threshold() -> None:
+    profile = get_method_environment_profile(method="b1", state="weak")
+    close = pd.Series([10.0] * 25 + [10.2, 11.0, 14.0, 16.0, 18.2])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+    )
+
+    assert gate["runup_pct"] == 82.0
+    assert "runup_over_limit" in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_sets_sideways_flag_for_tight_recent_range() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    close = pd.Series([10.0] * 20 + [10.0, 10.08, 10.05, 10.12, 10.09, 10.11, 10.07, 10.1, 10.06, 10.1])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.9] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+    )
+
+    assert gate["sideways_amplitude_pct"] == 1.2
+    assert "sideways_tight_range" in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_does_not_set_sideways_flag_above_20pct_threshold() -> None:
+    profile = get_method_environment_profile(method="b1", state="strong")
+    close = pd.Series([10.0] * 20 + [10.0, 10.5, 11.0, 11.5, 12.0, 11.8, 11.7, 11.6, 11.9, 12.1])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.9] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+    )
+
+    assert gate["sideways_amplitude_pct"] == 21.0
+    assert "sideways_tight_range" not in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_sets_weekly_slope_flag_when_26w_slope_is_not_rising() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    trade_dates = pd.bdate_range(end="2026-04-30", periods=140)
+    close = pd.Series([10.0] * len(trade_dates))
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+        trade_dates=pd.Series(trade_dates),
+    )
+
+    assert gate["weekly_slope_26w"] == 0.0
+    assert "weekly_slope_not_rising" in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_does_not_set_weekly_slope_flag_above_threshold() -> None:
+    profile = get_method_environment_profile(method="b1", state="strong")
+    trade_dates = pd.bdate_range(end="2026-04-30", periods=140)
+    close = pd.Series([10.0 + idx * 0.15 for idx in range(len(trade_dates))])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+        trade_dates=pd.Series(trade_dates),
+    )
+
+    assert gate["weekly_slope_26w"] > 0.2
+    assert "weekly_slope_not_rising" not in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_sets_weekly_macd_cooldown_flag_on_recent_weekly_death_cross() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    trade_dates = pd.bdate_range(end="2026-04-30", periods=140)
+    close = pd.Series([10.0 + idx * 0.05 for idx in range(len(trade_dates))])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+        trade_dates=pd.Series(trade_dates),
+        weekly_dif=pd.Series([0.4, 0.3, 0.1, -0.1]),
+        weekly_dea=pd.Series([0.2, 0.25, 0.2, 0.05]),
+    )
+
+    assert gate["weekly_macd_cooldown_active"] is True
+    assert "weekly_macd_cooldown_active" in gate["triggered_flags"]
+
+
+def test_b1_compute_environment_gate_clears_weekly_macd_cooldown_after_weekly_golden_cross() -> None:
+    profile = get_method_environment_profile(method="b1", state="neutral")
+    trade_dates = pd.bdate_range(end="2026-04-30", periods=140)
+    close = pd.Series([10.0 + idx * 0.05 for idx in range(len(trade_dates))])
+
+    gate = b1_reviewer._compute_b1_environment_gate(
+        close=close,
+        ma25=pd.Series([9.5] * len(close)),
+        dif=pd.Series([0.3, 0.35, 0.4, 0.45, 0.5]),
+        dea=pd.Series([0.2, 0.25, 0.3, 0.35, 0.4]),
+        profile=profile,
+        trade_dates=pd.Series(trade_dates),
+        weekly_dif=pd.Series([0.4, -0.1, -0.2, 0.1]),
+        weekly_dea=pd.Series([0.2, 0.0, -0.1, 0.0]),
+    )
+
+    assert gate["weekly_macd_cooldown_active"] is False
+    assert "weekly_macd_cooldown_active" not in gate["triggered_flags"]
+
+
+def test_b1_environment_verdict_gate_runup_demotes_but_sideways_is_diagnostic() -> None:
+    runup_verdict = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="trend_start",
+        environment_state="strong",
+        current_verdict="PASS",
+        gate_flags=["runup_over_limit"],
+    )
+    sideways_verdict = b1_reviewer._apply_b1_environment_verdict_gate(
+        high_return_match="exact",
+        family="distribution",
+        environment_state="neutral",
+        current_verdict="PASS",
+        gate_flags=["sideways_tight_range"],
+    )
+
+    assert runup_verdict == "WATCH"
+    assert sideways_verdict == "PASS"
+
+
+def test_b1_review_high_return_trend_start_keeps_pass_and_records_weekly_slope_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = get_method_environment_profile(method="b1", state="strong")
+    history = _constructive_b1_history()
+    history["dif"] = 0.5
+    history["dea"] = 0.4
+
+    monkeypatch.setattr(b1_reviewer, "_score_b1_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_price_position", lambda **kwargs: 3.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b1_volume_behavior", lambda *args, **kwargs: 4.0)
+    monkeypatch.setattr(b1_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(b1_reviewer, "map_macd_phase_score", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "apply_b1_macd_divergence_penalty", lambda **kwargs: 3.5)
+    monkeypatch.setattr(b1_reviewer, "infer_signal_type", lambda **kwargs: "trend_start")
+    monkeypatch.setattr(b1_reviewer, "apply_macd_verdict_gate", lambda **kwargs: kwargs["current_verdict"])
+    monkeypatch.setattr(
+        b1_reviewer,
+        "_compute_b1_environment_gate",
+        lambda **kwargs: {
+            "score_penalty": 0.0,
+            "cooldown_active": False,
+            "cooldown_reason": None,
+            "runup_pct": None,
+            "drawdown_pct": None,
+            "below_ma25": False,
+            "sideways_amplitude_pct": None,
+            "weekly_slope_26w": 0.05,
+            "weekly_macd_cooldown_active": False,
+            "triggered_flags": ["weekly_slope_not_rising"],
+        },
+    )
+
+    review = review_b1_symbol_history(
+        code="000007.SZ",
+        pick_date="2026-04-30",
+        history=history,
+        chart_path="/tmp/000007.SZ_day.png",
+        profile=profile,
+    )
+
+    assert review["pass_family"] == "trend_start"
+    assert review["pass_family_tier"] == "core"
+    assert review["score_combo_key"] == "trend_start|T4|P3|V4|A5|M3.5"
+    assert review["high_return_combo_match"] == "exact"
+    assert review["verdict"] == "PASS"
+    assert review["gate_weekly_slope_26w"] == 0.05
+    assert "weekly_slope_not_rising" in review["gate_flags"]
+
+
+def test_b1_resolve_daily_macd_lines_prefers_precomputed_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "close": [10.0, 10.1, 10.2],
+            "dif": [0.1, 0.2, 0.3],
+            "dea": [0.05, 0.1, 0.15],
+        }
+    )
+
+    def _unexpected_compute_macd(frame: pd.DataFrame) -> pd.DataFrame:
+        raise AssertionError("compute_macd should not be called when dif/dea are precomputed")
+
+    monkeypatch.setattr(b1_reviewer, "compute_macd", _unexpected_compute_macd)
+
+    dif, dea = b1_reviewer._resolve_daily_macd_lines(frame)
+
+    assert dif.tolist() == [0.1, 0.2, 0.3]
+    assert dea.tolist() == [0.05, 0.1, 0.15]
+
+
 def test_b1_review_uses_environment_profile_for_price_position_scoring() -> None:
     profile_weak = get_method_environment_profile(method="b1", state="weak")
     profile_strong = get_method_environment_profile(method="b1", state="strong")
@@ -403,7 +1397,9 @@ def test_b1_review_weak_profile_caps_high_score_setup_below_pass(monkeypatch: py
 
     assert review["total_score"] > profile.pass_threshold
     assert review["signal_type"] in {"rebound", "trend_start"}
-    assert review["verdict"] == "WATCH"
+    assert review["pass_family"] is None
+    assert review["pass_family_tier"] == "none"
+    assert review["verdict"] == "FAIL"
 
 
 def test_b1_weak_profile_restores_pass_for_zxdkx_repair_whitelist() -> None:
@@ -524,7 +1520,7 @@ def test_b1_review_weak_whitelist_excludes_weekly_initial_divergence(monkeypatch
     assert review["verdict"] == "WATCH"
 
 
-def test_b1_review_weak_whitelist_allows_real_002452_wave3_divergence_sample() -> None:
+def test_b1_review_weak_profile_caps_real_002452_wave3_divergence_sample_to_watch() -> None:
     profile = get_method_environment_profile(method="b1", state="weak")
     prepared = pd.read_feather(Path("/home/pi/.agents/skills/stock-select/runtime/prepared/2026-04-30.feather"))
     prepared["trade_date"] = pd.to_datetime(prepared["trade_date"], errors="coerce", format="mixed")
@@ -547,7 +1543,9 @@ def test_b1_review_weak_whitelist_allows_real_002452_wave3_divergence_sample() -
     )
 
     assert review["signal_type"] == "rebound"
-    assert review["verdict"] == "PASS"
+    assert review["pass_family"] == "rebound"
+    assert review["pass_family_tier"] == "near"
+    assert review["verdict"] == "WATCH"
 
 
 def test_b1_previous_abnormal_move_reuses_b2_event_logic() -> None:
