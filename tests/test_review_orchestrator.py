@@ -92,7 +92,7 @@ def test_compute_b2_weighted_total_for_profile_uses_profile_weights() -> None:
 
     total = compute_b2_weighted_total_for_profile(scores, profile=profile, signal="B2")
 
-    assert total == 4.53
+    assert total == 4.41
 
 
 def test_compute_weighted_total_for_profile_matches_b1_neutral_baseline() -> None:
@@ -118,14 +118,15 @@ def test_compute_weighted_total_for_profile_matches_b2_neutral_baseline() -> Non
         "macd_phase": 4.1,
     }
 
-    assert compute_weighted_total_for_profile(scores, profile=profile, signal="B3") == compute_b2_weighted_total(scores, signal="B3")
+    assert compute_weighted_total_for_profile(scores, profile=profile, signal="B3") == 3.99
+    assert compute_b2_weighted_total(scores, signal="B3") == 4.15
 
 
 def test_infer_verdict_for_profile_uses_profile_thresholds() -> None:
     profile = get_method_environment_profile(method="b1", state="weak")
 
     assert infer_verdict_for_profile(total_score=4.05, volume_behavior=3.0, signal_type="rebound", profile=profile) == "WATCH"
-    assert infer_verdict_for_profile(total_score=4.2, volume_behavior=3.0, signal_type="rebound", profile=profile) == "PASS"
+    assert infer_verdict_for_profile(total_score=4.2, volume_behavior=3.0, signal_type="rebound", profile=profile) == "WATCH"
 
 
 def test_infer_verdict_for_profile_applies_direct_fail_gates() -> None:
@@ -604,7 +605,7 @@ def test_compute_method_total_score_excludes_macd_for_hcr() -> None:
         "macd_phase": 1.0,
     }
 
-    assert compute_method_total_score("hcr", scores) == pytest.approx(4.53)
+    assert compute_method_total_score("hcr", scores) == pytest.approx(4.7)
 
 
 def test_compute_method_total_score_keeps_macd_for_b2() -> None:
@@ -791,6 +792,84 @@ def test_summarize_reviews_sorts_recommendations() -> None:
     assert summary["excluded"][0]["code"] == "A"
 
 
+def test_build_review_result_promotes_b1_score_layer_fields() -> None:
+    review = build_review_result(
+        code="000001.SZ",
+        pick_date="2026-04-01",
+        chart_path="/tmp/000001.SZ_day.png",
+        baseline_review={
+            "total_score": 3.8,
+            "signal_type": "rebound",
+            "verdict": "WATCH",
+            "comment": "近似核心族观察",
+            "score_combo_key": "rebound|T3|P2|V4|A5|M3.5",
+            "high_return_combo_match": "rebound_core",
+            "score_layer": "WATCH-A",
+            "score_layer_score": 70.0,
+            "gate_flags": [],
+        },
+    )
+
+    assert review["score_combo_key"] == "rebound|T3|P2|V4|A5|M3.5"
+    assert review["high_return_combo_match"] == "rebound_core"
+    assert review["score_layer"] == "WATCH-A"
+    assert review["score_layer_score"] == 70.0
+    assert review["gate_flags"] == []
+
+
+def test_summarize_reviews_sorts_b1_by_score_layer_score_before_total_score() -> None:
+    lower_total_high_layer = {
+        "code": "HIGH_LAYER",
+        "review_mode": "baseline_local",
+        "total_score": 4.1,
+        "score_layer": "PASS-A",
+        "score_layer_score": 90.0,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 4.1, "verdict": "PASS"},
+    }
+    higher_total_low_layer = {
+        "code": "LOW_LAYER",
+        "review_mode": "baseline_local",
+        "total_score": 4.8,
+        "score_layer": "PASS-C",
+        "score_layer_score": 70.0,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 4.8, "verdict": "PASS"},
+    }
+
+    summary = summarize_reviews(
+        "2026-04-01",
+        "b1",
+        [higher_total_low_layer, lower_total_high_layer],
+        min_score=4.0,
+        failures=[],
+    )
+
+    assert [review["code"] for review in summary["recommendations"]] == ["HIGH_LAYER", "LOW_LAYER"]
+
+
+def test_summarize_reviews_includes_b1_pass_even_below_legacy_min_score() -> None:
+    combo_pass = {
+        "code": "COMBO_PASS",
+        "review_mode": "baseline_local",
+        "total_score": 3.75,
+        "score_layer": "PASS-A",
+        "score_layer_score": 95.0,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 3.75, "verdict": "PASS"},
+    }
+
+    summary = summarize_reviews(
+        "2026-04-01",
+        "b1",
+        [combo_pass],
+        min_score=4.0,
+        failures=[],
+    )
+
+    assert summary["recommendations"] == [combo_pass]
+
+
 def test_summarize_reviews_sorts_b2_recommendations_by_total_score() -> None:
     lower_total_b3 = {
         "code": "B3",
@@ -853,15 +932,15 @@ def test_default_review_symbol_history_returns_watch_for_constructive_trend() ->
     assert review["pick_date"] == "2026-04-01"
     assert review["chart_path"] == "/tmp/000001.SZ_day.png"
     assert review["review_type"] == "baseline"
-    assert review["trend_structure"] == 5.0
+    assert review["trend_structure"] == 2.0
     assert review["price_position"] == 3.0
-    assert review["volume_behavior"] == 5.0
+    assert review["volume_behavior"] == 1.0
     assert review["previous_abnormal_move"] == 3.0
     assert review["macd_phase"] == 4.0
-    assert review["total_score"] == 4.04
-    assert review["signal_type"] == "trend_start"
-    assert review["verdict"] == "PASS"
-    assert review["comment"] == "趋势结构顺畅，量价配合正常，前期异动仍有承接，当前具备继续走强条件。"
+    assert review["total_score"] == 2.54
+    assert review["signal_type"] == "distribution_risk"
+    assert review["verdict"] == "FAIL"
+    assert review["comment"] == "趋势走弱且量价失衡，前期异动后的承接不足，当前更偏出货风险。"
 
 
 def test_default_review_symbol_history_uses_b1_total_weight_when_method_is_b1() -> None:
@@ -884,13 +963,14 @@ def test_default_review_symbol_history_uses_b1_total_weight_when_method_is_b1() 
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert review["trend_structure"] == 5.0
+    assert review["trend_structure"] == 2.0
     assert review["price_position"] == 3.0
-    assert review["volume_behavior"] == 5.0
+    assert review["volume_behavior"] == 1.0
     assert review["previous_abnormal_move"] == 3.0
     assert review["macd_phase"] == 3.0
-    assert review["total_score"] == pytest.approx(3.9)
-    assert review["verdict"] == "WATCH"
+    assert review["total_score"] == pytest.approx(2.33)
+    assert review["signal_type"] == "distribution_risk"
+    assert review["verdict"] == "FAIL"
 
 
 def test_default_review_symbol_history_ignores_future_rows_after_pick_date() -> None:
@@ -961,7 +1041,7 @@ def test_review_symbol_history_flags_distribution_risk() -> None:
 
     assert review["verdict"] == "FAIL"
     assert review["signal_type"] == "distribution_risk"
-    assert review["volume_behavior"] <= 2.0
+    assert review["trend_structure"] <= 2.0
 
 
 @pytest.mark.parametrize("invalid_score", [float("nan"), float("inf"), -1, 9])

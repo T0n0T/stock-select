@@ -251,11 +251,50 @@ distribution_risk → 出货风险
 
 ---
 
-# 六、判定规则
+# 六、当前 baseline 离散组合规则
 
-PASS：total_score ≥ 4.0
-WATCH：3.2 ≤ total_score < 4.0
-FAIL：total_score < 3.2
+当前 `b1` 的 baseline 不再只按 `total_score` 做 PASS/WATCH/FAIL，而是会把你的五个维度评分和 `signal_type` 离散化为组合键：
+
+`signal_type|T{trend_structure}|P{price_position}|V{volume_behavior}|A{previous_abnormal_move}|M{macd_phase}`
+
+例如：
+
+`distribution_risk|T2|P4|V4|A5|M4.0`
+
+你不需要、也不要在 JSON 中输出 `score_combo_key`、`score_layer`、`gate_flags` 或任何新增字段；这些由程序根据你的评分自动计算。你需要做的是让五个维度评分真实反映图形质量，避免为了迎合某个组合而反推分数。
+
+当前三组精确高涨幅组合是 baseline 的 PASS 候选：
+
+* `rebound|T3|P3|V4|A5|M3.5`
+* `distribution_risk|T2|P4|V4|A5|M4.0`
+* `trend_start|T4|P3|V4|A5|M3.5`
+
+近似核心族只作为高优先级 WATCH 观察，不应直接当成 PASS：
+
+* `dist_core`：`distribution_risk`，`T2`，`P3-P4`，`V4-V5`，`A5`，`M4.0`
+* `rebound_core`：`rebound`，`T3`，`P2-P3`，`V4`，`A5`，`M3.5-M4.0`
+* `trend_core`：`trend_start`，`T4`，`P3-P4`，`V4`，`A5`，`M3.5-M4.0`
+
+环境与 gate 的含义：
+
+* `runup` 过高是主要降级风险，说明短期涨幅可能已经透支。
+* `below_ma25` 在 neutral/weak 环境下可作为降级风险；strong 环境下不要因为低于 MA25 就单独否决。
+* `cooldown_active` 和 `sideways_tight_range` 只作为诊断背景，不是 PASS 的单独否决条件。
+* weak 环境下近似核心族噪声较大，应更倾向谨慎 WATCH；不要把弱环境下的近似族直接写成强 PASS。
+
+程序还会给 baseline 结果增加 `PASS-A/PASS-B/PASS-C` 与 `WATCH-A/WATCH-B/WATCH-C` 排序层。LLM 图审只需要在 reasoning 和 comment 中说明图形质量是否支持高优先观察或低优先观察，不要输出这些排序字段。
+
+---
+
+# 七、判定规则
+
+`total_score` 仍用于表达图形质量强弱，但不是 b1 baseline 的唯一 PASS 条件。
+
+一般图审口径：
+
+PASS：图形质量非常接近 b1 精确高涨幅组合，且没有明显 runup 透支、结构破坏或周 MACD 失效。
+WATCH：接近 b1 左侧低吸条件，或属于近似核心族，但仍需要右侧确认或存在环境/gate 风险。
+FAIL：不符合 b1 的 N 型回调低点，或趋势、量价、MACD、位置中存在明显破坏。
 
 特殊规则：
 
@@ -277,7 +316,7 @@ volume_behavior = 1 → 必须 FAIL
 
 ---
 
-# 七、强制推理步骤
+# 八、强制推理步骤
 
 在输出结果之前，必须先完成以下推理：
 
@@ -290,7 +329,7 @@ signal_reasoning
 
 ---
 
-# 八、评论压缩规则
+# 九、评论压缩规则
 
 将上述 reasoning 压缩为 **一句中文交易员点评**。
 
@@ -312,7 +351,7 @@ signal_reasoning
 
 ---
 
-# 九、输出格式约束
+# 十、输出格式约束
 
 `b1` 专项观察重点只影响你的图形判断标准。Output JSON format must remain identical to the default prompt contract.
 
@@ -348,7 +387,7 @@ signal_reasoning
 * `verdict` 只能是 `PASS`、`WATCH`、`FAIL`
 * 所有 reasoning 和 `comment` 必须是非空字符串
 
-# 十、输出格式（必须严格 JSON）
+# 十一、输出格式（必须严格 JSON）
 
 {
 "trend_reasoning": "string",
@@ -372,7 +411,7 @@ signal_reasoning
 
 ---
 
-# 十一、正确流程
+# 十二、正确流程
 
 Charts
 ↓
