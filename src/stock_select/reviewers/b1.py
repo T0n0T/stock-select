@@ -110,11 +110,12 @@ def review_b1_symbol_history(
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
     }
-    total_score = (
+    raw_total_score = (
         compute_method_total_score("b1", score_fields)
         if profile is None
         else round(sum(float(score_fields[field]) * weight for field, weight in profile.weights.items()), 2)
     )
+    total_score = raw_total_score
     effective_environment_state = str(profile.state if profile is not None else "neutral")
     environment_gate = _compute_b1_environment_gate(
         close=close,
@@ -221,6 +222,17 @@ def review_b1_symbol_history(
         gate_flags=list(environment_gate.get("triggered_flags", [])),
         high_return_match=high_return_combo["match_type"],
     )
+    total_score = _compute_b1_calibrated_total_score(
+        raw_total_score=raw_total_score,
+        verdict=verdict,
+        environment_state=effective_environment_state,
+        high_return_match=high_return_combo["match_type"],
+        pass_family=family_result["family"],
+        pass_family_tier=family_result["tier"],
+        score_layer=score_layer["score_layer"],
+        score_layer_score=score_layer["score_layer_score"],
+        gate_flags=list(environment_gate.get("triggered_flags", [])),
+    )
 
     return {
         "code": code,
@@ -232,6 +244,7 @@ def review_b1_symbol_history(
         "volume_behavior": volume_behavior,
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
+        "raw_total_score": raw_total_score,
         "total_score": total_score,
         "signal_type": signal_type,
         "score_combo_key": high_return_combo["combo_key"],
@@ -824,6 +837,62 @@ def _score_b1_layer(
             layer = "WATCH-C"
 
     return {"score_layer": layer, "score_layer_score": round(layer_score, 2) if layer is not None else None}
+
+
+def _compute_b1_calibrated_total_score(
+    *,
+    raw_total_score: float,
+    verdict: str,
+    environment_state: str,
+    high_return_match: str,
+    pass_family: str | None,
+    pass_family_tier: str | None,
+    score_layer: str | None,
+    score_layer_score: float | None,
+    gate_flags: list[str],
+) -> float:
+    flags = set(gate_flags)
+    match = str(high_return_match or "none")
+    layer = str(score_layer or "")
+    state = environment_state.lower()
+
+    if match == "exact":
+        score = 4.72
+        if layer == "PASS-A":
+            score += 0.12
+        elif layer == "PASS-B":
+            score += 0.06
+        elif verdict == "WATCH":
+            score -= 0.22
+        if state == "neutral":
+            score += 0.03
+    elif match in {"dist_core", "rebound_core", "trend_core"}:
+        score = {
+            "dist_core": 4.28,
+            "rebound_core": 4.22,
+            "trend_core": 4.18,
+        }[match]
+        if layer == "WATCH-A":
+            score += 0.08
+        elif layer == "WATCH-C":
+            score -= 0.12
+    elif pass_family is not None and str(pass_family_tier or "") == "core":
+        score = 3.88
+    elif pass_family is not None and str(pass_family_tier or "") == "near":
+        score = 3.62
+    else:
+        score = min(float(raw_total_score), 3.35)
+
+    if "runup_over_limit" in flags:
+        score -= 0.18
+    if "below_ma25" in flags and match != "exact":
+        score -= 0.12
+    if "cooldown_active" in flags and match not in {"exact", "dist_core"}:
+        score -= 0.08
+    if verdict == "FAIL":
+        score = min(score, 3.85)
+
+    return round(max(0.0, min(5.0, score)), 2)
 
 
 def _classify_b1_pass_family(

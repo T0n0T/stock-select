@@ -456,6 +456,51 @@ def test_b1_score_layer_promotes_gated_strong_exact_watch_to_watch_a() -> None:
     assert layer["score_layer"] == "WATCH-A"
 
 
+def test_b1_calibrated_total_score_prioritizes_exact_high_return_combo() -> None:
+    exact_score = b1_reviewer._compute_b1_calibrated_total_score(
+        raw_total_score=3.67,
+        verdict="PASS",
+        environment_state="neutral",
+        high_return_match="exact",
+        pass_family="rebound",
+        pass_family_tier="core",
+        score_layer="PASS-A",
+        score_layer_score=90.0,
+        gate_flags=["sideways_tight_range"],
+    )
+    high_raw_non_target_score = b1_reviewer._compute_b1_calibrated_total_score(
+        raw_total_score=4.51,
+        verdict="FAIL",
+        environment_state="neutral",
+        high_return_match="none",
+        pass_family=None,
+        pass_family_tier="none",
+        score_layer=None,
+        score_layer_score=None,
+        gate_flags=["below_ma25"],
+    )
+
+    assert exact_score >= 4.65
+    assert high_raw_non_target_score < 4.0
+    assert exact_score > high_raw_non_target_score
+
+
+def test_b1_calibrated_total_score_places_core_combo_in_review_band() -> None:
+    core_score = b1_reviewer._compute_b1_calibrated_total_score(
+        raw_total_score=4.12,
+        verdict="WATCH",
+        environment_state="neutral",
+        high_return_match="trend_core",
+        pass_family="trend_start",
+        pass_family_tier="near",
+        score_layer="WATCH-A",
+        score_layer_score=70.0,
+        gate_flags=["cooldown_active", "sideways_tight_range"],
+    )
+
+    assert 4.0 <= core_score < 4.65
+
+
 def test_b1_review_routes_high_return_distribution_combo_to_watch_when_neutral_below_ma25_gate_triggers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -681,7 +726,7 @@ def test_b1_review_pass_family_caps_rebound_core_to_watch_in_weak_even_if_legacy
     )
 
     legacy_verdict = b1_reviewer.infer_b1_verdict(
-        total_score=review["total_score"],
+        total_score=review["raw_total_score"],
         volume_behavior=5.0,
         signal_type="rebound",
         trend_structure=4.0,
@@ -802,7 +847,7 @@ def test_b1_review_pass_family_keeps_core_watch_when_environment_cooldown_active
         total_score=review["total_score"],
     )
     legacy_verdict = b1_reviewer.infer_b1_verdict(
-        total_score=review["total_score"],
+        total_score=review["raw_total_score"],
         volume_behavior=5.0,
         signal_type="rebound",
         trend_structure=4.0,
@@ -1395,7 +1440,8 @@ def test_b1_review_weak_profile_caps_high_score_setup_below_pass(monkeypatch: py
         profile=profile,
     )
 
-    assert review["total_score"] > profile.pass_threshold
+    assert review["raw_total_score"] > profile.pass_threshold
+    assert review["total_score"] < profile.pass_threshold
     assert review["signal_type"] in {"rebound", "trend_start"}
     assert review["pass_family"] is None
     assert review["pass_family_tier"] == "none"
@@ -1516,7 +1562,8 @@ def test_b1_review_weak_whitelist_excludes_weekly_initial_divergence(monkeypatch
         profile=profile,
     )
 
-    assert review["total_score"] >= 4.18
+    assert review["raw_total_score"] >= 4.18
+    assert review["total_score"] < 4.18
     assert review["verdict"] == "WATCH"
 
 
