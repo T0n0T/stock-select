@@ -249,10 +249,31 @@ def _validate_llm_min_baseline_score(value: float | None) -> float | None:
     return float(value)
 
 
+def _validate_llm_review_limit(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value < 1:
+        raise typer.BadParameter("--llm-review-limit must be a positive integer.")
+    return int(value)
+
+
 def _should_include_llm_review_task(review: dict[str, object], threshold: float | None) -> bool:
     if threshold is None:
         return True
     return float(review["total_score"]) >= threshold
+
+
+def _limit_llm_review_tasks(
+    tasks: list[dict[str, object]],
+    *,
+    limit: int | None,
+) -> list[dict[str, object]]:
+    if limit is None:
+        return tasks
+    return sorted(
+        tasks,
+        key=lambda task: (-float(task["baseline_score"]), int(task["rank"])),
+    )[:limit]
 
 
 def _connect(dsn: str):
@@ -2173,6 +2194,7 @@ def _review_impl(
     dsn: str | None,
     runtime_root: Path,
     llm_min_baseline_score: float | None = None,
+    llm_review_limit: int | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     resolver = get_review_resolver(method)
@@ -2279,6 +2301,7 @@ def _review_impl(
         }
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
+    llm_review_tasks = _limit_llm_review_tasks(llm_review_tasks, limit=llm_review_limit)
     tasks_payload = {
         "pick_date": pick_date,
         "method": normalized_method,
@@ -2286,6 +2309,8 @@ def _review_impl(
         "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,
     }
+    if llm_review_limit is not None:
+        tasks_payload["llm_review_limit"] = llm_review_limit
     tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if reporter:
@@ -2304,6 +2329,7 @@ def _review_intraday_impl(
     method: str,
     runtime_root: Path,
     llm_min_baseline_score: float | None = None,
+    llm_review_limit: int | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     resolver = get_review_resolver(method)
@@ -2417,6 +2443,7 @@ def _review_intraday_impl(
         }
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
+    llm_review_tasks = _limit_llm_review_tasks(llm_review_tasks, limit=llm_review_limit)
     tasks_payload = {
         "pick_date": pick_date,
         "method": normalized_method,
@@ -2424,6 +2451,8 @@ def _review_intraday_impl(
         "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": llm_review_tasks,
     }
+    if llm_review_limit is not None:
+        tasks_payload["llm_review_limit"] = llm_review_limit
     tasks_path.write_text(json.dumps(tasks_payload, indent=2), encoding="utf-8")
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if reporter:
@@ -3084,10 +3113,12 @@ def review(
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     llm_min_baseline_score: float | None = typer.Option(None, "--llm-min-baseline-score"),
+    llm_review_limit: int | None = typer.Option(None, "--llm-review-limit"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_review_method(method)
     validated_llm_min_baseline_score = _validate_llm_min_baseline_score(llm_min_baseline_score)
+    validated_llm_review_limit = _validate_llm_review_limit(llm_review_limit)
     reporter = ProgressReporter(enabled=progress)
     if intraday:
         if pick_date is not None:
@@ -3097,6 +3128,7 @@ def review(
             method=normalized_method,
             runtime_root=runtime_root,
             llm_min_baseline_score=validated_llm_min_baseline_score,
+            llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
         )
     else:
@@ -3108,6 +3140,7 @@ def review(
             dsn=dsn,
             runtime_root=runtime_root,
             llm_min_baseline_score=validated_llm_min_baseline_score,
+            llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
         )
     typer.echo(str(summary_path))
@@ -3332,12 +3365,14 @@ def run_all(
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
     llm_min_baseline_score: float | None = typer.Option(None, "--llm-min-baseline-score"),
+    llm_review_limit: int | None = typer.Option(None, "--llm-review-limit"),
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_cli_method(method)
     normalized_pool_source = _validate_pool_source(pool_source)
     validated_llm_min_baseline_score = _validate_llm_min_baseline_score(llm_min_baseline_score)
+    validated_llm_review_limit = _validate_llm_review_limit(llm_review_limit)
     reporter = ProgressReporter(enabled=progress)
     if intraday and pick_date is not None:
         raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
@@ -3392,6 +3427,7 @@ def run_all(
             method=normalized_method,
             runtime_root=runtime_root,
             llm_min_baseline_score=validated_llm_min_baseline_score,
+            llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
         )
     else:
@@ -3401,6 +3437,7 @@ def run_all(
             dsn=dsn,
             runtime_root=runtime_root,
             llm_min_baseline_score=validated_llm_min_baseline_score,
+            llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
         )
     reporter.emit("run", f"step=review done path={review_path} elapsed={reporter.since(review_started_at):.1f}s")
