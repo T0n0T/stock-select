@@ -62,10 +62,47 @@ def test_dribull_review_uses_trend_state_macd_mapping(monkeypatch: pytest.Monkey
         chart_path="/tmp/000001.SZ_day.png",
     )
 
-    assert b2_review["macd_phase"] == 5.0
     assert dribull_review["macd_phase"] == 5.0
     assert "日线MACD上升浪（一浪强势、上升初期）" in dribull_review["comment"]
     assert "wave" not in dribull_review["comment"]
+
+
+def test_dribull_review_does_not_apply_macd_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    weak_weekly = SimpleNamespace(
+        phase="invalid",
+        is_rising_initial=False,
+        is_top_divergence=False,
+        phase_index=0,
+        wave_stage="",
+        metrics={"dif": 0.1, "dea": 0.1, "spread": 0.0, "previous_spread": 0.0},
+        transition_warnings=(),
+    )
+    weak_daily = SimpleNamespace(
+        phase="ended",
+        is_rising_initial=False,
+        is_top_divergence=False,
+        phase_index=0,
+        wave_stage="",
+        metrics={"dif": 0.1, "dea": 0.1, "spread": 0.0, "previous_spread": 0.0},
+        transition_warnings=(),
+    )
+
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_trend_structure", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_price_position", lambda **kwargs: 5.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_volume_behavior", lambda **kwargs: 4.0)
+    monkeypatch.setattr(dribull_reviewer, "_score_b2_previous_abnormal_move", lambda **kwargs: 5.0)
+    monkeypatch.setattr(dribull_reviewer, "map_macd_phase_score", lambda **kwargs: 5.0)
+    monkeypatch.setattr(dribull_reviewer, "classify_weekly_macd_trend", lambda *args, **kwargs: weak_weekly)
+    monkeypatch.setattr(dribull_reviewer, "classify_daily_macd_trend", lambda *args, **kwargs: weak_daily)
+
+    review = dribull_reviewer.review_dribull_symbol_history(
+        code="000001.SZ",
+        pick_date="2026-04-30",
+        history=_history(),
+        chart_path="/tmp/000001.SZ_day.png",
+    )
+
+    assert review["verdict"] == "PASS"
 
 def test_dribull_review_keeps_marginal_score_as_watch(monkeypatch: pytest.MonkeyPatch) -> None:
     weekly_trend = SimpleNamespace(

@@ -6,7 +6,6 @@ import pandas as pd
 
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.review_orchestrator import (
-    apply_macd_verdict_gate,
     compute_method_total_score,
     describe_macd_trend_state,
     is_constructive_macd_trend_combo,
@@ -95,12 +94,6 @@ def review_dribull_symbol_history(
         volume_behavior=volume_behavior,
         previous_abnormal_move=previous_abnormal_move,
         macd_phase=macd_phase,
-    )
-    verdict = apply_macd_verdict_gate(
-        method="dribull",
-        current_verdict=verdict,
-        weekly_trend=weekly_trend,
-        daily_trend=daily_trend,
     )
 
     return {

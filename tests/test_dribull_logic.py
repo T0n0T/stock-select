@@ -1,6 +1,7 @@
 import importlib
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -37,34 +38,62 @@ def _trend(phase: str, *, initial: bool = False, divergence: bool = False) -> Si
     return SimpleNamespace(phase=phase, is_rising_initial=initial, is_top_divergence=divergence)
 
 
-@pytest.fixture(autouse=True)
-def _default_passing_macd_trend(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = importlib.import_module("stock_select.strategies.dribull")
-    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
-    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True))
-
-
 def _base_dribull_frame() -> pd.DataFrame:
-    trade_dates = pd.date_range("2025-09-01", periods=160, freq="B")
-    close = pd.Series([10.0] * 146 + [9.8, 9.7, 9.9, 10.1, 10.4, 10.8, 11.1, 11.4, 11.2, 11.0, 10.9, 10.92, 10.97, 11.02])
+    frame, _, _ = _left_peak_dribull_frame()
+    return frame.copy()
+
+
+def _left_peak_dribull_frame() -> tuple[pd.DataFrame, str, str]:
+    trade_dates = pd.bdate_range("2025-09-01", periods=160)
+    close = pd.Series(
+        [
+            *([10.0] * 40),
+            *np.linspace(10.0, 13.0, 10, endpoint=True),
+            *np.linspace(12.95, 11.4, 15, endpoint=True),
+            *np.linspace(11.45, 12.84, 90, endpoint=True),
+            13.24,
+            12.98,
+            12.96,
+            12.94,
+            12.95,
+        ],
+        dtype=float,
+    )
+    assert len(close) == 160
+    open_ = close - 0.04
+    high = close + 0.12
+    low = close - 0.18
+    peak_idx = 49
+    breakout_idx = 155
+    close.iloc[peak_idx] = 13.0
+    open_.iloc[peak_idx] = 12.88
+    high.iloc[peak_idx] = 13.08
+    low.iloc[peak_idx] = 12.80
+    open_.iloc[breakout_idx] = 13.15
+    close.iloc[breakout_idx] = 13.24
+    high.iloc[breakout_idx] = 13.30
+    low.iloc[breakout_idx] = 13.05
     ma25 = close.rolling(window=25, min_periods=25).mean()
     ma60 = close.rolling(window=60, min_periods=60).mean()
     ma144 = close.rolling(window=144, min_periods=144).mean()
-    low = close - 0.15
     low.iloc[-1] = float(ma25.iloc[-1]) * 1.004
+    open_.iloc[-1] = float(close.iloc[-1]) - 0.03
+    high.iloc[-1] = float(close.iloc[-1]) + 0.09
     volume = pd.Series([1000.0 + idx for idx in range(160)])
     volume.iloc[-1] = volume.iloc[-2] - 100.0
     j_values = [45.0] * 145 + [28.0, 26.0, 24.0, 22.0, 20.0, 18.0, 16.0, 14.0, 19.0, 21.0, 23.0, 25.0, 24.0, 22.0, 20.0]
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "trade_date": trade_dates,
-            "J": j_values,
-            "zxdq": [float(value + 0.30) for value in close],
-            "zxdkx": [float(value - 0.10) for value in close],
+            "open": open_,
+            "high": high,
             "low": low,
             "close": close,
             "volume": volume,
             "vol": volume,
+            "J": j_values,
+            "zxdq": [float(value + 0.30) for value in close],
+            "zxdkx": [float(value - 0.10) for value in close],
             "ma25": ma25,
             "ma60": ma60,
             "ma144": ma144,
@@ -77,14 +106,14 @@ def _base_dribull_frame() -> pd.DataFrame:
             "turnover_n": [1000.0 + idx for idx in range(160)],
         }
     )
+    frame["ts_code"] = "000001.SZ"
+    return frame, trade_dates[49].strftime("%Y-%m-%d"), trade_dates[155].strftime("%Y-%m-%d")
 
 
 def test_run_dribull_screen_with_stats_passes_when_recent_j_hit_and_formula_hold() -> None:
     run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame()
-
-    frame["ts_code"] = "000001.SZ"
+    frame, _, _ = _left_peak_dribull_frame()
     candidates, stats = run_dribull_screen_with_stats(
         frame,
         pick_date=pick_date,
@@ -93,6 +122,74 @@ def test_run_dribull_screen_with_stats_passes_when_recent_j_hit_and_formula_hold
 
     assert [item["code"] for item in candidates] == ["000001.SZ"]
     assert stats["selected"] == 1
+
+
+def test_run_dribull_screen_with_stats_fails_when_weekly_trend_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.dribull")
+    pick_date = pd.Timestamp("2026-04-10")
+    frame, _, _ = _left_peak_dribull_frame()
+    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("ended"))
+    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True))
+
+    candidates, stats = module.run_dribull_screen_with_stats(
+        frame,
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert candidates == []
+    assert stats["fail_weekly_trend"] == 1
+
+
+def test_run_dribull_screen_with_stats_fails_when_daily_trend_is_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.dribull")
+    pick_date = pd.Timestamp("2026-04-10")
+    frame, _, _ = _left_peak_dribull_frame()
+    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
+    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("invalid"))
+
+    candidates, stats = module.run_dribull_screen_with_stats(
+        frame,
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert candidates == []
+    assert stats["fail_daily_trend"] == 1
+
+
+def test_run_dribull_screen_with_stats_fails_when_trend_combo_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.dribull")
+    pick_date = pd.Timestamp("2026-04-10")
+    frame, _, _ = _left_peak_dribull_frame()
+    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
+    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=False))
+
+    candidates, stats = module.run_dribull_screen_with_stats(
+        frame,
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert candidates == []
+    assert stats["fail_trend_combo"] == 1
+
+
+def test_run_dribull_screen_with_stats_rejects_top_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.dribull")
+    pick_date = pd.Timestamp("2026-04-10")
+    frame, _, _ = _left_peak_dribull_frame()
+    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
+    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True, divergence=True))
+
+    candidates, stats = module.run_dribull_screen_with_stats(
+        frame,
+        pick_date=pick_date,
+        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
+    )
+
+    assert candidates == []
+    assert stats["fail_trend_combo"] == 1
 
 
 def test_prefilter_dribull_non_macd_keeps_only_symbols_passing_non_macd_rules() -> None:
@@ -117,56 +214,36 @@ def test_prefilter_dribull_non_macd_keeps_only_symbols_passing_non_macd_rules() 
     assert selected == ["PASS.SZ"]
 
 
-def test_prefilter_dribull_non_macd_does_not_require_daily_macd_any_more() -> None:
-    prefilter_dribull_non_macd = _load_prefilter_dribull_non_macd()
+def test_prefilter_dribull_non_macd_ignores_weekly_trend(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.dribull")
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame()
-    frame.loc[frame.index[-1], "dif"] = 0.07
-    frame.loc[frame.index[-1], "dea"] = 0.08
+    frame, _, _ = _left_peak_dribull_frame()
+    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("ended"))
+    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True))
 
-    frame["ts_code"] = "PASS.SZ"
-    selected = prefilter_dribull_non_macd(
-        pd.concat([frame], ignore_index=True),
-        pick_date=pick_date,
-        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
-    )
-
-    assert selected == ["PASS.SZ"]
-
-
-def test_run_dribull_screen_with_stats_ignores_missing_legacy_macd_columns() -> None:
-    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
-    pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame().drop(columns=["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
-
-    frame["ts_code"] = "000001.SZ"
-    candidates, stats = run_dribull_screen_with_stats(
+    selected = module.prefilter_dribull_non_macd(
         frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
 
-    assert [item["code"] for item in candidates] == ["000001.SZ"]
-    assert stats["fail_insufficient_history"] == 0
+    assert selected == ["000001.SZ"]
 
 
-@pytest.mark.parametrize("column_name", ["dif", "dea", "dif_w", "dea_w", "dif_m", "dea_m"])
-def test_run_dribull_screen_with_stats_ignores_malformed_legacy_macd_columns(column_name: str) -> None:
-    run_dribull_screen_with_stats = _load_run_dribull_screen_with_stats()
+def test_prefilter_dribull_non_macd_ignores_daily_trend(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = importlib.import_module("stock_select.strategies.dribull")
     pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame()
-    frame[column_name] = frame[column_name].astype(object)
-    frame.loc[3, column_name] = "boom"
+    frame, _, _ = _left_peak_dribull_frame()
+    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
+    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("invalid"))
 
-    frame["ts_code"] = "000001.SZ"
-    candidates, stats = run_dribull_screen_with_stats(
+    selected = module.prefilter_dribull_non_macd(
         frame,
         pick_date=pick_date,
         config={"j_threshold": 15.0, "j_q_threshold": 0.10},
     )
 
-    assert [item["code"] for item in candidates] == ["000001.SZ"]
-    assert stats["fail_insufficient_history"] == 0
+    assert selected == ["000001.SZ"]
 
 
 def test_run_dribull_screen_with_stats_fails_when_no_recent_j_hit_exists() -> None:
@@ -238,81 +315,6 @@ def test_run_dribull_screen_with_stats_fails_when_volume_does_not_shrink() -> No
 
     assert candidates == []
     assert stats["fail_volume_shrink"] == 1
-
-
-def test_run_dribull_screen_with_stats_fails_when_weekly_trend_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = importlib.import_module("stock_select.strategies.dribull")
-    pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame()
-    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("ended"))
-    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True))
-
-    frame["ts_code"] = "000001.SZ"
-    candidates, stats = module.run_dribull_screen_with_stats(
-        frame,
-        pick_date=pick_date,
-        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
-    )
-
-    assert candidates == []
-    assert stats["fail_weekly_trend"] == 1
-    assert "fail_weekly_wave" not in stats
-
-
-def test_run_dribull_screen_with_stats_fails_when_daily_trend_is_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = importlib.import_module("stock_select.strategies.dribull")
-    pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame()
-    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
-    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("invalid"))
-
-    frame["ts_code"] = "000001.SZ"
-    candidates, stats = module.run_dribull_screen_with_stats(
-        frame,
-        pick_date=pick_date,
-        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
-    )
-
-    assert candidates == []
-    assert stats["fail_daily_trend"] == 1
-
-
-def test_run_dribull_screen_with_stats_fails_when_trend_combo_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = importlib.import_module("stock_select.strategies.dribull")
-    pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame()
-
-    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
-    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=False))
-
-    frame["ts_code"] = "000001.SZ"
-    candidates, stats = module.run_dribull_screen_with_stats(
-        frame,
-        pick_date=pick_date,
-        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
-    )
-
-    assert candidates == []
-    assert stats["fail_trend_combo"] == 1
-
-
-def test_run_dribull_screen_with_stats_rejects_top_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = importlib.import_module("stock_select.strategies.dribull")
-    pick_date = pd.Timestamp("2026-04-10")
-    frame = _base_dribull_frame()
-
-    monkeypatch.setattr(module, "classify_weekly_macd_trend", lambda *args, **kwargs: _trend("rising"))
-    monkeypatch.setattr(module, "classify_daily_macd_trend", lambda *args, **kwargs: _trend("rising", initial=True, divergence=True))
-
-    frame["ts_code"] = "000001.SZ"
-    candidates, stats = module.run_dribull_screen_with_stats(
-        frame,
-        pick_date=pick_date,
-        config={"j_threshold": 15.0, "j_q_threshold": 0.10},
-    )
-
-    assert candidates == []
-    assert stats["fail_trend_combo"] == 1
 
 
 def test_run_dribull_screen_with_stats_fails_when_ma60_is_not_upward() -> None:

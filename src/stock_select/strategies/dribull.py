@@ -17,6 +17,8 @@ _DRIBULL_REQUIRED_COLUMNS = (
     "ma60",
     "ma144",
     "turnover_n",
+    "open",
+    "high",
 )
 _DRIBULL_NUMERIC_COLUMNS = (
     "J",
@@ -28,6 +30,8 @@ _DRIBULL_NUMERIC_COLUMNS = (
     "ma60",
     "ma144",
     "turnover_n",
+    "open",
+    "high",
 )
 
 
@@ -160,22 +164,14 @@ def run_dribull_screen_with_stats(
             stats["fail_ma144_distance"] += 1
             continue
 
-        weekly_trend = classify_weekly_macd_trend(
-            history[["trade_date", "close"]],
-            target_date.strftime("%Y-%m-%d"),
-        )
+        weekly_trend = classify_weekly_macd_trend(history[["trade_date", "close"]], target_date.strftime("%Y-%m-%d"))
         if weekly_trend.phase in {"invalid", "ended"}:
             stats["fail_weekly_trend"] += 1
             continue
-
-        daily_trend = classify_daily_macd_trend(
-            history[["trade_date", "close"]],
-            target_date.strftime("%Y-%m-%d"),
-        )
+        daily_trend = classify_daily_macd_trend(history[["trade_date", "close"]], target_date.strftime("%Y-%m-%d"))
         if daily_trend.phase in {"invalid", "ended"}:
             stats["fail_daily_trend"] += 1
             continue
-
         if not _is_dribull_trend_combo_ok(weekly_trend=weekly_trend, daily_trend=daily_trend):
             stats["fail_trend_combo"] += 1
             continue
@@ -196,8 +192,6 @@ def run_dribull_screen_with_stats(
 def _is_dribull_trend_combo_ok(*, weekly_trend: object, daily_trend: object) -> bool:
     weekly_phase = str(getattr(weekly_trend, "phase", ""))
     daily_phase = str(getattr(daily_trend, "phase", ""))
-    if weekly_phase in {"invalid", "ended"} or daily_phase in {"invalid", "ended"}:
-        return False
     if bool(getattr(weekly_trend, "is_top_divergence", False)) or bool(getattr(daily_trend, "is_top_divergence", False)):
         return False
     if weekly_phase == "rising" and daily_phase == "rising" and bool(getattr(daily_trend, "is_rising_initial", False)):
