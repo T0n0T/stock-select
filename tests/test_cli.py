@@ -7243,6 +7243,8 @@ def test_render_html_creates_zip_with_summary_and_charts(monkeypatch, tmp_path: 
         assert "macd_phase" in html_text
         assert "MACD" in html_text
         assert "MACD 处于加强阶段" in html_text
+        assert 'aria-expanded="false"' in html_text
+        assert "document.querySelectorAll('.toggle-button')" in html_text
 
 
 def test_render_html_uses_hcr_method_label(monkeypatch, tmp_path: Path) -> None:

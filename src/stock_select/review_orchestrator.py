@@ -729,7 +729,17 @@ def summarize_reviews(
     failures: list[dict[str, Any]],
 ) -> dict[str, Any]:
     normalized_method = method.strip().lower()
-    sort_key = lambda item: (float(item.get("score_layer_score") or 0.0), float(item.get("total_score", 0.0)))
+
+    def baseline_sort_key(item: dict[str, Any]) -> tuple[float, float]:
+        baseline_review = item.get("baseline_review") if isinstance(item.get("baseline_review"), dict) else None
+        baseline_score = 0.0
+        if baseline_review is not None:
+            try:
+                baseline_score = float(baseline_review.get("total_score", 0.0))
+            except (TypeError, ValueError):
+                baseline_score = 0.0
+        return (baseline_score, float(item.get("total_score", 0.0)))
+
     def is_recommendation(review: dict[str, Any]) -> bool:
         if review.get("verdict") != "PASS":
             return False
@@ -739,12 +749,12 @@ def summarize_reviews(
 
     recommendations = sorted(
         [review for review in reviews if is_recommendation(review)],
-        key=sort_key,
+        key=baseline_sort_key,
         reverse=True,
     )
     excluded = sorted(
         [review for review in reviews if review not in recommendations],
-        key=sort_key,
+        key=baseline_sort_key,
         reverse=True,
     )
     return {
