@@ -17,6 +17,7 @@
   - `review.md`
 - `left_peak/`
   - `screen.md`
+  - `review.md`
 - `hcr/`
   - `screen.md`
   - `review.md`
@@ -30,6 +31,7 @@
 - [Dribull 筛选层](./dribull/screen.md)
 - [Dribull Review 层](./dribull/review.md)
 - [Left Peak 筛选层](./left_peak/screen.md)
+- [Left Peak Review 层](./left_peak/review.md)
 - [HCR 筛选层](./hcr/screen.md)
 - [HCR Review 层](./hcr/review.md)
 
