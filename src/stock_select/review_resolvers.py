@@ -19,6 +19,7 @@ DEFAULT_PROMPT_PATH = str(_REFERENCE_DIR / "prompt.md")
 B1_PROMPT_PATH = str(_REFERENCE_DIR / "prompt-b1.md")
 B2_PROMPT_PATH = str(_REFERENCE_DIR / "prompt-b2.md")
 DRIBULL_PROMPT_PATH = str(_REFERENCE_DIR / "prompt-dribull.md")
+LEFT_PEAK_PROMPT_PATH = str(_REFERENCE_DIR / "prompt-left-peak.md")
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ def get_review_resolver(method: str) -> ReviewResolver:
     if normalized == "left_peak":
         return ReviewResolver(
             name="left_peak",
-            prompt_path=B1_PROMPT_PATH,
+            prompt_path=LEFT_PEAK_PROMPT_PATH,
             review_history=review_left_peak_symbol_history,
         )
     return ReviewResolver(
