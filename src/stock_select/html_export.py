@@ -62,7 +62,7 @@ def group_items_by_verdict(summary: dict[str, Any]) -> dict[str, list[dict[str, 
         grouped.setdefault(verdict, [])
         grouped[verdict].append(item)
     for key in grouped:
-        grouped[key] = sorted(grouped[key], key=lambda value: resolve_item_score(value) or -1.0, reverse=True)
+        grouped[key] = sorted(grouped[key], key=_baseline_item_sort_key, reverse=True)
     return grouped
 
 
@@ -291,6 +291,10 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
       font-weight: 700;
       cursor: pointer;
     }}
+    .toggle-button[aria-expanded="true"] {{
+      background: #eef6f2;
+      border-color: #b9d9cd;
+    }}
     .stock-comment {{
       margin: 14px 0 0;
       line-height: 1.7;
@@ -400,16 +404,26 @@ def render_summary_html(summary: dict[str, Any], *, names_by_code: dict[str, str
   <script>
     function toggleDetails(button) {{
       const card = button.closest('.stock-card');
+      if (!card) return;
       const details = card.querySelector('.stock-details');
+      if (!details) return;
       const hidden = details.hasAttribute('hidden');
       if (hidden) {{
         details.removeAttribute('hidden');
+        button.setAttribute('aria-expanded', 'true');
         button.textContent = '收起详情';
       }} else {{
         details.setAttribute('hidden', '');
+        button.setAttribute('aria-expanded', 'false');
         button.textContent = '展开详情';
       }}
     }}
+    document.addEventListener('DOMContentLoaded', () => {{
+      document.querySelectorAll('.toggle-button').forEach((button) => {{
+        button.setAttribute('aria-expanded', 'false');
+        button.addEventListener('click', () => toggleDetails(button));
+      }});
+    }});
   </script>
 </body>
 </html>
@@ -526,6 +540,21 @@ def _iter_summary_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(values, list):
             items.extend(item for item in values if isinstance(item, dict))
     return items
+
+
+def _baseline_item_sort_key(item: dict[str, Any]) -> tuple[float, float]:
+    baseline_review = item.get("baseline_review") if isinstance(item.get("baseline_review"), dict) else None
+    baseline_score = 0.0
+    if baseline_review is not None:
+        try:
+          baseline_score = float(baseline_review.get("total_score", 0.0))
+        except (TypeError, ValueError):
+          baseline_score = 0.0
+    try:
+        total_score = float(item.get("total_score", 0.0))
+    except (TypeError, ValueError):
+        total_score = 0.0
+    return (baseline_score, total_score)
 
 
 def _escape(value: Any) -> str:
@@ -674,7 +703,7 @@ def _detail_card(item: dict[str, Any], names_by_code: dict[str, str]) -> str:
             <span class="score-chip">score {_score(final_score)}</span>
           </div>
         </div>
-        <button class="toggle-button" type="button" onclick="toggleDetails(this)">展开详情</button>
+        <button class="toggle-button" type="button" aria-expanded="false">展开详情</button>
       </div>
       <p class="stock-comment">{_escape(comment)}</p>
       <div class="stock-body">

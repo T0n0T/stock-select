@@ -817,35 +817,31 @@ def test_build_review_result_promotes_b1_score_layer_fields() -> None:
     assert review["gate_flags"] == []
 
 
-def test_summarize_reviews_sorts_b1_by_score_layer_score_before_total_score() -> None:
-    lower_total_high_layer = {
-        "code": "HIGH_LAYER",
+def test_summarize_reviews_sorts_by_baseline_score_before_llm_score() -> None:
+    lower_llm_higher_baseline = {
+        "code": "HIGH_BASELINE",
         "review_mode": "baseline_local",
         "total_score": 4.1,
-        "score_layer": "PASS-A",
-        "score_layer_score": 90.0,
-        "verdict": "PASS",
-        "baseline_review": {"total_score": 4.1, "verdict": "PASS"},
-    }
-    higher_total_low_layer = {
-        "code": "LOW_LAYER",
-        "review_mode": "baseline_local",
-        "total_score": 4.8,
-        "score_layer": "PASS-C",
-        "score_layer_score": 70.0,
         "verdict": "PASS",
         "baseline_review": {"total_score": 4.8, "verdict": "PASS"},
+    }
+    higher_llm_lower_baseline = {
+        "code": "LOW_BASELINE",
+        "review_mode": "baseline_local",
+        "total_score": 4.9,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 4.2, "verdict": "PASS"},
     }
 
     summary = summarize_reviews(
         "2026-04-01",
         "b1",
-        [higher_total_low_layer, lower_total_high_layer],
+        [higher_llm_lower_baseline, lower_llm_higher_baseline],
         min_score=4.0,
         failures=[],
     )
 
-    assert [review["code"] for review in summary["recommendations"]] == ["HIGH_LAYER", "LOW_LAYER"]
+    assert [review["code"] for review in summary["recommendations"]] == ["HIGH_BASELINE", "LOW_BASELINE"]
 
 
 def test_summarize_reviews_includes_b1_pass_even_below_legacy_min_score() -> None:
