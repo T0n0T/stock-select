@@ -212,6 +212,33 @@ def test_screen_rejects_unknown_method() -> None:
     assert "dribull" in stderr
 
 
+def test_left_peak_method_is_registered_as_shared_prepared_method() -> None:
+    assert cli.validate_method("left_peak") == "left_peak"
+    assert "left_peak" in cli.SHARED_PREPARED_METHODS
+    assert "left_peak" in cli.BATCH_METHODS
+
+
+def test_left_peak_review_uses_environment_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        cli,
+        "resolve_market_environment",
+        lambda runtime_root, *, pick_date: {"state": "neutral", "reason": "fixture"},
+    )
+
+    resolved_environment, profile = cli._resolve_review_environment_context(
+        runtime_root=tmp_path,
+        pick_date="2026-05-19",
+        method="left_peak",
+    )
+
+    assert resolved_environment == {"state": "neutral", "reason": "fixture"}
+    assert profile is not None
+    assert profile.method == "left_peak"
+
+    kwargs = cli._review_baseline_kwargs(method="left_peak", candidate={}, profile=profile)
+    assert kwargs == {"profile": profile}
+
+
 def test_html_group_exposes_render_zip_and_serve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     called: list[tuple[str, Path]] = []

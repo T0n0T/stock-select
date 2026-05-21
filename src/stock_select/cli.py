@@ -47,6 +47,7 @@ from stock_select.strategies import (
     compute_zx_lines,
     max_vol_not_bearish,
     prefilter_dribull_non_macd,
+    run_left_peak_screen_with_stats,
     run_b1_screen,
     run_b1_screen_with_stats,
     run_b2_screen_with_stats,
@@ -105,8 +106,8 @@ LLM_REVIEW_MAX_CONCURRENCY = 6
 DRIBULL_PERIOD_MACD_WARMUP_START_DATE = "2023-01-01"
 HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
-SHARED_PREPARED_METHODS = frozenset({"b1", "b2", "dribull"})
-BATCH_METHODS = ("b1", "b2", "dribull", "hcr")
+SHARED_PREPARED_METHODS = frozenset({"b1", "b2", "dribull", "left_peak"})
+BATCH_METHODS = ("b1", "b2", "dribull", "left_peak", "hcr")
 B1_ARTIFACT_VERSION = 1
 HCR_ARTIFACT_VERSION = 1
 
@@ -507,6 +508,11 @@ def _build_method_review_focus_context(*, method: str, profile) -> str | None:
             "对周线后段、odd_confirmed_stage3、高阶奇数浪和高位过热样本要主动压分；"
             "强环境可以更接受右侧确认，但弱环境和中性环境仍要先看位置安全、承接质量与过热风险。"
         ),
+        "left_peak": (
+            "当前 review 重点：left_peak 专用左峰锚定口径；"
+            "优先检查价格是否仍贴近左峰后第一根阴线开盘价，周线推升只作为背景条件，"
+            "PASS 要同时满足锚定距离、五维组合与环境分层。"
+        ),
     }
     method_focus = method_focus_map.get(normalized_method)
     if method_focus is None:
@@ -526,7 +532,7 @@ def _resolve_review_environment_context(
     method: str,
 ):
     normalized_method = method.strip().lower()
-    if normalized_method not in {"b1", "b2"}:
+    if normalized_method not in {"b1", "b2", "left_peak"}:
         return None, None
     try:
         resolved_environment = resolve_market_environment(runtime_root, pick_date=pick_date)
@@ -549,7 +555,7 @@ def _review_baseline_kwargs(
     kwargs: dict[str, object] = {}
     if normalized_method == "b2":
         kwargs["signal"] = candidate.get("signal")
-    if profile is not None and normalized_method in {"b1", "b2"}:
+    if profile is not None and normalized_method in {"b1", "b2", "left_peak"}:
         kwargs["profile"] = profile
     return kwargs
 
@@ -563,7 +569,7 @@ def _build_review_task_extra_context(
     profile,
 ) -> dict[str, object] | None:
     extra_context: dict[str, object] = {}
-    if method.lower() in {"b1", "b2", "dribull"}:
+    if method.lower() in {"b1", "b2", "dribull", "left_peak"}:
         extra_context.update(_build_wave_task_context(history, pick_date, method=method))
     review_focus_context = _build_method_review_focus_context(method=method, profile=profile)
     if review_focus_context:
@@ -1656,6 +1662,21 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"selected={stats['selected']}",
         )
         return
+    if method == "left_peak":
+        reporter.emit(
+            "screen",
+            "breakdown "
+            f"total_symbols={stats['total_symbols']} "
+            f"eligible={stats['eligible']} "
+            f"fail_recent_high={stats['fail_recent_high']} "
+            f"fail_recent_j={stats['fail_recent_j']} "
+            f"fail_ma25_ma60={stats['fail_ma25_ma60']} "
+            f"fail_insufficient_history={stats['fail_insufficient_history']} "
+            f"fail_left_peak={stats['fail_left_peak']} "
+            f"fail_left_peak_close_band={stats['fail_left_peak_close_band']} "
+            f"selected={stats['selected']}",
+        )
+        return
     if method == "b2":
         reporter.emit(
             "screen",
@@ -1739,7 +1760,7 @@ def _screen_impl(
     prepared: pd.DataFrame | None = None
     screen_prepared: pd.DataFrame | None = None
     reused_base_prepared = False
-    if method in {"b1", "b2", "dribull"}:
+    if method in {"b1", "b2", "dribull", "left_peak"}:
         start_date = (pd.Timestamp(pick_date) - pd.Timedelta(days=DEFAULT_SCREEN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     else:
         start_date = None
@@ -1820,7 +1841,7 @@ def _screen_impl(
                     f"fetched rows={len(market)} symbols={market['ts_code'].nunique() if not market.empty else 0}",
                 )
             _validate_eod_pick_date_has_market_data(connection, market=market, pick_date=pick_date)
-            if method in {"b1", "b2", "dribull"}:
+            if method in {"b1", "b2", "dribull", "left_peak"}:
                 prepared = _call_prepare_screen_data(market, reporter=reporter)
                 screen_prepared = prepared
             else:
@@ -1871,7 +1892,7 @@ def _screen_impl(
             )
         else:
             prepared = prepared.iloc[0:0].copy()
-    if method in {"b1", "b2", "dribull"}:
+    if method in {"b1", "b2", "dribull", "left_peak"}:
         if prepared is None:
             prepared = pd.DataFrame()
         if method == "dribull" and pool_source == "record-watch" and screen_prepared is not None:
@@ -1899,6 +1920,11 @@ def _screen_impl(
             )
         elif method == "b2":
             candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(pick_date),
+            )
+        elif method == "left_peak":
+            candidates, stats = run_left_peak_screen_with_stats(
                 prepared_for_pick,
                 pd.Timestamp(pick_date),
             )
@@ -2003,7 +2029,7 @@ def _screen_intraday_impl(
             symbols=None,
         )
         overlay_market = build_intraday_market_frame(market, snapshot, trade_date=trade_date)
-        if method in {"b1", "b2", "dribull"}:
+        if method in {"b1", "b2", "dribull", "left_peak"}:
             prepared = _call_prepare_screen_data(overlay_market, reporter=reporter)
         else:
             prepared = _call_prepare_hcr_screen_data(overlay_market, reporter=reporter)
@@ -2026,7 +2052,7 @@ def _screen_intraday_impl(
         if reporter:
             reporter.emit("screen", f"write prepared path={prepared_cache_path}")
 
-    if method in {"b1", "b2", "dribull"}:
+    if method in {"b1", "b2", "dribull", "left_peak"}:
         pool_codes = _resolve_pool_codes(
             pool_source=pool_source,
             runtime_root=runtime_root,
@@ -2049,6 +2075,11 @@ def _screen_intraday_impl(
             )
         elif method == "b2":
             candidates, stats = run_b2_screen_with_stats(
+                prepared_for_pick,
+                pd.Timestamp(trade_date),
+            )
+        elif method == "left_peak":
+            candidates, stats = run_left_peak_screen_with_stats(
                 prepared_for_pick,
                 pd.Timestamp(trade_date),
             )
@@ -2633,7 +2664,7 @@ def _analyze_non_b2_symbol_screen(
     pick_date: str,
     history: pd.DataFrame,
 ) -> dict[str, object]:
-    if method in {"b1", "dribull"}:
+    if method in {"b1", "dribull", "left_peak"}:
         prepared_table = _call_prepare_screen_data(history)
     else:
         prepared_table = _call_prepare_hcr_screen_data(history)
@@ -2647,6 +2678,11 @@ def _analyze_non_b2_symbol_screen(
             prepared,
             pd.Timestamp(pick_date),
             DEFAULT_B1_CONFIG,
+        )
+    elif method == "left_peak":
+        candidates, stats = run_left_peak_screen_with_stats(
+            prepared,
+            pd.Timestamp(pick_date),
         )
     elif method == "dribull":
         candidates, stats = run_dribull_screen_with_stats(
