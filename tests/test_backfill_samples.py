@@ -26,11 +26,13 @@ def test_parse_args_uses_method_specific_default_max_workers() -> None:
     b1_args = script.parse_args(["--method", "b1"])
     b2_args = script.parse_args(["--method", "b2"])
     dribull_args = script.parse_args(["--method", "dribull"])
+    left_peak_args = script.parse_args(["--method", "left_peak"])
     hcr_args = script.parse_args(["--method", "hcr"])
 
     assert b1_args.max_workers == 4
     assert b2_args.max_workers == 4
     assert dribull_args.max_workers == 4
+    assert left_peak_args.max_workers == 4
     assert hcr_args.max_workers == 6
 
 
@@ -155,12 +157,14 @@ def test_plan_backfill_skips_date_when_review_and_environment_daily_exist(tmp_pa
 
 def test_build_run_command_keeps_requested_threshold_and_pick_date() -> None:
     script = _load_script_module()
+    runtime_root = Path("/tmp/stock-select-runtime")
 
     command = script.build_run_command(
         pick_date="2026-04-28",
         method="b2",
         llm_min_baseline_score=3.6,
         dsn="postgresql://example",
+        runtime_root=runtime_root,
     )
 
     assert command == [
@@ -174,6 +178,8 @@ def test_build_run_command_keeps_requested_threshold_and_pick_date() -> None:
         "2026-04-28",
         "--dsn",
         "postgresql://example",
+        "--runtime-root",
+        str(runtime_root),
     ]
 
 

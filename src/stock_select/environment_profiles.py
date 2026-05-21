@@ -131,6 +131,60 @@ _PROFILES = {
         },
         llm_focus="强环境下优先高分给右侧启动确认和强 MACD 共振。",
     ),
+    ("left_peak", "weak"): MethodEnvironmentProfile(
+        method="left_peak",
+        state="weak",
+        weights={
+            "trend_structure": 0.23,
+            "price_position": 0.22,
+            "volume_behavior": 0.22,
+            "previous_abnormal_move": 0.20,
+            "macd_phase": 0.13,
+        },
+        signal_weight=None,
+        pass_threshold=4.25,
+        watch_threshold=3.3,
+        subscore_mode={
+            "price_position": "left_side_favored",
+            "trend_structure": "support_preserving",
+        },
+        llm_focus="left_peak 专用口径：弱环境下只保留左峰锚定距离紧、五维组合命中的样本，严控偏离第一阴线开盘价过远。",
+    ),
+    ("left_peak", "neutral"): MethodEnvironmentProfile(
+        method="left_peak",
+        state="neutral",
+        weights={
+            "trend_structure": 0.23,
+            "price_position": 0.20,
+            "volume_behavior": 0.22,
+            "previous_abnormal_move": 0.20,
+            "macd_phase": 0.15,
+        },
+        signal_weight=None,
+        pass_threshold=4.0,
+        watch_threshold=3.2,
+        subscore_mode={"price_position": "default", "trend_structure": "default"},
+        llm_focus="left_peak 专用口径：中性环境下优先保留周线推升、左峰锚定不过远且结构完整的样本。",
+    ),
+    ("left_peak", "strong"): MethodEnvironmentProfile(
+        method="left_peak",
+        state="strong",
+        weights={
+            "trend_structure": 0.25,
+            "price_position": 0.17,
+            "volume_behavior": 0.23,
+            "previous_abnormal_move": 0.20,
+            "macd_phase": 0.15,
+        },
+        signal_weight=None,
+        pass_threshold=4.0,
+        watch_threshold=3.2,
+        subscore_mode={
+            "price_position": "less_left_bias",
+            "trend_structure": "restart_favored",
+        },
+        llm_focus="left_peak 专用口径：强环境不默认放宽，只接受贴近左峰锚点的再启动确认，压制明显追高。",
+    ),
 }
 
 

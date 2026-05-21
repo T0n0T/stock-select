@@ -5,7 +5,7 @@
 当前仓库的目标是提供一个可单独运行的 A 股初筛流程，包括：
 
 - 从 PostgreSQL 读取 `daily_market` 数据
-- 运行确定性的 `b1` / `b2` / `dribull` / `hcr` 初筛
+- 运行确定性的 `b1` / `b2` / `dribull` / `left_peak` / `hcr` 初筛
 - 为候选股票生成日线 PNG 图
 - 对候选股票执行本地 review 流程
 
@@ -79,10 +79,12 @@ mkdir -p ~/.agents/skills/review-tuning-diagnostics && cp -R /home/pi/Documents/
 uv run stock-select screen --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select screen --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select screen --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select screen --method left_peak --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select screen --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select chart --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select chart --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select chart --method dribull --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select chart --method left_peak --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select chart --method hcr --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method b1 --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select review --method b2 --pick-date YYYY-MM-DD --dsn postgresql://...
@@ -95,6 +97,7 @@ uv run stock-select record-watch --method hcr --pick-date YYYY-MM-DD --dsn postg
 uv run stock-select analyze-symbol --method b1 --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select analyze-symbol --method b2 --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select analyze-symbol --method dribull --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
+uv run stock-select analyze-symbol --method left_peak --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select analyze-symbol --method hcr --symbol 002350.SZ --pick-date YYYY-MM-DD --dsn postgresql://...
 uv run stock-select market-env show --pick-date YYYY-MM-DD
 uv run stock-select market-env history
@@ -323,8 +326,8 @@ SZ002703 浙江世宝
 
 - `screen`
   - 从 PostgreSQL 的 `daily_market` 读取目标日前约 366 天窗口
-  - 在本地计算 `b1` / `b2` / `dribull` 或 `hcr` 所需指标
-  - `b1` 与 `dribull` 共用同一天的基础 prepared cache
+  - 在本地计算 `b1` / `b2` / `dribull` / `left_peak` 或 `hcr` 所需指标
+  - `b1` / `b2` / `dribull` / `left_peak` 共用同一天的基础 prepared cache
   - 将候选结果写入 `~/.agents/skills/stock-select/runtime/candidates/`
 - `chart`
   - 读取 candidate 文件
@@ -443,7 +446,7 @@ SZ002703 浙江世宝
 
 ```text
 candidates/<pick_date>.<method>.json
-prepared/<pick_date>.feather + prepared/<pick_date>.meta.json      # b1 / b2 / dribull 共享基础 prepare
+prepared/<pick_date>.feather + prepared/<pick_date>.meta.json      # b1 / b2 / dribull / left_peak 共享基础 prepare
 prepared/<pick_date>.hcr.feather + prepared/<pick_date>.hcr.meta.json  # hcr 独立 prepare
 charts/<pick_date>.<method>/<code>_day.png
 reviews/<pick_date>.<method>/llm_review_tasks.json
@@ -461,7 +464,7 @@ watch_pool.csv
 
 ```text
 candidates/<run_id>.<method>.json
-prepared/<trade_date>.intraday.feather + prepared/<trade_date>.intraday.meta.json  # b1 / b2 / dribull 共享
+prepared/<trade_date>.intraday.feather + prepared/<trade_date>.intraday.meta.json  # b1 / b2 / dribull / left_peak 共享
 prepared/<trade_date>.intraday.hcr.feather + prepared/<trade_date>.intraday.hcr.meta.json  # hcr 独立
 charts/<run_id>.<method>/
 reviews/<run_id>.<method>/
@@ -469,14 +472,15 @@ reviews/<run_id>.<method>/
 
 其中：
 
-- `b1`、`b2` 和 `dribull` 在 EOD 与 intraday 下都共用基础 prepared cache
+- `b1`、`b2`、`dribull` 和 `left_peak` 在 EOD 与 intraday 下都共用基础 prepared cache
 - `dribull` 的二阶段 MACD warmup 仍是按需现算，不单独落盘
 - intraday 只有在 `screen --intraday --recompute` 时才会重写当日共享 prepared cache
 
 ## 当前限制
 
-- 当前筛选内置方法为 `b1`、`b2`、`dribull` 和 `hcr`
-- `review` 命名空间仍保留旧 `b2`，且 `review --method dribull` 复用现有 `b2` reviewer 与 `prompt-b2.md`
+- 当前筛选内置方法为 `b1`、`b2`、`dribull`、`left_peak` 和 `hcr`
+- `left_peak` 已有专用 baseline review 层，按左峰锚定距离、五维组合、MACD 状态机与环境 profile 分层
+- `review` 命名空间仍保留旧 `b2`
 - `run --method b2` 当前组合为“新的 `b2` 筛选 + 现有旧的 `b2 review`”
 - `screen`、`chart`、`run` 都依赖可访问的 PostgreSQL
 - 当前 Python CLI 里的 `review` 仍以本地 baseline 打分为主

@@ -32,6 +32,14 @@ def test_get_review_resolver_routes_dribull_to_dedicated_review_strategy() -> No
     assert resolver.review_history.__module__ == "stock_select.reviewers.dribull"
 
 
+def test_get_review_resolver_routes_left_peak_to_placeholder_review_strategy() -> None:
+    resolver = get_review_resolver("left_peak")
+
+    assert resolver.name == "left_peak"
+    assert resolver.prompt_path.endswith(".agents/skills/stock-select/references/prompt-b1.md")
+    assert resolver.review_history.__module__ == "stock_select.reviewers.left_peak"
+
+
 def test_get_review_resolver_returns_callable_review_history() -> None:
     resolver = get_review_resolver("b1")
 

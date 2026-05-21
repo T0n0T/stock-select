@@ -30,6 +30,7 @@ DEFAULT_MAX_WORKERS_BY_METHOD = {
     "b1": 4,
     "b2": 4,
     "dribull": 4,
+    "left_peak": 4,
     "hcr": 6,
 }
 
@@ -124,6 +125,7 @@ def build_run_command(
     method: str,
     llm_min_baseline_score: float,
     dsn: str | None,
+    runtime_root: Path,
     stock_select_bin: str = "stock-select",
 ) -> list[str]:
     command = [
@@ -138,6 +140,7 @@ def build_run_command(
     ]
     if dsn:
         command.extend(["--dsn", dsn])
+    command.extend(["--runtime-root", str(runtime_root)])
     return command
 
 
@@ -209,6 +212,7 @@ def run_single_backfill(
     method: str,
     llm_min_baseline_score: float,
     dsn: str | None,
+    runtime_root: Path,
     stock_select_bin: str,
 ) -> str:
     command = build_run_command(
@@ -216,6 +220,7 @@ def run_single_backfill(
         method=method,
         llm_min_baseline_score=llm_min_baseline_score,
         dsn=dsn,
+        runtime_root=runtime_root,
         stock_select_bin=stock_select_bin,
     )
     print(f"[{index}/{total}] running: {' '.join(command)}")
@@ -229,6 +234,7 @@ def run_missing_dates(
     method: str,
     llm_min_baseline_score: float,
     dsn: str | None,
+    runtime_root: Path,
     stock_select_bin: str,
     max_workers: int,
 ) -> None:
@@ -250,6 +256,7 @@ def run_missing_dates(
                 method=method,
                 llm_min_baseline_score=llm_min_baseline_score,
                 dsn=dsn,
+                runtime_root=runtime_root,
                 stock_select_bin=stock_select_bin,
             ): (
                 pick_date,
@@ -258,6 +265,7 @@ def run_missing_dates(
                     method=method,
                     llm_min_baseline_score=llm_min_baseline_score,
                     dsn=dsn,
+                    runtime_root=runtime_root,
                     stock_select_bin=stock_select_bin,
                 ),
             )
@@ -302,6 +310,7 @@ def run_backfill(argv: Sequence[str] | None = None) -> int:
         method=args.method,
         llm_min_baseline_score=args.llm_min_baseline_score,
         dsn=args.dsn,
+        runtime_root=args.runtime_root,
         stock_select_bin=args.stock_select_bin,
         max_workers=args.max_workers,
     )

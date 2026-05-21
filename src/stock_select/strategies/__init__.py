@@ -18,6 +18,7 @@ from stock_select.strategies.b1 import (
     run_b1_screen_with_stats,
 )
 from stock_select.strategies.b2 import run_b2_screen, run_b2_screen_with_stats
+from stock_select.strategies.left_peak import run_left_peak_screen, run_left_peak_screen_with_stats
 from stock_select.strategies.dribull import (
     DRIBULL_MACD_TREND_DAYS,
     DRIBULL_RECENT_J_LOOKBACK,
@@ -26,7 +27,7 @@ from stock_select.strategies.dribull import (
     run_dribull_screen_with_stats,
 )
 
-SUPPORTED_METHODS = ("b1", "b2", "dribull", "hcr")
+SUPPORTED_METHODS = ("b1", "b2", "dribull", "hcr", "left_peak")
 
 
 def normalize_method(method: str) -> str:
@@ -66,6 +67,8 @@ __all__ = [
     "run_b1_screen_with_stats",
     "run_b2_screen",
     "run_b2_screen_with_stats",
+    "run_left_peak_screen",
+    "run_left_peak_screen_with_stats",
     "run_dribull_screen",
     "run_dribull_screen_with_stats",
     "validate_method",

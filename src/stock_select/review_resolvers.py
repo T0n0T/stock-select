@@ -8,6 +8,7 @@ from stock_select.reviewers import (
     review_b1_symbol_history,
     review_b2_symbol_history,
     review_dribull_symbol_history,
+    review_left_peak_symbol_history,
     review_symbol_history,
 )
 
@@ -46,6 +47,12 @@ def get_review_resolver(method: str) -> ReviewResolver:
             name="dribull",
             prompt_path=DRIBULL_PROMPT_PATH,
             review_history=review_dribull_symbol_history,
+        )
+    if normalized == "left_peak":
+        return ReviewResolver(
+            name="left_peak",
+            prompt_path=B1_PROMPT_PATH,
+            review_history=review_left_peak_symbol_history,
         )
     return ReviewResolver(
         name="default",

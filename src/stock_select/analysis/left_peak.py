@@ -37,8 +37,29 @@ def find_recent_left_peak_breakout(
     if frame.empty:
         return _empty_breakout()
 
-    cutoff = pd.Timestamp(pick_date)
-    frame = frame.loc[frame["trade_date"] <= cutoff].reset_index(drop=True)
+    return find_recent_left_peak_breakout_prepared(
+        frame,
+        pd.Timestamp(pick_date),
+        swing_lookback=swing_lookback,
+        breakout_lookback=breakout_lookback,
+        high_cycle_days=high_cycle_days,
+        min_pullback_pct=min_pullback_pct,
+    )
+
+
+def find_recent_left_peak_breakout_prepared(
+    history: pd.DataFrame,
+    pick_date: pd.Timestamp,
+    *,
+    swing_lookback: int = 2,
+    breakout_lookback: int = 5,
+    high_cycle_days: int = 360,
+    min_pullback_pct: float = 5.0,
+) -> LeftPeakBreakout:
+    if history.empty:
+        return _empty_breakout()
+
+    frame = history.loc[history["trade_date"] <= pick_date].reset_index(drop=True)
     if len(frame) < max(20, breakout_lookback + swing_lookback * 2 + 1):
         return _empty_breakout()
 
