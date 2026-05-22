@@ -75,6 +75,35 @@ def test_compute_segments_buckets_all_score_fields() -> None:
     assert "macd_phase_bucket" in segment_types
 
 
+def test_compute_segments_groups_b1_by_yellow_signal_flag() -> None:
+    rows = [
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "PASS",
+            "yellow_b1": True,
+            "total_score": 4.3,
+            "ret3_pct": 2.0,
+            "ret5_pct": 3.0,
+        },
+        {
+            "method": "b1",
+            "environment_state": "neutral",
+            "verdict": "WATCH",
+            "yellow_b1": False,
+            "total_score": 3.5,
+            "ret3_pct": -1.0,
+            "ret5_pct": 0.0,
+        },
+    ]
+
+    result = review_tuning.compute_segments(rows)
+    yellow_segments = [item for item in result if item["segment_type"] == "yellow_b1"]
+
+    assert {item["segment_value"] for item in yellow_segments} == {"True", "False"}
+    assert any(item["segment_value"] == "True" and item["ret3"]["win_rate"] == 100.0 for item in yellow_segments)
+
+
 def test_compute_segments_uses_half_up_score_buckets_for_half_points() -> None:
     rows = [
         {

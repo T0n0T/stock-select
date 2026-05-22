@@ -16,6 +16,9 @@ DEFAULT_MAX_VOL_LOOKBACK = 20
 DEFAULT_TOP_M = 5000
 _B1_REQUIRED_COLUMNS = (
     "trade_date",
+    "open",
+    "high",
+    "low",
     "J",
     "zxdq",
     "zxdkx",
@@ -29,6 +32,9 @@ _B1_REQUIRED_COLUMNS = (
     "turnover_n",
 )
 _B1_NUMERIC_COLUMNS = (
+    "open",
+    "high",
+    "low",
     "J",
     "zxdq",
     "zxdkx",
@@ -212,6 +218,76 @@ def compute_b1_tightening_columns(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def compute_yellow_b1_signal(df: pd.DataFrame) -> pd.Series:
+    close = df["close"].astype(float)
+    open_ = df["open"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    volume = _resolve_volume_series(df)
+    days_l = pd.Series(range(1, len(df) + 1), index=df.index, dtype=float)
+
+    is_new = days_l <= 114.0
+    st_l = close.ewm(span=10, adjust=False).mean().ewm(span=10, adjust=False).mean()
+    lt_r = (
+        close.rolling(window=14, min_periods=14).mean()
+        + close.rolling(window=28, min_periods=28).mean()
+        + close.rolling(window=57, min_periods=57).mean()
+        + close.rolling(window=114, min_periods=114).mean()
+    ) / 4.0
+    lt_r = lt_r.where(~is_new)
+    cross_up = (st_l > lt_r) & (st_l.shift(1) <= lt_r.shift(1))
+    c_days = _barslast(cross_up.fillna(False))
+    honeymoon = (c_days >= 0.0) & (c_days <= 30.0) & (st_l > lt_r)
+    breakaway = st_l > lt_r * 1.03
+    lt_dir = pd.Series(1.0, index=df.index)
+    mature = ~is_new
+    lt_dir.loc[mature] = (lt_r.loc[mature] >= lt_r.shift(1).loc[mature] * 0.9999).map({True: 1.0, False: -1.0})
+    flip_c = lt_dir.ne(lt_dir.shift(1)).fillna(False).rolling(window=30, min_periods=1).sum()
+    lt_stable = flip_c <= 2.0
+    support = close >= lt_r * 0.95
+    tr_ok = is_new | honeymoon | breakaway | ((st_l > lt_r) & (close > lt_r) & lt_stable & support)
+    above_lt = is_new | (close > lt_r)
+
+    high_4 = high.rolling(window=4, min_periods=1).max()
+    low_4 = low.rolling(window=4, min_periods=1).min()
+    range_4 = (high_4 - low_4).clip(lower=0.01)
+
+    v1a = (high_4 - close) / range_4 * 100.0 - 90.0
+    v2a = _tdx_sma(v1a, 4, 1) + 100.0
+    v3a = (close - low_4) / range_4 * 100.0
+    v5a = _tdx_sma(_tdx_sma(v3a, 6, 1), 6, 1) + 100.0
+    v_diff = v5a - v2a - 4.0
+    turn_color = (v_diff > v_diff.shift(1)) & (v_diff.shift(1) <= v_diff.shift(2))
+
+    if "J" in df.columns:
+        j = df["J"].astype(float)
+    else:
+        j = compute_kdj(df[["high", "low", "close"]].copy())["J"].astype(float)
+
+    pct = close.pct_change() * 100.0
+    if "ts_code" in df.columns:
+        codes = df["ts_code"].astype(str)
+    else:
+        codes = pd.Series("", index=df.index)
+    amp_limit = pd.Series([12.0 if code.startswith(("688", "300")) else 8.0 for code in codes], index=df.index)
+    amp = (high - low) / close.shift(1) * 100.0
+    shake = (pct.abs() < 5.05) & (amp < amp_limit)
+    j_up = j > j.shift(1)
+    j_turn_up = j_up & (j.shift(1) <= j.shift(2))
+    up_days = _barslast(j_turn_up.fillna(False))
+    pre_ok = (pct.shift(1) < 3.7) & (j.shift(1) < 39.0)
+    up_shadow = high - pd.concat([close, open_], axis=1).max(axis=1)
+    ef_body = close - pd.concat([open_, close.shift(1)], axis=1).min(axis=1)
+    k_shape = (up_shadow <= ef_body) & (close > close.shift(1))
+    raw_b2 = (pct >= 3.7) & (volume > volume.shift(1)) & k_shape & pre_ok & j_up & tr_ok & above_lt
+    cur_b2 = raw_b2 & (_count_dynamic(raw_b2.fillna(False), up_days + 1) == 1)
+
+    b1_environment = tr_ok & above_lt & ~cur_b2.fillna(False)
+    yellow_raw = b1_environment & turn_color & (j < 29.0) & (pct <= 3.7)
+    yellow = yellow_raw & (yellow_raw.rolling(window=5, min_periods=1).sum() <= 3)
+    return yellow.fillna(False)
+
+
 def build_top_turnover_pool(
     prepared_table: pd.DataFrame,
     *,
@@ -279,6 +355,8 @@ def run_b1_screen_with_stats(
         "fail_v_shrink": 0,
         "fail_safe_mode": 0,
         "fail_lt_filter": 0,
+        "selected_yellow_b1": 0,
+        "selected_non_yellow_b1": 0,
         "selected": 0,
     }
 
@@ -339,6 +417,8 @@ def run_b1_screen_with_stats(
         if not _flag_is_true(row["lt_filter"]):
             stats["fail_lt_filter"] += 1
             continue
+        yellow_b1 = compute_yellow_b1_signal(history)
+        is_yellow_b1 = bool(yellow_b1.iloc[-1])
 
         results.append(
             {
@@ -346,8 +426,13 @@ def run_b1_screen_with_stats(
                 "pick_date": target_date.strftime("%Y-%m-%d"),
                 "close": float(row["close"]),
                 "turnover_n": float(row["turnover_n"]),
+                "yellow_b1": is_yellow_b1,
             }
         )
+        if is_yellow_b1:
+            stats["selected_yellow_b1"] += 1
+        else:
+            stats["selected_non_yellow_b1"] += 1
         stats["selected"] += 1
 
     return results, stats
@@ -414,6 +499,32 @@ def _resolve_volume_series(df: pd.DataFrame) -> pd.Series:
     raise KeyError(msg)
 
 
+def _tdx_sma(series: pd.Series, n: int, m: int) -> pd.Series:
+    values = pd.Series(series, copy=False).astype(float)
+    out: list[float] = []
+    previous: float | None = None
+    for value in values:
+        current_input = 0.0 if pd.isna(value) else float(value)
+        if previous is None:
+            current = current_input
+        else:
+            current = (m * current_input + (n - m) * previous) / n
+        out.append(current)
+        previous = current
+    return pd.Series(out, index=values.index, dtype=float)
+
+
+def _count_dynamic(condition: pd.Series, windows: pd.Series) -> pd.Series:
+    values = condition.astype(bool).tolist()
+    counts: list[int] = []
+    for idx, value in enumerate(values):
+        _ = value
+        window = max(int(float(windows.iloc[idx])), 1)
+        start = max(0, idx - window + 1)
+        counts.append(int(sum(values[start : idx + 1])))
+    return pd.Series(counts, index=condition.index, dtype=float)
+
+
 def _barslast(flags: pd.Series) -> pd.Series:
     values = flags.fillna(False).astype(bool).tolist()
     out: list[float] = []
@@ -444,6 +555,7 @@ __all__ = [
     "compute_turnover_n",
     "compute_weekly_close",
     "compute_weekly_ma_bull",
+    "compute_yellow_b1_signal",
     "compute_zx_lines",
     "max_vol_not_bearish",
     "run_b1_screen",

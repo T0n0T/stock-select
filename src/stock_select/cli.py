@@ -108,7 +108,7 @@ HCR_SCREEN_TRADING_DAYS = HCR_REQUIRED_TRADING_DAYS
 RT_K_MARKET_WILDCARDS = ("*.SH", "*.SZ", "*.BJ")
 SHARED_PREPARED_METHODS = frozenset({"b1", "b2", "dribull", "left_peak"})
 BATCH_METHODS = ("b1", "b2", "dribull", "left_peak", "hcr")
-B1_ARTIFACT_VERSION = 1
+B1_ARTIFACT_VERSION = 2
 HCR_ARTIFACT_VERSION = 1
 
 
@@ -866,9 +866,7 @@ def _build_prepared_cache_metadata(
     }
     if method:
         metadata["method"] = method
-    if method in SHARED_PREPARED_METHODS:
-        metadata["screen_version"] = B1_ARTIFACT_VERSION
-    elif method == "hcr":
+    if method == "hcr":
         metadata["screen_version"] = HCR_ARTIFACT_VERSION
     if metadata_overrides:
         metadata.update(metadata_overrides)
@@ -939,13 +937,11 @@ def _load_prepared_cache(cache_path: Path) -> dict[str, object]:
 
 
 def _prepared_cache_matches_screen_version(payload: dict[str, object], *, method: str) -> bool:
-    if method not in {"b1", "hcr"}:
+    if method != "hcr":
         return True
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         return False
-    if method == "b1":
-        return metadata.get("screen_version") == B1_ARTIFACT_VERSION
     return metadata.get("screen_version") == HCR_ARTIFACT_VERSION
 
 
@@ -1640,6 +1636,8 @@ def _emit_screen_breakdown(method: str, stats: dict[str, int], reporter: Progres
             f"fail_v_shrink={stats['fail_v_shrink']} "
             f"fail_safe_mode={stats['fail_safe_mode']} "
             f"fail_lt_filter={stats['fail_lt_filter']} "
+            f"selected_yellow_b1={stats['selected_yellow_b1']} "
+            f"selected_non_yellow_b1={stats['selected_non_yellow_b1']} "
             f"selected={stats['selected']}",
         )
         return
@@ -2289,6 +2287,8 @@ def _review_impl(
             chart_path=str(chart_path),
             baseline_review=baseline_review,
         )
+        if method.lower() == "b1" and "yellow_b1" in candidate:
+            review["yellow_b1"] = bool(candidate["yellow_b1"])
         (review_dir / f"{code}.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
         reviews.append(review)
         task = build_review_payload(
@@ -2431,6 +2431,8 @@ def _review_intraday_impl(
             chart_path=str(chart_path),
             baseline_review=baseline_review,
         )
+        if method.lower() == "b1" and "yellow_b1" in candidate:
+            review["yellow_b1"] = bool(candidate["yellow_b1"])
         (review_dir / f"{code}.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
         reviews.append(review)
         task = build_review_payload(

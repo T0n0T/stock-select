@@ -543,6 +543,31 @@ def build_verdict_segments(
     ]
 
 
+def build_yellow_b1_segments(
+    rows: list[dict[str, object]],
+    *,
+    scope: dict[str, object],
+) -> list[dict[str, object]]:
+    if scope.get("method") not in {None, "b1"}:
+        return []
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        if "yellow_b1" not in row:
+            continue
+        value = str(bool(row["yellow_b1"]))
+        grouped.setdefault(value, []).append(row)
+    return [
+        _build_segment_payload(
+            scope=scope,
+            segment_type="yellow_b1",
+            segment_value=segment_value,
+            rows=grouped[segment_value],
+        )
+        for segment_value in ("True", "False")
+        if segment_value in grouped
+    ]
+
+
 def compute_segments(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     segments: list[dict[str, object]] = []
     for scope, scoped_rows in iter_scoped_rows(rows):
@@ -550,6 +575,7 @@ def compute_segments(rows: list[dict[str, object]]) -> list[dict[str, object]]:
             segments.extend(build_score_bucket_segments(scoped_rows, scope=scope, field=field))
         segments.extend(build_total_score_band_segments(scoped_rows, scope=scope))
         segments.extend(build_verdict_segments(scoped_rows, scope=scope))
+        segments.extend(build_yellow_b1_segments(scoped_rows, scope=scope))
     return segments
 
 
@@ -1146,6 +1172,8 @@ def collect_review_samples(
                     "ret3_pct": None if fwd is None else fwd.get("ret3_pct"),
                     "ret5_pct": None if fwd is None else fwd.get("ret5_pct"),
                 }
+                if normalized_method == "b1" and "yellow_b1" in item:
+                    row["yellow_b1"] = bool(item["yellow_b1"])
                 for field in SCORE_FIELDS:
                     row[field] = _get_score(item, field)
                 rows.append(

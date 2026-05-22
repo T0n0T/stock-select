@@ -13,6 +13,7 @@ from stock_select.strategies.b1 import (
     compute_turnover_n,
     compute_weekly_close,
     compute_weekly_ma_bull,
+    compute_yellow_b1_signal,
     compute_zx_lines,
     max_vol_not_bearish,
     run_b1_screen,
@@ -28,6 +29,48 @@ from stock_select.strategies.b1 import (
     compute_zx_lines as strategy_compute_zx_lines,
     run_b1_screen_with_stats as strategy_run_b1_screen_with_stats,
 )
+
+
+def _yellow_b1_screen_frame(
+    *,
+    j: float = 12.0,
+    close: float = 9.87,
+    zxdq: float = 9.97,
+    zxdkx: float = 9.67,
+    weekly_ma_bull: bool = True,
+    max_vol_not_bearish_value: bool = True,
+    chg_d: float = 1.0,
+    v_shrink: bool = True,
+    safe_mode: bool = True,
+    lt_filter: bool = True,
+) -> pd.DataFrame:
+    closes = [10.0, 9.96, 9.65, 9.60, 9.56, close]
+    return pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-04-01", periods=6),
+            "open": [10.0, 9.9, 9.6, 9.5, 9.4, close - 0.05],
+            "close": closes,
+            "high": [value * 1.02 for value in closes],
+            "low": [value * 0.98 for value in closes],
+            "volume": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "J": [20.0, 18.0, 16.0, 13.0, 10.0, j],
+            "zxdq": [9.9, 9.8, 9.7, 9.6, 9.5, zxdq],
+            "zxdkx": [9.7, 9.6, 9.5, 9.4, 9.3, zxdkx],
+            "weekly_ma_bull": [True, True, True, True, True, weekly_ma_bull],
+            "max_vol_not_bearish": [True, True, True, True, True, max_vol_not_bearish_value],
+            "chg_d": [0.5, 0.6, 0.7, 0.8, 0.9, chg_d],
+            "amp_d": [2.0, 2.1, 2.2, 2.3, 2.4, 2.5],
+            "body_d": [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0],
+            "vm3": [100.0, 100.0, 100.0, 100.0, 100.0, 90.0],
+            "vm5": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "vm10": [100.0, 100.0, 100.0, 100.0, 100.0, 120.0],
+            "m5": [10.0, 9.9, 9.8, 9.7, 9.6, 9.7],
+            "v_shrink": [True, True, True, True, True, v_shrink],
+            "safe_mode": [True, True, True, True, True, safe_mode],
+            "lt_filter": [True, True, True, True, True, lt_filter],
+            "turnover_n": [1000.0, 2000.0, 3000.0, 3500.0, 3800.0, 4000.0],
+        }
+    )
 
 
 def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
@@ -50,6 +93,7 @@ def test_b1_strategy_module_exports_current_defaults_and_functions() -> None:
         "compute_turnover_n",
         "compute_weekly_close",
         "compute_weekly_ma_bull",
+        "compute_yellow_b1_signal",
         "compute_zx_lines",
         "max_vol_not_bearish",
         "run_b1_screen",
@@ -521,35 +565,35 @@ def test_build_top_turnover_pool_skips_rows_missing_ma25_or_ma60() -> None:
 
 
 def test_run_b1_screen_filters_symbols_on_pick_date() -> None:
-    pick_date = pd.Timestamp("2026-04-03")
+    pick_date = pd.Timestamp("2026-04-06")
     passing = pd.DataFrame(
         {
-            "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"]),
-            "open": [10.0, 10.2, 10.5],
-            "close": [10.4, 10.8, 11.0],
-            "high": [10.5, 10.9, 11.1],
-            "low": [9.9, 10.1, 10.4],
-            "volume": [100.0, 120.0, 150.0],
-            "J": [12.0, 11.0, 10.0],
-            "zxdq": [10.2, 10.5, 10.8],
-            "zxdkx": [10.0, 10.2, 10.4],
-            "weekly_ma_bull": [True, True, True],
-            "max_vol_not_bearish": [True, True, True],
-            "chg_d": [0.5, 0.6, 1.0],
-            "amp_d": [2.0, 2.1, 2.2],
-            "body_d": [-1.0, -1.0, -1.0],
-            "vm3": [100.0, 110.0, 90.0],
-            "vm5": [100.0, 110.0, 105.0],
-            "vm10": [100.0, 110.0, 120.0],
-            "m5": [10.2, 10.4, 10.6],
-            "v_shrink": [True, True, True],
-            "safe_mode": [True, True, True],
-            "lt_filter": [True, True, True],
-            "turnover_n": [1020.0, 2280.0, 3892.5],
+            "trade_date": pd.date_range("2026-04-01", periods=6),
+            "open": [10.0, 9.9, 9.6, 9.5, 9.4, 9.82],
+            "close": [10.0, 9.96, 9.65, 9.60, 9.56, 9.87],
+            "high": [10.2, 10.1592, 9.843, 9.792, 9.7512, 10.0674],
+            "low": [9.8, 9.7608, 9.457, 9.408, 9.3688, 9.6726],
+            "volume": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "J": [20.0, 18.0, 16.0, 13.0, 10.0, 12.0],
+            "zxdq": [9.9, 9.8, 9.7, 9.6, 9.5, 9.97],
+            "zxdkx": [9.7, 9.6, 9.5, 9.4, 9.3, 9.67],
+            "weekly_ma_bull": [True, True, True, True, True, True],
+            "max_vol_not_bearish": [True, True, True, True, True, True],
+            "chg_d": [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            "amp_d": [2.0, 2.1, 2.2, 2.3, 2.4, 2.5],
+            "body_d": [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0],
+            "vm3": [100.0, 100.0, 100.0, 100.0, 100.0, 90.0],
+            "vm5": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "vm10": [100.0, 100.0, 100.0, 100.0, 100.0, 120.0],
+            "m5": [10.0, 9.9, 9.8, 9.7, 9.6, 9.7],
+            "v_shrink": [True, True, True, True, True, True],
+            "safe_mode": [True, True, True, True, True, True],
+            "lt_filter": [True, True, True, True, True, True],
+            "turnover_n": [1000.0, 2000.0, 3000.0, 3500.0, 3800.0, 4000.0],
         }
     )
     failing = passing.copy()
-    failing["close"] = [10.4, 10.8, 10.3]
+    failing["close"] = [10.0, 9.96, 9.65, 9.60, 9.56, 9.50]
 
     passing["ts_code"] = "000001.SZ"
     failing["ts_code"] = "000002.SZ"
@@ -562,69 +606,80 @@ def test_run_b1_screen_filters_symbols_on_pick_date() -> None:
     assert result == [
         {
             "code": "000001.SZ",
-            "pick_date": "2026-04-03",
-            "close": 11.0,
-            "turnover_n": 3892.5,
+            "pick_date": "2026-04-06",
+            "close": 9.87,
+            "turnover_n": 4000.0,
+            "yellow_b1": True,
         }
     ]
 
 
-def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> None:
-    pick_date = pd.Timestamp("2026-04-03")
+def test_run_b1_screen_marks_yellow_b1_without_filtering_legacy_candidates() -> None:
+    pick_date = pd.Timestamp("2026-04-06")
 
-    def make_frame(
-        *,
-        j: float = 10.0,
-        close: float = 11.0,
-        zxdq: float = 10.8,
-        zxdkx: float = 10.4,
-        weekly_ma_bull: bool = True,
-        max_vol_not_bearish_value: bool = True,
-        chg_d: float = 1.0,
-        v_shrink: bool = True,
-        safe_mode: bool = True,
-        lt_filter: bool = True,
-    ) -> pd.DataFrame:
+    def make_frame(*, closes: list[float]) -> pd.DataFrame:
         return pd.DataFrame(
             {
-                "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"]),
-                "open": [10.0, 10.2, 10.5],
-                "close": [10.4, 10.8, close],
-                "high": [10.5, 10.9, 11.1],
-                "low": [9.9, 10.1, 10.4],
-                "volume": [100.0, 120.0, 150.0],
-                "J": [12.0, 11.0, j],
-                "zxdq": [10.2, 10.5, zxdq],
-                "zxdkx": [10.0, 10.2, zxdkx],
-                "weekly_ma_bull": [True, True, weekly_ma_bull],
-                "max_vol_not_bearish": [True, True, max_vol_not_bearish_value],
-                "chg_d": [0.5, 0.6, chg_d],
-                "amp_d": [2.0, 2.1, 2.2],
-                "body_d": [-1.0, -1.0, -1.0],
-                "vm3": [100.0, 110.0, 90.0],
-                "vm5": [100.0, 110.0, 105.0],
-                "vm10": [100.0, 110.0, 120.0],
-                "m5": [10.2, 10.4, 10.6],
-                "v_shrink": [True, True, v_shrink],
-                "safe_mode": [True, True, safe_mode],
-                "lt_filter": [True, True, lt_filter],
-                "turnover_n": [1020.0, 2280.0, 3892.5],
+                "trade_date": pd.date_range("2026-04-01", periods=6),
+                "open": [10.0, 9.9, 9.6, 9.5, 9.4, closes[-1] - 0.05],
+                "close": closes,
+                "high": [value * 1.02 for value in closes],
+                "low": [value * 0.98 for value in closes],
+                "volume": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+                "J": [20.0, 18.0, 16.0, 13.0, 10.0, 12.0],
+                "zxdq": [9.9, 9.8, 9.7, 9.6, 9.5, closes[-1] + 0.1],
+                "zxdkx": [9.7, 9.6, 9.5, 9.4, 9.3, closes[-1] - 0.2],
+                "weekly_ma_bull": [True, True, True, True, True, True],
+                "max_vol_not_bearish": [True, True, True, True, True, True],
+                "chg_d": [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+                "amp_d": [2.0, 2.1, 2.2, 2.3, 2.4, 2.5],
+                "body_d": [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0],
+                "vm3": [100.0, 100.0, 100.0, 100.0, 100.0, 90.0],
+                "vm5": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+                "vm10": [100.0, 100.0, 100.0, 100.0, 100.0, 120.0],
+                "m5": [10.0, 9.9, 9.8, 9.7, 9.6, 9.7],
+                "v_shrink": [True, True, True, True, True, True],
+                "safe_mode": [True, True, True, True, True, True],
+                "lt_filter": [True, True, True, True, True, True],
+                "turnover_n": [1000.0, 2000.0, 3000.0, 3500.0, 3800.0, 4000.0],
             }
         )
 
+    yellow = make_frame(closes=[10.0, 9.96, 9.65, 9.60, 9.56, 9.87])
+    yellow["ts_code"] = "YELLOW.SZ"
+    not_yellow = make_frame(closes=[10.0, 10.1, 10.2, 10.3, 10.4, 10.5])
+    not_yellow["ts_code"] = "PLAIN.SZ"
+
+    candidates, stats = run_b1_screen_with_stats(
+        pd.concat([yellow, not_yellow], ignore_index=True),
+        pick_date=pick_date,
+        config={"j_threshold": 20.0, "j_q_threshold": 0.5},
+    )
+
+    assert [(candidate["code"], candidate["yellow_b1"]) for candidate in candidates] == [
+        ("YELLOW.SZ", True),
+        ("PLAIN.SZ", False),
+    ]
+    assert stats["selected_yellow_b1"] == 1
+    assert stats["selected_non_yellow_b1"] == 1
+
+
+def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> None:
+    pick_date = pd.Timestamp("2026-04-06")
+
     prepared_frames = {}
     for _code, _frame in [
-        ("PASS.SZ", make_frame()),
-        ("FAILJ.SZ", make_frame(j=85.0)),
-        ("FAILCLOSE.SZ", make_frame(close=10.2)),
-        ("FAILZXDQ.SZ", make_frame(zxdq=10.1)),
-        ("FAILWEEKLY.SZ", make_frame(weekly_ma_bull=False)),
-        ("FAILMAXVOL.SZ", make_frame(max_vol_not_bearish_value=False)),
-        ("FAILCHG.SZ", make_frame(chg_d=5.2)),
-        ("FAILSHRINK.SZ", make_frame(v_shrink=False)),
-        ("FAILSAFE.SZ", make_frame(safe_mode=False)),
-        ("FAILLT.SZ", make_frame(lt_filter=False)),
-        ("MISSING.SZ", make_frame().iloc[[0, 1]].copy()),
+        ("PASS.SZ", _yellow_b1_screen_frame()),
+        ("FAILJ.SZ", _yellow_b1_screen_frame(j=85.0)),
+        ("FAILCLOSE.SZ", _yellow_b1_screen_frame(close=9.4)),
+        ("FAILZXDQ.SZ", _yellow_b1_screen_frame(zxdq=9.1)),
+        ("FAILWEEKLY.SZ", _yellow_b1_screen_frame(weekly_ma_bull=False)),
+        ("FAILMAXVOL.SZ", _yellow_b1_screen_frame(max_vol_not_bearish_value=False)),
+        ("FAILCHG.SZ", _yellow_b1_screen_frame(chg_d=5.2)),
+        ("FAILSHRINK.SZ", _yellow_b1_screen_frame(v_shrink=False)),
+        ("FAILSAFE.SZ", _yellow_b1_screen_frame(safe_mode=False)),
+        ("FAILLT.SZ", _yellow_b1_screen_frame(lt_filter=False)),
+        ("MISSING.SZ", _yellow_b1_screen_frame().iloc[[0, 1]].copy()),
     ]:
         _frame["ts_code"] = _code
         prepared_frames[_code] = _frame
@@ -649,6 +704,8 @@ def test_run_b1_screen_with_stats_reports_first_failed_condition_counts() -> Non
         "fail_v_shrink": 1,
         "fail_safe_mode": 1,
         "fail_lt_filter": 1,
+        "selected_yellow_b1": 1,
+        "selected_non_yellow_b1": 0,
         "selected": 1,
     }
 
@@ -694,6 +751,8 @@ def test_run_b1_screen_with_stats_keeps_legacy_order_before_new_filters() -> Non
     assert stats["fail_v_shrink"] == 0
     assert stats["fail_safe_mode"] == 0
     assert stats["fail_lt_filter"] == 0
+    assert stats["selected_yellow_b1"] == 0
+    assert stats["selected_non_yellow_b1"] == 0
 
 
 def test_run_b1_screen_with_stats_counts_missing_tightening_columns_as_insufficient_history() -> None:
@@ -736,6 +795,8 @@ def test_run_b1_screen_with_stats_counts_missing_tightening_columns_as_insuffici
         "fail_v_shrink": 0,
         "fail_safe_mode": 0,
         "fail_lt_filter": 0,
+        "selected_yellow_b1": 0,
+        "selected_non_yellow_b1": 0,
         "selected": 0,
     }
 
@@ -780,6 +841,8 @@ def test_run_b1_screen_with_stats_counts_missing_zxdkx_as_insufficient_history()
         "fail_v_shrink": 0,
         "fail_safe_mode": 0,
         "fail_lt_filter": 0,
+        "selected_yellow_b1": 0,
+        "selected_non_yellow_b1": 0,
         "selected": 0,
     }
 
@@ -840,6 +903,8 @@ def test_run_b1_screen_with_stats_counts_nan_tightening_booleans_as_first_failur
     assert stats["fail_v_shrink"] == 1
     assert stats["fail_safe_mode"] == 1
     assert stats["fail_lt_filter"] == 1
+    assert stats["selected_yellow_b1"] == 0
+    assert stats["selected_non_yellow_b1"] == 0
     assert stats["selected"] == 0
 
 
@@ -883,36 +948,14 @@ def test_run_b1_screen_with_stats_counts_only_earliest_new_failure() -> None:
     assert stats["fail_v_shrink"] == 0
     assert stats["fail_safe_mode"] == 0
     assert stats["fail_lt_filter"] == 0
+    assert stats["selected_yellow_b1"] == 0
+    assert stats["selected_non_yellow_b1"] == 0
 
 
 def test_run_b1_screen_uses_expanding_history_quantile_per_symbol() -> None:
-    pick_date = pd.Timestamp("2026-04-04")
-    frame = pd.DataFrame(
-        {
-            "trade_date": pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03", "2026-04-04"]),
-            "open": [10.0, 10.1, 10.2, 10.3],
-            "close": [10.2, 10.3, 10.4, 10.5],
-            "high": [10.3, 10.4, 10.5, 10.6],
-            "low": [9.9, 10.0, 10.1, 10.2],
-            "volume": [100.0, 110.0, 120.0, 130.0],
-            "J": [50.0, 10.0, 40.0, 13.0],
-            "zxdq": [10.0, 10.1, 10.2, 10.6],
-            "zxdkx": [9.8, 9.9, 10.0, 10.2],
-            "weekly_ma_bull": [True, True, True, True],
-            "max_vol_not_bearish": [True, True, True, True],
-            "chg_d": [0.5, 0.6, 0.7, 0.8],
-            "amp_d": [2.0, 2.1, 2.2, 2.3],
-            "body_d": [-1.0, -1.0, -1.0, -1.0],
-            "vm3": [100.0, 105.0, 110.0, 90.0],
-            "vm5": [100.0, 105.0, 110.0, 100.0],
-            "vm10": [100.0, 105.0, 110.0, 120.0],
-            "m5": [10.0, 10.1, 10.2, 10.3],
-            "v_shrink": [True, True, True, True],
-            "safe_mode": [True, True, True, True],
-            "lt_filter": [True, True, True, True],
-            "turnover_n": [1000.0, 2000.0, 3000.0, 4000.0],
-        }
-    )
+    pick_date = pd.Timestamp("2026-04-06")
+    frame = _yellow_b1_screen_frame(j=12.0)
+    frame["J"] = [50.0, 10.0, 40.0, 30.0, 10.0, 12.0]
 
     frame["ts_code"] = "PASS.SZ"
     candidates = run_b1_screen(
