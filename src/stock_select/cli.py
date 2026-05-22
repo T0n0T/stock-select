@@ -199,6 +199,15 @@ def _validate_cli_pick_date(pick_date: str) -> str:
         raise typer.BadParameter("pick_date must be a valid date in YYYY-MM-DD format.") from exc
 
 
+def _validate_environment_state(environment_state: str | None) -> str | None:
+    if environment_state is None:
+        return None
+    normalized = environment_state.strip().lower()
+    if normalized not in {"weak", "neutral", "strong"}:
+        raise typer.BadParameter("--environment-state must be one of: weak, neutral, strong.")
+    return normalized
+
+
 def _evaluate_market_environment_for_pick_date(
     *,
     runtime_root: Path,
@@ -530,14 +539,26 @@ def _resolve_review_environment_context(
     runtime_root: Path,
     pick_date: str,
     method: str,
+    environment_state: str | None = None,
+    environment_reason: str | None = None,
 ):
     normalized_method = method.strip().lower()
     if normalized_method not in {"b1", "b2", "left_peak"}:
         return None, None
-    try:
-        resolved_environment = resolve_market_environment(runtime_root, pick_date=pick_date)
-    except ValueError:
-        return None, None
+    normalized_state = _validate_environment_state(environment_state)
+    if normalized_state is not None:
+        resolved_environment = {
+            "state": normalized_state,
+            "interval_start": None,
+            "interval_end": None,
+            "reason": environment_reason,
+            "source": "manual_override",
+        }
+    else:
+        try:
+            resolved_environment = resolve_market_environment(runtime_root, pick_date=pick_date)
+        except ValueError:
+            return None, None
     try:
         profile = get_method_environment_profile(method=normalized_method, state=str(resolved_environment["state"]))
     except ValueError:
@@ -1717,22 +1738,25 @@ def _screen_impl(
     runtime_root: Path,
     pool_source: str,
     pool_file: Path | None,
+    environment_state: str | None = None,
+    environment_reason: str | None = None,
     recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     candidate_dir = runtime_root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_path = _candidate_path(runtime_root, pick_date, method)
-    ensure_market_environment(
-        runtime_root,
-        pick_date=pick_date,
-        evaluation_loader=lambda: _evaluate_market_environment_for_pick_date(
-            runtime_root=runtime_root,
+    if environment_state is None:
+        ensure_market_environment(
+            runtime_root,
             pick_date=pick_date,
-            dsn=dsn,
-            reporter=reporter,
-        ),
-    )
+            evaluation_loader=lambda: _evaluate_market_environment_for_pick_date(
+                runtime_root=runtime_root,
+                pick_date=pick_date,
+                dsn=dsn,
+                reporter=reporter,
+            ),
+        )
     allow_reuse = not recompute
     if allow_reuse and out_path.exists():
         try:
@@ -1970,6 +1994,8 @@ def _screen_intraday_impl(
     runtime_root: Path,
     pool_source: str,
     pool_file: Path | None,
+    environment_state: str | None = None,
+    environment_reason: str | None = None,
     recompute: bool = False,
     reporter: ProgressReporter | None = None,
 ) -> Path:
@@ -2222,6 +2248,8 @@ def _review_impl(
     pick_date: str,
     dsn: str | None,
     runtime_root: Path,
+    environment_state: str | None = None,
+    environment_reason: str | None = None,
     llm_min_baseline_score: float | None = None,
     llm_review_limit: int | None = None,
     reporter: ProgressReporter | None = None,
@@ -2249,6 +2277,8 @@ def _review_impl(
         runtime_root=runtime_root,
         pick_date=pick_date,
         method=normalized_method,
+        environment_state=environment_state,
+        environment_reason=environment_reason,
     )
     if reporter:
         reporter.emit("review", f"candidates={len(candidates)}")
@@ -2330,6 +2360,8 @@ def _review_impl(
             "interval_start": resolved_environment.get("interval_start"),
             "source": resolved_environment.get("source"),
         }
+        if resolved_environment.get("reason") is not None:
+            summary["environment_snapshot"]["reason"] = resolved_environment.get("reason")
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
     llm_review_tasks = _limit_llm_review_tasks(llm_review_tasks, limit=llm_review_limit)
@@ -2359,6 +2391,8 @@ def _review_intraday_impl(
     *,
     method: str,
     runtime_root: Path,
+    environment_state: str | None = None,
+    environment_reason: str | None = None,
     llm_min_baseline_score: float | None = None,
     llm_review_limit: int | None = None,
     reporter: ProgressReporter | None = None,
@@ -2391,6 +2425,8 @@ def _review_intraday_impl(
         runtime_root=runtime_root,
         pick_date=pick_date,
         method=normalized_method,
+        environment_state=environment_state,
+        environment_reason=environment_reason,
     )
     if reporter:
         reporter.emit("review", f"candidates={len(candidates)} intraday_run_id={run_id}")
@@ -2474,6 +2510,8 @@ def _review_intraday_impl(
             "interval_start": resolved_environment.get("interval_start"),
             "source": resolved_environment.get("source"),
         }
+        if resolved_environment.get("reason") is not None:
+            summary["environment_snapshot"]["reason"] = resolved_environment.get("reason")
     summary_path = review_dir / "summary.json"
     tasks_path = review_dir / "llm_review_tasks.json"
     llm_review_tasks = _limit_llm_review_tasks(llm_review_tasks, limit=llm_review_limit)
@@ -2727,6 +2765,8 @@ def _analyze_symbol_impl(
     pick_date: str | None,
     dsn: str | None,
     runtime_root: Path,
+    environment_state: str | None = None,
+    environment_reason: str | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Path:
     try:
@@ -2808,6 +2848,8 @@ def _analyze_symbol_impl(
         runtime_root=runtime_root,
         pick_date=resolved_pick_date,
         method=method.lower(),
+        environment_state=environment_state,
+        environment_reason=environment_reason,
     )
 
     if reporter:
@@ -3075,11 +3117,14 @@ def screen(
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
+    environment_state: str | None = typer.Option(None, "--environment-state"),
+    environment_reason: str | None = typer.Option(None, "--environment-reason"),
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_cli_method(method)
     normalized_pool_source = _validate_pool_source(pool_source)
+    resolved_environment_state = _validate_environment_state(environment_state)
     reporter = ProgressReporter(enabled=progress)
     try:
         if intraday:
@@ -3093,6 +3138,8 @@ def screen(
                 runtime_root=runtime_root,
                 pool_source=normalized_pool_source,
                 pool_file=pool_file,
+                environment_state=resolved_environment_state,
+                environment_reason=environment_reason,
                 recompute=recompute,
                 reporter=reporter,
             )
@@ -3106,6 +3153,8 @@ def screen(
                 runtime_root=runtime_root,
                 pool_source=normalized_pool_source,
                 pool_file=pool_file,
+                environment_state=resolved_environment_state,
+                environment_reason=environment_reason,
                 recompute=recompute,
                 reporter=reporter,
             )
@@ -3150,6 +3199,8 @@ def review(
     dsn: str | None = typer.Option(None, "--dsn"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
+    environment_state: str | None = typer.Option(None, "--environment-state"),
+    environment_reason: str | None = typer.Option(None, "--environment-reason"),
     llm_min_baseline_score: float | None = typer.Option(None, "--llm-min-baseline-score"),
     llm_review_limit: int | None = typer.Option(None, "--llm-review-limit"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
@@ -3157,6 +3208,7 @@ def review(
     normalized_method = _validate_review_method(method)
     validated_llm_min_baseline_score = _validate_llm_min_baseline_score(llm_min_baseline_score)
     validated_llm_review_limit = _validate_llm_review_limit(llm_review_limit)
+    resolved_environment_state = _validate_environment_state(environment_state)
     reporter = ProgressReporter(enabled=progress)
     if intraday:
         if pick_date is not None:
@@ -3165,6 +3217,8 @@ def review(
         summary_path = _review_intraday_impl(
             method=normalized_method,
             runtime_root=runtime_root,
+            environment_state=resolved_environment_state,
+            environment_reason=environment_reason,
             llm_min_baseline_score=validated_llm_min_baseline_score,
             llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
@@ -3177,6 +3231,8 @@ def review(
             pick_date=pick_date,
             dsn=dsn,
             runtime_root=runtime_root,
+            environment_state=resolved_environment_state,
+            environment_reason=environment_reason,
             llm_min_baseline_score=validated_llm_min_baseline_score,
             llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
@@ -3191,9 +3247,12 @@ def analyze_symbol(
     pick_date: str | None = typer.Option(None, "--pick-date"),
     dsn: str | None = typer.Option(None, "--dsn"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
+    environment_state: str | None = typer.Option(None, "--environment-state"),
+    environment_reason: str | None = typer.Option(None, "--environment-reason"),
     progress: bool = typer.Option(True, "--progress/--no-progress"),
 ) -> None:
     normalized_method = _validate_review_method(method)
+    resolved_environment_state = _validate_environment_state(environment_state)
     reporter = ProgressReporter(enabled=progress)
     result_path = _analyze_symbol_impl(
         method=normalized_method,
@@ -3201,6 +3260,8 @@ def analyze_symbol(
         pick_date=pick_date,
         dsn=dsn,
         runtime_root=runtime_root,
+        environment_state=resolved_environment_state,
+        environment_reason=environment_reason,
         reporter=reporter,
     )
     typer.echo(str(result_path))
@@ -3402,6 +3463,8 @@ def run_all(
     tushare_token: str | None = typer.Option(None, "--tushare-token"),
     runtime_root: Path = typer.Option(_default_runtime_root(), "--runtime-root"),
     intraday: bool = typer.Option(False, "--intraday/--no-intraday"),
+    environment_state: str | None = typer.Option(None, "--environment-state"),
+    environment_reason: str | None = typer.Option(None, "--environment-reason"),
     llm_min_baseline_score: float | None = typer.Option(None, "--llm-min-baseline-score"),
     llm_review_limit: int | None = typer.Option(None, "--llm-review-limit"),
     recompute: bool = typer.Option(False, "--recompute/--no-recompute"),
@@ -3411,12 +3474,12 @@ def run_all(
     normalized_pool_source = _validate_pool_source(pool_source)
     validated_llm_min_baseline_score = _validate_llm_min_baseline_score(llm_min_baseline_score)
     validated_llm_review_limit = _validate_llm_review_limit(llm_review_limit)
+    resolved_environment_state = _validate_environment_state(environment_state)
     reporter = ProgressReporter(enabled=progress)
     if intraday and pick_date is not None:
         raise typer.BadParameter("--pick-date and --intraday are mutually exclusive.")
     if not intraday and pick_date is None:
         raise typer.BadParameter("--pick-date is required unless --intraday is set.")
-
     reporter.emit("run", "step=screen start")
     screen_started_at = reporter.checkpoint()
     if intraday:
@@ -3428,6 +3491,8 @@ def run_all(
             runtime_root=runtime_root,
             pool_source=normalized_pool_source,
             pool_file=pool_file,
+            environment_state=resolved_environment_state,
+            environment_reason=environment_reason,
             recompute=recompute,
             reporter=reporter,
         )
@@ -3439,6 +3504,8 @@ def run_all(
             runtime_root=runtime_root,
             pool_source=normalized_pool_source,
             pool_file=pool_file,
+            environment_state=resolved_environment_state,
+            environment_reason=environment_reason,
             recompute=recompute,
             reporter=reporter,
         )
@@ -3464,6 +3531,8 @@ def run_all(
         review_path = _review_intraday_impl(
             method=normalized_method,
             runtime_root=runtime_root,
+            environment_state=resolved_environment_state,
+            environment_reason=environment_reason,
             llm_min_baseline_score=validated_llm_min_baseline_score,
             llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
@@ -3474,6 +3543,8 @@ def run_all(
             pick_date=pick_date,
             dsn=dsn,
             runtime_root=runtime_root,
+            environment_state=resolved_environment_state,
+            environment_reason=environment_reason,
             llm_min_baseline_score=validated_llm_min_baseline_score,
             llm_review_limit=validated_llm_review_limit,
             reporter=reporter,
