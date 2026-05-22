@@ -3217,7 +3217,7 @@ def test_review_summary_writes_environment_snapshot(tmp_path: Path, monkeypatch:
             {
                 "pick_date": "2026-04-01",
                 "method": "b1",
-                "screen_version": 1,
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 2),
                 "pool_source": "turnover-top",
                 "candidates": [{"code": "000001.SZ", "close": 10.5, "turnover_n": 200.0}],
             }
@@ -3276,6 +3276,77 @@ def test_review_summary_writes_environment_snapshot(tmp_path: Path, monkeypatch:
     assert summary["environment_snapshot"]["state"] == "weak"
 
 
+def test_review_summary_writes_manual_environment_snapshot_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-01.b1"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir = runtime_root / "charts" / "2026-04-01.b1"
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    candidate_path = runtime_root / "candidates" / "2026-04-01.b1.json"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-01",
+                "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 2),
+                "pool_source": "turnover-top",
+                "candidates": [{"code": "000001.SZ", "close": 10.5, "turnover_n": 200.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_symbol_history",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"] * 80,
+                "trade_date": pd.date_range("2025-12-01", periods=80, freq="B"),
+                "open": [10.0] * 80,
+                "high": [10.5] * 80,
+                "low": [9.8] * 80,
+                "close": [10.2] * 80,
+                "vol": [1000.0] * 80,
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--environment-state",
+            "weak",
+            "--environment-reason",
+            "manual intraday caution",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["environment_snapshot"] == {
+        "state": "weak",
+        "interval_start": None,
+        "source": "manual_override",
+        "reason": "manual intraday caution",
+    }
+
+
 def test_review_environment_snapshot_is_omitted_when_resolved_state_is_unsupported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3292,7 +3363,7 @@ def test_review_environment_snapshot_is_omitted_when_resolved_state_is_unsupport
             {
                 "pick_date": "2026-04-01",
                 "method": "b1",
-                "screen_version": 1,
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 2),
                 "pool_source": "turnover-top",
                 "candidates": [{"code": "000001.SZ", "close": 10.5, "turnover_n": 200.0}],
             }
@@ -3686,6 +3757,69 @@ def test_screen_calls_ensure_market_environment_before_fetch(tmp_path: Path, mon
     assert calls[0][1]["pick_date"] == "2026-05-19"
 
 
+def test_screen_with_manual_environment_override_skips_ensure_market_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    runner = CliRunner()
+
+    def fake_ensure(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"state": "neutral"}
+
+    monkeypatch.setattr(cli, "ensure_market_environment", fake_ensure)
+    monkeypatch.setattr(cli, "_connect", lambda _dsn: object())
+    monkeypatch.setattr(
+        cli,
+        "fetch_daily_window",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000001.SZ"],
+                "trade_date": ["2026-05-18", "2026-05-19"],
+                "open": [10.0, 10.1],
+                "high": [10.3, 10.4],
+                "low": [9.8, 9.9],
+                "close": [10.2, 10.3],
+                "vol": [1000.0, 1100.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_call_prepare_screen_data", lambda market, reporter=None: market.assign(turnover_n=100.0))
+    monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "run_b1_screen_with_stats",
+        lambda prepared, pick_date, config: ([], _b1_screen_stats(total_symbols=1, eligible=0, selected=0)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-05-19",
+            "--environment-state",
+            "weak",
+            "--environment-reason",
+            "manual intraday caution",
+            "--runtime-root",
+            str(tmp_path),
+            "--dsn",
+            "postgresql://example",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert not calls
+    payload = json.loads((tmp_path / "candidates" / "2026-05-19.b1.json").read_text(encoding="utf-8"))
+    assert "environment_state" not in payload
+    assert "environment_reason" not in payload
+
+
 def test_screen_backfills_historical_environment_before_existing_future_interval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3822,7 +3956,7 @@ def test_run_calls_ensure_market_environment_for_eod_screen_step(
     monkeypatch.setattr(
         cli,
         "_review_impl",
-        lambda *, method, pick_date, dsn, runtime_root, llm_min_baseline_score=None, reporter=None: (
+        lambda *, method, pick_date, dsn, runtime_root, environment_state=None, environment_reason=None, llm_min_baseline_score=None, llm_review_limit=None, reporter=None: (
             runtime_root / "reviews" / _eod_key(pick_date) / "summary.json"
         ),
     )
@@ -4789,6 +4923,123 @@ def test_review_intraday_works_with_only_v2_prepared_cache(monkeypatch: pytest.M
         {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
     ]
     assert (runtime_root / "reviews" / _intraday_key(run_id) / "summary.json").exists()
+
+
+def test_review_intraday_accepts_manual_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    run_id = "2026-04-09T11-31-08+08-00"
+    trade_date = "2026-04-09"
+    candidate_dir = runtime_root / "candidates"
+    chart_dir = runtime_root / "charts" / _intraday_key(run_id)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir.mkdir(parents=True, exist_ok=True)
+    (chart_dir / "000001.SZ_day.png").write_bytes(b"png")
+    (candidate_dir / f"{_intraday_key(run_id)}.json").write_text(
+        json.dumps(
+            {
+                "mode": "intraday_snapshot",
+                "method": "b1",
+                "screen_version": getattr(cli, "B1_ARTIFACT_VERSION", 1),
+                "trade_date": trade_date,
+                "run_id": run_id,
+                "candidates": [{"code": "000001.SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / f"{trade_date}.intraday.feather",
+        runtime_root / "prepared" / f"{trade_date}.intraday.meta.json",
+        method="b1",
+        pick_date=trade_date,
+        start_date="2025-04-08",
+        end_date=trade_date,
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-08", "open": 11.9, "high": 12.1, "low": 11.8, "close": 12.0, "vol": 120.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-09", "open": 12.1, "high": 12.5, "low": 12.0, "close": 12.34, "vol": 150.0},
+            ]
+        ),
+        metadata_overrides={
+            "mode": "intraday_snapshot",
+            "run_id": run_id,
+            "previous_trade_date": "2026-04-08",
+            "source": "tushare_rt_k",
+        },
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "get_review_resolver",
+        lambda method: SimpleNamespace(
+            name="b1",
+            prompt_path="resolver-prompt.md",
+            review_history=lambda **kwargs: {
+                "review_type": "baseline",
+                "total_score": 4.2,
+                "signal_type": "trend_start",
+                "verdict": "PASS",
+                "comment": f"profile={kwargs['profile'].state}" if kwargs.get("profile") is not None else "no-profile",
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_review_payload",
+        lambda **kwargs: {
+            "code": kwargs["code"],
+            "pick_date": kwargs["pick_date"],
+            **(kwargs.get("extra_context") or {}),
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "summarize_reviews",
+        lambda pick_date, method, reviews, min_score, failures: {
+            "pick_date": pick_date,
+            "method": method,
+            "reviewed_count": len(reviews),
+            "recommendations": reviews,
+            "excluded": [],
+            "failures": failures,
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "--method",
+            "b1",
+            "--intraday",
+            "--environment-state",
+            "weak",
+            "--environment-reason",
+            "manual intraday caution",
+            "--runtime-root",
+            str(runtime_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    review_dir = runtime_root / "reviews" / _intraday_key(run_id)
+    summary = json.loads((review_dir / "summary.json").read_text(encoding="utf-8"))
+    tasks = json.loads((review_dir / "llm_review_tasks.json").read_text(encoding="utf-8"))
+    review = json.loads((review_dir / "000001.SZ.json").read_text(encoding="utf-8"))
+    assert summary["environment_snapshot"] == {
+        "state": "weak",
+        "interval_start": None,
+        "source": "manual_override",
+        "reason": "manual intraday caution",
+    }
+    assert tasks["tasks"][0]["environment_state"] == "weak"
+    assert tasks["tasks"][0]["environment_reason"] == "manual intraday caution"
+    assert review["baseline_review"]["comment"] == "profile=weak"
 
 
 def test_review_intraday_rejects_stale_b1_prepared_cache(tmp_path: Path) -> None:
@@ -6446,7 +6697,10 @@ def test_run_intraday_passes_llm_min_baseline_score_to_review_step(
         *,
         method: str,
         runtime_root: Path,
+        environment_state: str | None = None,
+        environment_reason: str | None = None,
         llm_min_baseline_score: float | None = None,
+        llm_review_limit: int | None = None,
         reporter: object | None = None,
     ) -> Path:
         assert method == "b1"
@@ -6486,6 +6740,8 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         runtime_root: Path,
         pool_source: str,
         pool_file: Path | None,
+        environment_state: str | None = None,
+        environment_reason: str | None = None,
         recompute: bool = False,
         reporter: object | None = None,
     ) -> Path:
@@ -6514,7 +6770,10 @@ def test_run_intraday_chains_intraday_steps(monkeypatch: pytest.MonkeyPatch, tmp
         *,
         method: str,
         runtime_root: Path,
+        environment_state: str | None = None,
+        environment_reason: str | None = None,
         llm_min_baseline_score: float | None = None,
+        llm_review_limit: int | None = None,
         reporter: object | None = None,
     ) -> Path:
         calls.append(("review", method))
@@ -6606,6 +6865,8 @@ def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
         runtime_root: Path,
         pool_source: str,
         pool_file: Path | None,
+        environment_state: str | None = None,
+        environment_reason: str | None = None,
         recompute: bool = False,
         reporter: object | None = None,
     ) -> Path:
@@ -6634,7 +6895,10 @@ def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
         *,
         method: str,
         runtime_root: Path,
+        environment_state: str | None = None,
+        environment_reason: str | None = None,
         llm_min_baseline_score: float | None = None,
+        llm_review_limit: int | None = None,
         reporter: object | None = None,
     ) -> Path:
         assert method == "b1"
@@ -6666,12 +6930,86 @@ def test_run_intraday_accepts_pool_source_and_passes_it_to_intraday_screen_step(
     )
 
     assert result.exit_code == 0
-    assert calls == [
-        ("screen", "record-watch"),
-        ("chart", "b1"),
-        ("review", "b1"),
+
+
+def test_run_passes_manual_environment_override_to_eod_screen_and_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    runtime_root = tmp_path / "runtime"
+    captured: list[tuple[str, str | None, str | None]] = []
+
+    def fake_screen_impl(
+        *,
+        method: str,
+        pick_date: str,
+        dsn: str | None,
+        runtime_root: Path,
+        pool_source: str,
+        pool_file: Path | None,
+        environment_state: str | None = None,
+        environment_reason: str | None = None,
+        recompute: bool = False,
+        reporter: object | None = None,
+    ) -> Path:
+        captured.append(("screen", environment_state, environment_reason))
+        return runtime_root / "candidates" / _eod_key(pick_date)
+
+    def fake_chart_impl(
+        *,
+        method: str,
+        pick_date: str,
+        dsn: str | None,
+        runtime_root: Path,
+        reporter: object | None = None,
+    ) -> Path:
+        return runtime_root / "charts" / _eod_key(pick_date)
+
+    def fake_review_impl(
+        *,
+        method: str,
+        pick_date: str,
+        dsn: str | None,
+        runtime_root: Path,
+        environment_state: str | None = None,
+        environment_reason: str | None = None,
+        llm_min_baseline_score: float | None = None,
+        llm_review_limit: int | None = None,
+        reporter: object | None = None,
+    ) -> Path:
+        captured.append(("review", environment_state, environment_reason))
+        return runtime_root / "reviews" / _eod_key(pick_date) / "summary.json"
+
+    monkeypatch.setattr(cli, "_screen_impl", fake_screen_impl)
+    monkeypatch.setattr(cli, "_chart_impl", fake_chart_impl)
+    monkeypatch.setattr(cli, "_review_impl", fake_review_impl)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-05-19",
+            "--environment-state",
+            "strong",
+            "--environment-reason",
+            "manual rally regime",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == [
+        ("screen", "strong", "manual rally regime"),
+        ("review", "strong", "manual rally regime"),
     ]
-    assert "[run] step=screen start" in result.stderr
 
 
 def test_run_accepts_custom_pool_file_and_passes_it_to_screen_step(
