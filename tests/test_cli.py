@@ -47,6 +47,8 @@ def _b1_screen_stats(*, total_symbols: int, eligible: int, selected: int, **over
         "fail_v_shrink": 0,
         "fail_safe_mode": 0,
         "fail_lt_filter": 0,
+        "selected_yellow_b1": 0,
+        "selected_non_yellow_b1": selected,
         "selected": selected,
     }
     stats.update(overrides)
@@ -7960,7 +7962,7 @@ def test_screen_can_disable_progress_output(tmp_path: Path) -> None:
     assert result.stderr == ""
 
 
-def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
+def test_screen_emits_filter_breakdown_stats(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
 
@@ -7991,12 +7993,12 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
 
     from stock_select import cli
 
-    cli._connect = fake_connect  # type: ignore[assignment]
-    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
-    cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
-
-    original_run = cli.run_b1_screen_with_stats
-    original_pool = cli.build_top_turnover_pool
+    monkeypatch.setattr(cli, "_connect", fake_connect)
+    monkeypatch.setattr(cli, "fetch_daily_window", fake_fetch_daily_window)
+    monkeypatch.setattr(cli, "_prepare_screen_data", fake_prepare_screen_data)
+    monkeypatch.setattr(cli, "_validate_eod_pick_date_has_market_data", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_write_prepared_cache_v2", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "ensure_market_environment", lambda *args, **kwargs: None)
 
     def fake_run_b1_screen_with_stats(
         prepared_table: pd.DataFrame,
@@ -8022,6 +8024,8 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
                 fail_v_shrink=5,
                 fail_safe_mode=6,
                 fail_lt_filter=7,
+                selected_yellow_b1=8,
+                selected_non_yellow_b1=9,
             ),
         )
 
@@ -8029,33 +8033,30 @@ def test_screen_emits_filter_breakdown_stats(tmp_path: Path) -> None:
         assert top_m == 5000
         return {pd.Timestamp("2026-04-01"): ["000001.SZ"]}
 
-    cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
-    cli.build_top_turnover_pool = fake_build_top_turnover_pool  # type: ignore[assignment]
+    monkeypatch.setattr(cli, "run_b1_screen_with_stats", fake_run_b1_screen_with_stats)
+    monkeypatch.setattr(cli, "build_top_turnover_pool", fake_build_top_turnover_pool)
 
-    try:
-        result = runner.invoke(
-            app,
-            [
-                "screen",
-                "--method",
-                "b1",
-                "--pick-date",
-                "2026-04-01",
-                "--runtime-root",
-                str(runtime_root),
-                "--dsn",
-                "postgresql://example",
-            ],
-        )
-    finally:
-        cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
-        cli.build_top_turnover_pool = original_pool  # type: ignore[assignment]
+    result = runner.invoke(
+        app,
+        [
+            "screen",
+            "--method",
+            "b1",
+            "--pick-date",
+            "2026-04-01",
+            "--runtime-root",
+            str(runtime_root),
+            "--dsn",
+            "postgresql://example",
+        ],
+    )
 
     assert result.exit_code == 0
     assert (
         "[screen] breakdown total_symbols=10 eligible=8 fail_j=2 fail_insufficient_history=3 "
         "fail_close_zxdkx=1 fail_zxdq_zxdkx=2 fail_weekly_ma=1 fail_max_vol=1 "
-        "fail_chg_cap=4 fail_v_shrink=5 fail_safe_mode=6 fail_lt_filter=7 selected=1"
+        "fail_chg_cap=4 fail_v_shrink=5 fail_safe_mode=6 fail_lt_filter=7 "
+        "selected_yellow_b1=8 selected_non_yellow_b1=9 selected=1"
     ) in result.stderr
 
 
@@ -11220,7 +11221,10 @@ def test_screen_reuses_existing_non_empty_candidate_file_without_recomputing(tmp
     assert "[screen] reuse candidates path=" in result.stderr
 
 
-def test_screen_ignores_stale_b1_candidate_file_without_screen_version_and_recomputes(tmp_path: Path) -> None:
+def test_screen_ignores_stale_b1_candidate_file_without_screen_version_and_recomputes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     candidate_dir = runtime_root / "candidates"
@@ -11307,6 +11311,7 @@ def test_screen_ignores_stale_b1_candidate_file_without_screen_version_and_recom
     cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
     cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
     cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
+    monkeypatch.setattr(cli, "ensure_market_environment", lambda *args, **kwargs: None)
 
     try:
         result = runner.invoke(
@@ -11826,61 +11831,59 @@ def test_screen_hcr_ignores_prepared_cache_missing_pool_moving_averages(tmp_path
     assert "[screen] write prepared path=" in result.stderr
 
 
-def test_screen_ignores_stale_b1_prepared_cache_without_screen_version_and_recomputes(tmp_path: Path) -> None:
+def test_screen_reuses_legacy_b1_prepared_cache_without_screen_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
-    (runtime_root / "prepared").mkdir(parents=True, exist_ok=True)
+    prepared_table = pd.DataFrame(
+        {
+            "ts_code": ["BBB.SZ"],
+            "trade_date": pd.to_datetime(["2026-04-01"]),
+            "open": [11.0],
+            "high": [11.5],
+            "low": [10.9],
+            "close": [11.6],
+            "vol": [120.0],
+            "turnover_n": [200.0],
+            "J": [10.0],
+            "zxdq": [11.5],
+            "zxdkx": [11.2],
+            "weekly_ma_bull": [True],
+            "max_vol_not_bearish": [True],
+            "chg_d": [1.0],
+            "amp_d": [2.0],
+            "body_d": [-1.0],
+            "vm3": [90.0],
+            "vm5": [100.0],
+            "vm10": [120.0],
+            "m5": [10.4],
+            "v_shrink": [True],
+            "safe_mode": [True],
+            "lt_filter": [True],
+        }
+    )
+    cli._write_prepared_cache_v2(
+        runtime_root / "prepared" / "2026-04-01.feather",
+        runtime_root / "prepared" / "2026-04-01.meta.json",
+        pick_date="2026-04-01",
+        start_date="2025-03-31",
+        end_date="2026-04-01",
+        prepared_table=prepared_table,
+        metadata_overrides={"screen_version": 1},
+    )
 
-    calls = {"connect": 0, "prepare": 0}
+    def fail_connect(_: str) -> object:
+        raise AssertionError("b1 screen should not connect when legacy prepared cache is reusable")
 
-    def fake_connect(_: str) -> object:
-        calls["connect"] += 1
-        return object()
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("b1 screen should not fetch market window when legacy prepared cache is reusable")
 
-    def fake_fetch_daily_window(
-        connection: object,
-        *,
-        start_date: str,
-        end_date: str,
-        symbols: list[str] | None = None,
-    ) -> pd.DataFrame:
-        return pd.DataFrame(
-            {
-                "ts_code": ["BBB.SZ"],
-                "trade_date": pd.to_datetime(["2026-04-01"]),
-                "open": [11.0],
-                "high": [11.5],
-                "low": [10.9],
-                "close": [11.4],
-                "vol": [120.0],
-            }
-        )
+    def fail_prepare(*args, **kwargs) -> pd.DataFrame:
+        raise AssertionError("b1 screen should not prepare data when legacy prepared cache is reusable")
 
-    def fake_prepare_screen_data(_: pd.DataFrame) -> pd.DataFrame:
-        calls["prepare"] += 1
-        return pd.DataFrame(
-            {
-                "ts_code": ["BBB.SZ"],
-                "trade_date": pd.to_datetime(["2026-04-01"]),
-                "turnover_n": [200.0],
-                "J": [10.0],
-                "zxdq": [11.5],
-                "zxdkx": [11.2],
-                "weekly_ma_bull": [True],
-                "max_vol_not_bearish": [True],
-                "close": [11.6],
-                "chg_d": [1.0],
-                "amp_d": [2.0],
-                "body_d": [-1.0],
-                "vm3": [90.0],
-                "vm5": [100.0],
-                "vm10": [120.0],
-                "m5": [10.4],
-                "v_shrink": [True],
-                "safe_mode": [True],
-                "lt_filter": [True],
-            }
-        )
+    monkeypatch.setattr(cli, "ensure_market_environment", lambda *args, **kwargs: None)
 
     def fake_run_b1_screen_with_stats(
         prepared_subset: pd.DataFrame,
@@ -11897,9 +11900,9 @@ def test_screen_ignores_stale_b1_prepared_cache_without_screen_version_and_recom
     original_prepare = cli._prepare_screen_data
     original_run = cli.run_b1_screen_with_stats
 
-    cli._connect = fake_connect  # type: ignore[assignment]
-    cli.fetch_daily_window = fake_fetch_daily_window  # type: ignore[assignment]
-    cli._prepare_screen_data = fake_prepare_screen_data  # type: ignore[assignment]
+    cli._connect = fail_connect  # type: ignore[assignment]
+    cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
+    cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
     cli.run_b1_screen_with_stats = fake_run_b1_screen_with_stats  # type: ignore[assignment]
 
     try:
@@ -11924,11 +11927,13 @@ def test_screen_ignores_stale_b1_prepared_cache_without_screen_version_and_recom
         cli.run_b1_screen_with_stats = original_run  # type: ignore[assignment]
 
     assert result.exit_code == 0
-    assert calls == {"connect": 1, "prepare": 1}
-    assert "[screen] reuse prepared path=" not in result.stderr
+    assert "[screen] reuse prepared path=" in result.stderr
 
 
-def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(tmp_path: Path) -> None:
+def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     runner = CliRunner()
     runtime_root = tmp_path / "runtime"
     prepared_table = pd.DataFrame(
@@ -11999,6 +12004,7 @@ def test_screen_b2_reuses_shared_prepared_cache_when_candidate_output_missing(tm
     cli.fetch_daily_window = fail_fetch  # type: ignore[assignment]
     cli._prepare_screen_data = fail_prepare  # type: ignore[assignment]
     cli.run_b2_screen_with_stats = fake_run_b2_screen_with_stats  # type: ignore[assignment]
+    monkeypatch.setattr(cli, "ensure_market_environment", lambda *args, **kwargs: None)
 
     try:
         result = runner.invoke(

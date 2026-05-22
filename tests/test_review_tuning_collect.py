@@ -152,6 +152,65 @@ def test_collect_review_samples_reads_subscores_from_baseline_review(tmp_path: P
     assert rows[0]["verdict"] == "PASS"
 
 
+def test_collect_review_samples_preserves_b1_yellow_signal_flag(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    review_dir = runtime_root / "reviews" / "2026-04-10.b1"
+    review_dir.mkdir(parents=True)
+    (review_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "pick_date": "2026-04-10",
+                "recommendations": [
+                    {
+                        "code": "000001.SZ",
+                        "total_score": 4.2,
+                        "trend_structure": 4.0,
+                        "price_position": 5.0,
+                        "volume_behavior": 3.0,
+                        "previous_abnormal_move": 5.0,
+                        "macd_phase": 4.5,
+                        "verdict": "PASS",
+                        "yellow_b1": True,
+                    }
+                ],
+                "excluded": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prepared_root = tmp_path / "prepared"
+    prepared_root.mkdir()
+    cli._write_prepared_cache_v2(
+        prepared_root / "2026-04-15.feather",
+        prepared_root / "2026-04-15.meta.json",
+        method="b1",
+        pick_date="2026-04-15",
+        start_date="2026-04-01",
+        end_date="2026-04-15",
+        prepared_table=pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-10", "open": 10.0, "close": 10.0},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-11", "open": 10.1, "close": 10.2},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-12", "open": 10.2, "close": 10.3},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-13", "open": 10.3, "close": 10.4},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-14", "open": 10.4, "close": 10.5},
+                {"ts_code": "000001.SZ", "trade_date": "2026-04-15", "open": 10.5, "close": 10.6},
+            ]
+        ),
+    )
+
+    rows = collect_review_samples(
+        methods=["b1"],
+        start_date="2026-04-01",
+        end_date="2026-04-30",
+        runtime_root=runtime_root,
+        prepared_root=prepared_root,
+    )
+
+    assert rows[0]["yellow_b1"] is True
+
+
 def test_collect_review_samples_picks_latest_prepared_snapshot_on_or_before_end_date(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
     review_dir = runtime_root / "reviews" / "2026-04-10.b2"

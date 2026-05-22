@@ -9,6 +9,9 @@
 `b1` 依赖基础 `prepared` 层中的以下字段：
 
 - `trade_date`
+- `open`
+- `high`
+- `low`
 - `J`
 - `zxdq`
 - `zxdkx`
@@ -113,6 +116,13 @@
 
 全部通过后，股票入选候选。
 
+入选后会额外标注主图公式中的黄色 `B1` 信号，写入候选字段 `yellow_b1`：
+
+- `B1_环境 := TR_OK AND ABOVE_LT AND NOT(CUR_B2)`
+- `转色 := V_DIFF > REF(V_DIFF, 1) AND REF(V_DIFF, 1) <= REF(V_DIFF, 2)`
+- `B1_黄_原 := B1_环境 AND 转色 AND J < 29 AND PCT <= 3.7`
+- `B1_黄 := B1_黄_原 AND COUNT(B1_黄_原, 5) <= 3`
+
 ## 失败计数含义
 
 - `fail_j`: 当前位置不够低，未满足超卖或历史低分位
@@ -126,6 +136,11 @@
 - `fail_safe_mode`: 仍在派发后的危险冷却区
 - `fail_lt_filter`: 长趋势过于反复，且未命中例外放行条件
 
+另有两个入选后统计项：
+
+- `selected_yellow_b1`: 入选且命中黄色 `B1` 信号的数量
+- `selected_non_yellow_b1`: 入选但未命中黄色 `B1` 信号的数量
+
 ## 输出候选字段
 
 通过筛选后，输出：
@@ -134,3 +149,4 @@
 - `pick_date`
 - `close`
 - `turnover_n`
+- `yellow_b1`
