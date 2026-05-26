@@ -179,7 +179,7 @@ git commit -m "feat: add hybrid run command"
 **Files:**
 - Create: `scripts/compare_review.py`
 
-- [ ] **Step 1: Add review comparison script**
+- [x] **Step 1: Add review comparison script**
 
 Compare:
 
@@ -191,7 +191,7 @@ reviews/<pick_date>.<method>/llm_review_tasks.json
 
 For b1, assert `total_score`, `verdict`, `signal_type`, `yellow_b1`, recommendation codes, and task baseline fields match.
 
-- [ ] **Step 2: Compare Python run vs hybrid Rust run**
+- [x] **Step 2: Compare Python run vs hybrid Rust run**
 
 Run Python `run` and Rust hybrid `run` into separate temp roots, then:
 
@@ -202,7 +202,7 @@ python3 scripts/compare_review.py --python-root PY_ROOT --rust-root RS_ROOT --pi
 
 Expected: both PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/compare_review.py

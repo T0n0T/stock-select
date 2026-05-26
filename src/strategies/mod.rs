@@ -34,11 +34,5 @@ pub(crate) fn group_by_symbol(rows: &[PreparedRow]) -> BTreeMap<&str, Vec<&Prepa
 }
 
 pub(crate) fn sort_candidates(candidates: &mut [Candidate]) {
-    candidates.sort_by(|left, right| {
-        right
-            .turnover_n
-            .partial_cmp(&left.turnover_n)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(left.code.cmp(&right.code))
-    });
+    candidates.sort_by(|left, right| left.code.cmp(&right.code));
 }
