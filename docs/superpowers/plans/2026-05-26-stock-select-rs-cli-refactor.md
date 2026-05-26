@@ -114,7 +114,7 @@ git commit -m "test: add multi-date b1 screen regression"
 - Modify: `src/cli.rs`
 - Create: `tests/cli_args.rs`
 
-- [ ] **Step 1: Add Python bridge**
+- [x] **Step 1: Add Python bridge**
 
 Implement a bridge that runs:
 
@@ -125,7 +125,7 @@ uv run stock-select review --method METHOD --pick-date DATE --runtime-root ROOT
 
 with working directory `/home/pi/Documents/agents/stock-select`, inherited `POSTGRES_DSN`, and optional `--environment-state` / `--environment-reason` forwarding for review.
 
-- [ ] **Step 2: Add `run` command**
+- [x] **Step 2: Add `run` command**
 
 `stock-select-rs run` should accept the same core options as `screen`:
 
@@ -147,11 +147,11 @@ Rust screen -> Python chart -> Python review
 
 and prints stage elapsed time to stderr.
 
-- [ ] **Step 3: Add unit tests for command construction**
+- [x] **Step 3: Add unit tests for command construction**
 
 Tests verify bridge command arguments for chart/review and that `run` rejects unsupported methods through existing method parsing.
 
-- [ ] **Step 4: Run a full hybrid b1 run**
+- [x] **Step 4: Run a full hybrid b1 run**
 
 Run:
 
@@ -167,7 +167,7 @@ cargo run --release -- run \
 
 Expected: candidates, charts, reviews, `summary.json`, and `llm_review_tasks.json` exist.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src tests

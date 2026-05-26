@@ -10,6 +10,7 @@ use crate::config::{default_runtime_root, resolve_dsn_from_env, screen_window};
 use crate::model::{MarketRow, Method, PreparedRow};
 use crate::output::{build_screen_result, write_screen_result};
 use crate::prepare::prepare_rows;
+use crate::python_bridge::{PythonBridge, PythonStage, PythonStageArgs};
 use crate::strategies::run_strategy;
 
 #[derive(Debug, Parser)]
@@ -23,6 +24,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Screen(ScreenArgs),
+    Run(RunArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -39,6 +41,24 @@ pub struct ScreenArgs {
     recompute: bool,
 }
 
+#[derive(Debug, Parser)]
+pub struct RunArgs {
+    #[arg(long)]
+    method: Method,
+    #[arg(long)]
+    pick_date: NaiveDate,
+    #[arg(long)]
+    dsn: Option<String>,
+    #[arg(long)]
+    runtime_root: Option<PathBuf>,
+    #[arg(long)]
+    recompute: bool,
+    #[arg(long)]
+    environment_state: Option<String>,
+    #[arg(long)]
+    environment_reason: Option<String>,
+}
+
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -48,7 +68,70 @@ pub fn run() -> anyhow::Result<()> {
         .map(|path| {
             eprintln!("[screen] wrote {}", path.display());
         }),
+        Commands::Run(args) => run_hybrid(args),
     }
+}
+
+pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
+    let started = Instant::now();
+    let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
+    let method = args.method;
+    let pick_date = args.pick_date;
+
+    let screen_started = Instant::now();
+    let screen_path = run_screen(
+        ScreenArgs {
+            method,
+            pick_date,
+            dsn: args.dsn,
+            runtime_root: Some(runtime_root.clone()),
+            recompute: args.recompute,
+        },
+        |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+    )?;
+    eprintln!(
+        "[run] screen wrote {} elapsed={:.3}s",
+        screen_path.display(),
+        screen_started.elapsed().as_secs_f64()
+    );
+
+    let bridge = PythonBridge::default_project();
+    let chart_started = Instant::now();
+    bridge.run_stage(
+        PythonStage::Chart,
+        PythonStageArgs {
+            method,
+            pick_date,
+            runtime_root: &runtime_root,
+            environment_state: None,
+            environment_reason: None,
+        },
+    )?;
+    eprintln!(
+        "[run] chart elapsed={:.3}s",
+        chart_started.elapsed().as_secs_f64()
+    );
+
+    let review_started = Instant::now();
+    bridge.run_stage(
+        PythonStage::Review,
+        PythonStageArgs {
+            method,
+            pick_date,
+            runtime_root: &runtime_root,
+            environment_state: args.environment_state.as_deref(),
+            environment_reason: args.environment_reason.as_deref(),
+        },
+    )?;
+    eprintln!(
+        "[run] review elapsed={:.3}s",
+        review_started.elapsed().as_secs_f64()
+    );
+    eprintln!(
+        "[run] total elapsed={:.3}s",
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
 
 pub fn run_screen<F>(args: ScreenArgs, loader: F) -> anyhow::Result<PathBuf>

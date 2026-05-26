@@ -6,4 +6,5 @@ pub mod indicators;
 pub mod model;
 pub mod output;
 pub mod prepare;
+pub mod python_bridge;
 pub mod strategies;
