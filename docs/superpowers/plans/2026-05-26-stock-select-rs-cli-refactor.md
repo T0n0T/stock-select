@@ -214,7 +214,7 @@ git commit -m "test: add review golden comparison script"
 **Files:**
 - Create: `docs/superpowers/specs/2026-05-26-chart-bridge-design.md`
 
-- [ ] **Step 1: Write chart bridge design**
+- [x] **Step 1: Write chart bridge design**
 
 Specify whether the next chart phase uses:
 
@@ -230,7 +230,7 @@ Rust pyo3 embedded Python -> mplfinance
 
 Acceptance requires PNG file count, filenames, and visual smoke parity for b1 candidates.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-05-26-chart-bridge-design.md
