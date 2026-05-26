@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,7 +18,17 @@ def main() -> int:
     parser.add_argument("--pick-date", required=True)
     parser.add_argument("--method", required=True, choices=["b1", "b2", "dribull"])
     parser.add_argument("--check-review-summary", action="store_true")
+    parser.add_argument("--run-python-screen", action="store_true")
+    parser.add_argument("--run-rust-screen", action="store_true")
+    parser.add_argument("--python-project", type=Path, default=Path("/home/pi/Documents/agents/stock-select"))
+    parser.add_argument("--rust-bin", type=Path, default=Path("target/release/stock-select-rs"))
+    parser.add_argument("--keep-runtime", action="store_true")
     args = parser.parse_args()
+
+    if args.run_python_screen:
+        run_python_screen(args)
+    if args.run_rust_screen:
+        run_rust_screen(args)
 
     py_payload = load_candidate_payload(args.python_root, args.pick_date, args.method)
     rs_payload = load_candidate_payload(args.rust_root, args.pick_date, args.method)
@@ -40,6 +52,56 @@ def main() -> int:
         f"candidates={py_count}/{rs_count}"
     )
     return 0
+
+
+def run_python_screen(args: argparse.Namespace) -> None:
+    if not args.keep_runtime and args.python_root.exists():
+        shutil.rmtree(args.python_root)
+    command = [
+        "uv",
+        "run",
+        "stock-select",
+        "screen",
+        "--method",
+        args.method,
+        "--pick-date",
+        args.pick_date,
+        "--runtime-root",
+        str(args.python_root),
+        "--recompute",
+        "--no-progress",
+    ]
+    run_command(command, cwd=args.python_project, label="python screen")
+
+
+def run_rust_screen(args: argparse.Namespace) -> None:
+    if not args.keep_runtime and args.rust_root.exists():
+        shutil.rmtree(args.rust_root)
+    rust_bin = args.rust_bin
+    if not rust_bin.is_absolute():
+        rust_bin = Path.cwd() / rust_bin
+    command = [
+        str(rust_bin),
+        "screen",
+        "--method",
+        args.method,
+        "--pick-date",
+        args.pick_date,
+        "--runtime-root",
+        str(args.rust_root),
+        "--recompute",
+    ]
+    run_command(command, cwd=Path.cwd(), label="rust screen")
+
+
+def run_command(command: list[str], *, cwd: Path, label: str) -> None:
+    print(f"RUN {label}: {' '.join(command)}", file=sys.stderr)
+    try:
+        subprocess.run(command, cwd=cwd, check=True)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"{label} executable not found: {command[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"{label} failed with exit code {exc.returncode}") from exc
 
 
 def load_candidate_payload(root: Path, pick_date: str, method: str) -> dict[str, Any]:

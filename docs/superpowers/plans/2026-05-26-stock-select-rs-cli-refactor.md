@@ -71,18 +71,16 @@ git commit -m "test: add screen golden comparison script"
 **Files:**
 - Modify: `scripts/compare_screen.py`
 
-- [ ] **Step 1: Add optional command execution**
+- [ ] **Step 1: Add optional Rust command execution**
 
 Add optional arguments:
 
 ```text
---run-python-screen
 --run-rust-screen
---python-project /home/pi/Documents/agents/stock-select
 --rust-bin target/release/stock-select-rs
 ```
 
-When enabled, the script removes each runtime root, runs Python/Rust `screen --recompute`, then compares artifacts.
+Python golden artifacts are read from `~/.agents/skills/stock-select/runtime` by default and must not be recomputed during this task. When `--run-rust-screen` is enabled, the script removes the Rust runtime root, runs Rust `screen --recompute`, then compares artifacts against the existing Python runtime.
 
 - [ ] **Step 2: Run b1 for at least three dates**
 
@@ -91,11 +89,10 @@ Use:
 ```bash
 for d in 2026-05-25 2026-05-22 2026-05-21; do
   python3 scripts/compare_screen.py \
-    --python-root /tmp/stock-select-reg-python-$d \
+    --python-root ~/.agents/skills/stock-select/runtime \
     --rust-root /tmp/stock-select-reg-rust-$d \
     --pick-date $d \
     --method b1 \
-    --run-python-screen \
     --run-rust-screen
 done
 ```

@@ -4,17 +4,27 @@ pub fn ema(values: &[f64], span: usize) -> Vec<f64> {
         return Vec::new();
     }
     let alpha = 2.0 / (span as f64 + 1.0);
+    let beta = 1.0 - alpha;
     let mut out = Vec::with_capacity(values.len());
-    let mut prev = values[0];
-    out.push(prev);
-    for value in &values[1..] {
+    let mut prev = f64::NAN;
+    let mut missing_after_valid = 0_i32;
+    for value in values {
         if value.is_nan() {
             out.push(prev);
-            continue;
+            if !prev.is_nan() {
+                missing_after_valid += 1;
+            }
+        } else if prev.is_nan() {
+            prev = *value;
+            missing_after_valid = 0;
+            out.push(prev);
+        } else {
+            let effective_alpha = alpha / (alpha + beta.powi(missing_after_valid + 1));
+            let current = effective_alpha * *value + (1.0 - effective_alpha) * prev;
+            out.push(current);
+            prev = current;
+            missing_after_valid = 0;
         }
-        let current = alpha * *value + (1.0 - alpha) * prev;
-        out.push(current);
-        prev = current;
     }
     out
 }
@@ -251,6 +261,15 @@ mod tests {
         assert_close(out[0], 10.0);
         assert_close(out[1], 11.0);
         assert_close(out[2], 12.5);
+    }
+
+    #[test]
+    fn ema_matches_pandas_adjust_false_after_nan_gap() {
+        let out = ema(&[1.0, f64::NAN, 3.0, 4.0], 2);
+        assert_close(out[0], 1.0);
+        assert_close(out[1], 1.0);
+        assert_close(out[2], 2.7142857142857144);
+        assert_close(out[3], 3.571428571428571);
     }
 
     #[test]
