@@ -242,7 +242,7 @@ git commit -m "docs: add chart bridge design"
 **Files:**
 - Create: `docs/superpowers/specs/2026-05-26-review-rust-port-design.md`
 
-- [ ] **Step 1: Write review port design**
+- [x] **Step 1: Write review port design**
 
 Map Python modules to Rust modules:
 
@@ -255,7 +255,7 @@ analysis/macd_waves.py -> src/analysis/macd_waves.rs
 
 Acceptance requires per-stock golden parity before replacing Python review in `run`.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-05-26-review-rust-port-design.md
