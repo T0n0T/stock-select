@@ -11,11 +11,18 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
         ("total_symbols".to_string(), grouped.len()),
         ("eligible".to_string(), 0),
         ("fail_no_pick_date".to_string(), 0),
-        ("fail_low_j".to_string(), 0),
-        ("fail_zx".to_string(), 0),
-        ("fail_trend".to_string(), 0),
-        ("fail_volume".to_string(), 0),
-        ("fail_tightening".to_string(), 0),
+        ("fail_j".to_string(), 0),
+        ("fail_insufficient_history".to_string(), 0),
+        ("fail_close_zxdkx".to_string(), 0),
+        ("fail_zxdq_zxdkx".to_string(), 0),
+        ("fail_weekly_ma".to_string(), 0),
+        ("fail_max_vol".to_string(), 0),
+        ("fail_chg_cap".to_string(), 0),
+        ("fail_v_shrink".to_string(), 0),
+        ("fail_safe_mode".to_string(), 0),
+        ("fail_lt_filter".to_string(), 0),
+        ("selected_yellow_b1".to_string(), 0),
+        ("selected_non_yellow_b1".to_string(), 0),
         ("selected".to_string(), 0),
     ]);
     let mut candidates = Vec::new();
@@ -30,8 +37,6 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
             continue;
         };
         increment(&mut stats, "eligible");
-        let recent_start = idx.saturating_sub(14);
-        let recent_low_j = history[recent_start..=idx].iter().any(|item| item.j < 15.0);
         let j_quantile = expanding_quantile(
             &history[..=idx]
                 .iter()
@@ -39,32 +44,48 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
                 .collect::<Vec<_>>(),
             0.10,
         );
-        if !(row.j < 15.0 || row.j <= j_quantile || recent_low_j) {
-            increment(&mut stats, "fail_low_j");
+        if !(row.j < 15.0 || row.j <= j_quantile) {
+            increment(&mut stats, "fail_j");
+            continue;
+        }
+        let Some(zxdkx) = row.zxdkx else {
+            increment(&mut stats, "fail_insufficient_history");
+            continue;
+        };
+        if !(row.close > zxdkx) {
+            increment(&mut stats, "fail_close_zxdkx");
             continue;
         }
         let Some(zxdq) = row.zxdq else {
-            increment(&mut stats, "fail_zx");
+            increment(&mut stats, "fail_zxdq_zxdkx");
             continue;
         };
-        let Some(zxdkx) = row.zxdkx else {
-            increment(&mut stats, "fail_zx");
-            continue;
-        };
-        if !(row.close > zxdkx && zxdq > zxdkx) {
-            increment(&mut stats, "fail_zx");
+        if !(zxdq > zxdkx) {
+            increment(&mut stats, "fail_zxdq_zxdkx");
             continue;
         }
-        if !(row.weekly_ma_bull || row.ma25.unwrap_or(0.0) > row.ma60.unwrap_or(f64::MAX)) {
-            increment(&mut stats, "fail_trend");
+        if !row.weekly_ma_bull {
+            increment(&mut stats, "fail_weekly_ma");
             continue;
         }
         if !row.max_vol_not_bearish {
-            increment(&mut stats, "fail_volume");
+            increment(&mut stats, "fail_max_vol");
             continue;
         }
-        if !(row.v_shrink && row.safe_mode && row.lt_filter) {
-            increment(&mut stats, "fail_tightening");
+        if !(row.chg_d.unwrap_or(f64::NAN) <= 4.0) {
+            increment(&mut stats, "fail_chg_cap");
+            continue;
+        }
+        if !row.v_shrink {
+            increment(&mut stats, "fail_v_shrink");
+            continue;
+        }
+        if !row.safe_mode {
+            increment(&mut stats, "fail_safe_mode");
+            continue;
+        }
+        if !row.lt_filter {
+            increment(&mut stats, "fail_lt_filter");
             continue;
         }
         candidates.push(Candidate {
@@ -73,7 +94,13 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
             close: row.close,
             turnover_n: row.turnover_n,
             signal: None,
+            yellow_b1: Some(row.yellow_b1),
         });
+        if row.yellow_b1 {
+            increment(&mut stats, "selected_yellow_b1");
+        } else {
+            increment(&mut stats, "selected_non_yellow_b1");
+        }
         increment(&mut stats, "selected");
     }
     sort_candidates(&mut candidates);
@@ -121,11 +148,13 @@ mod tests {
             ma25: Some(10.5),
             ma60: Some(10.0),
             ma144: Some(9.0),
+            chg_d: Some(1.0),
             weekly_ma_bull: true,
             max_vol_not_bearish: true,
             v_shrink: true,
             safe_mode: true,
             lt_filter: true,
+            yellow_b1: false,
         }
     }
 

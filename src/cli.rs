@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 
 use crate::cache::{load_prepared_cache, write_prepared_cache};
 use crate::config::{default_runtime_root, resolve_dsn_from_env, screen_window};
-use crate::model::{MarketRow, Method};
+use crate::model::{MarketRow, Method, PreparedRow};
 use crate::output::{build_screen_result, write_screen_result};
 use crate::prepare::prepare_rows;
 use crate::strategies::run_strategy;
@@ -110,8 +110,16 @@ where
         anyhow::bail!("No prepared rows found for pick_date {}.", args.pick_date);
     }
 
+    let pool_started = Instant::now();
+    let prepared_for_pick = filter_turnover_top_pool(&prepared, args.pick_date, 5000);
+    eprintln!(
+        "[screen] pool_source=turnover-top pool_size={} elapsed={:.3}s",
+        unique_symbol_count(&prepared_for_pick),
+        pool_started.elapsed().as_secs_f64()
+    );
+
     let strategy_started = Instant::now();
-    let strategy = run_strategy(args.method, &prepared, args.pick_date);
+    let strategy = run_strategy(args.method, &prepared_for_pick, args.pick_date);
     eprintln!(
         "[screen] strategy method={} candidates={} elapsed={:.3}s",
         args.method.as_str(),
@@ -130,6 +138,49 @@ where
         started.elapsed().as_secs_f64()
     );
     Ok(output_path)
+}
+
+fn filter_turnover_top_pool(
+    prepared: &[PreparedRow],
+    pick_date: NaiveDate,
+    top_m: usize,
+) -> Vec<PreparedRow> {
+    if top_m == 0 {
+        return Vec::new();
+    }
+    let mut ranked: Vec<(f64, &str)> = prepared
+        .iter()
+        .filter(|row| row.trade_date == pick_date)
+        .filter(|row| match (row.ma25, row.ma60) {
+            (Some(ma25), Some(ma60)) => ma25 > ma60,
+            _ => false,
+        })
+        .map(|row| (row.turnover_n, row.ts_code.as_str()))
+        .collect();
+    ranked.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.1.cmp(right.1))
+    });
+    let pool: std::collections::BTreeSet<&str> = ranked
+        .into_iter()
+        .take(top_m)
+        .map(|(_turnover, code)| code)
+        .collect();
+    prepared
+        .iter()
+        .filter(|row| pool.contains(row.ts_code.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn unique_symbol_count(rows: &[PreparedRow]) -> usize {
+    rows.iter()
+        .map(|row| row.ts_code.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 fn load_and_prepare<F>(
@@ -211,5 +262,55 @@ mod tests {
         .unwrap();
         assert_eq!(path, temp.path().join("candidates/2026-05-03.b2.json"));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn turnover_top_pool_filters_by_pick_date_ma_alignment_and_rank() {
+        fn prepared(code: &str, turnover_n: f64, ma25: f64, ma60: f64) -> PreparedRow {
+            PreparedRow {
+                ts_code: code.to_string(),
+                trade_date: NaiveDate::from_ymd_opt(2026, 5, 3).unwrap(),
+                open: 1.0,
+                high: 1.0,
+                low: 1.0,
+                close: 1.0,
+                volume: 1.0,
+                turnover_n,
+                k: 50.0,
+                d: 50.0,
+                j: 50.0,
+                zxdq: Some(1.0),
+                zxdkx: Some(1.0),
+                dif: 0.0,
+                dea: 0.0,
+                macd_hist: 0.0,
+                ma25: Some(ma25),
+                ma60: Some(ma60),
+                ma144: Some(1.0),
+                chg_d: Some(1.0),
+                weekly_ma_bull: true,
+                max_vol_not_bearish: true,
+                v_shrink: true,
+                safe_mode: true,
+                lt_filter: true,
+                yellow_b1: false,
+            }
+        }
+        let rows = vec![
+            prepared("000001.SZ", 10.0, 2.0, 1.0),
+            prepared("000002.SZ", 30.0, 2.0, 1.0),
+            prepared("000003.SZ", 40.0, 1.0, 2.0),
+            prepared("000004.SZ", 20.0, 2.0, 1.0),
+        ];
+        let filtered =
+            filter_turnover_top_pool(&rows, NaiveDate::from_ymd_opt(2026, 5, 3).unwrap(), 2);
+        let codes = filtered
+            .iter()
+            .map(|row| row.ts_code.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            codes,
+            std::collections::BTreeSet::from(["000002.SZ", "000004.SZ"])
+        );
     }
 }

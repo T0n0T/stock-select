@@ -8,6 +8,10 @@ pub fn ema(values: &[f64], span: usize) -> Vec<f64> {
     let mut prev = values[0];
     out.push(prev);
     for value in &values[1..] {
+        if value.is_nan() {
+            out.push(prev);
+            continue;
+        }
         let current = alpha * *value + (1.0 - alpha) * prev;
         out.push(current);
         prev = current;
@@ -31,13 +35,22 @@ pub fn rolling_sum(values: &[f64], window: usize, min_periods: usize) -> Vec<Opt
     assert!(window > 0, "window must be positive");
     let mut out = Vec::with_capacity(values.len());
     let mut sum = 0.0;
+    let mut nan_count = 0_usize;
     for idx in 0..values.len() {
-        sum += values[idx];
+        if values[idx].is_nan() {
+            nan_count += 1;
+        } else {
+            sum += values[idx];
+        }
         if idx >= window {
-            sum -= values[idx - window];
+            if values[idx - window].is_nan() {
+                nan_count -= 1;
+            } else {
+                sum -= values[idx - window];
+            }
         }
         let count = (idx + 1).min(window);
-        out.push((count >= min_periods).then_some(sum));
+        out.push((count >= min_periods && nan_count == 0).then_some(sum));
     }
     out
 }
@@ -66,9 +79,12 @@ pub fn kdj(high: &[f64], low: &[f64], close: &[f64], n: usize) -> (Vec<f64>, Vec
     let mut prev_d = 50.0;
 
     for idx in 0..high.len() {
-        let low_value = low_n[idx].unwrap_or(low[idx]);
-        let high_value = high_n[idx].unwrap_or(high[idx]);
-        let rsv = (close[idx] - low_value) / (high_value - low_value + 1e-9) * 100.0;
+        let rsv = match (low_n[idx], high_n[idx]) {
+            (Some(low_value), Some(high_value)) if !close[idx].is_nan() => {
+                (close[idx] - low_value) / (high_value - low_value + 1e-9) * 100.0
+            }
+            _ => 0.0,
+        };
         let (current_k, current_d) = if idx == 0 {
             (50.0, 50.0)
         } else {
@@ -124,6 +140,27 @@ pub fn zx_lines(close: &[f64]) -> (Vec<f64>, Vec<Option<f64>>) {
 }
 
 pub fn barslast(condition: &[bool]) -> Vec<f64> {
+    barslast_with_default(condition, None)
+}
+
+pub fn barslast_with_default(condition: &[bool], default_distance: Option<f64>) -> Vec<f64> {
+    let mut out = Vec::with_capacity(condition.len());
+    let mut last_true: Option<usize> = None;
+    let default_distance = default_distance.unwrap_or_else(|| condition.len() as f64 + 1.0);
+    for (idx, value) in condition.iter().enumerate() {
+        if *value {
+            last_true = Some(idx);
+            out.push(0.0);
+        } else if let Some(last) = last_true {
+            out.push((idx - last) as f64);
+        } else {
+            out.push(default_distance);
+        }
+    }
+    out
+}
+
+pub fn barslast_initial_index_distance(condition: &[bool]) -> Vec<f64> {
     let mut out = Vec::with_capacity(condition.len());
     let mut last_true: Option<usize> = None;
     for (idx, value) in condition.iter().enumerate() {
@@ -135,6 +172,22 @@ pub fn barslast(condition: &[bool]) -> Vec<f64> {
         } else {
             out.push((idx + 1) as f64);
         }
+    }
+    out
+}
+
+pub fn tdx_sma(values: &[f64], n: usize, m: usize) -> Vec<f64> {
+    assert!(n > 0, "n must be positive");
+    let mut out = Vec::with_capacity(values.len());
+    let mut previous: Option<f64> = None;
+    for value in values {
+        let input = if value.is_nan() { 0.0 } else { *value };
+        let current = match previous {
+            Some(prev) => (m as f64 * input + (n - m) as f64 * prev) / n as f64,
+            None => input,
+        };
+        out.push(current);
+        previous = Some(current);
     }
     out
 }
@@ -165,6 +218,10 @@ fn rolling_extreme(
         let start = idx.saturating_sub(window - 1);
         let count = idx - start + 1;
         if count < min_periods {
+            out.push(None);
+            continue;
+        }
+        if values[start..=idx].iter().any(|value| value.is_nan()) {
             out.push(None);
             continue;
         }
@@ -234,8 +291,14 @@ mod tests {
 
     #[test]
     fn barslast_matches_tdx_style_distance() {
-        let out = barslast(&[false, false, true, false, false, true]);
+        let out = barslast_initial_index_distance(&[false, false, true, false, false, true]);
         assert_eq!(out, vec![1.0, 2.0, 0.0, 1.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn barslast_default_matches_python_helper() {
+        let out = barslast(&[false, false, true, false]);
+        assert_eq!(out, vec![5.0, 5.0, 0.0, 1.0]);
     }
 
     #[test]

@@ -21,11 +21,6 @@ pub fn fetch_daily_window(
             vol::double precision AS vol
         FROM daily_market
         WHERE trade_date BETWEEN $1 AND $2
-          AND open IS NOT NULL
-          AND high IS NOT NULL
-          AND low IS NOT NULL
-          AND close IS NOT NULL
-          AND vol IS NOT NULL
         ORDER BY ts_code ASC, trade_date ASC
         ",
         &[&start_date, &end_date],
@@ -35,12 +30,16 @@ pub fn fetch_daily_window(
             Ok(MarketRow {
                 ts_code: row.try_get("ts_code")?,
                 trade_date: row.try_get("trade_date")?,
-                open: row.try_get("open")?,
-                high: row.try_get("high")?,
-                low: row.try_get("low")?,
-                close: row.try_get("close")?,
-                vol: row.try_get("vol")?,
+                open: optional_f64(&row, "open")?,
+                high: optional_f64(&row, "high")?,
+                low: optional_f64(&row, "low")?,
+                close: optional_f64(&row, "close")?,
+                vol: optional_f64(&row, "vol")?,
             })
         })
         .collect()
+}
+
+fn optional_f64(row: &postgres::Row, column: &str) -> anyhow::Result<f64> {
+    Ok(row.try_get::<_, Option<f64>>(column)?.unwrap_or(f64::NAN))
 }

@@ -44,6 +44,7 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
                 close: row.close,
                 turnover_n: row.turnover_n,
                 signal: Some(signal.clone()),
+                yellow_b1: None,
             });
             increment(&mut stats, "selected");
             match signal.as_str() {
@@ -180,11 +181,13 @@ mod tests {
             ma25: Some(10.0),
             ma60: Some(9.0),
             ma144: Some(8.0),
+            chg_d: Some(1.0),
             weekly_ma_bull: true,
             max_vol_not_bearish: true,
             v_shrink: true,
             safe_mode: true,
             lt_filter: true,
+            yellow_b1: false,
         }
     }
 

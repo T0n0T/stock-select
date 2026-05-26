@@ -79,6 +79,7 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
             close: row.close,
             turnover_n: row.turnover_n,
             signal: None,
+            yellow_b1: None,
         });
         increment(&mut stats, "selected");
     }
@@ -117,11 +118,13 @@ mod tests {
             ma25: Some(10.0),
             ma60: Some(9.8 + day as f64 * 0.01),
             ma144: Some(9.7),
+            chg_d: Some(1.0),
             weekly_ma_bull: true,
             max_vol_not_bearish: true,
             v_shrink: true,
             safe_mode: true,
             lt_filter: true,
+            yellow_b1: false,
         }
     }
 

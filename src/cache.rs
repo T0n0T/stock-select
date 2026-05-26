@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 1;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreparedCacheMetadata {
@@ -187,11 +187,13 @@ fn encode_prepared_rows(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
         write_option_f64(&mut out, row.ma25)?;
         write_option_f64(&mut out, row.ma60)?;
         write_option_f64(&mut out, row.ma144)?;
+        write_option_f64(&mut out, row.chg_d)?;
         write_bool(&mut out, row.weekly_ma_bull)?;
         write_bool(&mut out, row.max_vol_not_bearish)?;
         write_bool(&mut out, row.v_shrink)?;
         write_bool(&mut out, row.safe_mode)?;
         write_bool(&mut out, row.lt_filter)?;
+        write_bool(&mut out, row.yellow_b1)?;
     }
     Ok(out)
 }
@@ -229,11 +231,13 @@ fn decode_prepared_rows(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRow>> {
             ma25: read_option_f64(&mut cursor)?,
             ma60: read_option_f64(&mut cursor)?,
             ma144: read_option_f64(&mut cursor)?,
+            chg_d: read_option_f64(&mut cursor)?,
             weekly_ma_bull: read_bool(&mut cursor)?,
             max_vol_not_bearish: read_bool(&mut cursor)?,
             v_shrink: read_bool(&mut cursor)?,
             safe_mode: read_bool(&mut cursor)?,
             lt_filter: read_bool(&mut cursor)?,
+            yellow_b1: read_bool(&mut cursor)?,
         });
     }
     Ok(rows)
@@ -356,11 +360,13 @@ mod tests {
             ma25: Some(10.0),
             ma60: Some(9.0),
             ma144: Some(8.0),
+            chg_d: Some(1.0),
             weekly_ma_bull: true,
             max_vol_not_bearish: true,
             v_shrink: true,
             safe_mode: true,
             lt_filter: true,
+            yellow_b1: false,
         }
     }
 

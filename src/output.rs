@@ -14,8 +14,10 @@ pub fn build_screen_result(
     ScreenResult {
         method,
         pick_date,
-        generated_at: generated_at_epoch_seconds(),
-        count: candidates.len(),
+        pool_source: "turnover-top".to_string(),
+        screen_version: (method == Method::B1).then_some(2),
+        generated_at: Some(generated_at_epoch_seconds()),
+        count: Some(candidates.len()),
         candidates,
         stats,
     }
@@ -59,6 +61,7 @@ mod tests {
                 close: 10.5,
                 turnover_n: 123.0,
                 signal: Some("B2".to_string()),
+                yellow_b1: None,
             }],
             BTreeMap::from([("selected".to_string(), 1)]),
         );
@@ -68,6 +71,32 @@ mod tests {
         assert_eq!(value["method"], "b2");
         assert_eq!(value["pick_date"], "2026-05-26");
         assert_eq!(value["count"], 1);
+        assert_eq!(value["pool_source"], "turnover-top");
         assert_eq!(value["candidates"][0]["signal"], "B2");
+    }
+
+    #[test]
+    fn b1_candidate_json_includes_python_compatibility_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let pick = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
+        let result = build_screen_result(
+            Method::B1,
+            pick,
+            vec![Candidate {
+                code: "000001.SZ".to_string(),
+                pick_date: pick,
+                close: 10.5,
+                turnover_n: 123.0,
+                signal: None,
+                yellow_b1: Some(false),
+            }],
+            BTreeMap::new(),
+        );
+        let path = write_screen_result(temp.path(), &result).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["screen_version"], 2);
+        assert_eq!(value["pool_source"], "turnover-top");
+        assert_eq!(value["candidates"][0]["yellow_b1"], false);
     }
 }

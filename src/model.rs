@@ -71,11 +71,13 @@ pub struct PreparedRow {
     pub ma25: Option<f64>,
     pub ma60: Option<f64>,
     pub ma144: Option<f64>,
+    pub chg_d: Option<f64>,
     pub weekly_ma_bull: bool,
     pub max_vol_not_bearish: bool,
     pub v_shrink: bool,
     pub safe_mode: bool,
     pub lt_filter: bool,
+    pub yellow_b1: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -86,15 +88,23 @@ pub struct Candidate {
     pub turnover_n: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yellow_b1: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenResult {
     pub method: Method,
     pub pick_date: NaiveDate,
-    pub generated_at: String,
-    pub count: usize,
+    pub pool_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_version: Option<u32>,
     pub candidates: Vec<Candidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub stats: std::collections::BTreeMap<String, usize>,
 }
 
