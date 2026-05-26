@@ -4,6 +4,7 @@ import pytest
 from stock_select.analysis import classify_daily_macd_trend, classify_weekly_macd_trend
 from stock_select.environment_profiles import get_method_environment_profile
 from stock_select.reviewers.b2 import (
+    calibrate_b2_selection_score,
     infer_b2_elastic_watch,
     infer_b2_watch_tier,
     infer_b2_verdict,
@@ -28,6 +29,40 @@ def _first_non_fallback_periods(end: str = "2026-04-30") -> int:
             return periods
     msg = "could not find non-fallback periods"
     raise AssertionError(msg)
+
+
+def test_calibrate_b2_selection_score_promotes_high_watch_score_above_plain_structure_score() -> None:
+    low_watch = calibrate_b2_selection_score(
+        structure_score=3.9,
+        verdict="WATCH",
+        watch_score=50.0,
+        watch_tier="WATCH-B",
+    )
+    high_watch = calibrate_b2_selection_score(
+        structure_score=3.9,
+        verdict="WATCH",
+        watch_score=85.0,
+        watch_tier="WATCH-B",
+    )
+
+    assert low_watch == pytest.approx(3.8)
+    assert high_watch == pytest.approx(4.15)
+    assert high_watch > low_watch
+
+
+def test_calibrate_b2_selection_score_keeps_structure_score_for_pass_and_fail() -> None:
+    assert calibrate_b2_selection_score(
+        structure_score=4.3,
+        verdict="PASS",
+        watch_score=None,
+        watch_tier=None,
+    ) == pytest.approx(4.3)
+    assert calibrate_b2_selection_score(
+        structure_score=2.8,
+        verdict="FAIL",
+        watch_score=None,
+        watch_tier=None,
+    ) == pytest.approx(2.8)
 
 
 def _constructive_b2_history() -> pd.DataFrame:
@@ -2284,7 +2319,8 @@ def test_b2_review_uses_profile_weighted_total_score() -> None:
         profile=get_method_environment_profile(method="b2", state="strong"),
     )
 
-    assert review["total_score"] == 3.3
+    assert review["structure_score"] == pytest.approx(3.65)
+    assert review["total_score"] > review["structure_score"]
 
 
 def test_b2_review_does_not_apply_macd_verdict_gate(monkeypatch) -> None:

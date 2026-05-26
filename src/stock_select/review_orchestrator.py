@@ -588,6 +588,8 @@ def build_review_result(
     llm_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     primary = llm_review if llm_review is not None else baseline_review
+    if "structure_score" not in baseline_review and baseline_review.get("total_score") is not None:
+        baseline_review = {**baseline_review, "structure_score": baseline_review.get("total_score")}
     watch_fields = {
         "watch_reason": primary.get("watch_reason"),
         "watch_score": primary.get("watch_score"),
@@ -634,19 +636,18 @@ def merge_review_result(
     llm_weight: float = 0.6,
 ) -> dict[str, Any]:
     baseline_review = existing_review["baseline_review"]
-    normalized = str(method).strip().lower()
-    if normalized in {"b1", "b2"} and baseline_weight == 0.4 and llm_weight == 0.6:
-        baseline_weight = 0.6
-        llm_weight = 0.4
     baseline_score = float(baseline_review.get("total_score", 0.0))
     llm_score = float(llm_review.get("total_score", 0.0))
-    final_score = round(baseline_score * baseline_weight + llm_score * llm_weight, 2)
+    weighted_review_score = round(baseline_score * baseline_weight + llm_score * llm_weight, 2)
+    final_score = round(baseline_score, 2)
     verdict = infer_final_verdict(final_score)
 
     return {
         **existing_review,
         "review_mode": "merged",
         "llm_review": llm_review,
+        "llm_score": llm_score,
+        "weighted_review_score": weighted_review_score,
         "final_score": final_score,
         "total_score": final_score,
         "signal_type": str(llm_review.get("signal_type", "")),
@@ -730,7 +731,11 @@ def summarize_reviews(
 ) -> dict[str, Any]:
     normalized_method = method.strip().lower()
 
-    def baseline_sort_key(item: dict[str, Any]) -> tuple[float, float]:
+    def selection_sort_key(item: dict[str, Any]) -> tuple[float, float]:
+        try:
+            selection_score = float(item.get("total_score", item.get("final_score", 0.0)))
+        except (TypeError, ValueError):
+            selection_score = 0.0
         baseline_review = item.get("baseline_review") if isinstance(item.get("baseline_review"), dict) else None
         baseline_score = 0.0
         if baseline_review is not None:
@@ -738,7 +743,7 @@ def summarize_reviews(
                 baseline_score = float(baseline_review.get("total_score", 0.0))
             except (TypeError, ValueError):
                 baseline_score = 0.0
-        return (baseline_score, float(item.get("total_score", 0.0)))
+        return (selection_score, baseline_score)
 
     def is_recommendation(review: dict[str, Any]) -> bool:
         if review.get("verdict") != "PASS":
@@ -749,12 +754,12 @@ def summarize_reviews(
 
     recommendations = sorted(
         [review for review in reviews if is_recommendation(review)],
-        key=baseline_sort_key,
+        key=selection_sort_key,
         reverse=True,
     )
     excluded = sorted(
         [review for review in reviews if review not in recommendations],
-        key=baseline_sort_key,
+        key=selection_sort_key,
         reverse=True,
     )
     return {

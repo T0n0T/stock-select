@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from stock_select import cli
 from stock_select.cli import app
+from stock_select.html_export import group_items_by_verdict
 from stock_select.market_environment import load_environment_history, write_environment_history
 
 
@@ -67,6 +68,32 @@ def test_default_runtime_root_uses_agents_skill_runtime() -> None:
     expected = Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
 
     assert cli._default_runtime_root() == expected
+
+
+def test_html_groups_sort_by_top_level_selection_score_not_legacy_baseline_subscore() -> None:
+    summary = {
+        "recommendations": [
+            {
+                "code": "LOW_SELECTION",
+                "verdict": "PASS",
+                "total_score": 4.2,
+                "baseline_review": {"total_score": 4.9},
+                "llm_score": 5.0,
+            },
+            {
+                "code": "HIGH_SELECTION",
+                "verdict": "PASS",
+                "total_score": 4.8,
+                "baseline_review": {"total_score": 3.8},
+                "llm_score": 3.2,
+            },
+        ],
+        "excluded": [],
+    }
+
+    grouped = group_items_by_verdict(summary)
+
+    assert [item["code"] for item in grouped["PASS"]] == ["HIGH_SELECTION", "LOW_SELECTION"]
 
 
 def test_b2_prompt_reference_exists_and_preserves_default_json_contract() -> None:
@@ -7198,8 +7225,10 @@ def test_review_merge_combines_baseline_and_llm_results(tmp_path: Path) -> None:
         "previous_abnormal_move": 4.0,
         "macd_phase": 5.0,
     }
-    assert merged["final_score"] == 3.85
-    assert merged["total_score"] == 3.85
+    assert merged["llm_score"] == 4.53
+    assert merged["weighted_review_score"] == 4.08
+    assert merged["final_score"] == 3.4
+    assert merged["total_score"] == 3.4
     assert merged["verdict"] == "WATCH"
     assert summary["excluded"][0]["code"] == "000001.SZ"
     assert "[review-merge] merged reviews=1 failures=0" in result.stderr

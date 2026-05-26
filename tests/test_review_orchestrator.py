@@ -811,22 +811,23 @@ def test_build_review_result_promotes_b1_score_layer_fields() -> None:
     )
 
     assert review["score_combo_key"] == "rebound|T3|P2|V4|A5|M3.5"
+    assert review["baseline_review"]["structure_score"] == 3.8
     assert review["high_return_combo_match"] == "rebound_core"
     assert review["score_layer"] == "WATCH-A"
     assert review["score_layer_score"] == 70.0
     assert review["gate_flags"] == []
 
 
-def test_summarize_reviews_sorts_by_baseline_score_before_llm_score() -> None:
-    lower_llm_higher_baseline = {
-        "code": "HIGH_BASELINE",
+def test_summarize_reviews_sorts_by_top_level_selection_score_before_llm_score() -> None:
+    lower_selection_higher_legacy_baseline = {
+        "code": "LOW_SELECTION",
         "review_mode": "baseline_local",
         "total_score": 4.1,
         "verdict": "PASS",
         "baseline_review": {"total_score": 4.8, "verdict": "PASS"},
     }
-    higher_llm_lower_baseline = {
-        "code": "LOW_BASELINE",
+    higher_selection_lower_legacy_baseline = {
+        "code": "HIGH_SELECTION",
         "review_mode": "baseline_local",
         "total_score": 4.9,
         "verdict": "PASS",
@@ -836,12 +837,43 @@ def test_summarize_reviews_sorts_by_baseline_score_before_llm_score() -> None:
     summary = summarize_reviews(
         "2026-04-01",
         "b1",
-        [higher_llm_lower_baseline, lower_llm_higher_baseline],
+        [higher_selection_lower_legacy_baseline, lower_selection_higher_legacy_baseline],
         min_score=4.0,
         failures=[],
     )
 
-    assert [review["code"] for review in summary["recommendations"]] == ["HIGH_BASELINE", "LOW_BASELINE"]
+    assert [review["code"] for review in summary["recommendations"]] == ["HIGH_SELECTION", "LOW_SELECTION"]
+
+
+def test_summarize_reviews_sorts_by_top_level_selection_score_before_legacy_baseline_subscore() -> None:
+    high_selection_score = {
+        "code": "HIGH_SELECTION",
+        "review_mode": "merged",
+        "total_score": 4.8,
+        "final_score": 4.8,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 3.8, "verdict": "PASS"},
+        "llm_score": 3.2,
+    }
+    low_selection_score = {
+        "code": "LOW_SELECTION",
+        "review_mode": "merged",
+        "total_score": 4.2,
+        "final_score": 4.2,
+        "verdict": "PASS",
+        "baseline_review": {"total_score": 4.9, "verdict": "PASS"},
+        "llm_score": 5.0,
+    }
+
+    summary = summarize_reviews(
+        "2026-04-01",
+        "b1",
+        [low_selection_score, high_selection_score],
+        min_score=4.0,
+        failures=[],
+    )
+
+    assert [review["code"] for review in summary["recommendations"]] == ["HIGH_SELECTION", "LOW_SELECTION"]
 
 
 def test_summarize_reviews_includes_b1_pass_even_below_legacy_min_score() -> None:
@@ -1066,7 +1098,7 @@ def test_normalize_llm_review_rejects_non_finite_and_out_of_range_scores(invalid
         )
 
 
-def test_merge_review_result_does_not_let_distribution_risk_veto_weighted_score() -> None:
+def test_merge_review_result_keeps_baseline_selection_score_when_llm_is_weaker() -> None:
     merged = merge_review_result(
         existing_review={
             "code": "000001.SZ",
@@ -1095,12 +1127,15 @@ def test_merge_review_result_does_not_let_distribution_risk_veto_weighted_score(
 
     assert merged["review_mode"] == "merged"
     assert merged["signal_type"] == "distribution_risk"
-    assert merged["final_score"] == 4.16
+    assert merged["llm_score"] == 3.6
+    assert merged["weighted_review_score"] == 4.16
+    assert merged["final_score"] == 5.0
+    assert merged["total_score"] == 5.0
     assert merged["verdict"] == "PASS"
     assert merged["comment"] == "llm hard fail"
 
 
-def test_merge_review_result_does_not_let_explicit_llm_fail_veto_weighted_score() -> None:
+def test_merge_review_result_keeps_baseline_selection_score_when_llm_explicitly_fails() -> None:
     merged = merge_review_result(
         existing_review={
             "code": "000001.SZ",
@@ -1128,12 +1163,15 @@ def test_merge_review_result_does_not_let_explicit_llm_fail_veto_weighted_score(
     )
 
     assert merged["signal_type"] == "rebound"
-    assert merged["final_score"] == 4.08
+    assert merged["llm_score"] == 3.8
+    assert merged["weighted_review_score"] == 4.08
+    assert merged["final_score"] == 4.5
+    assert merged["total_score"] == 4.5
     assert merged["verdict"] == "PASS"
     assert merged["comment"] == "llm explicit fail"
 
 
-def test_merge_review_result_uses_lower_llm_weight_for_b1() -> None:
+def test_merge_review_result_keeps_b1_baseline_score_for_sorting_and_stores_llm_reference_score() -> None:
     existing_review = {
         "code": "000001.SZ",
         "pick_date": "2026-04-01",
@@ -1160,10 +1198,13 @@ def test_merge_review_result_uses_lower_llm_weight_for_b1() -> None:
 
     merged = merge_review_result(method="b1", existing_review=existing_review, llm_review=llm_review)
 
-    assert merged["final_score"] == pytest.approx(3.96)
+    assert merged["llm_score"] == 3.0
+    assert merged["weighted_review_score"] == pytest.approx(3.64)
+    assert merged["final_score"] == pytest.approx(4.6)
+    assert merged["total_score"] == pytest.approx(4.6)
 
 
-def test_merge_review_result_uses_lower_llm_weight_for_b2() -> None:
+def test_merge_review_result_keeps_b2_baseline_score_for_sorting_and_stores_llm_reference_score() -> None:
     existing_review = {
         "code": "000001.SZ",
         "pick_date": "2026-04-01",
@@ -1190,7 +1231,10 @@ def test_merge_review_result_uses_lower_llm_weight_for_b2() -> None:
 
     merged = merge_review_result(method="b2", existing_review=existing_review, llm_review=llm_review)
 
-    assert merged["final_score"] == pytest.approx(3.96)
+    assert merged["llm_score"] == 3.0
+    assert merged["weighted_review_score"] == pytest.approx(3.64)
+    assert merged["final_score"] == pytest.approx(4.6)
+    assert merged["total_score"] == pytest.approx(4.6)
 
 
 def test_normalize_llm_review_validates_macd_phase_score() -> None:

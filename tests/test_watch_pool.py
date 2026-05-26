@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from stock_select.watch_pool import load_watch_pool
+from stock_select.watch_pool import load_watch_pool, trim_and_sort_watch_rows
 
 
 def _update_watch_pool_worker(csv_path_str: str, row: dict[str, object]) -> None:
@@ -74,3 +74,40 @@ def test_update_watch_pool_serializes_concurrent_writers(tmp_path: Path) -> None
 
     rows = load_watch_pool(csv_path).to_dict(orient="records")
     assert {(row["method"], row["code"]) for row in rows} == {("b1", "AAA.SZ"), ("hcr", "BBB.SZ")}
+
+
+def test_trim_and_sort_watch_rows_orders_same_day_by_total_score_descending() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "method": "b1",
+                "pick_date": "2026-04-10",
+                "code": "AAA.SZ",
+                "verdict": "WATCH",
+                "total_score": 3.6,
+                "signal_type": "rebound",
+                "comment": "low",
+                "recorded_at": "2026-04-14T10:00:00+08:00",
+            },
+            {
+                "method": "b1",
+                "pick_date": "2026-04-10",
+                "code": "ZZZ.SZ",
+                "verdict": "PASS",
+                "total_score": 4.8,
+                "signal_type": "trend_start",
+                "comment": "high",
+                "recorded_at": "2026-04-14T10:01:00+08:00",
+            },
+        ]
+    )
+
+    sorted_rows, trimmed = trim_and_sort_watch_rows(
+        rows,
+        trade_dates_desc=["2026-04-14", "2026-04-10"],
+        execution_trade_date="2026-04-14",
+        cutoff_trade_date="2026-04-10",
+    )
+
+    assert trimmed == 0
+    assert sorted_rows["code"].tolist() == ["ZZZ.SZ", "AAA.SZ"]
