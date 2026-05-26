@@ -178,6 +178,7 @@ fn environment_gate_matches_python_daily_metrics() {
             below_ma25: true,
             runup_pct: Some(116.0),
             sideways_amplitude_pct: Some(20.0),
+            weekly_slope_26w: None,
             weekly_macd_cooldown_active: false,
             triggered_flags: vec![
                 "cooldown_active".to_string(),

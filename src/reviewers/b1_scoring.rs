@@ -23,6 +23,7 @@ pub struct B1EnvironmentGate {
     pub below_ma25: bool,
     pub runup_pct: Option<f64>,
     pub sideways_amplitude_pct: Option<f64>,
+    pub weekly_slope_26w: Option<f64>,
     pub weekly_macd_cooldown_active: bool,
     pub triggered_flags: Vec<String>,
     pub score_penalty: f64,
@@ -348,6 +349,7 @@ pub fn compute_b1_environment_gate(
     let sideways_amplitude_pct = compute_b1_sideways_amplitude_pct(close);
     let runup_limit = resolve_b1_runup_limit(&state);
     let sideways_limit = 20.0;
+    let weekly_slope_26w = None;
     let weekly_macd_cooldown_active = false;
 
     let mut triggered_flags = Vec::new();
@@ -385,6 +387,7 @@ pub fn compute_b1_environment_gate(
         below_ma25,
         runup_pct,
         sideways_amplitude_pct,
+        weekly_slope_26w,
         weekly_macd_cooldown_active,
         triggered_flags,
         score_penalty,

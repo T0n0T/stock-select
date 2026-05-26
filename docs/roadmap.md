@@ -11,8 +11,8 @@
 当前 checkpoint：
 
 ```text
-latest commit: 55e5b16 docs: add rust refactor roadmap
-working tree: 包含文档更新和当前 Phase 1 测试新增改动
+latest commit: 95dffb2 feat: advance b1 native review groundwork
+working tree: b1 native review 已实现并通过 2026-05-25 golden parity，待提交
 ```
 
 项目正在推进 b1 Rust-native review。后续实现任务不要重算 Python golden，应直接读取既有 Python 产物：
@@ -24,10 +24,10 @@ working tree: 包含文档更新和当前 Phase 1 测试新增改动
 当前已完成的最近目标：
 
 ```text
-已新增 2026-05-25.b1 全量 b1 decision fixture harness。
+stock-select-rs run --method b1 已使用 Rust native review 输出与 Python baseline 完全一致的 artifacts。
 ```
 
-该测试验证 Rust b1 decision core 在 104 个 Python baseline-reviewed candidates 上与 Python 完全一致。下一步进入原生 OHLCV review score 输入计算层。
+2026-05-25.b1 已验证 104 个 baseline review、3 个 recommendations 与 Python golden 一致。chart 仍桥接 Python 渲染。
 
 ## 当前架构
 
@@ -36,11 +36,11 @@ Rust CLI 当前仍是混合替代路径：
 ```text
 stock-select-rs screen  -> Rust native
 stock-select-rs chart   -> Rust CLI bridge to Python chart
-stock-select-rs review  -> Rust CLI bridge to Python review
-stock-select-rs run     -> Rust screen + Python chart + Python review
+stock-select-rs review  -> b1 Rust native；其他方法仍 bridge to Python review
+stock-select-rs run     -> b1 Rust screen + Python chart + Rust native review
 ```
 
-不要把 `review` 或 `run` 当作 Rust-native review。它们当前是 CLI-compatible workflow，但 review 执行仍委托 Python，直到后续新增并验证 native 路径。
+`chart` 尚未原生化；`review --method b1 --native` 和 `run --method b1` 已不再委托 Python review。其他方法仍保持 Python bridge。
 
 面向用户的 runtime layout 已与 Python 对齐：
 
@@ -72,7 +72,7 @@ Python golden artifacts 读取路径：
 2026-05-19: 108/108
 ```
 
-已通过 Rust CLI bridge 验证 b1 review parity：
+已通过 Rust native b1 review parity：
 
 ```text
 pick_date=2026-05-25
@@ -84,13 +84,14 @@ recommendation codes=000066.SZ,300292.SZ,301290.SZ
 已通过 `stock-select-rs run --method b1` 端到端临时路径验证：
 
 ```text
-runtime_root=/tmp/stock-select-rs-b1-run-final
+runtime_root=/tmp/stock-select-rs-native-run-b1
 screen comparison: PASS candidates=104/104
 review comparison: PASS reviewed=104 recommendations=3
 chart smoke: PASS charts=104
+run elapsed=78.210s
 ```
 
-注意：当前 `run` 的 review 阶段仍通过 Python bridge 执行；本次验证证明 Rust CLI 用户流程和最终 artifacts 已与 Python baseline 对齐，不代表 b1 review 已完全 Rust-native。
+注意：当前 `run` 的 chart 阶段仍通过 Python bridge 执行；review 阶段已经是 Rust native b1。
 
 代表性验证命令：
 
@@ -113,7 +114,8 @@ cargo run --release -- review \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-review-cli-b1 \
   --environment-state weak \
-  --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱"
+  --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱" \
+  --native
 
 python3 scripts/compare_screen.py \
   --python-root ~/.agents/skills/stock-select/runtime \
@@ -169,7 +171,7 @@ review
 run
 ```
 
-`chart`、`review` 和 `run` 在 Rust native 尚未完成的阶段桥接 Python。`review` 和 `run` 会转发：
+`chart` 仍桥接 Python。`review` 对 b1 已有 Rust native path；其他方法暂时桥接 Python。`review` 和 `run` 会处理：
 
 ```text
 --dsn
@@ -209,14 +211,23 @@ Rust-native review 已有基础：
   - pass family/tier classification
   - environment verdict gate
   - score layer and calibrated total score
+- `src/reviewers/b1_scoring.rs`
+  - b1 trend/position/volume/previous abnormal move/environment gate 原生评分
+- `src/macd_trends.rs`
+  - b1 使用的 MACD state machine、weekly/daily trend classification、dual-period phase score
+- `src/native_review.rs`
+  - 读取 candidate/prepared cache
+  - 写 per-stock review JSON、`summary.json`、`llm_review_tasks.json`
+  - b1 watch reason/score/tier、wave task context 与 Python 对齐
 
-当前 b1 native decision core 已通过代表性 Python baseline 样本验证：
+当前 b1 native review 已通过 2026-05-25 全量 Python baseline parity：
 
 ```text
-000066.SZ exact distribution PASS-B total_score=4.78
-runup-over-limit exact distribution WATCH-A total_score=4.32
-300166.SZ rebound near WATCH-C total_score=3.54
-002428.SZ non-family rebound FAIL total_score=2.91
+cargo fmt --check
+cargo test --quiet
+python3 scripts/compare_screen.py --python-root ~/.agents/skills/stock-select/runtime --rust-root /tmp/stock-select-rs-native-run-b1 --pick-date 2026-05-25 --method b1
+python3 scripts/compare_review.py --python-root ~/.agents/skills/stock-select/runtime --rust-root /tmp/stock-select-rs-native-run-b1 --pick-date 2026-05-25 --method b1
+python3 scripts/check_charts.py --runtime-root /tmp/stock-select-rs-native-run-b1 --pick-date 2026-05-25 --method b1
 ```
 
 decision core 的范围刻意小于完整 review。它假设以下输入已经计算完成：
@@ -250,39 +261,27 @@ PASS: 104/104 b1 decision fixtures match Python for 2026-05-25
 
 ## 已知缺口
 
-### Review 尚未完全原生化
+### Review 原生化状态
 
-`stock-select-rs review` 仍把完整逐股 review 执行委托给 Python。Rust-native 代码目前可以在拿到相同输入后决定最终 b1 字段，但尚未从 OHLCV 历史数据原生计算所有必要输入。
+b1 review 已完成 Rust native parity。`stock-select-rs review --method b1 --native` 与 `stock-select-rs run --method b1` 会输出与 Python CLI 一致的 baseline review、summary、LLM task artifacts。
 
-缺失的 b1 native 部分：
+仍未原生化的 review 范围：
 
-- one-year per-candidate history loading for review
-- review prepared frame construction
-- b1 trend structure score
-- b1 price position score
-- b1 volume behavior score
-- previous abnormal move score
-- MACD wave classification
-- MACD phase score and divergence penalty
-- environment gate metrics:
-  - cooldown flags
-  - below MA25
-  - runup percent
-  - sideways amplitude
-  - weekly MACD cooldown
-- comment generation
-- `llm_review_tasks.json` task context generation
-- summary/recommendation writer
+- b2 / dribull review 仍委托 Python bridge
+- b1 自动 market environment resolution 尚未移植
+- b1 weekly slope / weekly MACD cooldown 当前对 2026-05-25 golden 为 `null/false`，后续多日期验证时需要继续补强
+- b1 comment 已满足当前 compare 脚本与 task context 对齐，但如后续要逐字比对 per-stock `comment`，需要补全 Python 中周 MACD 红柱、水上、背离、近 3 日死叉描述片段
 
 ### Environment Profile 状态
 
-Python 当前仍负责自动 market environment resolution 和 profile application。
+Python 当前仍负责自动 market environment resolution；Rust b1 native review 已支持 manual profile application。
 
 Rust 当前支持：
 
 - profile constants
 - profile-aware scoring helpers
-- manual environment forwarding to Python review
+- manual environment state/reason
+- b1 native review 使用 profile weights/subscore mode/llm_focus
 
 Rust 尚不支持：
 
@@ -367,13 +366,13 @@ fixture test 直接读取 `~/.agents/skills/stock-select/runtime/reviews/2026-05
 当前进展：
 
 ```text
-已新增 src/reviewers/b1_scoring.rs，完成第一批不依赖数据库的 b1 评分纯函数：
+已完成并接入 src/reviewers/b1_scoring.rs：
 - compute_bbi
 - score_b1_trend_structure
 - score_b1_price_position
 - score_b1_volume_behavior
 - score_b1_previous_abnormal_move
-- compute_b1_environment_gate（已覆盖 daily cooldown、below_ma25、runup、sideways；weekly slope / weekly MACD cooldown 后续接 MACD wave 阶段）
+- compute_b1_environment_gate（已覆盖 daily cooldown、below_ma25、runup、sideways）
 - b1_raw_total_score
 ```
 
@@ -383,28 +382,11 @@ fixture test 直接读取 `~/.agents/skills/stock-select/runtime/reviews/2026-05
 tests/b1_review_scoring.rs
 ```
 
-下一步应继续把这些纯函数接入真实 candidate history，并补全：
-
-```text
-MACD phase / wave context
-weekly environment gate metrics
-```
-
-建议顺序：
-
-1. Fetch one-year candidate histories in Rust.
-2. Port or reuse MA25, BBI, zxdq/zxdkx, MACD helpers.
-3. Implement and fixture-test:
-   - trend structure
-   - price position
-   - volume behavior
-   - previous abnormal move
-4. Keep each score function independently tested before composing the full reviewer.
-
 验收标准：
 
 ```text
 For 2026-05-25 b1, all 104 symbols match Python baseline score fields.
+已通过。
 ```
 
 推荐执行方式：
@@ -420,21 +402,18 @@ For 2026-05-25 b1, all 104 symbols match Python baseline score fields.
 
 目标：移植 Python `analysis/macd_waves.py` 和 b1 MACD phase logic。
 
-任务：
+当前状态：
 
-1. Implement MACD state machine structs.
-2. Implement daily MACD trend classification.
-3. Implement weekly aggregation and weekly MACD trend classification.
-4. Generate text context:
-   - `weekly_wave_context`
-   - `daily_wave_context`
-   - `wave_combo_context`
-5. Match Python reason strings where they affect comments/tasks.
+```text
+已新增 src/macd_trends.rs，并接入 native b1 review。
+已修正 pandas resample("W-FRI") 对未完成周的排除行为。
+```
 
 验收标准：
 
 ```text
 For 2026-05-25 b1, all 104 symbols match Python macd_phase and wave task context.
+已通过 compare_review.py。
 ```
 
 参考源码：
@@ -446,6 +425,8 @@ For 2026-05-25 b1, all 104 symbols match Python macd_phase and wave task context
 ### Phase 4：Native b1 Review Command
 
 目标：在切换默认行为前，先通过显式选项增加 native Rust review path。
+
+当前状态：已完成。
 
 拟定 CLI：
 
@@ -475,11 +456,14 @@ PASS review comparison method=b1 pick_date=2026-05-25 reviewed=104 recommendatio
 
 ### Phase 5：切换 b1 run Review 默认路径
 
-只有 native b1 review 通过 full golden comparison 后才执行：
+当前状态：已完成 `run --method b1` review 阶段切换为 Rust native。
 
-- make `stock-select-rs review --method b1` native by default
-- keep Python bridge behind an explicit fallback option
-- update `stock-select-rs run --method b1` to use native review
+保留策略：
+
+- `review --method b1 --native` 显式原生路径可用于单独验证
+- `run --method b1` 默认使用 native review
+- 其他方法继续 bridge
+- 后续再决定是否让 `review --method b1` 无需 `--native` 即默认原生
 
 最终验收：
 
@@ -487,6 +471,7 @@ PASS review comparison method=b1 pick_date=2026-05-25 reviewed=104 recommendatio
 stock-select-rs run --method b1 uses Rust screen + Rust native review by default,
 and compare_review.py still reports 104 reviewed candidates and 3 recommendations
 for 2026-05-25.
+已通过。
 ```
 
 ## 实现约束

@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use crate::cache::{load_prepared_cache, write_prepared_cache};
 use crate::config::{default_runtime_root, resolve_dsn_from_env, screen_window};
 use crate::model::{MarketRow, Method, PreparedRow};
+use crate::native_review::{NativeReviewArgs, run_native_review};
 use crate::output::{build_screen_result, write_screen_result};
 use crate::prepare::prepare_rows;
 use crate::python_bridge::{PythonBridge, PythonStage, PythonStageArgs};
@@ -73,6 +74,8 @@ pub struct ReviewArgs {
     llm_min_baseline_score: Option<f64>,
     #[arg(long)]
     llm_review_limit: Option<usize>,
+    #[arg(long)]
+    native: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -141,6 +144,21 @@ where
 }
 
 pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
+    if args.native {
+        let runtime_root = args
+            .runtime_root
+            .clone()
+            .unwrap_or_else(default_runtime_root);
+        return run_native_review(NativeReviewArgs {
+            method: args.method,
+            pick_date: args.pick_date,
+            runtime_root,
+            environment_state: args.environment_state.clone(),
+            environment_reason: args.environment_reason.clone(),
+            llm_min_baseline_score: args.llm_min_baseline_score,
+            llm_review_limit: args.llm_review_limit,
+        });
+    }
     let bridge = PythonBridge::default_project();
     run_review_with(args, |stage, stage_args| {
         bridge.run_stage(stage, stage_args)
@@ -229,19 +247,31 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
     );
 
     let review_started = Instant::now();
-    bridge.run_stage(
-        PythonStage::Review,
-        PythonStageArgs {
+    if method == Method::B1 {
+        run_native_review(NativeReviewArgs {
             method,
             pick_date,
-            dsn: args.review.dsn.as_deref(),
-            runtime_root: &runtime_root,
-            environment_state: args.review.environment_state.as_deref(),
-            environment_reason: args.review.environment_reason.as_deref(),
+            runtime_root: runtime_root.clone(),
+            environment_state: args.review.environment_state.clone(),
+            environment_reason: args.review.environment_reason.clone(),
             llm_min_baseline_score: args.review.llm_min_baseline_score,
             llm_review_limit: args.review.llm_review_limit,
-        },
-    )?;
+        })?;
+    } else {
+        bridge.run_stage(
+            PythonStage::Review,
+            PythonStageArgs {
+                method,
+                pick_date,
+                dsn: args.review.dsn.as_deref(),
+                runtime_root: &runtime_root,
+                environment_state: args.review.environment_state.as_deref(),
+                environment_reason: args.review.environment_reason.as_deref(),
+                llm_min_baseline_score: args.review.llm_min_baseline_score,
+                llm_review_limit: args.review.llm_review_limit,
+            },
+        )?;
+    }
     eprintln!(
         "[run] review elapsed={:.3}s",
         review_started.elapsed().as_secs_f64()
@@ -561,6 +591,7 @@ mod tests {
             environment_reason: Some("SSE neutral; CN2000 neutral; 双指数共振偏弱".to_string()),
             llm_min_baseline_score: Some(4.25),
             llm_review_limit: Some(3),
+            native: false,
         };
         let mut calls = Vec::new();
         let path = run_review_with(args, |stage, stage_args| {
