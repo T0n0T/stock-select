@@ -24,6 +24,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Screen(ScreenArgs),
+    Chart(ChartArgs),
     Run(RunArgs),
 }
 
@@ -39,6 +40,16 @@ pub struct ScreenArgs {
     runtime_root: Option<PathBuf>,
     #[arg(long)]
     recompute: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct ChartArgs {
+    #[arg(long)]
+    method: Method,
+    #[arg(long)]
+    pick_date: NaiveDate,
+    #[arg(long)]
+    runtime_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -68,8 +79,46 @@ pub fn run() -> anyhow::Result<()> {
         .map(|path| {
             eprintln!("[screen] wrote {}", path.display());
         }),
+        Commands::Chart(args) => run_chart(args).map(|path| {
+            eprintln!("[chart] wrote {}", path.display());
+        }),
         Commands::Run(args) => run_hybrid(args),
     }
+}
+
+pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
+    let bridge = PythonBridge::default_project();
+    run_chart_with(args, |stage, stage_args| {
+        bridge.run_stage(stage, stage_args)
+    })
+}
+
+pub fn run_chart_with<F>(args: ChartArgs, mut runner: F) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(PythonStage, PythonStageArgs<'_>) -> anyhow::Result<()>,
+{
+    let started = Instant::now();
+    let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
+    runner(
+        PythonStage::Chart,
+        PythonStageArgs {
+            method: args.method,
+            pick_date: args.pick_date,
+            runtime_root: &runtime_root,
+            environment_state: None,
+            environment_reason: None,
+        },
+    )?;
+    let output_path = runtime_root.join("charts").join(format!(
+        "{}.{}",
+        args.pick_date.format("%Y-%m-%d"),
+        args.method.as_str()
+    ));
+    eprintln!(
+        "[chart] total elapsed={:.3}s",
+        started.elapsed().as_secs_f64()
+    );
+    Ok(output_path)
 }
 
 pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
@@ -395,5 +444,34 @@ mod tests {
             codes,
             std::collections::BTreeSet::from(["000002.SZ", "000004.SZ"])
         );
+    }
+
+    #[test]
+    fn chart_orchestration_returns_expected_chart_directory_from_injected_runner() {
+        let temp = tempfile::tempdir().unwrap();
+        let pick = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        let args = ChartArgs {
+            method: Method::B1,
+            pick_date: pick,
+            runtime_root: Some(temp.path().to_path_buf()),
+        };
+        let mut calls = Vec::new();
+        let path = run_chart_with(args, |stage, stage_args| {
+            calls.push((
+                stage,
+                stage_args.method,
+                stage_args.pick_date,
+                stage_args.runtime_root.to_path_buf(),
+            ));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(path, temp.path().join("charts/2026-05-25.b1"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, PythonStage::Chart);
+        assert_eq!(calls[0].1, Method::B1);
+        assert_eq!(calls[0].2, pick);
+        assert_eq!(calls[0].3, temp.path());
     }
 }
