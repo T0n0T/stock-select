@@ -38,6 +38,29 @@ def _resolve_b2_daily_state_hint(*, weekly_trend: Any, daily_trend: Any) -> str:
     return "healthy_breakout"
 
 
+def calibrate_b2_selection_score(
+    *,
+    structure_score: float,
+    verdict: str,
+    watch_score: float | None,
+    watch_tier: str | None,
+) -> float:
+    score = float(structure_score)
+    if str(verdict).upper() != "WATCH" or watch_score is None:
+        return round(max(1.0, min(5.0, score)), 2)
+
+    tier_bonus = {
+        "WATCH-A": 0.12,
+        "WATCH-B": 0.00,
+        "WATCH-C": -0.12,
+    }.get(str(watch_tier or "").upper(), 0.0)
+    calibrated = 3.3 + max(0.0, min(100.0, float(watch_score))) / 100.0
+    calibrated += tier_bonus
+    if score >= 4.2:
+        calibrated = max(score, calibrated)
+    return round(max(1.0, min(5.0, calibrated)), 2)
+
+
 def _compute_b2_overheat_penalty(
     *,
     close: pd.Series,
@@ -335,6 +358,12 @@ def review_b2_symbol_history(
         elastic_watch_reason=elastic_watch_reason,
         signal=signal,
     )
+    selection_score = calibrate_b2_selection_score(
+        structure_score=total_score,
+        verdict=verdict,
+        watch_score=watch_score,
+        watch_tier=watch_tier,
+    )
     comment = _build_b2_comment(weekly_trend=weekly_trend, daily_trend=daily_trend, verdict=verdict)
 
     return {
@@ -347,7 +376,8 @@ def review_b2_symbol_history(
         "volume_behavior": volume_behavior,
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
-        "total_score": total_score,
+        "structure_score": total_score,
+        "total_score": selection_score,
         "signal": signal,
         "signal_type": signal_type,
         "verdict": verdict,
@@ -537,13 +567,20 @@ def _score_b2_weak_bundle(
     )
     if verdict == "WATCH" and relaunch_override.get("watch_tier") is not None:
         watch_tier = str(relaunch_override["watch_tier"])
+    selection_score = calibrate_b2_selection_score(
+        structure_score=total_score,
+        verdict=verdict,
+        watch_score=watch_score,
+        watch_tier=watch_tier,
+    )
     return {
         "trend_structure": trend_structure,
         "price_position": price_position,
         "volume_behavior": volume_behavior,
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
-        "total_score": total_score,
+        "structure_score": total_score,
+        "total_score": selection_score,
         "signal_type": signal_type,
         "verdict": verdict,
         "elastic_watch": elastic_watch,
@@ -957,13 +994,20 @@ def _score_b2_neutral_bundle(
         elastic_watch_reason=elastic_watch_reason,
         signal=signal,
     )
+    selection_score = calibrate_b2_selection_score(
+        structure_score=total_score,
+        verdict=verdict,
+        watch_score=watch_score,
+        watch_tier=watch_tier,
+    )
     return {
         "trend_structure": trend_structure,
         "price_position": price_position,
         "volume_behavior": volume_behavior,
         "previous_abnormal_move": previous_abnormal_move,
         "macd_phase": macd_phase,
-        "total_score": total_score,
+        "structure_score": total_score,
+        "total_score": selection_score,
         "signal_type": signal_type,
         "verdict": verdict,
         "elastic_watch": elastic_watch,

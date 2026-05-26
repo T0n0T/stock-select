@@ -156,9 +156,10 @@ def trim_and_sort_watch_rows(
     frame["_trade_distance"] = frame["pick_date"].astype(str).map(trade_index)
     frame = frame[frame["_trade_distance"].notna()].copy()
     frame["_trade_distance"] = frame["_trade_distance"].astype(int)
+    frame["_sort_total_score"] = pd.to_numeric(frame["total_score"], errors="coerce").fillna(0.0)
     frame = frame.sort_values(
-        by=["_trade_distance", "pick_date", "code"],
-        ascending=[True, False, True],
+        by=["_trade_distance", "pick_date", "_sort_total_score", "code"],
+        ascending=[True, False, False, True],
         kind="stable",
     ).reset_index(drop=True)
     return frame[WATCH_POOL_COLUMNS].copy(), before_count - len(frame)

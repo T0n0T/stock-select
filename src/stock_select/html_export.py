@@ -62,7 +62,7 @@ def group_items_by_verdict(summary: dict[str, Any]) -> dict[str, list[dict[str, 
         grouped.setdefault(verdict, [])
         grouped[verdict].append(item)
     for key in grouped:
-        grouped[key] = sorted(grouped[key], key=_baseline_item_sort_key, reverse=True)
+        grouped[key] = sorted(grouped[key], key=_selection_item_sort_key, reverse=True)
     return grouped
 
 
@@ -542,7 +542,11 @@ def _iter_summary_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
-def _baseline_item_sort_key(item: dict[str, Any]) -> tuple[float, float]:
+def _selection_item_sort_key(item: dict[str, Any]) -> tuple[float, float]:
+    try:
+        selection_score = float(item.get("total_score", item.get("final_score", 0.0)))
+    except (TypeError, ValueError):
+        selection_score = 0.0
     baseline_review = item.get("baseline_review") if isinstance(item.get("baseline_review"), dict) else None
     baseline_score = 0.0
     if baseline_review is not None:
@@ -550,11 +554,7 @@ def _baseline_item_sort_key(item: dict[str, Any]) -> tuple[float, float]:
           baseline_score = float(baseline_review.get("total_score", 0.0))
         except (TypeError, ValueError):
           baseline_score = 0.0
-    try:
-        total_score = float(item.get("total_score", 0.0))
-    except (TypeError, ValueError):
-        total_score = 0.0
-    return (baseline_score, total_score)
+    return (selection_score, baseline_score)
 
 
 def _escape(value: Any) -> str:
