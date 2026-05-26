@@ -9,4 +9,5 @@ pub mod output;
 pub mod prepare;
 pub mod python_bridge;
 pub mod review_protocol;
+pub mod reviewers;
 pub mod strategies;
