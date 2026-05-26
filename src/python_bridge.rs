@@ -30,9 +30,12 @@ pub enum PythonStage {
 pub struct PythonStageArgs<'a> {
     pub method: Method,
     pub pick_date: NaiveDate,
+    pub dsn: Option<&'a str>,
     pub runtime_root: &'a Path,
     pub environment_state: Option<&'a str>,
     pub environment_reason: Option<&'a str>,
+    pub llm_min_baseline_score: Option<f64>,
+    pub llm_review_limit: Option<usize>,
 }
 
 impl PythonBridge {
@@ -55,9 +58,13 @@ impl PythonBridge {
             args.method.as_str().to_string(),
             "--pick-date".to_string(),
             args.pick_date.format("%Y-%m-%d").to_string(),
-            "--runtime-root".to_string(),
-            args.runtime_root.display().to_string(),
         ];
+        if let Some(value) = args.dsn {
+            command_args.push("--dsn".to_string());
+            command_args.push(value.to_string());
+        }
+        command_args.push("--runtime-root".to_string());
+        command_args.push(args.runtime_root.display().to_string());
 
         if stage == PythonStage::Review {
             if let Some(value) = args.environment_state {
@@ -66,6 +73,14 @@ impl PythonBridge {
             }
             if let Some(value) = args.environment_reason {
                 command_args.push("--environment-reason".to_string());
+                command_args.push(value.to_string());
+            }
+            if let Some(value) = args.llm_min_baseline_score {
+                command_args.push("--llm-min-baseline-score".to_string());
+                command_args.push(value.to_string());
+            }
+            if let Some(value) = args.llm_review_limit {
+                command_args.push("--llm-review-limit".to_string());
                 command_args.push(value.to_string());
             }
         }
@@ -117,9 +132,12 @@ mod tests {
             PythonStageArgs {
                 method: Method::B1,
                 pick_date: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+                dsn: Some("postgresql://example"),
                 runtime_root: Path::new("/tmp/run-root"),
                 environment_state: Some("weak"),
                 environment_reason: Some("ignored for chart"),
+                llm_min_baseline_score: Some(4.0),
+                llm_review_limit: Some(3),
             },
         );
 
@@ -135,6 +153,8 @@ mod tests {
                 "b1",
                 "--pick-date",
                 "2026-05-25",
+                "--dsn",
+                "postgresql://example",
                 "--runtime-root",
                 "/tmp/run-root",
             ]
@@ -149,9 +169,12 @@ mod tests {
             PythonStageArgs {
                 method: Method::B1,
                 pick_date: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+                dsn: Some("postgresql://example"),
                 runtime_root: Path::new("/tmp/run-root"),
                 environment_state: Some("weak"),
                 environment_reason: Some("match python scheduled weak env"),
+                llm_min_baseline_score: Some(4.25),
+                llm_review_limit: Some(5),
             },
         );
 
@@ -165,12 +188,18 @@ mod tests {
                 "b1",
                 "--pick-date",
                 "2026-05-25",
+                "--dsn",
+                "postgresql://example",
                 "--runtime-root",
                 "/tmp/run-root",
                 "--environment-state",
                 "weak",
                 "--environment-reason",
                 "match python scheduled weak env",
+                "--llm-min-baseline-score",
+                "4.25",
+                "--llm-review-limit",
+                "5",
             ]
         );
     }
