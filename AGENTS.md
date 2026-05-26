@@ -14,7 +14,7 @@
 
 1. Rust CLI 的用户流程和最终产物需要与 Python `stock-select` CLI 对齐。
 2. `prepare cache` 的内部格式可以不兼容 Python，但 CLI 使用方式、runtime 目录结构和最终结果需要保持一致。
-3. 当前优先级是推进 `b1` 的 Rust 原生能力，特别是 `screen`、`review`、`run` 的端到端对齐。
+3. 当前优先级是推进 `b1` 的 Rust 原生能力，特别是 `screen`、`chart`、`review`、`run` 的端到端对齐。
 4. 在 Rust 原生实现完全通过 golden 对比前，可以保留 Python bridge，但必须在文档和代码路径中明确哪些阶段仍由 Python 执行。
 
 ## Python Golden 约束
@@ -39,11 +39,10 @@
 ## 当前实现边界
 
 1. `stock-select-rs screen` 已是 Rust 原生路径。
-2. `stock-select-rs chart` 当前仍桥接 Python chart。
-3. `stock-select-rs review` 当前默认仍桥接 Python review。
-4. `stock-select-rs run` 当前是 Rust screen + Python chart + Python review 的混合编排。
-5. Rust 中已有 b1 review decision core，但还未完成从 OHLCV 历史数据原生计算全部 review 输入。
-6. 环境 profile 目前 Rust 侧已有常量和 scoring helper，但自动环境评估仍未完全原生化。
+2. `stock-select-rs chart` 已迁到本仓库内置 chart runner：Rust 读取 prepared cache 并调用 `scripts/render_charts.py`，不再调用源 Python CLI 项目。
+3. `stock-select-rs review --method b1 --native` 已是 Rust 原生路径；其他方法仍可桥接 Python review。
+4. `stock-select-rs run --method b1` 当前是 Rust screen + 本仓库 chart runner + Rust native b1 review。
+5. 环境 profile 目前 Rust 侧已有常量和 scoring helper，但自动环境评估仍未完全原生化。
 
 ## 文档规则
 
@@ -75,6 +74,13 @@ cargo test --quiet
 
 ```bash
 python3 -m py_compile scripts/check_charts.py scripts/compare_screen.py scripts/compare_review.py
+```
+
+如果修改 chart runner，同时检查：
+
+```bash
+python3 -m py_compile scripts/render_charts.py
+python3 scripts/check_charts.py --runtime-root <rust-runtime-root> --pick-date 2026-05-25 --method b1
 ```
 
 涉及 b1 CLI 对齐时，优先使用：

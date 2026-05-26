@@ -6,16 +6,16 @@
 
 ## 当前快照
 
-日期：2026-05-26
+日期：2026-05-27
 
 当前 checkpoint：
 
 ```text
-latest commit: 95dffb2 feat: advance b1 native review groundwork
-working tree: b1 native review 已实现并通过 2026-05-25 golden parity，待提交
+latest commit: 5289843 feat: native b1 review parity
+working tree: chart runner 已迁入本仓库，待提交
 ```
 
-项目正在推进 b1 Rust-native review。后续实现任务不要重算 Python golden，应直接读取既有 Python 产物：
+项目正在推进 b1 Rust-native end-to-end。后续实现任务不要重算 Python golden，应直接读取既有 Python 产物：
 
 ```text
 ~/.agents/skills/stock-select/runtime
@@ -25,9 +25,10 @@ working tree: b1 native review 已实现并通过 2026-05-25 golden parity，待
 
 ```text
 stock-select-rs run --method b1 已使用 Rust native review 输出与 Python baseline 完全一致的 artifacts。
+stock-select-rs chart 已改为本仓库内置 runner，不再调用源 Python CLI 项目。
 ```
 
-2026-05-25.b1 已验证 104 个 baseline review、3 个 recommendations 与 Python golden 一致。chart 仍桥接 Python 渲染。
+2026-05-25.b1 已验证 104 个 baseline review、3 个 recommendations 与 Python golden 一致。chart PNG 由 `scripts/render_charts.py` 在本仓库内生成。
 
 ## 当前架构
 
@@ -35,12 +36,12 @@ Rust CLI 当前仍是混合替代路径：
 
 ```text
 stock-select-rs screen  -> Rust native
-stock-select-rs chart   -> Rust CLI bridge to Python chart
+stock-select-rs chart   -> Rust prepared cache + 本仓库 Python/mplfinance runner
 stock-select-rs review  -> b1 Rust native；其他方法仍 bridge to Python review
-stock-select-rs run     -> b1 Rust screen + Python chart + Rust native review
+stock-select-rs run     -> b1 Rust screen + 本仓库 chart runner + Rust native review
 ```
 
-`chart` 尚未原生化；`review --method b1 --native` 和 `run --method b1` 已不再委托 Python review。其他方法仍保持 Python bridge。
+`chart` 不再调用 `/home/pi/Documents/agents/stock-select` 的 Python CLI；它仍使用 Python 绘图库 `mplfinance/matplotlib`，但脚本和输入数据都在本仓库控制。`review --method b1 --native` 和 `run --method b1` 已不再委托 Python review。其他方法 review 仍保持 Python bridge。
 
 面向用户的 runtime layout 已与 Python 对齐：
 
@@ -84,14 +85,14 @@ recommendation codes=000066.SZ,300292.SZ,301290.SZ
 已通过 `stock-select-rs run --method b1` 端到端临时路径验证：
 
 ```text
-runtime_root=/tmp/stock-select-rs-native-run-b1
+runtime_root=/tmp/stock-select-rs-local-chart-run-b1
 screen comparison: PASS candidates=104/104
 review comparison: PASS reviewed=104 recommendations=3
 chart smoke: PASS charts=104
-run elapsed=78.210s
+run elapsed=74.051s
 ```
 
-注意：当前 `run` 的 chart 阶段仍通过 Python bridge 执行；review 阶段已经是 Rust native b1。
+注意：当前 `run` 的 chart 阶段仍使用 Python/mplfinance 绘图库，但不再通过源 Python CLI bridge。
 
 代表性验证命令：
 
@@ -171,7 +172,7 @@ review
 run
 ```
 
-`chart` 仍桥接 Python。`review` 对 b1 已有 Rust native path；其他方法暂时桥接 Python。`review` 和 `run` 会处理：
+`chart` 已迁到本仓库 runner。`review` 对 b1 已有 Rust native path；其他方法暂时桥接 Python。`review` 和 `run` 会处理：
 
 ```text
 --dsn
@@ -183,13 +184,23 @@ run
 
 ### Chart
 
-Rust CLI 已有 `chart` command，但 chart rendering 仍由 Python 执行：
+Rust CLI 已有 `chart` command，当前 chart 渲染路径为：
 
 ```text
-Rust Command -> uv run stock-select chart
+Rust Command -> 读取 runtime prepared/candidates -> 写 charts/*.payload.json -> uv run scripts/render_charts.py
 ```
 
+`scripts/render_charts.py` 使用 PEP 723 inline dependencies 声明 `pandas`、`matplotlib`、`mplfinance`，不依赖源 Python CLI 项目的 `pyproject.toml` 或虚拟环境。
+
 Rust CLI 生成路径下的 chart artifacts 已 smoke-check 为真实 PNG。既有 Python runtime 中 `2026-05-25.b1` 的 chart 文件存在 placeholder text artifacts，因此不能作为 PNG visual golden。
+
+本阶段验证：
+
+```text
+runtime_root=/tmp/stock-select-rs-local-chart-run-b1
+python3 scripts/check_charts.py --runtime-root /tmp/stock-select-rs-local-chart-run-b1 --pick-date 2026-05-25 --method b1
+PASS chart smoke method=b1 pick_date=2026-05-25 charts=104
+```
 
 ### Review Core
 
@@ -298,15 +309,21 @@ Rust 尚不支持：
 
 ### Chart 状态
 
-Chart rendering 仍由 Python 执行。在 review parity 原生化稳定、chart visual smoke tests 更充分之前，先保持该策略。
+Chart rendering 已从源 Python CLI bridge 迁到本仓库。当前仍使用 Python/mplfinance 绘图库，但执行入口、输入 payload 和 runtime 写入都由 Rust 仓库控制。
 
-Rust CLI `chart` command 当前作为稳定 workflow entrypoint，并桥接到：
+Rust CLI `chart` command 当前作为稳定 workflow entrypoint，调用：
 
 ```text
-uv run stock-select chart
+uv run scripts/render_charts.py --input <runtime>/charts/<pick_date>.<method>.payload.json
 ```
 
 `2026-05-25` Python runtime chart files 不是可靠 PNG golden set，因为历史文件中存在 placeholder text artifacts。Chart validation 应使用新的 Rust runtime 临时目录和 PNG smoke checks。
+
+后续可选增强：
+
+- 将 chart payload 临时文件改为缓存可复用或运行后清理
+- 对 PNG 做尺寸/非空像素/关键 panel 存在性检查
+- 若要完全去 Python 运行时，再另起阶段做纯 Rust 绘图
 
 ## 下一步路线图
 
@@ -479,7 +496,7 @@ for 2026-05-25.
 - b1 native review 开发期间不要重算 Python golden artifacts。
 - parity validation 使用 `/tmp` 下的 Rust runtime 临时目录。
 - `prepare cache` 内部可以不同于 Python，但 CLI 使用方式和最终 runtime artifacts 必须保持一致。
-- review parity 稳定前保持 `chart` bridged。
+- chart 当前不再依赖源 Python CLI 项目；不要重新引入 `/home/pi/Documents/agents/stock-select` 的 chart bridge。
 - 改默认行为前，先通过显式 opt-in 增加 native b1 review。
 - parity test 失败时按层对比：
   - candidate set
@@ -496,7 +513,7 @@ for 2026-05-25.
 ```bash
 cargo fmt --check
 cargo test --quiet
-python3 -m py_compile scripts/check_charts.py scripts/compare_screen.py scripts/compare_review.py
+python3 -m py_compile scripts/check_charts.py scripts/compare_screen.py scripts/compare_review.py scripts/render_charts.py
 ```
 
 做 b1 CLI parity 时运行：

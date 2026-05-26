@@ -6,6 +6,7 @@ pub mod environment_profiles;
 pub mod indicators;
 pub mod macd_trends;
 pub mod model;
+pub mod native_chart;
 pub mod native_review;
 pub mod output;
 pub mod prepare;
