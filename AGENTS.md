@@ -15,7 +15,7 @@
 1. Rust CLI 的用户流程和最终产物需要与 Python `stock-select` CLI 对齐。
 2. `prepare cache` 的内部格式可以不兼容 Python，但 CLI 使用方式、runtime 目录结构和最终结果需要保持一致。
 3. 当前优先级是推进 `b1` 的 Rust 原生能力，特别是 `screen`、`chart`、`review`、`run` 的端到端对齐。
-4. 在 Rust 原生实现完全通过 golden 对比前，可以保留 Python bridge，但必须在文档和代码路径中明确哪些阶段仍由 Python 执行。
+4. CLI 生产路径不再保留源 Python CLI bridge；未完成 Rust 原生实现的方法应显式报错，不允许静默回退到 Python CLI。
 
 ## Python Golden 约束
 
@@ -40,8 +40,8 @@
 
 1. `stock-select-rs screen` 已是 Rust 原生路径。
 2. `stock-select-rs chart` 已迁到本仓库内置 chart runner：Rust 读取 prepared cache 并调用 `scripts/render_charts.py`，不再调用源 Python CLI 项目。
-3. `stock-select-rs review --method b1 --native` 已是 Rust 原生路径；其他方法仍可桥接 Python review。
-4. `stock-select-rs run --method b1` 当前是 Rust screen + 本仓库 chart runner + Rust native b1 review。
+3. `stock-select-rs review` 直接调用 Rust native review；当前只有 `b1` 已完成原生 parity，其他方法会显式返回未实现错误。
+4. `stock-select-rs run` 当前是 Rust screen + 本仓库 chart runner + Rust native review；只有 `b1` review 完整可用。
 5. 环境 profile 目前 Rust 侧已有常量和 scoring helper，但自动环境评估仍未完全原生化。
 
 ## 文档规则
@@ -50,7 +50,7 @@
 2. 若需要引用 Python 源码、命令输出或字段名，保留原始英文标识，不强行翻译代码符号。
 3. `docs/roadmap.md` 是当前重构现状和下一步推进顺序的主入口。
 4. 重要阶段切换必须同步更新 roadmap，例如：
-   - review 从 Python bridge 切到 Rust native
+   - review/run 默认原生行为发生变化
    - run 默认编排发生变化
    - environment profile 原生化完成
    - chart 渲染策略发生变化
@@ -105,4 +105,4 @@ python3 scripts/compare_review.py \
 2. 修改已有文件前，先确认是否存在用户或其他协作者的未提交改动，不要覆盖无关修改。
 3. 新增 Rust 原生能力时，优先补 golden fixture 或小粒度单元测试，再实现逻辑。
 4. parity 失败时按层定位：候选集、score 输入字段、MACD wave context、gate flags、最终 decision、summary/recommendation。
-5. 不要把 Python bridge 的通过结果描述成 Rust native 已完成。
+5. 不要重新引入源 Python CLI bridge；如需 Python 绘图库，只允许通过本仓库受控脚本调用。

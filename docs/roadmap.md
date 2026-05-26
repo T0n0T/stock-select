@@ -11,8 +11,8 @@
 当前 checkpoint：
 
 ```text
-latest commit: 5289843 feat: native b1 review parity
-working tree: chart runner 已迁入本仓库，待提交
+latest commit: c6ddc8b feat: move chart rendering into rust repo
+working tree: 移除源 Python CLI bridge，review/run 强制走 Rust native，待提交
 ```
 
 项目正在推进 b1 Rust-native end-to-end。后续实现任务不要重算 Python golden，应直接读取既有 Python 产物：
@@ -26,22 +26,23 @@ working tree: chart runner 已迁入本仓库，待提交
 ```text
 stock-select-rs run --method b1 已使用 Rust native review 输出与 Python baseline 完全一致的 artifacts。
 stock-select-rs chart 已改为本仓库内置 runner，不再调用源 Python CLI 项目。
+stock-select-rs review/run 不再回退到源 Python CLI bridge。
 ```
 
 2026-05-25.b1 已验证 104 个 baseline review、3 个 recommendations 与 Python golden 一致。chart PNG 由 `scripts/render_charts.py` 在本仓库内生成。
 
 ## 当前架构
 
-Rust CLI 当前仍是混合替代路径：
+Rust CLI 当前生产路径：
 
 ```text
 stock-select-rs screen  -> Rust native
 stock-select-rs chart   -> Rust prepared cache + 本仓库 Python/mplfinance runner
-stock-select-rs review  -> b1 Rust native；其他方法仍 bridge to Python review
-stock-select-rs run     -> b1 Rust screen + 本仓库 chart runner + Rust native review
+stock-select-rs review  -> Rust native review
+stock-select-rs run     -> Rust screen + 本仓库 chart runner + Rust native review
 ```
 
-`chart` 不再调用 `/home/pi/Documents/agents/stock-select` 的 Python CLI；它仍使用 Python 绘图库 `mplfinance/matplotlib`，但脚本和输入数据都在本仓库控制。`review --method b1 --native` 和 `run --method b1` 已不再委托 Python review。其他方法 review 仍保持 Python bridge。
+`chart` 不再调用 `/home/pi/Documents/agents/stock-select` 的 Python CLI；它仍使用 Python 绘图库 `mplfinance/matplotlib`，但脚本和输入数据都在本仓库控制。`review` 和 `run` 不再委托源 Python CLI。当前只有 b1 review 完成 Rust native parity；b2 / dribull / hcr 的 review 会显式返回未实现错误。
 
 面向用户的 runtime layout 已与 Python 对齐：
 
@@ -115,8 +116,7 @@ cargo run --release -- review \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-review-cli-b1 \
   --environment-state weak \
-  --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱" \
-  --native
+  --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱"
 
 python3 scripts/compare_screen.py \
   --python-root ~/.agents/skills/stock-select/runtime \
@@ -172,7 +172,7 @@ review
 run
 ```
 
-`chart` 已迁到本仓库 runner。`review` 对 b1 已有 Rust native path；其他方法暂时桥接 Python。`review` 和 `run` 会处理：
+`chart` 已迁到本仓库 runner。`review` 和 `run` 只走 Rust native review；当前 b1 可用，其他方法会显式报未实现。`review` 和 `run` 会处理：
 
 ```text
 --dsn
@@ -274,11 +274,11 @@ PASS: 104/104 b1 decision fixtures match Python for 2026-05-25
 
 ### Review 原生化状态
 
-b1 review 已完成 Rust native parity。`stock-select-rs review --method b1 --native` 与 `stock-select-rs run --method b1` 会输出与 Python CLI 一致的 baseline review、summary、LLM task artifacts。
+b1 review 已完成 Rust native parity。`stock-select-rs review --method b1` 与 `stock-select-rs run --method b1` 会输出与 Python CLI 一致的 baseline review、summary、LLM task artifacts。
 
 仍未原生化的 review 范围：
 
-- b2 / dribull review 仍委托 Python bridge
+- b2 / dribull / hcr review 尚未移植；CLI 不再回退到 Python bridge，会显式报错
 - b1 自动 market environment resolution 尚未移植
 - b1 weekly slope / weekly MACD cooldown 当前对 2026-05-25 golden 为 `null/false`，后续多日期验证时需要继续补强
 - b1 comment 已满足当前 compare 脚本与 task context 对齐，但如后续要逐字比对 per-stock `comment`，需要补全 Python 中周 MACD 红柱、水上、背离、近 3 日死叉描述片段
@@ -412,7 +412,7 @@ For 2026-05-25 b1, all 104 symbols match Python baseline score fields.
 1. Add score field fixtures from Python JSON.
 2. Implement one score function at a time.
 3. Compare only that field before composing the full native reviewer.
-4. Keep the Python bridge as the CLI default during this phase.
+4. 历史策略曾允许 Python bridge 作为 CLI 默认；当前生产代码已移除该 bridge。
 ```
 
 ### Phase 3: MACD Wave Port
@@ -453,8 +453,7 @@ stock-select-rs review \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-native-review-b1 \
   --environment-state weak \
-  --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱" \
-  --native
+  --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱"
 ```
 
 验收标准：
@@ -469,18 +468,18 @@ python3 scripts/compare_review.py \
 PASS review comparison method=b1 pick_date=2026-05-25 reviewed=104 recommendations=3
 ```
 
-在 full comparison 通过前，native path 可以与 Python bridge 共存。本阶段不要切换 `run` 默认行为。
+当前状态已更新：源 Python CLI bridge 已移除，`review` 默认即为 Rust native。
 
 ### Phase 5：切换 b1 run Review 默认路径
 
-当前状态：已完成 `run --method b1` review 阶段切换为 Rust native。
+当前状态：已完成 `run` review 阶段切换为 Rust native。
 
 保留策略：
 
-- `review --method b1 --native` 显式原生路径可用于单独验证
+- `review --method b1` 默认使用 native review
 - `run --method b1` 默认使用 native review
-- 其他方法继续 bridge
-- 后续再决定是否让 `review --method b1` 无需 `--native` 即默认原生
+- 其他方法 review 尚未移植，显式报错
+- 不保留源 Python CLI bridge fallback
 
 最终验收：
 
@@ -497,7 +496,7 @@ for 2026-05-25.
 - parity validation 使用 `/tmp` 下的 Rust runtime 临时目录。
 - `prepare cache` 内部可以不同于 Python，但 CLI 使用方式和最终 runtime artifacts 必须保持一致。
 - chart 当前不再依赖源 Python CLI 项目；不要重新引入 `/home/pi/Documents/agents/stock-select` 的 chart bridge。
-- 改默认行为前，先通过显式 opt-in 增加 native b1 review。
+- review/run 已默认使用 Rust native review；不要重新加入源 Python CLI fallback。
 - parity test 失败时按层对比：
   - candidate set
   - score input fields

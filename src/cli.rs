@@ -12,7 +12,6 @@ use crate::native_chart::{NativeChartArgs, run_native_chart};
 use crate::native_review::{NativeReviewArgs, run_native_review};
 use crate::output::{build_screen_result, write_screen_result};
 use crate::prepare::prepare_rows;
-use crate::python_bridge::{PythonBridge, PythonStage, PythonStageArgs};
 use crate::strategies::run_strategy;
 
 #[derive(Debug, Parser)]
@@ -75,8 +74,6 @@ pub struct ReviewArgs {
     llm_min_baseline_score: Option<f64>,
     #[arg(long)]
     llm_review_limit: Option<usize>,
-    #[arg(long)]
-    native: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -122,54 +119,17 @@ pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
 }
 
 pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
-    if args.native {
-        let runtime_root = args
-            .runtime_root
-            .clone()
-            .unwrap_or_else(default_runtime_root);
-        return run_native_review(NativeReviewArgs {
-            method: args.method,
-            pick_date: args.pick_date,
-            runtime_root,
-            environment_state: args.environment_state.clone(),
-            environment_reason: args.environment_reason.clone(),
-            llm_min_baseline_score: args.llm_min_baseline_score,
-            llm_review_limit: args.llm_review_limit,
-        });
-    }
-    let bridge = PythonBridge::default_project();
-    run_review_with(args, |stage, stage_args| {
-        bridge.run_stage(stage, stage_args)
-    })
-}
-
-pub fn run_review_with<F>(args: ReviewArgs, mut runner: F) -> anyhow::Result<PathBuf>
-where
-    F: FnMut(PythonStage, PythonStageArgs<'_>) -> anyhow::Result<()>,
-{
     let started = Instant::now();
     let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
-    runner(
-        PythonStage::Review,
-        PythonStageArgs {
-            method: args.method,
-            pick_date: args.pick_date,
-            dsn: args.dsn.as_deref(),
-            runtime_root: &runtime_root,
-            environment_state: args.environment_state.as_deref(),
-            environment_reason: args.environment_reason.as_deref(),
-            llm_min_baseline_score: args.llm_min_baseline_score,
-            llm_review_limit: args.llm_review_limit,
-        },
-    )?;
-    let output_path = runtime_root
-        .join("reviews")
-        .join(format!(
-            "{}.{}",
-            args.pick_date.format("%Y-%m-%d"),
-            args.method.as_str()
-        ))
-        .join("summary.json");
+    let output_path = run_native_review(NativeReviewArgs {
+        method: args.method,
+        pick_date: args.pick_date,
+        runtime_root,
+        environment_state: args.environment_state,
+        environment_reason: args.environment_reason,
+        llm_min_baseline_score: args.llm_min_baseline_score,
+        llm_review_limit: args.llm_review_limit,
+    })?;
     eprintln!(
         "[review] total elapsed={:.3}s",
         started.elapsed().as_secs_f64()
@@ -216,32 +176,15 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
     );
 
     let review_started = Instant::now();
-    if method == Method::B1 {
-        run_native_review(NativeReviewArgs {
-            method,
-            pick_date,
-            runtime_root: runtime_root.clone(),
-            environment_state: args.review.environment_state.clone(),
-            environment_reason: args.review.environment_reason.clone(),
-            llm_min_baseline_score: args.review.llm_min_baseline_score,
-            llm_review_limit: args.review.llm_review_limit,
-        })?;
-    } else {
-        let bridge = PythonBridge::default_project();
-        bridge.run_stage(
-            PythonStage::Review,
-            PythonStageArgs {
-                method,
-                pick_date,
-                dsn: args.review.dsn.as_deref(),
-                runtime_root: &runtime_root,
-                environment_state: args.review.environment_state.as_deref(),
-                environment_reason: args.review.environment_reason.as_deref(),
-                llm_min_baseline_score: args.review.llm_min_baseline_score,
-                llm_review_limit: args.review.llm_review_limit,
-            },
-        )?;
-    }
+    run_native_review(NativeReviewArgs {
+        method,
+        pick_date,
+        runtime_root: runtime_root.clone(),
+        environment_state: args.review.environment_state.clone(),
+        environment_reason: args.review.environment_reason.clone(),
+        llm_min_baseline_score: args.review.llm_min_baseline_score,
+        llm_review_limit: args.review.llm_review_limit,
+    })?;
     eprintln!(
         "[run] review elapsed={:.3}s",
         review_started.elapsed().as_secs_f64()
@@ -514,53 +457,5 @@ mod tests {
             codes,
             std::collections::BTreeSet::from(["000002.SZ", "000004.SZ"])
         );
-    }
-
-    #[test]
-    fn review_orchestration_forwards_environment_and_baseline_filters_to_runner() {
-        let temp = tempfile::tempdir().unwrap();
-        let pick = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-        let args = ReviewArgs {
-            method: Method::B1,
-            pick_date: pick,
-            dsn: Some("postgresql://example".to_string()),
-            runtime_root: Some(temp.path().to_path_buf()),
-            environment_state: Some("weak".to_string()),
-            environment_reason: Some("SSE neutral; CN2000 neutral; 双指数共振偏弱".to_string()),
-            llm_min_baseline_score: Some(4.25),
-            llm_review_limit: Some(3),
-            native: false,
-        };
-        let mut calls = Vec::new();
-        let path = run_review_with(args, |stage, stage_args| {
-            calls.push((
-                stage,
-                stage_args.method,
-                stage_args.pick_date,
-                stage_args.dsn.map(str::to_string),
-                stage_args.runtime_root.to_path_buf(),
-                stage_args.environment_state.map(str::to_string),
-                stage_args.environment_reason.map(str::to_string),
-                stage_args.llm_min_baseline_score,
-                stage_args.llm_review_limit,
-            ));
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!(path, temp.path().join("reviews/2026-05-25.b1/summary.json"));
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, PythonStage::Review);
-        assert_eq!(calls[0].1, Method::B1);
-        assert_eq!(calls[0].2, pick);
-        assert_eq!(calls[0].3.as_deref(), Some("postgresql://example"));
-        assert_eq!(calls[0].4, temp.path());
-        assert_eq!(calls[0].5.as_deref(), Some("weak"));
-        assert_eq!(
-            calls[0].6.as_deref(),
-            Some("SSE neutral; CN2000 neutral; 双指数共振偏弱")
-        );
-        assert_eq!(calls[0].7, Some(4.25));
-        assert_eq!(calls[0].8, Some(3));
     }
 }
