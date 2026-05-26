@@ -14,10 +14,15 @@
 
 - `scripts/compare_screen.py`: runs or compares Python/Rust screen outputs for one or more dates and methods.
 - `scripts/compare_review.py`: compares Python/Rust review output directories after baseline review.
-- `src/cli.rs`: add `run`, Python bridge options, and stage timing.
+- `scripts/check_charts.py`: smoke-checks chart PNG existence, dimensions, and PNG headers.
+- `src/cli.rs`: implements `screen`, `chart`, `review`, and hybrid `run` command orchestration.
 - `src/python_bridge.rs`: execute Python CLI commands with inherited DSN/runtime arguments.
-- `src/lib.rs`: export `python_bridge`.
-- `tests/cli_args.rs`: lightweight CLI command construction and Python bridge tests without invoking real DB.
+- `src/environment_profiles.rs`: Rust-native method environment profile constants.
+- `src/review_protocol.rs`: Rust-native review scoring protocol helpers.
+- `src/reviewers/b1.rs`: Rust-native b1 decision core for final baseline decision fields.
+- `src/lib.rs`: exports public modules.
+- `tests/review_phase1.rs`: tests profile/scoring parity.
+- `tests/b1_reviewer_decision.rs`: tests b1 decision core against Python baseline samples.
 - `docs/superpowers/plans/2026-05-26-stock-select-rs-cli-refactor.md`: this plan.
 
 ## Task 1: Golden Screen Comparison Script
@@ -25,7 +30,7 @@
 **Files:**
 - Create: `scripts/compare_screen.py`
 
-- [ ] **Step 1: Add a comparison script**
+- [x] **Step 1: Add a comparison script**
 
 Create `scripts/compare_screen.py` with arguments:
 
@@ -45,7 +50,7 @@ The script reads:
 
 and compares candidate code set, `close`, `turnover_n`, `yellow_b1` for b1, `signal` for b2, and Python-required top-level fields.
 
-- [ ] **Step 2: Run against existing b1 artifacts**
+- [x] **Step 2: Run against existing b1 artifacts**
 
 Run:
 
@@ -59,7 +64,7 @@ python3 scripts/compare_screen.py \
 
 Expected: PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/compare_screen.py docs/superpowers/plans/2026-05-26-stock-select-rs-cli-refactor.md
@@ -71,7 +76,7 @@ git commit -m "test: add screen golden comparison script"
 **Files:**
 - Modify: `scripts/compare_screen.py`
 
-- [ ] **Step 1: Add optional Rust command execution**
+- [x] **Step 1: Add optional Rust command execution**
 
 Add optional arguments:
 
@@ -82,7 +87,7 @@ Add optional arguments:
 
 Python golden artifacts are read from `~/.agents/skills/stock-select/runtime` by default and must not be recomputed during this task. When `--run-rust-screen` is enabled, the script removes the Rust runtime root, runs Rust `screen --recompute`, then compares artifacts against the existing Python runtime.
 
-- [ ] **Step 2: Run b1 for at least three dates**
+- [x] **Step 2: Run b1 for at least three dates**
 
 Use:
 
@@ -99,7 +104,7 @@ done
 
 Expected: all PASS. If a date fails, inspect missing/extra codes and fix Rust b1 before moving on.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/compare_screen.py src
