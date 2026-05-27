@@ -14,7 +14,7 @@
 
 1. Rust CLI 的用户流程和最终产物需要与 Python `stock-select` CLI 对齐。
 2. `prepare cache` 的内部格式可以不兼容 Python，但 CLI 使用方式、runtime 目录结构和最终结果需要保持一致。
-3. 当前优先级是推进 `b1` 的 Rust 原生能力，特别是 `screen`、`chart`、`review`、`run` 的端到端对齐。
+3. 当前 `b1`、`b2` 已完成 `screen`、`chart`、`review`、`run` 的端到端对齐；下一阶段优先推进 dribull / hcr 或环境评估原生化。
 4. CLI 生产路径不再保留源 Python CLI bridge；未完成 Rust 原生实现的方法应显式报错，不允许静默回退到 Python CLI。
 
 ## Python Golden 约束
@@ -36,12 +36,14 @@
    recommendation codes=000066.SZ,300292.SZ,301290.SZ
    ```
 
+5. b2 基准日期优先使用 `2026-05-25`。当前 Python golden 目录是已 merge 状态，不是纯 baseline：`603308.SH` 带有 `llm_review`，顶层结果来自 `review-merge`，但 `baseline_review` 仍保留本地 baseline。
+
 ## 当前实现边界
 
 1. `stock-select-rs screen` 已是 Rust 原生路径。
 2. `stock-select-rs chart` 已迁到本仓库内置 chart runner：Rust 读取 prepared cache 并调用 `scripts/render_charts.py`，不再调用源 Python CLI 项目。
-3. `stock-select-rs review` 直接调用 Rust native review；当前只有 `b1` 已完成原生 parity，其他方法会显式返回未实现错误。
-4. `stock-select-rs run` 当前是 Rust screen + 本仓库 chart runner + Rust native review；只有 `b1` review 完整可用。
+3. `stock-select-rs review` 直接调用 Rust native review；当前 `b1`、`b2` 已完成原生 parity，其他方法会显式返回未实现错误。
+4. `stock-select-rs run` 当前是 Rust screen + 本仓库 chart runner + Rust native review；`b1`、`b2` 完整可用。
 5. 环境 profile 目前 Rust 侧已有常量和 scoring helper，但自动环境评估仍未完全原生化。
 
 ## 文档规则

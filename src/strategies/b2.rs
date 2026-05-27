@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 
-use crate::indicators::{barslast, count_dynamic};
+use crate::indicators::{barslast, count_dynamic, ema, rolling_mean, rolling_sum};
 use crate::model::{Candidate, PreparedRow};
 use crate::strategies::{StrategyOutput, group_by_symbol, sort_candidates};
 
@@ -67,6 +67,77 @@ fn build_signals(history: &[&PreparedRow], code: &str) -> Vec<Option<String>> {
     let mut cur_b2 = vec![false; len];
     let mut cur_b3 = vec![false; len];
     let mut cur_b3_plus = vec![false; len];
+    let close = history.iter().map(|row| row.close).collect::<Vec<_>>();
+    let st_l = ema(&ema(&close, 10), 10);
+    let ma14 = rolling_mean(&close, 14, 14);
+    let ma28 = rolling_mean(&close, 28, 28);
+    let ma57 = rolling_mean(&close, 57, 57);
+    let ma114 = rolling_mean(&close, 114, 114);
+    let lt_r = (0..len)
+        .map(|idx| match (ma14[idx], ma28[idx], ma57[idx], ma114[idx]) {
+            (Some(a), Some(b), Some(c), Some(d)) if idx + 1 > 114 => Some((a + b + c + d) / 4.0),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let cross_up = (0..len)
+        .map(|idx| {
+            idx > 0
+                && matches!(
+                    (lt_r[idx], lt_r[idx - 1]),
+                    (Some(cur), Some(prev)) if st_l[idx] > cur && st_l[idx - 1] <= prev
+                )
+        })
+        .collect::<Vec<_>>();
+    let c_days = barslast(&cross_up);
+    let mut lt_dir = vec![1.0; len];
+    for idx in 0..len {
+        let is_new = idx + 1 <= 114;
+        if !is_new {
+            lt_dir[idx] = if idx > 0
+                && lt_r[idx].is_some()
+                && lt_r[idx - 1].is_some()
+                && lt_r[idx].unwrap() >= lt_r[idx - 1].unwrap() * 0.9999
+            {
+                1.0
+            } else {
+                -1.0
+            };
+        }
+    }
+    let flip_values = (0..len)
+        .map(|idx| {
+            if idx > 0 && lt_dir[idx] != lt_dir[idx - 1] {
+                1.0
+            } else {
+                0.0
+            }
+        })
+        .collect::<Vec<_>>();
+    let flip_c = rolling_sum(&flip_values, 30, 1);
+    let tr_ok = (0..len)
+        .map(|idx| {
+            let is_new = idx + 1 <= 114;
+            if is_new {
+                return true;
+            }
+            let Some(lt) = lt_r[idx] else {
+                return false;
+            };
+            let honeymoon = c_days[idx] >= 0.0 && c_days[idx] <= 30.0 && st_l[idx] > lt;
+            let breakaway = st_l[idx] > lt * 1.03;
+            let lt_stable = flip_c[idx].unwrap_or(0.0) <= 2.0;
+            let support = history[idx].close >= lt * 0.95;
+            honeymoon
+                || breakaway
+                || (st_l[idx] > lt && history[idx].close > lt && lt_stable && support)
+        })
+        .collect::<Vec<_>>();
+    let above_lt = (0..len)
+        .map(|idx| {
+            let is_new = idx + 1 <= 114;
+            is_new || lt_r[idx].is_some_and(|lt| history[idx].close > lt)
+        })
+        .collect::<Vec<_>>();
     let amp_limit = if code.starts_with("688") || code.starts_with("300") {
         12.0
     } else {
@@ -83,15 +154,13 @@ fn build_signals(history: &[&PreparedRow], code: &str) -> Vec<Option<String>> {
         let ef_body = row.close - row.open.min(prev.close);
         let k_shape = up_shadow <= ef_body && row.close > row.open;
         let j_up = row.j > prev.j;
-        let tr_ok = trend_ok(row);
-        let above_lt = row.zxdkx.map(|zxdkx| row.close > zxdkx).unwrap_or(true);
         raw_b2[idx] = pct >= 3.7
             && row.volume > prev.volume
             && k_shape
             && pre_ok
             && j_up
-            && tr_ok
-            && above_lt;
+            && tr_ok[idx]
+            && above_lt[idx];
     }
 
     let j_up: Vec<bool> = (0..len)
@@ -116,14 +185,12 @@ fn build_signals(history: &[&PreparedRow], code: &str) -> Vec<Option<String>> {
         let amp = (row.high - row.low) / prev.close * 100.0;
         let shake = pct.abs() < 5.05 && amp < amp_limit;
         let j_up_now = row.j > prev.j;
-        let tr_ok = trend_ok(row);
-        let above_lt = row.zxdkx.map(|zxdkx| row.close > zxdkx).unwrap_or(true);
         cur_b3[idx] = cur_b2[idx - 1]
             && shake
             && row.volume <= prev.volume * 0.9
             && j_up_now
-            && tr_ok
-            && above_lt;
+            && tr_ok[idx]
+            && above_lt[idx];
         cur_b3_plus[idx] =
             cur_b3[idx] && row.volume <= prev.volume * 0.52 && row.close > prev.close;
     }
@@ -141,13 +208,6 @@ fn build_signals(history: &[&PreparedRow], code: &str) -> Vec<Option<String>> {
             }
         })
         .collect()
-}
-
-fn trend_ok(row: &PreparedRow) -> bool {
-    match (row.zxdq, row.zxdkx) {
-        (Some(zxdq), Some(zxdkx)) => zxdq > zxdkx || row.close > zxdkx,
-        _ => true,
-    }
 }
 
 fn increment(stats: &mut BTreeMap<String, usize>, key: &str) {

@@ -2,6 +2,7 @@ use chrono::{Datelike, Duration, NaiveDate};
 
 use crate::indicators::macd;
 use crate::model::PreparedRow;
+use crate::native_review::WaveTaskContext;
 
 const RISING_INITIAL_BARS: usize = 3;
 const MIN_TREND_PERIODS: usize = 4;
@@ -131,6 +132,64 @@ pub fn is_constructive_macd_trend_combo(weekly: &MacdTrendState, daily: &MacdTre
     weekly.phase == "rising" && daily.phase == "falling"
 }
 
+pub(crate) fn describe_b2_macd_score_context(
+    weekly: &MacdTrendState,
+    daily: &MacdTrendState,
+    signal: &str,
+) -> WaveTaskContext {
+    let daily_stage = derive_score_stage(daily);
+    let weekly_stage = adjust_b2_context_weekly_stage(derive_score_stage(weekly), &daily_stage);
+    let setup_tag = derive_setup_tag(&weekly_stage, &daily_stage);
+    let risk_flags = score_risk_flags(&weekly_stage, &daily_stage);
+    let reason = build_score_reason(
+        "b2",
+        &weekly_stage,
+        &daily_stage,
+        signal,
+        &setup_tag,
+        &risk_flags,
+    );
+    WaveTaskContext {
+        weekly_wave_context: render_stage_context("周线", &weekly_stage),
+        daily_wave_context: render_stage_context("日线", &daily_stage),
+        wave_combo_context: format!(
+            "b2 组合：{}；{}",
+            describe_setup_tag(&setup_tag),
+            render_combo_reason(&reason)
+        ),
+    }
+}
+
+fn adjust_b2_context_weekly_stage(
+    mut weekly_stage: ScoreStage,
+    daily_stage: &ScoreStage,
+) -> ScoreStage {
+    let above_water_pre_odd = weekly_stage
+        .reason
+        .contains("even wave ended with above-water golden cross")
+        || weekly_stage
+            .reason
+            .contains("above-water golden cross starts next pre odd push");
+    let daily_late_push = matches!(
+        daily_stage.wave_cycle_phase.as_str(),
+        "pre_odd_pushing" | "odd_confirmed"
+    ) && daily_stage.odd_push_stage == "stage3_hist_lagging";
+    if weekly_stage.wave_cycle_phase == "pre_odd_pushing"
+        && weekly_stage.odd_push_stage == "stage2_line_extending"
+        && above_water_pre_odd
+        && daily_late_push
+    {
+        weekly_stage.odd_push_stage = "stage1_hist_dominant".to_string();
+        if weekly_stage.current_wave_index == 5 {
+            weekly_stage.wave_cycle_phase = "odd_confirmed".to_string();
+            weekly_stage.current_opportunity_phase = "not_applicable".to_string();
+            weekly_stage.reason = "pre odd wave confirmed by macd_max above baseline_H".to_string();
+            weekly_stage.risk_flags.clear();
+        }
+    }
+    weekly_stage
+}
+
 pub fn map_b1_macd_phase_score(
     history_len: usize,
     weekly: &MacdTrendState,
@@ -152,6 +211,26 @@ pub fn map_b1_macd_phase_score(
         score -= 0.5;
     }
     round2(score.clamp(1.0, 5.0))
+}
+
+pub fn map_b2_macd_phase_score(
+    history_len: usize,
+    weekly: &MacdTrendState,
+    daily: &MacdTrendState,
+    signal: Option<&str>,
+    environment_state: &str,
+) -> f64 {
+    if history_len < 60 {
+        return 3.0;
+    }
+    if environment_state == "weak" || environment_state == "neutral" {
+        return score_b2_macd_state_machine_combo_with_fake_weekly(
+            daily,
+            signal.unwrap_or(""),
+            environment_state,
+        );
+    }
+    score_b2_macd_state_machine_combo(weekly, daily, signal.unwrap_or(""), environment_state)
 }
 
 fn classify_macd_trend_with_state_machine_from_lines(dif: &[f64], dea: &[f64]) -> MacdTrendState {
@@ -1451,6 +1530,621 @@ pub fn adjust_b1_macd_phase_score(score: f64, environment_state: &str) -> f64 {
         _ => 0.0,
     };
     round2((rounded + adjustment).clamp(1.0, 5.0))
+}
+
+fn score_b2_macd_state_machine_combo(
+    weekly: &MacdTrendState,
+    daily: &MacdTrendState,
+    signal: &str,
+    environment_state: &str,
+) -> f64 {
+    let daily_stage = derive_score_stage(daily);
+    let weekly_stage = derive_score_stage(weekly);
+    let daily_score = score_daily_stage(&daily_stage);
+    let weekly_score = round2(daily_score * weekly_coefficient(&weekly_stage, environment_state));
+    let combo_score = score_combo(&weekly_stage, &daily_stage, signal, environment_state);
+    let risk_adjustment = score_risk_adjustment(&weekly_stage, &daily_stage);
+    let method_bias = score_b2_method_bias(&weekly_stage, &daily_stage, signal);
+    let raw_score = (weekly_score + daily_score + combo_score + risk_adjustment + method_bias)
+        .clamp(0.0, 100.0);
+    round2(1.0 + ((raw_score + 8.0).min(100.0) / 25.0))
+}
+
+fn score_b2_macd_state_machine_combo_with_fake_weekly(
+    daily: &MacdTrendState,
+    signal: &str,
+    environment_state: &str,
+) -> f64 {
+    let daily_stage = derive_score_stage(daily);
+    let weekly_stage = waiting_score_stage();
+    let daily_score = score_daily_stage(&daily_stage);
+    let weekly_score = round2(daily_score * weekly_coefficient(&weekly_stage, environment_state));
+    let combo_score = score_combo(&weekly_stage, &daily_stage, signal, environment_state);
+    let risk_adjustment = score_risk_adjustment(&weekly_stage, &daily_stage);
+    let method_bias = score_b2_method_bias(&weekly_stage, &daily_stage, signal);
+    let raw_score = (weekly_score + daily_score + combo_score + risk_adjustment + method_bias)
+        .clamp(0.0, 100.0);
+    round2(1.0 + ((raw_score + 8.0).min(100.0) / 25.0))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScoreStage {
+    wave_cycle_phase: String,
+    current_wave_index: i32,
+    current_opportunity_phase: String,
+    odd_push_stage: String,
+    waiting_strength_tier: String,
+    supports_first_even_repair_window: bool,
+    bottom_divergence_valid: Option<bool>,
+    top_divergence_level: String,
+    risk_flags: Vec<String>,
+    reason: String,
+}
+
+fn waiting_score_stage() -> ScoreStage {
+    ScoreStage {
+        wave_cycle_phase: "waiting".to_string(),
+        current_wave_index: 0,
+        current_opportunity_phase: "not_applicable".to_string(),
+        odd_push_stage: "not_applicable".to_string(),
+        waiting_strength_tier: "waiting_flat".to_string(),
+        supports_first_even_repair_window: false,
+        bottom_divergence_valid: None,
+        top_divergence_level: "none".to_string(),
+        risk_flags: Vec::new(),
+        reason: "insufficient MACD history".to_string(),
+    }
+}
+
+fn derive_score_stage(trend: &MacdTrendState) -> ScoreStage {
+    let current_state = trend.metrics.state_machine_state.as_str();
+    let wave_cycle_phase = match current_state {
+        "waiting_underwater" => "waiting",
+        "pre_odd_pushing" | "pre_wave1_pushing" => "pre_odd_pushing",
+        "pre_odd_adjusting" => "pre_odd_adjusting",
+        "odd_wave_forming" => "odd_confirmed",
+        "even_wave_forming" if trend.metrics.even_repair_started => "even_repairing",
+        "even_wave_forming" => "even_adjusting",
+        _ => "waiting",
+    }
+    .to_string();
+    let current_wave_index = if ["pre_odd_pushing", "pre_odd_adjusting"]
+        .contains(&wave_cycle_phase.as_str())
+        || (current_state == "even_wave_forming" && trend.metrics.golden_cross_imminent)
+    {
+        next_odd_wave_index(trend.metrics.state_machine_wave_index)
+    } else {
+        trend.metrics.state_machine_wave_index
+    };
+    let current_opportunity_phase =
+        if current_state == "even_wave_forming" && trend.metrics.golden_cross_imminent {
+            "pre_odd_imminent"
+        } else if wave_cycle_phase == "pre_odd_pushing" {
+            "pre_odd_starting"
+        } else {
+            "not_applicable"
+        }
+        .to_string();
+    let odd_push_stage =
+        if ["pre_odd_pushing", "odd_confirmed"].contains(&wave_cycle_phase.as_str()) {
+            classify_odd_push_stage(trend.metrics.dif, trend.metrics.dea, trend.metrics.spread)
+        } else {
+            "not_applicable".to_string()
+        };
+    let waiting_strength_tier = classify_waiting_strength_tier(
+        trend.metrics.dif,
+        trend.metrics.dea,
+        trend.metrics.spread,
+        &wave_cycle_phase,
+    );
+    let supports_first_even_repair_window = wave_cycle_phase == "even_repairing"
+        && trend.metrics.state_machine_wave_index == 2
+        && trend.metrics.state_machine_valid_odd_wave_count == 1;
+    let mut risk_flags = Vec::new();
+    if wave_cycle_phase == "pre_odd_pushing" && trend.metrics.baseline_h.is_some() {
+        risk_flags.push("baseline_pending".to_string());
+    }
+    if trend.metrics.bottom_divergence_valid == Some(false) {
+        risk_flags.push("bottom_divergence_invalid".to_string());
+    }
+    let top_divergence_level = if wave_cycle_phase == "odd_confirmed"
+        && odd_push_stage != "stage1_hist_dominant"
+        && trend.is_top_divergence
+    {
+        "none"
+    } else {
+        "none"
+    }
+    .to_string();
+    ScoreStage {
+        wave_cycle_phase,
+        current_wave_index,
+        current_opportunity_phase,
+        odd_push_stage,
+        waiting_strength_tier,
+        supports_first_even_repair_window,
+        bottom_divergence_valid: trend.metrics.bottom_divergence_valid,
+        top_divergence_level,
+        risk_flags,
+        reason: trend.metrics.state_machine_reason.clone(),
+    }
+}
+
+fn next_odd_wave_index(current_wave_index: i32) -> i32 {
+    if current_wave_index <= 0 {
+        1
+    } else if current_wave_index % 2 == 0 {
+        current_wave_index + 1
+    } else {
+        current_wave_index
+    }
+}
+
+fn classify_odd_push_stage(latest_dif: f64, latest_dea: f64, latest_hist: f64) -> String {
+    if 0.0 < latest_dea && latest_dea < latest_hist && 0.0 < latest_dif && latest_dif < latest_hist
+    {
+        "stage1_hist_dominant".to_string()
+    } else if 0.0 < latest_dea && latest_dea < latest_hist && latest_hist < latest_dif {
+        "stage2_line_extending".to_string()
+    } else if latest_hist < latest_dea && latest_hist < latest_dif {
+        "stage3_hist_lagging".to_string()
+    } else {
+        "not_applicable".to_string()
+    }
+}
+
+fn classify_waiting_strength_tier(
+    latest_dif: f64,
+    latest_dea: f64,
+    latest_hist: f64,
+    wave_cycle_phase: &str,
+) -> String {
+    if wave_cycle_phase != "waiting" {
+        return "not_applicable".to_string();
+    }
+    if latest_dif > 0.0 && latest_dea < 0.0 && latest_hist > 0.0 {
+        "underwater_ready".to_string()
+    } else if latest_dif < 0.0 && latest_dea < 0.0 && latest_hist > 0.0 {
+        "underwater_strengthening".to_string()
+    } else {
+        "waiting_flat".to_string()
+    }
+}
+
+fn classify_weekly_grade(stage: &ScoreStage) -> &'static str {
+    match stage.wave_cycle_phase.as_str() {
+        "cycle_ended" => "很差",
+        "waiting" if stage.waiting_strength_tier == "underwater_ready" => "差",
+        "waiting" => "很差",
+        "even_adjusting" | "even_repairing" => "中",
+        "pre_odd_adjusting" => "差",
+        "pre_odd_pushing" => "很好",
+        "odd_confirmed" => match stage.odd_push_stage.as_str() {
+            "stage1_hist_dominant" => "很好",
+            "stage2_line_extending" => "好",
+            "stage3_hist_lagging" => "中",
+            _ => "中",
+        },
+        _ => "很差",
+    }
+}
+
+fn classify_daily_grade(stage: &ScoreStage) -> &'static str {
+    match stage.wave_cycle_phase.as_str() {
+        "cycle_ended" => "很差",
+        "waiting" => "很差",
+        "even_adjusting" => "差",
+        _ if stage.current_opportunity_phase == "pre_odd_imminent" => {
+            if stage.current_wave_index == 3 {
+                "很好"
+            } else {
+                "好"
+            }
+        }
+        "even_repairing" if stage.bottom_divergence_valid == Some(true) => "很好",
+        "even_repairing" if stage.supports_first_even_repair_window => "好",
+        "even_repairing" => "中",
+        "pre_odd_pushing" => "好",
+        "pre_odd_adjusting" => "中",
+        "odd_confirmed" => match stage.odd_push_stage.as_str() {
+            "stage1_hist_dominant" => "很好",
+            "stage2_line_extending" => "好",
+            "stage3_hist_lagging" => "中",
+            _ => "中",
+        },
+        _ => "很差",
+    }
+}
+
+fn weekly_coefficient(stage: &ScoreStage, environment_state: &str) -> f64 {
+    let grade = classify_weekly_grade(stage);
+    let mut score = match environment_state {
+        "weak" => match grade {
+            "很差" => 0.35,
+            "差" => 0.5,
+            "中" => 0.65,
+            "好" => 0.8,
+            "很好" => 0.9,
+            _ => 0.35,
+        },
+        "strong" => match grade {
+            "很差" => 0.7,
+            "差" => 1.16,
+            "中" => 1.08,
+            "好" => 1.15,
+            "很好" => 1.2,
+            _ => 0.7,
+        },
+        _ => match grade {
+            "很差" => 0.55,
+            "差" => 0.7,
+            "中" => 0.9,
+            "好" => 1.1,
+            "很好" => 1.15,
+            _ => 0.55,
+        },
+    };
+    if stage.wave_cycle_phase == "waiting"
+        && stage.waiting_strength_tier == "underwater_strengthening"
+    {
+        score += 0.03;
+    }
+    if stage.wave_cycle_phase == "pre_odd_pushing" && stage.current_wave_index >= 4 {
+        score -= 0.20;
+    }
+    if stage.bottom_divergence_valid == Some(true) {
+        score += 0.05;
+    } else if stage.bottom_divergence_valid == Some(false) {
+        score -= 0.05;
+    }
+    score
+}
+
+fn score_daily_stage(stage: &ScoreStage) -> f64 {
+    let table = |grade: &str| match grade {
+        "很差" => 5.0,
+        "差" => 10.0,
+        "中" => 18.0,
+        "好" => 22.0,
+        "很好" => 28.0,
+        _ => 5.0,
+    };
+    if stage.current_opportunity_phase == "pre_odd_imminent" {
+        return table("很好")
+            + if stage.current_wave_index == 3 {
+                4.0
+            } else {
+                1.0
+            };
+    }
+    if stage.wave_cycle_phase == "even_repairing" {
+        if stage.bottom_divergence_valid == Some(true) {
+            if stage.supports_first_even_repair_window {
+                return table("好") + 3.0;
+            }
+            return table("中") + 2.0;
+        }
+        if stage.supports_first_even_repair_window {
+            return table("好");
+        }
+        return table("中");
+    }
+    table(classify_daily_grade(stage))
+}
+
+fn score_combo(
+    weekly_stage: &ScoreStage,
+    daily_stage: &ScoreStage,
+    signal: &str,
+    environment_state: &str,
+) -> f64 {
+    if weekly_stage.wave_cycle_phase == "cycle_ended"
+        || daily_stage.wave_cycle_phase == "cycle_ended"
+    {
+        return 0.0;
+    }
+    if daily_stage.current_opportunity_phase == "pre_odd_imminent"
+        && daily_stage.current_wave_index == 3
+    {
+        if weekly_stage.wave_cycle_phase == "odd_confirmed"
+            && weekly_stage.odd_push_stage == "stage1_hist_dominant"
+        {
+            let score = if signal == "B3" { 20.0 } else { 18.0 };
+            return match environment_state {
+                "weak" => score - 15.0,
+                "strong" => score - 12.0,
+                _ => score,
+            };
+        }
+        if weekly_stage.wave_cycle_phase == "odd_confirmed"
+            && weekly_stage.odd_push_stage == "stage3_hist_lagging"
+        {
+            let score = if signal == "B3" { 10.0 } else { 8.0 };
+            return if environment_state == "strong" {
+                score - 2.0
+            } else {
+                score
+            };
+        }
+        if ["pre_odd_pushing", "even_repairing", "odd_confirmed"]
+            .contains(&weekly_stage.wave_cycle_phase.as_str())
+        {
+            let mut score = 16.0;
+            if weekly_stage.wave_cycle_phase == "pre_odd_pushing"
+                && weekly_stage.current_wave_index >= 4
+            {
+                score = 6.0;
+            }
+            return match environment_state {
+                "weak" => score - 15.0,
+                "strong" => score - 4.0,
+                _ => score,
+            };
+        }
+    }
+    if daily_stage.current_opportunity_phase == "pre_odd_imminent" && environment_state == "weak" {
+        return 2.0;
+    }
+    if daily_stage.wave_cycle_phase == "even_repairing"
+        && weekly_stage.wave_cycle_phase == "even_repairing"
+    {
+        return 10.0;
+    }
+    if daily_stage.wave_cycle_phase == "odd_confirmed"
+        && daily_stage.odd_push_stage == "stage3_hist_lagging"
+    {
+        return 8.0;
+    }
+    6.0
+}
+
+fn score_risk_adjustment(weekly_stage: &ScoreStage, daily_stage: &ScoreStage) -> f64 {
+    let mut score = 0.0;
+    if daily_stage.bottom_divergence_valid == Some(true) {
+        if daily_stage.current_opportunity_phase == "pre_odd_imminent" {
+            score += 6.0;
+        } else if daily_stage.supports_first_even_repair_window {
+            score += 5.0;
+        } else if daily_stage.wave_cycle_phase == "even_repairing" {
+            score += 1.0;
+        }
+    }
+    if daily_stage.bottom_divergence_valid == Some(false) {
+        score -= 6.0;
+    }
+    if weekly_stage.wave_cycle_phase == "cycle_ended"
+        || daily_stage.wave_cycle_phase == "cycle_ended"
+    {
+        score -= 10.0;
+    }
+    if weekly_stage.top_divergence_level == "B" || daily_stage.top_divergence_level == "B" {
+        score -= 8.0;
+    }
+    if weekly_stage.current_wave_index >= 7 || daily_stage.current_wave_index >= 7 {
+        score -= 7.0;
+    }
+    score
+}
+
+fn score_b2_method_bias(weekly_stage: &ScoreStage, daily_stage: &ScoreStage, signal: &str) -> f64 {
+    let _ = weekly_stage;
+    if daily_stage.current_opportunity_phase == "pre_odd_imminent"
+        && daily_stage.current_wave_index == 3
+    {
+        if signal == "B3" { 4.0 } else { 2.0 }
+    } else if daily_stage.wave_cycle_phase == "even_repairing" {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn derive_setup_tag(weekly_stage: &ScoreStage, daily_stage: &ScoreStage) -> String {
+    if ["cycle_ended"].contains(&weekly_stage.wave_cycle_phase.as_str())
+        || ["cycle_ended"].contains(&daily_stage.wave_cycle_phase.as_str())
+    {
+        return "cycle_ended".to_string();
+    }
+    if daily_stage.current_opportunity_phase == "pre_odd_imminent"
+        && daily_stage.current_wave_index == 3
+    {
+        return "pre_wave3_imminent".to_string();
+    }
+    if daily_stage.current_opportunity_phase == "pre_odd_imminent" {
+        return "pre_odd_imminent".to_string();
+    }
+    if daily_stage.wave_cycle_phase == "even_repairing" {
+        return "even_repairing".to_string();
+    }
+    if daily_stage.wave_cycle_phase == "odd_confirmed"
+        && daily_stage.odd_push_stage == "stage3_hist_lagging"
+    {
+        return "odd_stage3_late".to_string();
+    }
+    format!(
+        "{}__{}",
+        weekly_stage.wave_cycle_phase, daily_stage.wave_cycle_phase
+    )
+}
+
+fn score_risk_flags(weekly_stage: &ScoreStage, daily_stage: &ScoreStage) -> Vec<String> {
+    let mut flags = weekly_stage.risk_flags.clone();
+    flags.extend(daily_stage.risk_flags.clone());
+    if daily_stage.bottom_divergence_valid == Some(true) {
+        flags.push("bottom_divergence_valid".to_string());
+    }
+    if weekly_stage.wave_cycle_phase == "cycle_ended"
+        || daily_stage.wave_cycle_phase == "cycle_ended"
+    {
+        flags.push("cycle_ended".to_string());
+    }
+    if weekly_stage.top_divergence_level == "B" || daily_stage.top_divergence_level == "B" {
+        flags.push("top_divergence_B".to_string());
+    }
+    if weekly_stage.current_wave_index >= 7 || daily_stage.current_wave_index >= 7 {
+        flags.push("late_odd_wave".to_string());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    flags
+        .into_iter()
+        .filter(|item| seen.insert(item.clone()))
+        .collect()
+}
+
+fn build_score_reason(
+    method: &str,
+    weekly_stage: &ScoreStage,
+    daily_stage: &ScoreStage,
+    signal: &str,
+    setup_tag: &str,
+    risk_flags: &[String],
+) -> String {
+    let mut parts = vec![
+        format!("method={method}"),
+        format!("signal={signal}"),
+        format!("setup={setup_tag}"),
+        format!(
+            "weekly={}:{}",
+            weekly_stage.wave_cycle_phase, weekly_stage.odd_push_stage
+        ),
+        format!(
+            "daily={}:{}:{}",
+            daily_stage.wave_cycle_phase,
+            daily_stage.current_opportunity_phase,
+            daily_stage.odd_push_stage
+        ),
+    ];
+    if risk_flags
+        .iter()
+        .any(|flag| flag == "bottom_divergence_valid")
+    {
+        parts.push("left_bottom_divergence".to_string());
+    }
+    if !risk_flags.is_empty() {
+        parts.push(format!("risk={}", risk_flags.join(",")));
+    }
+    parts.join("; ")
+}
+
+fn render_stage_context(prefix: &str, stage: &ScoreStage) -> String {
+    let mut parts = vec![prefix.to_string(), describe_wave_phase(stage)];
+    let odd_push = describe_odd_push_stage(&stage.odd_push_stage);
+    if !odd_push.is_empty() {
+        parts.push(odd_push.to_string());
+    }
+    if stage.bottom_divergence_valid == Some(true) {
+        parts.push("左侧底背离有效".to_string());
+    } else if stage.bottom_divergence_valid == Some(false) {
+        parts.push("左侧底背离未成立".to_string());
+    }
+    if !stage.reason.is_empty() {
+        parts.push(stage.reason.clone());
+    }
+    parts.join("，")
+}
+
+fn describe_wave_phase(stage: &ScoreStage) -> String {
+    if stage.current_opportunity_phase == "pre_odd_imminent" {
+        let wave_name = if stage.current_wave_index <= 1 {
+            "预备奇数浪".to_string()
+        } else {
+            format!("预备{}浪", wave_number_to_cn(stage.current_wave_index))
+        };
+        return format!("{wave_name}金叉临近");
+    }
+    if stage.wave_cycle_phase == "pre_odd_pushing" {
+        let wave_name = if stage.current_wave_index <= 1 {
+            "预备奇数浪".to_string()
+        } else {
+            format!("预备{}浪", wave_number_to_cn(stage.current_wave_index))
+        };
+        return format!("{wave_name}启动");
+    }
+    match stage.wave_cycle_phase.as_str() {
+        "waiting" => "水下等待".to_string(),
+        "pre_odd_adjusting" => "预备奇数浪调整".to_string(),
+        "odd_confirmed" if stage.current_wave_index > 0 => {
+            format!("{}浪确认", wave_number_to_cn(stage.current_wave_index))
+        }
+        "odd_confirmed" => "奇数浪确认".to_string(),
+        "even_adjusting" => "偶数浪调整".to_string(),
+        "even_repairing" => "偶数浪修复".to_string(),
+        "cycle_ended" => "本轮周期结束".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn describe_odd_push_stage(stage_name: &str) -> &'static str {
+    match stage_name {
+        "stage1_hist_dominant" => "柱体主导强化阶段",
+        "stage2_line_extending" => "线体延伸阶段",
+        "stage3_hist_lagging" => "推进后段",
+        _ => "",
+    }
+}
+
+fn describe_setup_tag(tag: &str) -> String {
+    match tag {
+        "pre_wave3_imminent" => "预备三浪金叉临近".to_string(),
+        "pre_odd_imminent" => "预备奇数浪金叉临近".to_string(),
+        "even_repairing" => "偶数浪修复观察窗口".to_string(),
+        "odd_stage3_late" => "奇数浪推进后段".to_string(),
+        "cycle_ended" => "周期结束低分段".to_string(),
+        _ => tag.replace("__", " / "),
+    }
+}
+
+fn render_combo_reason(reason: &str) -> String {
+    let replacements = [
+        ("setup=pre_wave3_imminent", "形态=预备三浪金叉临近"),
+        ("setup=pre_odd_imminent", "形态=预备奇数浪金叉临近"),
+        ("setup=even_repairing", "形态=偶数浪修复观察窗口"),
+        ("setup=odd_stage3_late", "形态=奇数浪推进后段"),
+        (
+            "weekly=odd_confirmed:stage1_hist_dominant",
+            "周线=奇数浪确认/柱体主导强化阶段",
+        ),
+        (
+            "weekly=odd_confirmed:stage2_line_extending",
+            "周线=奇数浪确认/线体延伸阶段",
+        ),
+        (
+            "weekly=odd_confirmed:stage3_hist_lagging",
+            "周线=奇数浪确认/推进后段",
+        ),
+        ("weekly=even_repairing:not_applicable", "周线=偶数浪修复"),
+        ("weekly=waiting:not_applicable", "周线=水下等待"),
+        (
+            "daily=even_repairing:pre_odd_imminent:not_applicable",
+            "日线=偶数浪修复/预备奇数浪金叉临近",
+        ),
+        (
+            "daily=odd_confirmed:not_applicable:stage3_hist_lagging",
+            "日线=奇数浪确认/推进后段",
+        ),
+        ("left_bottom_divergence", "左侧底背离支持"),
+        ("risk=bottom_divergence_valid", "风险标记=底背离有效"),
+    ];
+    let mut rendered = reason.to_string();
+    for (source, target) in replacements {
+        rendered = rendered.replace(source, target);
+    }
+    rendered
+}
+
+fn wave_number_to_cn(wave_index: i32) -> String {
+    match wave_index {
+        1 => "一".to_string(),
+        2 => "二".to_string(),
+        3 => "三".to_string(),
+        4 => "四".to_string(),
+        5 => "五".to_string(),
+        6 => "六".to_string(),
+        7 => "七".to_string(),
+        8 => "八".to_string(),
+        9 => "九".to_string(),
+        _ => wave_index.to_string(),
+    }
 }
 
 fn weekly_close(history: &[PreparedRow]) -> Vec<(NaiveDate, f64)> {

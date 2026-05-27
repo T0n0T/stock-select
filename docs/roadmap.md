@@ -31,6 +31,16 @@ stock-select-rs review/run 不再回退到源 Python CLI bridge。
 
 2026-05-25.b1 已验证 104 个 baseline review、3 个 recommendations 与 Python golden 一致。chart PNG 由 `scripts/render_charts.py` 在本仓库内生成。
 
+当前最近完成的目标：
+
+```text
+b2 Rust native review parity
+golden pick_date=2026-05-25 method=b2
+python reviewed=139 recommendations=0 failures=0 llm_tasks=5
+plan=docs/superpowers/plans/2026-05-27-b2-native-review.md
+progress=Task 1-5 completed；b2 screen/review/run 已通过 2026-05-25 Python golden parity 与 chart smoke
+```
+
 ## 当前架构
 
 Rust CLI 当前生产路径：
@@ -42,7 +52,7 @@ stock-select-rs review  -> Rust native review
 stock-select-rs run     -> Rust screen + 本仓库 chart runner + Rust native review
 ```
 
-`chart` 不再调用 `/home/pi/Documents/agents/stock-select` 的 Python CLI；它仍使用 Python 绘图库 `mplfinance/matplotlib`，但脚本和输入数据都在本仓库控制。`review` 和 `run` 不再委托源 Python CLI。当前只有 b1 review 完成 Rust native parity；b2 / dribull / hcr 的 review 会显式返回未实现错误。
+`chart` 不再调用 `/home/pi/Documents/agents/stock-select` 的 Python CLI；它仍使用 Python 绘图库 `mplfinance/matplotlib`，但脚本和输入数据都在本仓库控制。`review` 和 `run` 不再委托源 Python CLI。当前 b1、b2 review/run 已完成 Rust native parity；dribull / hcr 的 review 会显式返回未实现错误。
 
 面向用户的 runtime layout 已与 Python 对齐：
 
@@ -94,6 +104,95 @@ run elapsed=74.051s
 ```
 
 注意：当前 `run` 的 chart 阶段仍使用 Python/mplfinance 绘图库，但不再通过源 Python CLI bridge。
+
+## b2 原生化进度
+
+目标：`stock-select-rs review/run --method b2` 走 Rust native review，并与 Python `2026-05-25.b2` baseline artifacts 全量一致。
+
+当前 golden：
+
+```text
+python_root=~/.agents/skills/stock-select/runtime
+pick_date=2026-05-25
+method=b2
+reviewed=139
+recommendations=0
+failures=0
+llm_review_tasks=5
+```
+
+实施计划：
+
+```text
+docs/superpowers/plans/2026-05-27-b2-native-review.md
+```
+
+进度：
+
+```text
+Task 1: golden fixture harness - completed
+Task 2: b2 scoring port - completed，score subfields/watch/verdict/selection score 已对齐
+Task 3: b2 baseline reviewer - completed，CLI 可输出与 Python golden 一致的 b2 review artifacts
+Task 4: native_review b2 integration - completed，screen parity、LLM task limit、LLM merge、task context 已对齐
+Task 5: b2 run parity validation - completed
+```
+
+已验证：
+
+```text
+cargo test --test b2_reviewer_golden -- --nocapture
+PASS b2_python_golden_fixture_shape_is_stable
+
+cargo test --test b2_review_scoring -- --nocapture
+PASS 7 b2 scoring tests
+
+cargo run --release -- run --method b2 --pick-date 2026-05-25 --runtime-root /tmp/stock-select-rs-b2-native-wip --environment-state weak --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱" --recompute
+WIP completed: screen=147 candidates, chart=147 PNG, review completed
+
+python3 scripts/compare_screen.py --python-root ~/.agents/skills/stock-select/runtime --rust-root /tmp/stock-select-rs-b2-native-wip --pick-date 2026-05-25 --method b2
+FAIL only_rust=['300458.SZ', '300474.SZ', '301267.SZ', '600508.SH', '600985.SH', '603289.SH', '688286.SH', '920139.BJ']
+
+After ST/LT b2 screen fix:
+python3 scripts/compare_screen.py --python-root ~/.agents/skills/stock-select/runtime --rust-root /tmp/stock-select-rs-b2-screen-fix --pick-date 2026-05-25 --method b2
+PASS screen comparison method=b2 pick_date=2026-05-25 candidates=139/139
+
+After b2 review native WIP:
+cargo run --release -- review --method b2 --pick-date 2026-05-25 --runtime-root /tmp/stock-select-rs-b2-screen-fix --environment-state weak --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱" --llm-review-limit 5
+review completed
+
+cargo test --test b2_reviewer_golden -- --nocapture
+PASS 1 fixture shape test
+
+cargo test --test b2_review_scoring -- --nocapture
+PASS 7 b2 scoring tests
+
+python3 scripts/compare_review.py --python-root ~/.agents/skills/stock-select/runtime --rust-root /tmp/stock-select-rs-b2-screen-fix --pick-date 2026-05-25 --method b2
+PASS review comparison method=b2 pick_date=2026-05-25 reviewed=139 recommendations=0
+
+stock-select-rs run --method b2 --pick-date 2026-05-25 --runtime-root /tmp/stock-select-rs-native-run-b2 --environment-state weak --environment-reason "SSE neutral; CN2000 neutral; 双指数共振偏弱" --llm-review-limit 5 --recompute
+run elapsed=91.722s
+
+python3 scripts/compare_screen.py --python-root ~/.agents/skills/stock-select/runtime --rust-root /tmp/stock-select-rs-native-run-b2 --pick-date 2026-05-25 --method b2
+PASS screen comparison method=b2 pick_date=2026-05-25 candidates=139/139
+
+python3 scripts/compare_review.py --python-root ~/.agents/skills/stock-select/runtime --rust-root /tmp/stock-select-rs-native-run-b2 --pick-date 2026-05-25 --method b2
+PASS review comparison method=b2 pick_date=2026-05-25 reviewed=139 recommendations=0
+
+python3 scripts/check_charts.py --runtime-root /tmp/stock-select-rs-native-run-b2 --pick-date 2026-05-25 --method b2
+PASS chart smoke method=b2 pick_date=2026-05-25 charts=139
+```
+
+当前状态：
+
+```text
+b2 screen candidate set 已对齐。
+b2 review 原生流程已通过 Python golden parity：per-stock review、summary、llm_review_tasks 均一致。
+Python golden 的 2026-05-25.b2 不是纯 baseline：603308.SH 已经是 review-merge 后结果，baseline_review.verdict=PASS，但顶层 verdict=WATCH；临时 Rust runtime 比较 merge 后状态时需要复制该 llm_review_results 文件。
+llm_review_tasks 的 `--llm-review-limit 5` 排序规则已对齐为 baseline_score 降序、rank 升序，top5 code 与 task context 已一致。
+2026-05-27 进度：恢复 Python `calibrate_b2_selection_score` 对应的 Rust 原生 selection score，补齐 weak relaunch tier、688786.SH MACD 边界、b2 task context 周线阶段后，compare_review.py 已通过。
+后续工作：
+- b2 当前无 parity 阻塞；后续可扩展多日期回归或推进其他方法。
+```
 
 代表性验证命令：
 
@@ -172,7 +271,7 @@ review
 run
 ```
 
-`chart` 已迁到本仓库 runner。`review` 和 `run` 只走 Rust native review；当前 b1 可用，其他方法会显式报未实现。`review` 和 `run` 会处理：
+`chart` 已迁到本仓库 runner。`review` 和 `run` 只走 Rust native review；当前 b1、b2 可用，其他方法会显式报未实现。`review` 和 `run` 会处理：
 
 ```text
 --dsn
@@ -274,12 +373,12 @@ PASS: 104/104 b1 decision fixtures match Python for 2026-05-25
 
 ### Review 原生化状态
 
-b1 review 已完成 Rust native parity。`stock-select-rs review --method b1` 与 `stock-select-rs run --method b1` 会输出与 Python CLI 一致的 baseline review、summary、LLM task artifacts。
+b1、b2 review 已完成 Rust native parity。`stock-select-rs review --method b1|b2` 与 `stock-select-rs run --method b1|b2` 会输出与 Python CLI 一致的 baseline review、summary、LLM task artifacts。
 
 仍未原生化的 review 范围：
 
-- b2 / dribull / hcr review 尚未移植；CLI 不再回退到 Python bridge，会显式报错
-- b1 自动 market environment resolution 尚未移植
+- dribull / hcr review 尚未移植；CLI 不再回退到 Python bridge，会显式报错
+- 自动 market environment resolution 尚未移植
 - b1 weekly slope / weekly MACD cooldown 当前对 2026-05-25 golden 为 `null/false`，后续多日期验证时需要继续补强
 - b1 comment 已满足当前 compare 脚本与 task context 对齐，但如后续要逐字比对 per-stock `comment`，需要补全 Python 中周 MACD 红柱、水上、背离、近 3 日死叉描述片段
 

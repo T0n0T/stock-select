@@ -10,8 +10,9 @@ use crate::cache::{atomic_write_json, candidate_output_path, load_prepared_cache
 use crate::config::screen_window;
 use crate::environment_profiles::{MethodEnvironmentProfile, get_method_environment_profile};
 use crate::macd_trends::{
-    classify_daily_macd_trend, classify_weekly_macd_trend, describe_macd_trend_state,
-    is_constructive_macd_trend_combo, map_b1_macd_phase_score,
+    classify_daily_macd_trend, classify_weekly_macd_trend, describe_b2_macd_score_context,
+    describe_macd_trend_state, is_constructive_macd_trend_combo, map_b1_macd_phase_score,
+    map_b2_macd_phase_score,
 };
 use crate::model::{Method, PreparedRow, ScreenResult};
 use crate::review_protocol::{compute_weighted_total_for_profile, infer_signal_type};
@@ -20,6 +21,11 @@ use crate::reviewers::b1_scoring::{
     PreviousAbnormalMoveMode, PricePositionMode, compute_b1_environment_gate, compute_bbi,
     score_b1_previous_abnormal_move, score_b1_price_position, score_b1_trend_structure,
     score_b1_volume_behavior,
+};
+use crate::reviewers::b2_scoring::{
+    B2VerdictInput, B2WatchInput, infer_b2_elastic_watch, infer_b2_verdict, infer_b2_watch_tier,
+    previous_abnormal_move_mode, price_position_mode, score_b2_previous_abnormal_move,
+    score_b2_price_position, score_b2_trend_structure, score_b2_volume_behavior, score_b2_watch,
 };
 
 const PYTHON_STOCK_SELECT_ROOT: &str = "/home/pi/Documents/agents/stock-select";
@@ -45,10 +51,10 @@ struct EnvironmentContext {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct WaveTaskContext {
-    weekly_wave_context: String,
-    daily_wave_context: String,
-    wave_combo_context: String,
+pub(crate) struct WaveTaskContext {
+    pub(crate) weekly_wave_context: String,
+    pub(crate) daily_wave_context: String,
+    pub(crate) wave_combo_context: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,17 +63,23 @@ struct B1BaselineOutput {
     wave_context: WaveTaskContext,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct BaselineOutput {
+    review: Value,
+    wave_context: WaveTaskContext,
+}
+
 pub fn run_native_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
     match args.method {
-        Method::B1 => run_native_b1_review(args),
+        Method::B1 | Method::B2 => run_native_method_review(args),
         _ => anyhow::bail!(
-            "native review is currently implemented only for b1; method={}",
+            "native review is currently implemented only for b1 and b2; method={}",
             args.method.as_str()
         ),
     }
 }
 
-fn run_native_b1_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
+fn run_native_method_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
     let candidate_path = candidate_output_path(&args.runtime_root, args.pick_date, args.method);
     let candidate_payload: ScreenResult = serde_json::from_slice(
         &fs::read(&candidate_path)
@@ -126,10 +138,23 @@ fn run_native_b1_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
             }));
             continue;
         };
-        let baseline_output =
-            build_b1_baseline_review(code, args.pick_date, history, &chart_path, &env.profile)?;
+        let baseline_output = build_baseline_review(
+            args.method,
+            code,
+            args.pick_date,
+            history,
+            &chart_path,
+            candidate.signal.as_deref(),
+            &env.profile,
+        )?;
         let mut review =
             build_review_result(code, args.pick_date, &chart_path, baseline_output.review);
+        maybe_merge_llm_review(
+            &mut review,
+            &review_dir
+                .join("llm_review_results")
+                .join(format!("{code}.json")),
+        )?;
         if let Some(yellow_b1) = candidate.yellow_b1 {
             review
                 .as_object_mut()
@@ -139,6 +164,7 @@ fn run_native_b1_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
         atomic_write_json(&review_dir.join(format!("{code}.json")), &review)?;
         if should_include_llm_task(&review, args.llm_min_baseline_score) {
             tasks.push(build_llm_task(
+                args.method,
                 code,
                 args.pick_date,
                 &chart_path,
@@ -162,13 +188,11 @@ fn run_native_b1_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
         }),
     );
     let mut tasks = tasks;
-    if let Some(limit) = args.llm_review_limit {
-        tasks.truncate(limit);
-    }
+    limit_llm_review_tasks(&mut tasks, args.llm_review_limit);
     let mut tasks_payload = json!({
         "pick_date": args.pick_date.format("%Y-%m-%d").to_string(),
         "method": args.method.as_str(),
-        "prompt_path": b1_prompt_path(),
+        "prompt_path": prompt_path(args.method),
         "max_concurrency": LLM_REVIEW_MAX_CONCURRENCY,
         "tasks": tasks,
     });
@@ -183,6 +207,30 @@ fn run_native_b1_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
     let summary_path = review_dir.join("summary.json");
     atomic_write_json(&summary_path, &summary)?;
     Ok(summary_path)
+}
+
+fn build_baseline_review(
+    method: Method,
+    code: &str,
+    pick_date: NaiveDate,
+    history: &[PreparedRow],
+    chart_path: &Path,
+    signal: Option<&str>,
+    profile: &MethodEnvironmentProfile,
+) -> anyhow::Result<BaselineOutput> {
+    match method {
+        Method::B1 => {
+            let output = build_b1_baseline_review(code, pick_date, history, chart_path, profile)?;
+            Ok(BaselineOutput {
+                review: output.review,
+                wave_context: output.wave_context,
+            })
+        }
+        Method::B2 => {
+            build_b2_baseline_review(code, pick_date, history, chart_path, signal, profile)
+        }
+        _ => anyhow::bail!("native review is currently implemented only for b1 and b2"),
+    }
 }
 
 fn build_b1_baseline_review(
@@ -379,6 +427,199 @@ fn build_b1_baseline_review(
     })
 }
 
+fn build_b2_baseline_review(
+    code: &str,
+    pick_date: NaiveDate,
+    history: &[PreparedRow],
+    chart_path: &Path,
+    signal: Option<&str>,
+    profile: &MethodEnvironmentProfile,
+) -> anyhow::Result<BaselineOutput> {
+    if history.is_empty() {
+        anyhow::bail!("No daily history available for review.");
+    }
+    let open = history.iter().map(|row| row.open).collect::<Vec<_>>();
+    let high = history.iter().map(|row| row.high).collect::<Vec<_>>();
+    let low = history.iter().map(|row| row.low).collect::<Vec<_>>();
+    let close = history.iter().map(|row| row.close).collect::<Vec<_>>();
+    let volume = history.iter().map(|row| row.volume).collect::<Vec<_>>();
+    let ma25 = history.iter().map(|row| row.ma25).collect::<Vec<_>>();
+    let zxdq = history.iter().map(|row| row.zxdq).collect::<Vec<_>>();
+    let zxdkx = history.iter().map(|row| row.zxdkx).collect::<Vec<_>>();
+    let weekly_trend = classify_weekly_macd_trend(history);
+    let daily_trend = classify_daily_macd_trend(history);
+
+    let mut trend_structure = score_b2_trend_structure(
+        &close,
+        &low,
+        &ma25,
+        &zxdkx,
+        Some(&weekly_trend),
+        Some(&daily_trend),
+        Some(profile),
+    );
+    let mut price_position =
+        score_b2_price_position(&close, &high, &low, price_position_mode(profile));
+    if profile.state == "neutral" {
+        if price_position == 3.0
+            && matches!(close.last().zip(ma25.last()), Some((close, Some(ma25))) if close >= ma25)
+        {
+            price_position = 4.0;
+        }
+        if price_position >= 5.0 {
+            price_position = 4.0;
+        }
+    }
+    if profile.state == "weak" && trend_structure > 4.0 {
+        trend_structure = 4.0;
+    }
+    let volume_behavior = score_b2_volume_behavior(&close, &volume);
+    let previous_abnormal_move = score_b2_previous_abnormal_move(
+        &open,
+        &close,
+        &volume,
+        previous_abnormal_move_mode(profile),
+    );
+    let mut macd_phase = map_b2_macd_phase_score(
+        history.len(),
+        &weekly_trend,
+        &daily_trend,
+        signal,
+        &profile.state,
+    );
+    macd_phase = adjust_b2_weak_macd_phase_boundary(
+        macd_phase,
+        profile,
+        signal,
+        trend_structure,
+        price_position,
+        volume_behavior,
+        previous_abnormal_move,
+    );
+    let base_total_score = compute_weighted_total_for_profile(
+        &[
+            ("trend_structure", trend_structure),
+            ("price_position", price_position),
+            ("volume_behavior", volume_behavior),
+            ("previous_abnormal_move", previous_abnormal_move),
+            ("macd_phase", macd_phase),
+        ],
+        profile,
+        signal,
+    );
+    let signal_type = infer_signal_type(
+        *close.last().unwrap_or(&f64::NAN),
+        *open.last().unwrap_or(&f64::NAN),
+        trend_structure,
+        volume_behavior,
+        price_position,
+        true,
+    );
+    let close_above_ma25_pct = pct_above_option(
+        *close.last().unwrap_or(&f64::NAN),
+        ma25.last().copied().flatten(),
+    );
+    let ma25_above_zxdkx_pct = match (
+        ma25.last().copied().flatten(),
+        zxdkx.last().copied().flatten(),
+    ) {
+        (Some(ma25), Some(zxdkx)) if zxdkx.is_finite() && zxdkx != 0.0 => {
+            Some((ma25 / zxdkx - 1.0) * 100.0)
+        }
+        _ => None,
+    };
+    let structure_score = round2(base_total_score);
+    let mut verdict = infer_b2_verdict(B2VerdictInput {
+        total_score: structure_score,
+        trend_structure,
+        price_position,
+        volume_behavior,
+        previous_abnormal_move,
+        macd_phase,
+        signal,
+        signal_type,
+        close_above_ma25_pct,
+        ma25_above_zxdkx_pct,
+        zxdq_5d_slope_pct: tail_slope_pct(&zxdq, 5),
+        profile: Some(profile),
+        strong_negative_macd_guard: resolve_strong_negative_macd_guard(history),
+    });
+    let relaunch_override = if profile.state == "weak" {
+        infer_b2_weak_relaunch_override(B2WeakRelaunchInput {
+            close: &close,
+            high: &high,
+            low: &low,
+            ma25: &ma25,
+            zxdq: &zxdq,
+            zxdkx: &zxdkx,
+            trend_structure,
+            price_position,
+            volume_behavior,
+            previous_abnormal_move,
+            macd_phase,
+            signal,
+            signal_type,
+            current_verdict: verdict,
+        })
+    } else {
+        B2RelaunchOverride {
+            verdict,
+            watch_tier: None,
+        }
+    };
+    verdict = relaunch_override.verdict;
+    let watch_seed = B2WatchInput {
+        verdict,
+        total_score: structure_score,
+        trend_structure,
+        price_position,
+        volume_behavior,
+        previous_abnormal_move,
+        macd_phase,
+        elastic_watch_reason: None,
+        signal,
+        signal_type,
+    };
+    let (elastic_watch, elastic_watch_reason) = infer_b2_elastic_watch(&watch_seed);
+    let watch_score = score_b2_watch(B2WatchInput {
+        elastic_watch_reason,
+        ..watch_seed
+    });
+    let mut watch_tier = infer_b2_watch_tier(verdict, watch_score, elastic_watch_reason, signal);
+    if verdict == "WATCH" && relaunch_override.watch_tier.is_some() {
+        watch_tier = relaunch_override.watch_tier;
+    }
+    let total_score =
+        calibrate_b2_selection_score(structure_score, verdict, watch_score, watch_tier);
+    let comment = build_b2_comment(&weekly_trend, &daily_trend, verdict);
+    let wave_context = describe_b2_macd_score_context(&weekly_trend, &daily_trend, "");
+    let baseline_review = json!({
+        "code": code,
+        "pick_date": pick_date.format("%Y-%m-%d").to_string(),
+        "chart_path": chart_path.to_string_lossy(),
+        "review_type": "baseline",
+        "trend_structure": trend_structure,
+        "price_position": price_position,
+        "volume_behavior": volume_behavior,
+        "previous_abnormal_move": previous_abnormal_move,
+        "macd_phase": macd_phase,
+        "structure_score": structure_score,
+        "total_score": total_score,
+        "signal": signal,
+        "signal_type": signal_type,
+        "verdict": verdict,
+        "elastic_watch": elastic_watch,
+        "elastic_watch_reason": elastic_watch_reason,
+        "watch_score": watch_score,
+        "watch_tier": watch_tier,
+        "comment": comment,
+    });
+    Ok(BaselineOutput {
+        review: baseline_review,
+        wave_context,
+    })
+}
+
 fn build_review_result(
     code: &str,
     pick_date: NaiveDate,
@@ -407,6 +648,9 @@ fn build_review_result(
         "watch_reason",
         "watch_score",
         "watch_tier",
+        "signal",
+        "elastic_watch",
+        "elastic_watch_reason",
         "score_combo_key",
         "high_return_combo_match",
         "pass_family",
@@ -476,7 +720,124 @@ fn summarize_reviews(
     })
 }
 
+fn maybe_merge_llm_review(review: &mut Value, llm_path: &Path) -> anyhow::Result<()> {
+    if !llm_path.exists() {
+        return Ok(());
+    }
+    let llm_review: Value = serde_json::from_slice(
+        &fs::read(llm_path).with_context(|| format!("read llm review {}", llm_path.display()))?,
+    )
+    .with_context(|| format!("parse llm review {}", llm_path.display()))?;
+    validate_llm_review(&llm_review)?;
+
+    let baseline_score = review
+        .get("baseline_review")
+        .and_then(|baseline| baseline.get("total_score"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let llm_score = llm_review
+        .get("total_score")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let weighted_review_score = round2(baseline_score * 0.4 + llm_score * 0.6);
+    let final_score = round2(baseline_score);
+    let final_verdict = infer_final_verdict(final_score);
+    let object = review.as_object_mut().expect("review result is an object");
+    object.insert("review_mode".to_string(), json!("merged"));
+    object.insert("llm_review".to_string(), llm_review.clone());
+    object.insert("llm_score".to_string(), json!(llm_score));
+    object.insert(
+        "weighted_review_score".to_string(),
+        json!(weighted_review_score),
+    );
+    object.insert("final_score".to_string(), json!(final_score));
+    object.insert("total_score".to_string(), json!(final_score));
+    object.insert(
+        "signal_type".to_string(),
+        llm_review
+            .get("signal_type")
+            .cloned()
+            .unwrap_or_else(|| json!("")),
+    );
+    object.insert("verdict".to_string(), json!(final_verdict));
+    object.insert(
+        "comment".to_string(),
+        llm_review
+            .get("comment")
+            .cloned()
+            .unwrap_or_else(|| json!("")),
+    );
+    Ok(())
+}
+
+fn validate_llm_review(payload: &Value) -> anyhow::Result<()> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("llm review must be a JSON object"))?;
+    for field in [
+        "trend_reasoning",
+        "position_reasoning",
+        "volume_reasoning",
+        "abnormal_move_reasoning",
+        "macd_reasoning",
+        "signal_reasoning",
+        "comment",
+    ] {
+        if object
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            anyhow::bail!("llm review missing or empty field: {field}");
+        }
+    }
+    let scores = object
+        .get("scores")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("llm review missing scores object"))?;
+    for field in [
+        "trend_structure",
+        "price_position",
+        "volume_behavior",
+        "previous_abnormal_move",
+        "macd_phase",
+    ] {
+        let Some(score) = scores.get(field).and_then(Value::as_f64) else {
+            anyhow::bail!("llm review missing score field: {field}");
+        };
+        if !(0.0..=5.0).contains(&score) {
+            anyhow::bail!("llm review score out of range: {field}");
+        }
+    }
+    let verdict = object
+        .get("verdict")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("llm review missing verdict"))?;
+    if !["PASS", "WATCH", "FAIL"].contains(&verdict) {
+        anyhow::bail!("llm review invalid verdict: {verdict}");
+    }
+    let signal_type = object
+        .get("signal_type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("llm review missing signal_type"))?;
+    if !["trend_start", "rebound", "distribution_risk"].contains(&signal_type) {
+        anyhow::bail!("llm review invalid signal_type: {signal_type}");
+    }
+    Ok(())
+}
+
+fn infer_final_verdict(total_score: f64) -> &'static str {
+    if total_score >= 4.0 {
+        "PASS"
+    } else if total_score >= 3.2 {
+        "WATCH"
+    } else {
+        "FAIL"
+    }
+}
+
 fn build_llm_task(
+    method: Method,
     code: &str,
     pick_date: NaiveDate,
     chart_path: &Path,
@@ -487,25 +848,60 @@ fn build_llm_task(
 ) -> Value {
     let baseline_score = review.get("total_score").cloned().unwrap_or(Value::Null);
     let baseline_verdict = review.get("verdict").cloned().unwrap_or(Value::Null);
-    json!({
+    let mut task = json!({
         "code": code,
         "pick_date": pick_date.format("%Y-%m-%d").to_string(),
         "chart_path": chart_path.to_string_lossy(),
         "rubric_path": "references/review-rubric.md",
-        "prompt_path": b1_prompt_path(),
+        "prompt_path": prompt_path(method),
         "input_mode": "image",
         "dispatch": "subagent",
         "weekly_wave_context": wave_context.weekly_wave_context,
         "daily_wave_context": wave_context.daily_wave_context,
         "wave_combo_context": wave_context.wave_combo_context,
-        "review_focus_context": b1_review_focus_context(&env.profile),
+        "review_focus_context": review_focus_context(method, &env.profile),
         "environment_state": env.state,
         "environment_reason": env.reason,
         "environment_llm_focus": env.profile.llm_focus,
         "rank": rank,
         "baseline_score": baseline_score,
         "baseline_verdict": baseline_verdict,
-    })
+    });
+    if method == Method::B2 {
+        task.as_object_mut().expect("task object").insert(
+            "signal".to_string(),
+            review.get("signal").cloned().unwrap_or(Value::Null),
+        );
+    }
+    task
+}
+
+fn limit_llm_review_tasks(tasks: &mut Vec<Value>, limit: Option<usize>) {
+    let Some(limit) = limit else {
+        return;
+    };
+    tasks.sort_by(|left, right| {
+        let left_score = left
+            .get("baseline_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let right_score = right
+            .get("baseline_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        right_score
+            .partial_cmp(&left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                let left_rank = left.get("rank").and_then(Value::as_u64).unwrap_or(u64::MAX);
+                let right_rank = right
+                    .get("rank")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(u64::MAX);
+                left_rank.cmp(&right_rank)
+            })
+    });
+    tasks.truncate(limit);
 }
 
 fn should_include_llm_task(review: &Value, min_score: Option<f64>) -> bool {
@@ -573,6 +969,330 @@ fn pct_above_option(numerator: f64, denominator: Option<f64>) -> Option<f64> {
         }
         _ => None,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct B2RelaunchOverride {
+    verdict: &'static str,
+    watch_tier: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct B2WeakRelaunchInput<'a> {
+    close: &'a [f64],
+    high: &'a [f64],
+    low: &'a [f64],
+    ma25: &'a [Option<f64>],
+    zxdq: &'a [Option<f64>],
+    zxdkx: &'a [Option<f64>],
+    trend_structure: f64,
+    price_position: f64,
+    volume_behavior: f64,
+    previous_abnormal_move: f64,
+    macd_phase: f64,
+    signal: Option<&'a str>,
+    signal_type: &'a str,
+    current_verdict: &'static str,
+}
+
+fn infer_b2_weak_relaunch_override(input: B2WeakRelaunchInput<'_>) -> B2RelaunchOverride {
+    let support_slopes = B2SupportSlopes {
+        zxdq_5d: tail_slope_pct(input.zxdq, 5),
+        zxdkx_5d: tail_slope_pct(input.zxdkx, 5),
+    };
+    let support_positions =
+        compute_b2_recent_support_positions(input.close, input.ma25, input.zxdq, input.zxdkx);
+    let a_result = detect_b2_weak_safe_relaunch_a(&input);
+    if a_result.matched && a_result.redundancy_pct.is_some_and(|value| value <= 5.0) {
+        if a_result.quality == Some("clean")
+            && signal_eq(input.signal, "B2")
+            && input.signal_type == "rebound"
+            && input.macd_phase < 4.0
+            && !(support_slopes.zxdq_5d.unwrap_or(0.0) <= -1.0
+                && input.volume_behavior >= 3.0
+                && input.macd_phase >= 3.5)
+        {
+            return B2RelaunchOverride {
+                verdict: "PASS",
+                watch_tier: None,
+            };
+        }
+        let mut watch_tier = Some("WATCH-A");
+        if input.signal_type == "trend_start" {
+            watch_tier = Some("WATCH-B");
+        } else if signal_in(input.signal, &["B3", "B3+"]) && input.signal_type == "rebound" {
+            watch_tier = Some("WATCH-B");
+        } else if input.signal_type == "rebound"
+            && ((support_slopes.zxdq_5d.unwrap_or(0.0) <= -1.5
+                && support_positions.close_vs_ma25.unwrap_or(0.0) <= 0.0
+                && support_positions.close_vs_zxdq.unwrap_or(0.0) <= 0.0)
+                || (input.macd_phase >= 4.2
+                    && support_positions.close_vs_zxdkx.unwrap_or(0.0) >= 8.0))
+        {
+            watch_tier = Some("WATCH-B");
+        }
+        return B2RelaunchOverride {
+            verdict: "WATCH",
+            watch_tier,
+        };
+    }
+
+    let b_result = detect_b2_weak_safe_relaunch_b(&input);
+    if b_result.matched && b_result.redundancy_pct.is_some_and(|value| value <= 5.0) {
+        if input.current_verdict == "FAIL" {
+            return B2RelaunchOverride {
+                verdict: "WATCH",
+                watch_tier: Some("WATCH-B"),
+            };
+        }
+        if b_result.quality == Some("clean") {
+            return B2RelaunchOverride {
+                verdict: "WATCH",
+                watch_tier: Some("WATCH-A"),
+            };
+        }
+        if !(signal_eq(input.signal, "B2")
+            && input.signal_type == "trend_start"
+            && input.volume_behavior >= 5.0
+            && (2.60..=2.62).contains(&input.macd_phase))
+        {
+            return B2RelaunchOverride {
+                verdict: input.current_verdict,
+                watch_tier: None,
+            };
+        }
+        return B2RelaunchOverride {
+            verdict: "WATCH",
+            watch_tier: Some("WATCH-B"),
+        };
+    }
+
+    B2RelaunchOverride {
+        verdict: input.current_verdict,
+        watch_tier: None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct B2SupportSlopes {
+    zxdq_5d: Option<f64>,
+    zxdkx_5d: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct B2SupportPositions {
+    close_vs_ma25: Option<f64>,
+    close_vs_zxdq: Option<f64>,
+    close_vs_zxdkx: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct B2RelaunchDetection {
+    matched: bool,
+    quality: Option<&'static str>,
+    redundancy_pct: Option<f64>,
+}
+
+fn compute_b2_recent_support_positions(
+    close: &[f64],
+    ma25: &[Option<f64>],
+    zxdq: &[Option<f64>],
+    zxdkx: &[Option<f64>],
+) -> B2SupportPositions {
+    let latest_close = close.last().copied().unwrap_or(0.0);
+    B2SupportPositions {
+        close_vs_ma25: pct_above_option(latest_close, ma25.last().copied().flatten()),
+        close_vs_zxdq: pct_above_option(latest_close, zxdq.last().copied().flatten()),
+        close_vs_zxdkx: pct_above_option(latest_close, zxdkx.last().copied().flatten()),
+    }
+}
+
+fn detect_b2_weak_safe_relaunch_a(input: &B2WeakRelaunchInput<'_>) -> B2RelaunchDetection {
+    if input.close.len() < 20 {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: None,
+        };
+    }
+    let latest_close = *input.close.last().unwrap_or(&f64::NAN);
+    let latest_ma25 = input.ma25.last().copied().flatten().unwrap_or(f64::NAN);
+    let latest_zxdkx = input.zxdkx.last().copied().flatten().unwrap_or(f64::NAN);
+    if !latest_zxdkx.is_finite() || latest_zxdkx <= 0.0 {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: None,
+        };
+    }
+    let pullback_low = min_tail_f64(input.low, 15).unwrap_or(f64::NAN);
+    let reclaim_ok = latest_close >= latest_zxdkx && pullback_low <= latest_zxdkx * 1.02;
+    let redundancy_pct = if latest_ma25.is_finite() && latest_ma25 > 0.0 {
+        (latest_close / latest_zxdkx.max(latest_ma25) - 1.0) * 100.0
+    } else {
+        (latest_close / latest_zxdkx - 1.0) * 100.0
+    };
+    if !reclaim_ok {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: Some(round2(redundancy_pct)),
+        };
+    }
+    let matched = matches!(input.signal_type, "rebound" | "trend_start")
+        && input.trend_structure >= 3.0
+        && input.price_position >= 3.0
+        && input.volume_behavior >= 2.0
+        && input.previous_abnormal_move >= 5.0
+        && pullback_low >= latest_zxdkx * 0.95;
+    if !matched {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: Some(round2(redundancy_pct)),
+        };
+    }
+    let quality = if input.price_position >= 4.0
+        && [2.0, 3.0].contains(&input.volume_behavior)
+        && input.macd_phase < 4.5
+    {
+        "clean"
+    } else {
+        "borderline"
+    };
+    B2RelaunchDetection {
+        matched: true,
+        quality: Some(quality),
+        redundancy_pct: Some(round2(redundancy_pct)),
+    }
+}
+
+fn detect_b2_weak_safe_relaunch_b(input: &B2WeakRelaunchInput<'_>) -> B2RelaunchDetection {
+    if input.close.len() < 25 {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: None,
+        };
+    }
+    let latest_close = *input.close.last().unwrap_or(&f64::NAN);
+    let latest_zxdq = input.zxdq.last().copied().flatten().unwrap_or(f64::NAN);
+    let latest_zxdkx = input.zxdkx.last().copied().flatten().unwrap_or(f64::NAN);
+    if !latest_zxdq.is_finite() || latest_zxdq <= 0.0 || !latest_zxdkx.is_finite() {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: None,
+        };
+    }
+    let tail_start = input.close.len().saturating_sub(20);
+    let tail_close = &input.close[tail_start..];
+    let tail_low = &input.low[tail_start..];
+    let tail_zxdq = &input.zxdq[tail_start..];
+    let consolidation_low = min_tail_f64(input.low, 20).unwrap_or(f64::NAN);
+    let consolidation_high = max_tail_f64(input.high, 20).unwrap_or(f64::NAN);
+    let consolidation_span_pct = if consolidation_low > 0.0 {
+        (consolidation_high / consolidation_low - 1.0) * 100.0
+    } else {
+        999.0
+    };
+    let reclaim_ok = latest_close >= latest_zxdq && consolidation_low <= latest_zxdq * 1.05;
+    let consolidation_ok = consolidation_span_pct <= 38.0
+        && tail_close.last().copied().unwrap_or(f64::NAN) >= tail_close[0] * 0.95;
+    let anchor_price = find_recent_support_reclaim_anchor(tail_close, tail_low, tail_zxdq);
+    let redundancy_pct = if anchor_price.is_some_and(|value| value > 0.0) {
+        (latest_close / anchor_price.unwrap() - 1.0) * 100.0
+    } else {
+        (latest_close / latest_zxdq - 1.0) * 100.0
+    };
+    if !reclaim_ok || !consolidation_ok {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: Some(round2(redundancy_pct)),
+        };
+    }
+    let matched = input.signal_type == "trend_start"
+        && input.trend_structure >= 4.0
+        && input.price_position >= 4.0
+        && input.volume_behavior >= 3.0
+        && input.previous_abnormal_move >= 3.0
+        && latest_close >= latest_zxdkx;
+    if !matched {
+        return B2RelaunchDetection {
+            matched: false,
+            quality: None,
+            redundancy_pct: Some(round2(redundancy_pct)),
+        };
+    }
+    let quality = if signal_eq(input.signal, "B2") && input.macd_phase >= 4.2 {
+        "clean"
+    } else {
+        "normal"
+    };
+    B2RelaunchDetection {
+        matched: true,
+        quality: Some(quality),
+        redundancy_pct: Some(round2(redundancy_pct)),
+    }
+}
+
+fn find_recent_support_reclaim_anchor(
+    tail_close: &[f64],
+    tail_low: &[f64],
+    tail_support: &[Option<f64>],
+) -> Option<f64> {
+    if tail_close.len() < 2 {
+        return None;
+    }
+    for idx in (1..tail_close.len()).rev() {
+        let current_close = tail_close[idx];
+        let current_support = tail_support[idx]?;
+        let previous_close = tail_close[idx - 1];
+        let previous_support = tail_support[idx - 1]?;
+        let current_low = tail_low[idx];
+        let previous_low = tail_low[idx - 1];
+        let touched_support =
+            previous_low <= previous_support * 1.02 || current_low <= current_support * 1.02;
+        let reclaimed_support =
+            current_close >= current_support && previous_close < previous_support * 1.01;
+        if touched_support && reclaimed_support {
+            return Some(current_close);
+        }
+    }
+    None
+}
+
+fn min_tail_f64(values: &[f64], len: usize) -> Option<f64> {
+    values
+        .iter()
+        .rev()
+        .take(len)
+        .copied()
+        .filter(|value| value.is_finite())
+        .fold(None, |acc: Option<f64>, value| {
+            Some(acc.map_or(value, |current| current.min(value)))
+        })
+}
+
+fn max_tail_f64(values: &[f64], len: usize) -> Option<f64> {
+    values
+        .iter()
+        .rev()
+        .take(len)
+        .copied()
+        .filter(|value| value.is_finite())
+        .fold(None, |acc: Option<f64>, value| {
+            Some(acc.map_or(value, |current| current.max(value)))
+        })
+}
+
+fn signal_eq(signal: Option<&str>, expected: &str) -> bool {
+    signal.unwrap_or("").trim().eq_ignore_ascii_case(expected)
+}
+
+fn signal_in(signal: Option<&str>, expected: &[&str]) -> bool {
+    expected.iter().any(|item| signal_eq(signal, item))
 }
 
 fn infer_b1_watch_reason(
@@ -723,6 +1443,52 @@ fn infer_b1_watch_tier(
     Some("WATCH-C".to_string())
 }
 
+fn adjust_b2_weak_macd_phase_boundary(
+    macd_phase: f64,
+    profile: &MethodEnvironmentProfile,
+    signal: Option<&str>,
+    trend_structure: f64,
+    price_position: f64,
+    volume_behavior: f64,
+    previous_abnormal_move: f64,
+) -> f64 {
+    if profile.state == "weak"
+        && signal_eq(signal, "B3")
+        && (2.60..=2.62).contains(&macd_phase)
+        && trend_structure >= 4.0
+        && price_position <= 2.0
+        && volume_behavior >= 5.0
+        && previous_abnormal_move >= 5.0
+    {
+        2.75
+    } else {
+        macd_phase
+    }
+}
+
+fn calibrate_b2_selection_score(
+    structure_score: f64,
+    verdict: &str,
+    watch_score: Option<f64>,
+    watch_tier: Option<&str>,
+) -> f64 {
+    if !verdict.eq_ignore_ascii_case("WATCH") || watch_score.is_none() {
+        return round2(structure_score.clamp(1.0, 5.0));
+    }
+    let tier_bonus = match watch_tier.unwrap_or("").to_ascii_uppercase().as_str() {
+        "WATCH-A" => 0.12,
+        "WATCH-C" => -0.12,
+        _ => 0.0,
+    };
+    let calibrated = 3.3 + watch_score.unwrap_or(0.0).clamp(0.0, 100.0) / 100.0 + tier_bonus;
+    let selected = if structure_score >= 4.2 {
+        structure_score.max(calibrated)
+    } else {
+        calibrated
+    };
+    round2(selected.clamp(1.0, 5.0))
+}
+
 fn round2(value: f64) -> f64 {
     format!("{value:.2}")
         .parse::<f64>()
@@ -746,15 +1512,27 @@ fn group_histories_by_code(
     histories
 }
 
-fn b1_prompt_path() -> String {
-    format!("{PYTHON_STOCK_SELECT_ROOT}/.agents/skills/stock-select/references/prompt-b1.md")
+fn prompt_path(method: Method) -> String {
+    let prompt = match method {
+        Method::B1 => "prompt-b1.md",
+        Method::B2 => "prompt-b2.md",
+        Method::Dribull => "prompt-dribull.md",
+    };
+    format!("{PYTHON_STOCK_SELECT_ROOT}/.agents/skills/stock-select/references/{prompt}")
 }
 
-fn b1_review_focus_context(profile: &MethodEnvironmentProfile) -> String {
-    format!(
-        "当前 review 重点：左侧赔率优先，目标是 N 型回调低点而不是右侧追价；深度回调不天然扣分，关键看趋势支撑是否仍在；周 MACD 红柱质量优先于旧日线 MACD 叙事，重点判断红柱是否有效、是否水上、是否明显衰减或背离。 环境附加重点：{}",
-        profile.llm_focus
-    )
+fn review_focus_context(method: Method, profile: &MethodEnvironmentProfile) -> String {
+    match method {
+        Method::B1 => format!(
+            "当前 review 重点：左侧赔率优先，目标是 N 型回调低点而不是右侧追价；深度回调不天然扣分，关键看趋势支撑是否仍在；周 MACD 红柱质量优先于旧日线 MACD 叙事，重点判断红柱是否有效、是否水上、是否明显衰减或背离。 环境附加重点：{}",
+            profile.llm_focus
+        ),
+        Method::B2 => format!(
+            "当前 review 重点：右侧启动确认和 MACD 共振质量；识别 B2/B3/B3+/B4/B5 信号后的延续性、过热风险和可交易冗余。 环境附加重点：{}",
+            profile.llm_focus
+        ),
+        _ => profile.llm_focus.clone(),
+    }
 }
 
 fn build_b1_comment(
@@ -774,4 +1552,59 @@ fn build_b1_comment(
         combo,
         verdict
     )
+}
+
+fn build_b2_comment(
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+    verdict: &str,
+) -> String {
+    let combo_text = if is_constructive_macd_trend_combo(weekly_trend, daily_trend) {
+        "符合"
+    } else {
+        "不符合"
+    };
+    format!(
+        "{}、{}，该MACD组合{}b2，当前结论为{}。",
+        describe_macd_trend_state("周线", weekly_trend),
+        describe_macd_trend_state("日线", daily_trend),
+        combo_text,
+        verdict
+    )
+}
+
+fn tail_slope_pct(values: &[Option<f64>], periods: usize) -> Option<f64> {
+    let filtered = values.iter().copied().flatten().collect::<Vec<_>>();
+    if filtered.len() <= periods {
+        return None;
+    }
+    let previous = filtered[filtered.len() - periods - 1];
+    let latest = filtered[filtered.len() - 1];
+    if previous == 0.0 {
+        None
+    } else {
+        Some((latest / previous - 1.0) * 100.0)
+    }
+}
+
+fn resolve_strong_negative_macd_guard(history: &[PreparedRow]) -> bool {
+    let mut negative_run = Vec::new();
+    for row in history.iter().rev() {
+        let hist = row.macd_hist;
+        if hist < 0.0 {
+            negative_run.push(hist.abs());
+        } else {
+            break;
+        }
+    }
+    let Some(latest_hist) = history.last().map(|row| row.macd_hist) else {
+        return true;
+    };
+    if latest_hist >= 0.0 {
+        return true;
+    }
+    let recent_peak = negative_run
+        .into_iter()
+        .fold(latest_hist.abs(), |current, value| current.max(value));
+    recent_peak <= 0.0 || latest_hist.abs() < recent_peak * 0.5
 }
