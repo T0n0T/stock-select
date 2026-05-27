@@ -11,10 +11,29 @@ pub fn build_screen_result(
     candidates: Vec<Candidate>,
     stats: std::collections::BTreeMap<String, usize>,
 ) -> ScreenResult {
+    build_screen_result_with_pool(
+        method,
+        pick_date,
+        "turnover-top".to_string(),
+        None,
+        candidates,
+        stats,
+    )
+}
+
+pub fn build_screen_result_with_pool(
+    method: Method,
+    pick_date: NaiveDate,
+    pool_source: String,
+    pool_file: Option<String>,
+    candidates: Vec<Candidate>,
+    stats: std::collections::BTreeMap<String, usize>,
+) -> ScreenResult {
     ScreenResult {
         method,
         pick_date,
-        pool_source: "turnover-top".to_string(),
+        pool_source,
+        pool_file,
         screen_version: (method == Method::B1).then_some(2),
         generated_at: Some(generated_at_epoch_seconds()),
         count: Some(candidates.len()),

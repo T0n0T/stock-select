@@ -1,16 +1,20 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Instant;
 
 use anyhow::Context;
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use clap::{Parser, Subcommand};
 
 use crate::cache::{load_prepared_cache, write_prepared_cache};
 use crate::config::{default_runtime_root, resolve_dsn_from_env, screen_window};
+use crate::market_environment::{
+    EnvironmentEvaluation, ensure_market_environment, evaluate_market_environment,
+};
 use crate::model::{MarketRow, Method, PreparedRow};
 use crate::native_chart::{NativeChartArgs, run_native_chart};
 use crate::native_review::{NativeReviewArgs, run_native_review};
-use crate::output::{build_screen_result, write_screen_result};
+use crate::output::{build_screen_result_with_pool, write_screen_result};
 use crate::prepare::prepare_rows;
 use crate::strategies::run_strategy;
 
@@ -42,6 +46,10 @@ pub struct ScreenArgs {
     runtime_root: Option<PathBuf>,
     #[arg(long)]
     recompute: bool,
+    #[arg(long, default_value = "turnover-top")]
+    pool_source: PoolSource,
+    #[arg(long)]
+    pool_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -82,6 +90,39 @@ pub struct RunArgs {
     review: ReviewArgs,
     #[arg(long)]
     recompute: bool,
+    #[arg(long, default_value = "turnover-top")]
+    pool_source: PoolSource,
+    #[arg(long)]
+    pool_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolSource {
+    TurnoverTop,
+    Custom,
+}
+
+impl PoolSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TurnoverTop => "turnover-top",
+            Self::Custom => "custom",
+        }
+    }
+}
+
+impl FromStr for PoolSource {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "turnover-top" => Ok(Self::TurnoverTop),
+            "custom" => Ok(Self::Custom),
+            other => Err(format!(
+                "unsupported pool source '{other}', expected turnover-top or custom"
+            )),
+        }
+    }
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -121,12 +162,19 @@ pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
 pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
     let started = Instant::now();
     let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
+    let (environment_state, environment_reason) = resolve_review_environment_args(
+        &runtime_root,
+        args.pick_date,
+        args.dsn.as_deref(),
+        args.environment_state,
+        args.environment_reason,
+    )?;
     let output_path = run_native_review(NativeReviewArgs {
         method: args.method,
         pick_date: args.pick_date,
         runtime_root,
-        environment_state: args.environment_state,
-        environment_reason: args.environment_reason,
+        environment_state,
+        environment_reason,
         llm_min_baseline_score: args.llm_min_baseline_score,
         llm_review_limit: args.llm_review_limit,
     })?;
@@ -146,6 +194,13 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         .unwrap_or_else(default_runtime_root);
     let method = args.review.method;
     let pick_date = args.review.pick_date;
+    let (environment_state, environment_reason) = resolve_review_environment_args(
+        &runtime_root,
+        pick_date,
+        args.review.dsn.as_deref(),
+        args.review.environment_state.clone(),
+        args.review.environment_reason.clone(),
+    )?;
 
     let screen_started = Instant::now();
     let screen_path = run_screen(
@@ -155,6 +210,8 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
             dsn: args.review.dsn.clone(),
             runtime_root: Some(runtime_root.clone()),
             recompute: args.recompute,
+            pool_source: args.pool_source,
+            pool_file: args.pool_file.clone(),
         },
         |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
     )?;
@@ -180,8 +237,8 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         method,
         pick_date,
         runtime_root: runtime_root.clone(),
-        environment_state: args.review.environment_state.clone(),
-        environment_reason: args.review.environment_reason.clone(),
+        environment_state,
+        environment_reason,
         llm_min_baseline_score: args.review.llm_min_baseline_score,
         llm_review_limit: args.review.llm_review_limit,
     })?;
@@ -194,6 +251,82 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         started.elapsed().as_secs_f64()
     );
     Ok(())
+}
+
+fn resolve_review_environment_args(
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    dsn_arg: Option<&str>,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    resolve_review_environment_args_with_evaluator(
+        runtime_root,
+        pick_date,
+        manual_state,
+        manual_reason,
+        || {
+            let dsn = resolve_dsn_from_env(dsn_arg)?;
+            let start_date = pick_date - Duration::days(180);
+            let sse = crate::db::fetch_index_history(&dsn, "000001.SH", start_date, pick_date)
+                .context("fetch SSE index history for market environment")?;
+            let cn2000 = crate::db::fetch_index_history(&dsn, "399303.SZ", start_date, pick_date)
+                .context("fetch CN2000 index history for market environment")?;
+            evaluate_market_environment(pick_date, &sse, &cn2000)
+        },
+    )
+}
+
+fn resolve_review_environment_args_with_evaluator<F>(
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+    evaluator: F,
+) -> anyhow::Result<(Option<String>, Option<String>)>
+where
+    F: FnOnce() -> anyhow::Result<EnvironmentEvaluation>,
+{
+    let resolved = ensure_market_environment(
+        runtime_root,
+        pick_date,
+        manual_state,
+        manual_reason,
+        evaluator,
+    )?;
+    eprintln!(
+        "[environment] state={} source={} interval={}..{}",
+        resolved.state,
+        resolved.source,
+        resolved
+            .interval_start
+            .map(|date| date.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        resolved
+            .interval_end
+            .map(|date| date.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    Ok((Some(resolved.state), resolved.reason))
+}
+
+pub fn resolve_review_environment_args_for_test<F>(
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+    evaluator: F,
+) -> anyhow::Result<(Option<String>, Option<String>)>
+where
+    F: FnOnce() -> anyhow::Result<EnvironmentEvaluation>,
+{
+    resolve_review_environment_args_with_evaluator(
+        runtime_root,
+        pick_date,
+        manual_state,
+        manual_reason,
+        evaluator,
+    )
 }
 
 pub fn run_screen<F>(args: ScreenArgs, loader: F) -> anyhow::Result<PathBuf>
@@ -256,24 +389,35 @@ where
     }
 
     let pool_started = Instant::now();
-    let prepared_for_pick = filter_turnover_top_pool(&prepared, args.pick_date, 5000);
+    let pool_selection = filter_pool(
+        &prepared,
+        args.pick_date,
+        args.pool_source,
+        args.pool_file.clone(),
+        &runtime_root,
+    )?;
     eprintln!(
-        "[screen] pool_source=turnover-top pool_size={} elapsed={:.3}s",
-        unique_symbol_count(&prepared_for_pick),
+        "[screen] pool_source={} pool_size={} elapsed={:.3}s",
+        args.pool_source.as_str(),
+        unique_symbol_count(&pool_selection.rows),
         pool_started.elapsed().as_secs_f64()
     );
 
     let strategy_started = Instant::now();
-    let strategy = run_strategy(args.method, &prepared_for_pick, args.pick_date);
+    let strategy = run_strategy(args.method, &pool_selection.rows, args.pick_date);
     eprintln!(
         "[screen] strategy method={} candidates={} elapsed={:.3}s",
         args.method.as_str(),
         strategy.candidates.len(),
         strategy_started.elapsed().as_secs_f64()
     );
-    let result = build_screen_result(
+    let result = build_screen_result_with_pool(
         args.method,
         args.pick_date,
+        args.pool_source.as_str().to_string(),
+        pool_selection
+            .pool_file
+            .map(|path| path.to_string_lossy().to_string()),
         strategy.candidates,
         strategy.stats,
     );
@@ -283,6 +427,158 @@ where
         started.elapsed().as_secs_f64()
     );
     Ok(output_path)
+}
+
+struct PoolSelection {
+    rows: Vec<PreparedRow>,
+    pool_file: Option<PathBuf>,
+}
+
+fn filter_pool(
+    prepared: &[PreparedRow],
+    pick_date: NaiveDate,
+    pool_source: PoolSource,
+    pool_file: Option<PathBuf>,
+    runtime_root: &std::path::Path,
+) -> anyhow::Result<PoolSelection> {
+    match pool_source {
+        PoolSource::TurnoverTop => Ok(PoolSelection {
+            rows: filter_turnover_top_pool(prepared, pick_date, 5000),
+            pool_file: None,
+        }),
+        PoolSource::Custom => {
+            let resolved = resolve_custom_pool_codes(pool_file, runtime_root)?;
+            Ok(PoolSelection {
+                rows: filter_custom_pool_rows(prepared, pick_date, &resolved.codes)?,
+                pool_file: Some(resolved.path),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCustomPool {
+    pub path: PathBuf,
+    pub codes: Vec<String>,
+}
+
+fn resolve_custom_pool_codes(
+    pool_file: Option<PathBuf>,
+    runtime_root: &std::path::Path,
+) -> anyhow::Result<ResolvedCustomPool> {
+    let path = match pool_file {
+        Some(path) => expand_home(path),
+        None => std::env::var("STOCK_SELECT_POOL_FILE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| expand_home(PathBuf::from(value)))
+            .unwrap_or_else(|| runtime_root.join("custom-pool.txt")),
+    };
+    let content = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Missing custom pool file: {}. Define a custom pool with --pool-file PATH, or set STOCK_SELECT_POOL_FILE, or create {}.",
+            path.display(),
+            runtime_root.join("custom-pool.txt").display()
+        )
+    })?;
+    let mut codes = Vec::new();
+    for token in content.split_whitespace() {
+        if let Some(code) = normalize_stock_code_token(token) {
+            if !codes.contains(&code) {
+                codes.push(code);
+            }
+        }
+    }
+    if codes.is_empty() {
+        anyhow::bail!(
+            "Custom pool must contain at least one stock code. Provide codes separated by whitespace, for example: 603138 300058"
+        );
+    }
+    Ok(ResolvedCustomPool { path, codes })
+}
+
+fn filter_custom_pool_rows(
+    prepared: &[PreparedRow],
+    pick_date: NaiveDate,
+    pool_codes: &[String],
+) -> anyhow::Result<Vec<PreparedRow>> {
+    let available = prepared
+        .iter()
+        .filter(|row| row.trade_date == pick_date)
+        .map(|row| row.ts_code.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let effective = pool_codes
+        .iter()
+        .filter(|code| available.contains(code.as_str()))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if effective.is_empty() {
+        anyhow::bail!("Effective custom pool is empty after prepared-data intersection.");
+    }
+    Ok(prepared
+        .iter()
+        .filter(|row| effective.contains(row.ts_code.as_str()))
+        .cloned()
+        .collect())
+}
+
+pub fn resolve_custom_pool_codes_for_test(
+    pool_file: Option<PathBuf>,
+    runtime_root: &std::path::Path,
+) -> anyhow::Result<ResolvedCustomPool> {
+    resolve_custom_pool_codes(pool_file, runtime_root)
+}
+
+pub fn filter_custom_pool_rows_for_test(
+    prepared: &[PreparedRow],
+    pick_date: NaiveDate,
+    pool_source: PoolSource,
+    pool_file: Option<PathBuf>,
+    runtime_root: &std::path::Path,
+) -> anyhow::Result<Vec<PreparedRow>> {
+    Ok(filter_pool(prepared, pick_date, pool_source, pool_file, runtime_root)?.rows)
+}
+
+fn normalize_stock_code_token(token: &str) -> Option<String> {
+    let upper = token.trim().to_ascii_uppercase();
+    if upper.is_empty() {
+        return None;
+    }
+    let digits = if upper.len() >= 6 && upper[..6].chars().all(|ch| ch.is_ascii_digit()) {
+        upper[..6].to_string()
+    } else {
+        let chars = upper.chars().collect::<Vec<_>>();
+        let mut found = None;
+        for idx in 0..chars.len().saturating_sub(5) {
+            let candidate = chars[idx..idx + 6].iter().collect::<String>();
+            if candidate.chars().all(|ch| ch.is_ascii_digit()) {
+                found = Some(candidate);
+                break;
+            }
+        }
+        found?
+    };
+    if upper.ends_with(".SH") || digits.starts_with('6') || digits.starts_with("688") {
+        Some(format!("{digits}.SH"))
+    } else {
+        Some(format!("{digits}.SZ"))
+    }
+}
+
+fn expand_home(path: PathBuf) -> PathBuf {
+    let Some(raw) = path.to_str() else {
+        return path;
+    };
+    if raw == "~" {
+        return std::env::var("HOME").map(PathBuf::from).unwrap_or(path);
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return std::env::var("HOME")
+            .map(|home| PathBuf::from(home).join(rest))
+            .unwrap_or(path);
+    }
+    path
 }
 
 fn filter_turnover_top_pool(
@@ -396,6 +692,8 @@ mod tests {
             dsn: Some("postgresql://example".to_string()),
             runtime_root: Some(temp.path().to_path_buf()),
             recompute: true,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
         };
         let path = run_screen(args, |_dsn, _start, _end| {
             Ok(vec![

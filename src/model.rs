@@ -98,6 +98,8 @@ pub struct ScreenResult {
     pub pick_date: NaiveDate,
     pub pool_source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub screen_version: Option<u32>,
     pub candidates: Vec<Candidate>,
     #[serde(skip_serializing_if = "Option::is_none")]

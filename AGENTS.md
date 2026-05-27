@@ -14,7 +14,7 @@
 
 1. Rust CLI 的用户流程和最终产物需要与 Python `stock-select` CLI 对齐。
 2. `prepare cache` 的内部格式可以不兼容 Python，但 CLI 使用方式、runtime 目录结构和最终结果需要保持一致。
-3. 当前 `b1`、`b2` 已完成 `screen`、`chart`、`review`、`run` 的端到端对齐；下一阶段优先推进 dribull / hcr 或环境评估原生化。
+3. 当前 `b1`、`b2` 已完成 `screen`、`chart`、`review`、`run` 的端到端对齐；下一阶段优先推进 dribull / hcr 或更多日期回归。
 4. CLI 生产路径不再保留源 Python CLI bridge；未完成 Rust 原生实现的方法应显式报错，不允许静默回退到 Python CLI。
 
 ## Python Golden 约束
@@ -44,7 +44,8 @@
 2. `stock-select-rs chart` 已迁到本仓库内置 chart runner：Rust 读取 prepared cache 并调用 `scripts/render_charts.py`，不再调用源 Python CLI 项目。
 3. `stock-select-rs review` 直接调用 Rust native review；当前 `b1`、`b2` 已完成原生 parity，其他方法会显式返回未实现错误。
 4. `stock-select-rs run` 当前是 Rust screen + 本仓库 chart runner + Rust native review；`b1`、`b2` 完整可用。
-5. 环境 profile 目前 Rust 侧已有常量和 scoring helper，但自动环境评估仍未完全原生化。
+5. `review` / `run` 已接入 Rust 原生自动环境评估。显式传入 `--environment-state` 时手动值优先；未传入时会读取或生成 `runtime/environment/` 下的环境记录。
+6. `screen` / `run` 已支持自定义票池：`--pool-source custom`，可配合 `--pool-file` 使用；路径优先级为 `--pool-file`、`STOCK_SELECT_POOL_FILE`、`<runtime-root>/custom-pool.txt`。
 
 ## 文档规则
 
