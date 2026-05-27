@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
@@ -5,6 +6,7 @@ use std::time::Instant;
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
 use clap::{Parser, Subcommand};
+use serde_json::Value;
 
 use crate::cache::{load_prepared_cache, write_prepared_cache};
 use crate::config::{default_runtime_root, resolve_dsn_from_env, screen_window};
@@ -34,6 +36,7 @@ enum Commands {
     Chart(ChartArgs),
     Review(ReviewArgs),
     ReviewMerge(ReviewMergeArgs),
+    ReviewList(ReviewListArgs),
     Run(RunArgs),
 }
 
@@ -100,6 +103,20 @@ pub struct ReviewMergeArgs {
 }
 
 #[derive(Debug, Parser)]
+pub struct ReviewListArgs {
+    #[arg(long)]
+    pub method: Method,
+    #[arg(long)]
+    pub pick_date: NaiveDate,
+    #[arg(long)]
+    pub runtime_root: Option<PathBuf>,
+    #[arg(long)]
+    pub dsn: Option<String>,
+    #[arg(long)]
+    pub verdict: String,
+}
+
+#[derive(Debug, Parser)]
 pub struct RunArgs {
     #[command(flatten)]
     review: ReviewArgs,
@@ -157,6 +174,15 @@ pub fn run() -> anyhow::Result<()> {
         }),
         Commands::ReviewMerge(args) => run_review_merge(args).map(|path| {
             eprintln!("[review-merge] wrote {}", path.display());
+        }),
+        Commands::ReviewList(args) => run_review_list(args, |codes| {
+            let dsn = resolve_dsn_from_env(None)?;
+            crate::db::fetch_instrument_names(&dsn, codes)
+        })
+        .map(|output| {
+            if !output.is_empty() {
+                println!("{output}");
+            }
         }),
         Commands::Run(args) => run_hybrid(args),
     }
@@ -217,6 +243,115 @@ pub fn run_review_merge(args: ReviewMergeArgs) -> anyhow::Result<PathBuf> {
         started.elapsed().as_secs_f64()
     );
     Ok(output_path)
+}
+
+pub fn run_review_list<F>(args: ReviewListArgs, name_loader: F) -> anyhow::Result<String>
+where
+    F: FnOnce(&[String]) -> anyhow::Result<BTreeMap<String, String>>,
+{
+    let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
+    let reviews = load_reviews_for_verdict(
+        &runtime_root,
+        args.pick_date,
+        args.method,
+        args.verdict.as_str(),
+    )?;
+    let codes = reviews
+        .iter()
+        .filter_map(|review| review.get("code").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let names = if args.dsn.is_some() {
+        let dsn = resolve_dsn_from_env(args.dsn.as_deref())?;
+        crate::db::fetch_instrument_names(&dsn, &codes)?
+    } else {
+        name_loader(&codes).unwrap_or_default()
+    };
+    Ok(build_review_list_lines(&reviews, &names).join("\n"))
+}
+
+fn load_reviews_for_verdict(
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    method: Method,
+    verdict: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let normalized = normalize_verdict(verdict)?;
+    let summary_path = runtime_root
+        .join("reviews")
+        .join(format!(
+            "{}.{}",
+            pick_date.format("%Y-%m-%d"),
+            method.as_str()
+        ))
+        .join("summary.json");
+    let summary: Value = serde_json::from_slice(
+        &std::fs::read(&summary_path)
+            .with_context(|| format!("read review summary {}", summary_path.display()))?,
+    )
+    .with_context(|| format!("parse review summary {}", summary_path.display()))?;
+    let mut reviews = Vec::new();
+    for section in ["recommendations", "excluded"] {
+        if let Some(items) = summary.get(section).and_then(Value::as_array) {
+            for item in items {
+                if item
+                    .get("verdict")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(&normalized))
+                {
+                    reviews.push(item.clone());
+                }
+            }
+        }
+    }
+    Ok(reviews)
+}
+
+fn normalize_verdict(verdict: &str) -> anyhow::Result<String> {
+    let normalized = verdict.trim().to_ascii_uppercase();
+    if matches!(normalized.as_str(), "PASS" | "WATCH" | "FAIL") {
+        Ok(normalized)
+    } else {
+        anyhow::bail!("unsupported verdict '{verdict}', expected PASS, WATCH, or FAIL")
+    }
+}
+
+fn build_review_list_lines(reviews: &[Value], names: &BTreeMap<String, String>) -> Vec<String> {
+    reviews
+        .iter()
+        .filter_map(|review| {
+            let code = review.get("code").and_then(Value::as_str)?;
+            let name = names.get(code).map(String::as_str).unwrap_or("-");
+            let signal = review_signal(review);
+            let signal_type = review
+                .get("signal_type")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("-");
+            Some(format!("{code}\t{name}\t{signal}\t{signal_type}"))
+        })
+        .collect()
+}
+
+fn review_signal(review: &Value) -> &str {
+    review
+        .get("signal")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            review
+                .get("baseline_review")
+                .and_then(|baseline| baseline.get("signal"))
+                .and_then(Value::as_str)
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("-")
+}
+
+pub fn build_review_list_lines_for_test(
+    reviews: &[Value],
+    names: &BTreeMap<String, String>,
+) -> Vec<String> {
+    build_review_list_lines(reviews, names)
 }
 
 pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {

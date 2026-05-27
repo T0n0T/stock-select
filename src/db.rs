@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use postgres::{Client, NoTls};
+use std::collections::BTreeMap;
 
 use crate::model::MarketRow;
 
@@ -77,6 +78,37 @@ pub fn fetch_index_history(
             })
         })
         .collect()
+}
+
+pub fn fetch_instrument_names(
+    dsn: &str,
+    symbols: &[String],
+) -> anyhow::Result<BTreeMap<String, String>> {
+    if symbols.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut client = Client::connect(dsn, NoTls)?;
+    let rows = client.query(
+        "
+        SELECT ts_code, name
+        FROM instruments
+        WHERE ts_code = ANY($1)
+        ORDER BY ts_code ASC
+        ",
+        &[&symbols],
+    )?;
+    let mut names = BTreeMap::new();
+    for row in rows {
+        let code: String = row.try_get("ts_code")?;
+        let name: Option<String> = row.try_get("name")?;
+        if let Some(name) = name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+        {
+            names.insert(code, name);
+        }
+    }
+    Ok(names)
 }
 
 fn optional_f64(row: &postgres::Row, column: &str) -> anyhow::Result<f64> {

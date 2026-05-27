@@ -271,10 +271,11 @@ screen
 chart
 review
 review-merge
+review-list
 run
 ```
 
-`chart` 已迁到本仓库 runner。`review`、`review-merge` 和 `run` 只走 Rust native review；当前 b1、b2 可用，其他方法会显式报未实现。`review` 和 `run` 会处理：
+`chart` 已迁到本仓库 runner。`review`、`review-merge`、`review-list` 和 `run` 只走 Rust native review；当前 b1、b2 可用，其他方法会显式报未实现。`review` 和 `run` 会处理：
 
 ```text
 --dsn
@@ -294,6 +295,32 @@ run
 ```
 
 `review-merge` 会读取 `reviews/<pick_date>.<method>/llm_review_results/<code>.json`，校验 LLM review schema，合并回个股 review 文件，并重写 `summary.json`。传入 `--codes` 时只尝试合并指定代码，未指定代码保持原 review 状态。
+
+`review-list` 会处理：
+
+```text
+--method
+--pick-date
+--runtime-root
+--verdict PASS|WATCH|FAIL
+--dsn <optional>
+```
+
+`review-list` 从 `reviews/<pick_date>.<method>/summary.json` 读取指定 verdict 的结果，沿用 summary 中的排序，输出 tab-separated 行：
+
+```text
+code    name    signal    signal_type
+```
+
+名称来自 PostgreSQL `instruments(ts_code, name)`；如果未配置 DSN 或查询不到名称，则输出 `-`。示例：
+
+```bash
+stock-select-rs review-list \
+  --method b2 \
+  --pick-date 2026-05-25 \
+  --runtime-root /tmp/stock-select-rs-review-merge-b2 \
+  --verdict WATCH
+```
 
 `screen` 和 `run` 会处理：
 
