@@ -17,6 +17,7 @@ pub struct NativeChartArgs {
     pub pick_date: NaiveDate,
     pub runtime_root: PathBuf,
     pub codes: Option<Vec<String>>,
+    pub chart_workers: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -121,14 +122,89 @@ pub fn run_native_chart(args: NativeChartArgs) -> anyhow::Result<PathBuf> {
         }
     }
 
-    let payload_path = args.runtime_root.join("charts").join(format!(
-        "{}.{}.payload.json",
-        args.pick_date.format("%Y-%m-%d"),
-        args.method.as_str()
-    ));
-    atomic_write_json(&payload_path, &ChartPayload { charts })?;
-    run_chart_script(&payload_path)?;
+    let payload_paths = write_chart_payloads(
+        &args.runtime_root,
+        args.pick_date,
+        args.method,
+        charts,
+        args.chart_workers,
+    )?;
+    run_chart_scripts(&payload_paths)?;
     Ok(chart_dir)
+}
+
+fn write_chart_payloads(
+    runtime_root: &Path,
+    pick_date: NaiveDate,
+    method: Method,
+    charts: Vec<ChartItem>,
+    chart_workers: usize,
+) -> anyhow::Result<Vec<PathBuf>> {
+    cleanup_chart_payloads(runtime_root, pick_date, method)?;
+    let chunks = split_chart_items(charts, chart_workers);
+    let chunk_count = chunks.len();
+    let mut payload_paths = Vec::with_capacity(chunk_count);
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        let payload_path = if chunk_count == 1 {
+            runtime_root.join("charts").join(format!(
+                "{}.{}.payload.json",
+                pick_date.format("%Y-%m-%d"),
+                method.as_str()
+            ))
+        } else {
+            runtime_root.join("charts").join(format!(
+                "{}.{}.payload.part-{:02}-of-{:02}.json",
+                pick_date.format("%Y-%m-%d"),
+                method.as_str(),
+                idx + 1,
+                chunk_count
+            ))
+        };
+        atomic_write_json(&payload_path, &ChartPayload { charts: chunk })?;
+        payload_paths.push(payload_path);
+    }
+    Ok(payload_paths)
+}
+
+fn cleanup_chart_payloads(
+    runtime_root: &Path,
+    pick_date: NaiveDate,
+    method: Method,
+) -> anyhow::Result<()> {
+    let charts_dir = runtime_root.join("charts");
+    if !charts_dir.exists() {
+        return Ok(());
+    }
+    let prefix = format!(
+        "{}.{}.payload",
+        pick_date.format("%Y-%m-%d"),
+        method.as_str()
+    );
+    for entry in fs::read_dir(&charts_dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.starts_with(&prefix) && name.ends_with(".json") {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn split_chart_items(charts: Vec<ChartItem>, chart_workers: usize) -> Vec<Vec<ChartItem>> {
+    if charts.is_empty() {
+        return vec![Vec::new()];
+    }
+    let worker_count = chart_workers.max(1).min(charts.len());
+    let mut chunks = vec![Vec::new(); worker_count];
+    for (idx, chart) in charts.into_iter().enumerate() {
+        chunks[idx % worker_count].push(chart);
+    }
+    chunks
+        .into_iter()
+        .filter(|chunk| !chunk.is_empty())
+        .collect()
 }
 
 fn should_render_chart(code: &str, requested_codes: Option<&BTreeSet<String>>) -> bool {
@@ -153,6 +229,49 @@ fn run_chart_script(payload_path: &Path) -> anyhow::Result<()> {
         .context("spawn local chart renderer")?;
     if !status.success() {
         anyhow::bail!("local chart renderer failed with status {status}");
+    }
+    Ok(())
+}
+
+fn run_chart_scripts(payload_paths: &[PathBuf]) -> anyhow::Result<()> {
+    if payload_paths.len() <= 1 {
+        if let Some(path) = payload_paths.first() {
+            run_chart_script(path)?;
+        }
+        return Ok(());
+    }
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/render_charts.py");
+    let script = script_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid chart script path"))?
+        .to_string();
+    let mut children = Vec::with_capacity(payload_paths.len());
+    for payload_path in payload_paths {
+        let payload = payload_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid chart payload path"))?
+            .to_string();
+        let child = Command::new("uv")
+            .args(["run", script.as_str(), "--input", payload.as_str()])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .spawn()
+            .with_context(|| {
+                format!("spawn local chart renderer for {}", payload_path.display())
+            })?;
+        children.push((payload_path.clone(), child));
+    }
+
+    let mut failures = Vec::new();
+    for (payload_path, mut child) in children {
+        let status = child
+            .wait()
+            .with_context(|| format!("wait local chart renderer for {}", payload_path.display()))?;
+        if !status.success() {
+            failures.push(format!("{} status={status}", payload_path.display()));
+        }
+    }
+    if !failures.is_empty() {
+        anyhow::bail!("local chart renderer failed: {}", failures.join("; "));
     }
     Ok(())
 }
@@ -216,6 +335,91 @@ mod tests {
         assert!(!should_render_chart("000001.SZ", Some(&requested)));
         assert!(should_render_chart("000002.SZ", Some(&requested)));
         assert!(should_render_chart("000001.SZ", None));
+    }
+
+    #[test]
+    fn chart_items_split_across_requested_workers_round_robin() {
+        let charts = [
+            "000001.SZ",
+            "000002.SZ",
+            "000003.SZ",
+            "000004.SZ",
+            "000005.SZ",
+        ]
+        .into_iter()
+        .map(chart_item)
+        .collect::<Vec<_>>();
+
+        let chunks = split_chart_items(charts, 3);
+
+        let codes = chunks
+            .iter()
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|item| item.code.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            vec![
+                vec!["000001.SZ", "000004.SZ"],
+                vec!["000002.SZ", "000005.SZ"],
+                vec!["000003.SZ"],
+            ]
+        );
+    }
+
+    #[test]
+    fn chart_items_split_caps_workers_to_item_count() {
+        let charts = ["000001.SZ", "000002.SZ"]
+            .into_iter()
+            .map(chart_item)
+            .collect::<Vec<_>>();
+
+        let chunks = split_chart_items(charts, 8);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0][0].code, "000001.SZ");
+        assert_eq!(chunks[1][0].code, "000002.SZ");
+    }
+
+    #[test]
+    fn cleanup_chart_payloads_removes_only_matching_payloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let charts_dir = temp.path().join("charts");
+        fs::create_dir_all(&charts_dir).unwrap();
+        fs::write(charts_dir.join("2026-05-25.b2.payload.json"), "{}").unwrap();
+        fs::write(
+            charts_dir.join("2026-05-25.b2.payload.part-01-of-02.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::write(charts_dir.join("2026-05-25.b1.payload.json"), "{}").unwrap();
+
+        cleanup_chart_payloads(
+            temp.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+            Method::B2,
+        )
+        .unwrap();
+
+        assert!(!charts_dir.join("2026-05-25.b2.payload.json").exists());
+        assert!(
+            !charts_dir
+                .join("2026-05-25.b2.payload.part-01-of-02.json")
+                .exists()
+        );
+        assert!(charts_dir.join("2026-05-25.b1.payload.json").exists());
+    }
+
+    fn chart_item(code: &str) -> ChartItem {
+        ChartItem {
+            code: code.to_string(),
+            out_path: format!("/tmp/{code}.png"),
+            rows: Vec::new(),
+        }
     }
 
     fn prepared(code: &str, day: u32) -> PreparedRow {

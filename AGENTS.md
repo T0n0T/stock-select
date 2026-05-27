@@ -41,7 +41,7 @@
 ## 当前实现边界
 
 1. `stock-select-rs screen` 已是 Rust 原生路径。
-2. `stock-select-rs chart` 已迁到本仓库内置 chart runner：Rust 读取 prepared cache 并调用 `scripts/render_charts.py`，不再调用源 Python CLI 项目。
+2. `stock-select-rs chart` 已迁到本仓库内置 chart runner：Rust 读取 prepared cache，按 `--chart-workers` 分片并发调用 `scripts/render_charts.py`，不再调用源 Python CLI 项目。
 3. `stock-select-rs review` 直接调用 Rust native review；当前 `b1`、`b2` 已完成原生 parity，其他方法会显式返回未实现错误。
 4. `stock-select-rs review-merge` 已是 Rust 原生命令，负责校验 `llm_review_results/<code>.json`、合并回个股 review 并重写 `summary.json`。
 5. `stock-select-rs review-list` 已是 Rust 原生命令，可按日期、method、verdict 输出排序后的代码、名称、signal 和 signal_type，用于替代 HTML 列表浏览。

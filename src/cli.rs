@@ -68,6 +68,8 @@ pub struct ChartArgs {
     dsn: Option<String>,
     #[arg(long)]
     runtime_root: Option<PathBuf>,
+    #[arg(long, default_value_t = 4)]
+    chart_workers: usize,
 }
 
 #[derive(Debug, Parser)]
@@ -126,6 +128,8 @@ pub struct RunArgs {
     pool_source: PoolSource,
     #[arg(long)]
     pool_file: Option<PathBuf>,
+    #[arg(long, default_value_t = 4)]
+    chart_workers: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +200,7 @@ pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
         pick_date: args.pick_date,
         runtime_root,
         codes: None,
+        chart_workers: args.chart_workers,
     })?;
     eprintln!(
         "[chart] total elapsed={:.3}s",
@@ -416,6 +421,7 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
             pick_date,
             runtime_root: runtime_root.clone(),
             codes: Some(chart_codes),
+            chart_workers: args.chart_workers,
         })?;
         eprintln!(
             "[run] chart elapsed={:.3}s",
