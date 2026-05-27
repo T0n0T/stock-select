@@ -16,6 +16,7 @@ pub struct NativeChartArgs {
     pub method: Method,
     pub pick_date: NaiveDate,
     pub runtime_root: PathBuf,
+    pub codes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -77,14 +78,13 @@ pub fn run_native_chart(args: NativeChartArgs) -> anyhow::Result<PathBuf> {
     ));
     fs::create_dir_all(&chart_dir)?;
     let histories = group_histories_by_code(&prepared, args.pick_date);
-    let candidate_codes = candidate_payload
-        .candidates
-        .iter()
-        .map(|candidate| candidate.code.as_str())
-        .collect::<BTreeSet<_>>();
+    let requested_codes = args
+        .codes
+        .map(|codes| codes.into_iter().collect::<BTreeSet<_>>());
     let charts = candidate_payload
         .candidates
         .iter()
+        .filter(|candidate| should_render_chart(candidate.code.as_str(), requested_codes.as_ref()))
         .map(|candidate| {
             let history = histories.get(candidate.code.as_str()).ok_or_else(|| {
                 anyhow::anyhow!("No price history found for candidate: {}", candidate.code)
@@ -103,8 +103,22 @@ pub fn run_native_chart(args: NativeChartArgs) -> anyhow::Result<PathBuf> {
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     eprintln!("[chart] candidates={}", charts.len());
-    if charts.len() != candidate_codes.len() {
-        anyhow::bail!("candidate code set contains duplicates");
+    if let Some(requested_codes) = requested_codes.as_ref() {
+        let rendered_codes = charts
+            .iter()
+            .map(|item| item.code.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing = requested_codes
+            .iter()
+            .filter(|code| !rendered_codes.contains(code.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "requested chart codes are not candidates: {}",
+                missing.join(",")
+            );
+        }
     }
 
     let payload_path = args.runtime_root.join("charts").join(format!(
@@ -115,6 +129,10 @@ pub fn run_native_chart(args: NativeChartArgs) -> anyhow::Result<PathBuf> {
     atomic_write_json(&payload_path, &ChartPayload { charts })?;
     run_chart_script(&payload_path)?;
     Ok(chart_dir)
+}
+
+fn should_render_chart(code: &str, requested_codes: Option<&BTreeSet<String>>) -> bool {
+    requested_codes.is_none_or(|codes| codes.contains(code))
 }
 
 fn run_chart_script(payload_path: &Path) -> anyhow::Result<()> {
@@ -188,6 +206,16 @@ mod tests {
         let histories = group_histories_by_code(&rows, pick);
         assert_eq!(histories["000001.SZ"].len(), 2);
         assert_eq!(histories["000002.SZ"].len(), 1);
+    }
+
+    #[test]
+    fn chart_subset_filter_keeps_only_requested_codes() {
+        let requested = ["000002.SZ".to_string(), "000003.SZ".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert!(!should_render_chart("000001.SZ", Some(&requested)));
+        assert!(should_render_chart("000002.SZ", Some(&requested)));
+        assert!(should_render_chart("000001.SZ", None));
     }
 
     fn prepared(code: &str, day: u32) -> PreparedRow {

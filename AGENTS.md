@@ -45,7 +45,7 @@
 3. `stock-select-rs review` 直接调用 Rust native review；当前 `b1`、`b2` 已完成原生 parity，其他方法会显式返回未实现错误。
 4. `stock-select-rs review-merge` 已是 Rust 原生命令，负责校验 `llm_review_results/<code>.json`、合并回个股 review 并重写 `summary.json`。
 5. `stock-select-rs review-list` 已是 Rust 原生命令，可按日期、method、verdict 输出排序后的代码、名称、signal 和 signal_type，用于替代 HTML 列表浏览。
-6. `stock-select-rs run` 当前是 Rust screen + 本仓库 chart runner + Rust native review；`b1`、`b2` 完整可用。
+6. `stock-select-rs run` 当前是 Rust screen + Rust native review；只有传入 `--llm-review-limit` 或 `--llm-min-baseline-score` 时才进入 chart 阶段，且只为 `llm_review_tasks.json` 中的股票绘图。
 7. `review` / `run` 已接入 Rust 原生自动环境评估。显式传入 `--environment-state` 时手动值优先；未传入时会读取或生成 `runtime/environment/` 下的环境记录。
 8. `screen` / `run` 已支持自定义票池：`--pool-source custom`，可配合 `--pool-file` 使用；路径优先级为 `--pool-file`、`STOCK_SELECT_POOL_FILE`、`<runtime-root>/custom-pool.txt`。
 

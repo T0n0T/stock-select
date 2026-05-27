@@ -40,6 +40,7 @@ pub struct NativeReviewArgs {
     pub environment_reason: Option<String>,
     pub llm_min_baseline_score: Option<f64>,
     pub llm_review_limit: Option<usize>,
+    pub require_chart_files: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,7 +234,7 @@ fn run_native_method_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
     for (rank, candidate) in candidate_payload.candidates.iter().enumerate() {
         let code = candidate.code.as_str();
         let chart_path = chart_dir.join(format!("{code}_day.png"));
-        if !chart_path.exists() {
+        if args.require_chart_files && !chart_path.exists() {
             failures.push(json!({
                 "code": code,
                 "reason": format!("Chart file not found: {}", chart_path.display()),

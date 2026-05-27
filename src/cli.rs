@@ -195,6 +195,7 @@ pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
         method: args.method,
         pick_date: args.pick_date,
         runtime_root,
+        codes: None,
     })?;
     eprintln!(
         "[chart] total elapsed={:.3}s",
@@ -221,6 +222,7 @@ pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
         environment_reason,
         llm_min_baseline_score: args.llm_min_baseline_score,
         llm_review_limit: args.llm_review_limit,
+        require_chart_files: true,
     })?;
     eprintln!(
         "[review] total elapsed={:.3}s",
@@ -390,19 +392,8 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         screen_started.elapsed().as_secs_f64()
     );
 
-    let chart_started = Instant::now();
-    run_native_chart(NativeChartArgs {
-        method,
-        pick_date,
-        runtime_root: runtime_root.clone(),
-    })?;
-    eprintln!(
-        "[run] chart elapsed={:.3}s",
-        chart_started.elapsed().as_secs_f64()
-    );
-
     let review_started = Instant::now();
-    run_native_review(NativeReviewArgs {
+    let summary_path = run_native_review(NativeReviewArgs {
         method,
         pick_date,
         runtime_root: runtime_root.clone(),
@@ -410,16 +401,54 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         environment_reason,
         llm_min_baseline_score: args.review.llm_min_baseline_score,
         llm_review_limit: args.review.llm_review_limit,
+        require_chart_files: false,
     })?;
     eprintln!(
         "[run] review elapsed={:.3}s",
         review_started.elapsed().as_secs_f64()
     );
+
+    if args.review.llm_min_baseline_score.is_some() || args.review.llm_review_limit.is_some() {
+        let chart_started = Instant::now();
+        let chart_codes = load_llm_review_task_codes(&summary_path)?;
+        run_native_chart(NativeChartArgs {
+            method,
+            pick_date,
+            runtime_root: runtime_root.clone(),
+            codes: Some(chart_codes),
+        })?;
+        eprintln!(
+            "[run] chart elapsed={:.3}s",
+            chart_started.elapsed().as_secs_f64()
+        );
+    } else {
+        eprintln!("[run] chart skipped reason=no-llm-review-threshold");
+    }
     eprintln!(
         "[run] total elapsed={:.3}s",
         started.elapsed().as_secs_f64()
     );
     Ok(())
+}
+
+fn load_llm_review_task_codes(summary_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let review_dir = summary_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("summary path has no parent: {}", summary_path.display()))?;
+    let tasks_path = review_dir.join("llm_review_tasks.json");
+    let payload: Value = serde_json::from_slice(
+        &std::fs::read(&tasks_path)
+            .with_context(|| format!("read llm review tasks {}", tasks_path.display()))?,
+    )
+    .with_context(|| format!("parse llm review tasks {}", tasks_path.display()))?;
+    Ok(payload
+        .get("tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|task| task.get("code").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect())
 }
 
 fn resolve_review_environment_args(

@@ -51,10 +51,10 @@ Rust CLI 当前生产路径：
 stock-select-rs screen  -> Rust native
 stock-select-rs chart   -> Rust prepared cache + 本仓库 Python/mplfinance runner
 stock-select-rs review  -> Rust native review
-stock-select-rs run     -> Rust screen + 本仓库 chart runner + Rust native review
+stock-select-rs run     -> Rust screen + Rust native review + 条件式 chart runner
 ```
 
-`chart` 不再调用 `/home/pi/Documents/agents/stock-select` 的 Python CLI；它仍使用 Python 绘图库 `mplfinance/matplotlib`，但脚本和输入数据都在本仓库控制。`review` 和 `run` 不再委托源 Python CLI。当前 b1、b2 review/run 已完成 Rust native parity；dribull / hcr 的 review 会显式返回未实现错误。
+`chart` 不再调用 `/home/pi/Documents/agents/stock-select` 的 Python CLI；它仍使用 Python 绘图库 `mplfinance/matplotlib`，但脚本和输入数据都在本仓库控制。`run` 默认先完成 screen + review；只有传入 `--llm-review-limit` 或 `--llm-min-baseline-score` 时才进入 chart 阶段，且只绘制最终 `llm_review_tasks.json` 中需要给 LLM/subagent 查看图像的股票。`review` 和 `run` 不再委托源 Python CLI。当前 b1、b2 review/run 已完成 Rust native parity；dribull / hcr 的 review 会显式返回未实现错误。
 
 面向用户的 runtime layout 已与 Python 对齐：
 
@@ -105,7 +105,7 @@ chart smoke: PASS charts=104
 run elapsed=74.051s
 ```
 
-注意：当前 `run` 的 chart 阶段仍使用 Python/mplfinance 绘图库，但不再通过源 Python CLI bridge。
+注意：当前 `run` 的 chart 阶段仍使用 Python/mplfinance 绘图库，但不再通过源 Python CLI bridge；且只有配置 LLM review 限制时才触发 chart。
 
 ## b2 原生化进度
 
@@ -351,6 +351,13 @@ Rust Command -> 读取 runtime prepared/candidates -> 写 charts/*.payload.json 
 
 Rust CLI 生成路径下的 chart artifacts 已 smoke-check 为真实 PNG。既有 Python runtime 中 `2026-05-25.b1` 的 chart 文件存在 placeholder text artifacts，因此不能作为 PNG visual golden。
 
+`chart` command 独立运行时仍会为全部 candidate 绘图。`run` command 的 chart 阶段已经改为条件式：
+
+```text
+无 --llm-review-limit 且无 --llm-min-baseline-score：跳过 chart
+有 --llm-review-limit 或 --llm-min-baseline-score：先 review 生成 llm_review_tasks.json，再只为 task 中的 code 绘图
+```
+
 本阶段验证：
 
 ```text
@@ -567,6 +574,22 @@ stock-select-rs review-merge --method b2 --pick-date 2026-05-25 --codes 603308.S
 screen parity: PASS candidates=139/139
 review parity after merge: PASS reviewed=139 recommendations=0
 chart smoke: PASS charts=139
+
+conditional run chart:
+runtime_root=/tmp/stock-select-rs-run-no-chart
+stock-select-rs run --method b2 --pick-date 2026-05-25 --recompute
+reviewed=139
+chart skipped
+
+runtime_root=/tmp/stock-select-rs-run-chart-limit
+stock-select-rs run --method b2 --pick-date 2026-05-25 --llm-review-limit 5 --recompute
+llm_review_tasks=5
+charts=5
+
+runtime_root=/tmp/stock-select-rs-run-chart-minscore
+stock-select-rs run --method b2 --pick-date 2026-05-25 --llm-min-baseline-score 4.03 --recompute
+llm_review_tasks=3
+charts=3
 ```
 
 注意：`/tmp/stock-select-rs-auto-env` 的 b2 自动环境 run 使用 Rust 自动评估得到 `neutral`，因此不用于和 Python weak-profile golden 做 review parity。Python golden 的 `603308.SH` 是 review-merge 后的 WATCH；Rust 现在可通过 `review-merge --codes 603308.SH` 合并同一份 LLM 结果，并通过 Python golden parity。
