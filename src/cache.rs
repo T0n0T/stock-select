@@ -23,6 +23,14 @@ pub struct PreparedCacheMetadata {
     pub row_count: usize,
     pub symbol_count: usize,
     pub source_table: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_trade_date: Option<NaiveDate>,
 }
 
 pub fn prepared_cache_data_path(runtime_root: &Path, pick_date: NaiveDate) -> PathBuf {
@@ -37,12 +45,35 @@ pub fn prepared_cache_meta_path(runtime_root: &Path, pick_date: NaiveDate) -> Pa
         .join(format!("{}.meta.json", pick_date.format("%Y-%m-%d")))
 }
 
+pub fn intraday_prepared_cache_data_path(runtime_root: &Path, trade_date: NaiveDate) -> PathBuf {
+    runtime_root
+        .join("prepared")
+        .join(format!("{}.intraday.bin", trade_date.format("%Y-%m-%d")))
+}
+
+pub fn intraday_prepared_cache_meta_path(runtime_root: &Path, trade_date: NaiveDate) -> PathBuf {
+    runtime_root.join("prepared").join(format!(
+        "{}.intraday.meta.json",
+        trade_date.format("%Y-%m-%d")
+    ))
+}
+
 pub fn candidate_output_path(runtime_root: &Path, pick_date: NaiveDate, method: Method) -> PathBuf {
     runtime_root.join("candidates").join(format!(
         "{}.{}.json",
         pick_date.format("%Y-%m-%d"),
         method.as_str()
     ))
+}
+
+pub fn intraday_candidate_output_path(
+    runtime_root: &Path,
+    artifact_key: &str,
+    method: Method,
+) -> PathBuf {
+    runtime_root
+        .join("candidates")
+        .join(format!("{}.{}.json", artifact_key, method.as_str()))
 }
 
 pub fn build_metadata(
@@ -68,7 +99,28 @@ pub fn build_metadata(
         row_count: rows.len(),
         symbol_count,
         source_table: "daily_market".to_string(),
+        mode: None,
+        source: None,
+        run_id: None,
+        previous_trade_date: None,
     }
+}
+
+pub fn build_intraday_metadata(
+    method: Method,
+    trade_date: NaiveDate,
+    start_date: NaiveDate,
+    previous_trade_date: NaiveDate,
+    run_id: &str,
+    rows: &[PreparedRow],
+) -> PreparedCacheMetadata {
+    let mut metadata = build_metadata(method, trade_date, start_date, trade_date, rows);
+    metadata.source_table = "intraday_snapshot".to_string();
+    metadata.mode = Some("intraday_snapshot".to_string());
+    metadata.source = Some("tushare_rt_k".to_string());
+    metadata.run_id = Some(run_id.to_string());
+    metadata.previous_trade_date = Some(previous_trade_date);
+    metadata
 }
 
 pub fn metadata_matches(
@@ -109,6 +161,33 @@ pub fn write_prepared_cache(
     Ok(())
 }
 
+pub fn write_intraday_prepared_cache(
+    runtime_root: &Path,
+    method: Method,
+    trade_date: NaiveDate,
+    start_date: NaiveDate,
+    previous_trade_date: NaiveDate,
+    run_id: &str,
+    rows: &[PreparedRow],
+) -> anyhow::Result<()> {
+    let data_path = intraday_prepared_cache_data_path(runtime_root, trade_date);
+    let meta_path = intraday_prepared_cache_meta_path(runtime_root, trade_date);
+    if let Some(parent) = data_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    atomic_write_binary(&data_path, &encode_prepared_rows(rows)?)?;
+    let metadata = build_intraday_metadata(
+        method,
+        trade_date,
+        start_date,
+        previous_trade_date,
+        run_id,
+        rows,
+    );
+    atomic_write_json(&meta_path, &metadata)?;
+    Ok(())
+}
+
 pub fn load_prepared_cache(
     runtime_root: &Path,
     method: Method,
@@ -130,6 +209,10 @@ pub fn load_prepared_cache(
         return Ok(None);
     }
     Ok(Some(rows))
+}
+
+pub fn decode_prepared_cache_rows(data_path: &Path) -> anyhow::Result<Vec<PreparedRow>> {
+    decode_prepared_rows(&fs::read(data_path)?)
 }
 
 pub fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {

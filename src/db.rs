@@ -41,6 +41,64 @@ pub fn fetch_daily_window(
         .collect()
 }
 
+pub fn fetch_symbol_history(
+    dsn: &str,
+    symbol: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<Vec<MarketRow>> {
+    let mut client = Client::connect(dsn, NoTls)?;
+    let rows = client.query(
+        "
+        SELECT
+            ts_code,
+            trade_date,
+            open::double precision AS open,
+            high::double precision AS high,
+            low::double precision AS low,
+            close::double precision AS close,
+            vol::double precision AS vol
+        FROM daily_market
+        WHERE ts_code = $1
+          AND trade_date BETWEEN $2 AND $3
+        ORDER BY trade_date ASC
+        ",
+        &[&symbol, &start_date, &end_date],
+    )?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(MarketRow {
+                ts_code: row.try_get("ts_code")?,
+                trade_date: row.try_get("trade_date")?,
+                open: optional_f64(&row, "open")?,
+                high: optional_f64(&row, "high")?,
+                low: optional_f64(&row, "low")?,
+                close: optional_f64(&row, "close")?,
+                vol: optional_f64(&row, "vol")?,
+            })
+        })
+        .collect()
+}
+
+pub fn fetch_latest_symbol_trade_date(dsn: &str, symbol: &str) -> anyhow::Result<NaiveDate> {
+    let mut client = Client::connect(dsn, NoTls)?;
+    let row = client.query_one(
+        "
+        SELECT max(trade_date) AS trade_date
+        FROM daily_market
+        WHERE ts_code = $1
+          AND open IS NOT NULL
+          AND high IS NOT NULL
+          AND low IS NOT NULL
+          AND close IS NOT NULL
+          AND vol IS NOT NULL
+        ",
+        &[&symbol],
+    )?;
+    row.try_get::<_, Option<NaiveDate>>("trade_date")?
+        .ok_or_else(|| anyhow::anyhow!("No daily history found for symbol: {symbol}"))
+}
+
 pub fn fetch_index_history(
     dsn: &str,
     symbol: &str,
@@ -78,6 +136,20 @@ pub fn fetch_index_history(
             })
         })
         .collect()
+}
+
+pub fn resolve_previous_trade_date(dsn: &str, trade_date: NaiveDate) -> anyhow::Result<NaiveDate> {
+    let mut client = Client::connect(dsn, NoTls)?;
+    let row = client.query_one(
+        "
+        SELECT max(trade_date) AS trade_date
+        FROM daily_market
+        WHERE trade_date < $1
+        ",
+        &[&trade_date],
+    )?;
+    row.try_get::<_, Option<NaiveDate>>("trade_date")?
+        .ok_or_else(|| anyhow::anyhow!("No previous trade date found before {trade_date}."))
 }
 
 pub fn fetch_instrument_names(

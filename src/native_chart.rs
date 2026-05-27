@@ -7,9 +7,13 @@ use anyhow::Context;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use crate::cache::{atomic_write_json, candidate_output_path, load_prepared_cache};
+use crate::cache::{
+    atomic_write_json, candidate_output_path, intraday_candidate_output_path,
+    intraday_prepared_cache_data_path, load_prepared_cache,
+};
 use crate::config::screen_window;
 use crate::model::{Method, PreparedRow, ScreenResult};
+use crate::progress::ProgressReporter;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeChartArgs {
@@ -18,11 +22,31 @@ pub struct NativeChartArgs {
     pub runtime_root: PathBuf,
     pub codes: Option<Vec<String>>,
     pub chart_workers: usize,
+    pub artifact_key: Option<String>,
+    pub intraday: bool,
+    pub progress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct ChartPayload {
     charts: Vec<ChartItem>,
+}
+
+pub fn render_single_chart(
+    code: &str,
+    history: &[PreparedRow],
+    out_path: &Path,
+) -> anyhow::Result<()> {
+    let payload_path = out_path.with_extension("payload.json");
+    let item = ChartItem {
+        code: code.to_string(),
+        out_path: out_path.display().to_string(),
+        rows: history.iter().map(chart_row_from_prepared).collect(),
+    };
+    atomic_write_json(&payload_path, &ChartPayload { charts: vec![item] })?;
+    run_chart_script(&payload_path)?;
+    let _ = fs::remove_file(payload_path);
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -49,34 +73,53 @@ struct ChartRow {
 }
 
 pub fn run_native_chart(args: NativeChartArgs) -> anyhow::Result<PathBuf> {
-    let candidate_path = candidate_output_path(&args.runtime_root, args.pick_date, args.method);
+    let progress = ProgressReporter::new(args.progress);
+    let candidate_path = if args.intraday {
+        intraday_candidate_output_path(
+            &args.runtime_root,
+            args.artifact_key
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("intraday chart requires artifact_key"))?,
+            args.method,
+        )
+    } else {
+        candidate_output_path(&args.runtime_root, args.pick_date, args.method)
+    };
     let candidate_payload: ScreenResult = serde_json::from_slice(
         &fs::read(&candidate_path)
             .with_context(|| format!("read candidate file {}", candidate_path.display()))?,
     )
     .with_context(|| format!("parse candidate file {}", candidate_path.display()))?;
 
-    let (start_date, end_date) = screen_window(args.pick_date);
-    let prepared = load_prepared_cache(
-        &args.runtime_root,
-        args.method,
-        args.pick_date,
-        start_date,
-        end_date,
-    )?
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "prepared cache not found for native chart; run screen first for {} {}",
+    let prepared = if args.intraday {
+        let data_path = intraday_prepared_cache_data_path(&args.runtime_root, args.pick_date);
+        crate::cache::decode_prepared_cache_rows(&data_path)?
+    } else {
+        let (start_date, end_date) = screen_window(args.pick_date);
+        load_prepared_cache(
+            &args.runtime_root,
+            args.method,
             args.pick_date,
-            args.method.as_str()
-        )
-    })?;
+            start_date,
+            end_date,
+        )?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "prepared cache not found for native chart; run screen first for {} {}",
+                args.pick_date,
+                args.method.as_str()
+            )
+        })?
+    };
 
-    let chart_dir = args.runtime_root.join("charts").join(format!(
-        "{}.{}",
-        args.pick_date.format("%Y-%m-%d"),
-        args.method.as_str()
-    ));
+    let chart_key = args
+        .artifact_key
+        .clone()
+        .unwrap_or_else(|| args.pick_date.format("%Y-%m-%d").to_string());
+    let chart_dir =
+        args.runtime_root
+            .join("charts")
+            .join(format!("{}.{}", chart_key, args.method.as_str()));
     fs::create_dir_all(&chart_dir)?;
     let histories = group_histories_by_code(&prepared, args.pick_date);
     let requested_codes = args
@@ -103,7 +146,15 @@ pub fn run_native_chart(args: NativeChartArgs) -> anyhow::Result<PathBuf> {
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    eprintln!("[chart] candidates={}", charts.len());
+    progress.step(
+        "chart",
+        "payload",
+        "done",
+        [
+            ("candidates", charts.len().to_string()),
+            ("workers", args.chart_workers.to_string()),
+        ],
+    );
     if let Some(requested_codes) = requested_codes.as_ref() {
         let rendered_codes = charts
             .iter()
@@ -129,7 +180,19 @@ pub fn run_native_chart(args: NativeChartArgs) -> anyhow::Result<PathBuf> {
         charts,
         args.chart_workers,
     )?;
-    run_chart_scripts(&payload_paths)?;
+    progress.step(
+        "chart",
+        "render",
+        "start",
+        [("parts", payload_paths.len().to_string())],
+    );
+    run_chart_scripts(&payload_paths, progress)?;
+    progress.step(
+        "chart",
+        "render",
+        "done",
+        [("dir", chart_dir.display().to_string())],
+    );
     Ok(chart_dir)
 }
 
@@ -233,10 +296,22 @@ fn run_chart_script(payload_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_chart_scripts(payload_paths: &[PathBuf]) -> anyhow::Result<()> {
+fn run_chart_scripts(payload_paths: &[PathBuf], progress: ProgressReporter) -> anyhow::Result<()> {
     if payload_paths.len() <= 1 {
         if let Some(path) = payload_paths.first() {
+            progress.step(
+                "chart",
+                "render-part",
+                "start",
+                [("part", "1/1".to_string())],
+            );
             run_chart_script(path)?;
+            progress.step(
+                "chart",
+                "render-part",
+                "done",
+                [("part", "1/1".to_string())],
+            );
         }
         return Ok(());
     }
@@ -246,7 +321,13 @@ fn run_chart_scripts(payload_paths: &[PathBuf]) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("invalid chart script path"))?
         .to_string();
     let mut children = Vec::with_capacity(payload_paths.len());
-    for payload_path in payload_paths {
+    for (idx, payload_path) in payload_paths.iter().enumerate() {
+        progress.step(
+            "chart",
+            "render-part",
+            "start",
+            [("part", format!("{}/{}", idx + 1, payload_paths.len()))],
+        );
         let payload = payload_path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("invalid chart payload path"))?
@@ -262,12 +343,19 @@ fn run_chart_scripts(payload_paths: &[PathBuf]) -> anyhow::Result<()> {
     }
 
     let mut failures = Vec::new();
-    for (payload_path, mut child) in children {
+    for (idx, (payload_path, mut child)) in children.into_iter().enumerate() {
         let status = child
             .wait()
             .with_context(|| format!("wait local chart renderer for {}", payload_path.display()))?;
         if !status.success() {
             failures.push(format!("{} status={status}", payload_path.display()));
+        } else {
+            progress.step(
+                "chart",
+                "render-part",
+                "done",
+                [("part", format!("{}/{}", idx + 1, payload_paths.len()))],
+            );
         }
     }
     if !failures.is_empty() {

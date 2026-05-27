@@ -1,15 +1,22 @@
 use std::collections::BTreeMap;
+use std::io;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
 
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use serde_json::Value;
 
-use crate::cache::{load_prepared_cache, write_prepared_cache};
-use crate::config::{default_runtime_root, resolve_dsn_from_env, screen_window};
+use crate::cache::{
+    atomic_write_json, intraday_candidate_output_path, load_prepared_cache,
+    write_intraday_prepared_cache, write_prepared_cache,
+};
+use crate::config::{
+    default_runtime_root, resolve_config_value, resolve_dsn_from_env, screen_window,
+};
 use crate::market_environment::{
     EnvironmentEvaluation, ensure_market_environment, evaluate_market_environment,
 };
@@ -20,6 +27,7 @@ use crate::native_review::{
 };
 use crate::output::{build_screen_result_with_pool, write_screen_result};
 use crate::prepare::prepare_rows;
+use crate::progress::ProgressReporter;
 use crate::strategies::run_strategy;
 
 #[derive(Debug, Parser)]
@@ -38,6 +46,14 @@ enum Commands {
     ReviewMerge(ReviewMergeArgs),
     ReviewList(ReviewListArgs),
     Run(RunArgs),
+    AnalyzeSymbol(AnalyzeSymbolArgs),
+    Completions(CompletionsArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct CompletionsArgs {
+    #[arg(value_parser = clap::value_parser!(Shell))]
+    shell: Shell,
 }
 
 #[derive(Debug, Parser)]
@@ -45,7 +61,11 @@ pub struct ScreenArgs {
     #[arg(long)]
     method: Method,
     #[arg(long)]
-    pick_date: NaiveDate,
+    pick_date: Option<NaiveDate>,
+    #[arg(long)]
+    intraday: bool,
+    #[arg(long, env = "TUSHARE_TOKEN", hide_env_values = true)]
+    tushare_token: Option<String>,
     #[arg(long)]
     dsn: Option<String>,
     #[arg(long)]
@@ -56,6 +76,8 @@ pub struct ScreenArgs {
     pool_source: PoolSource,
     #[arg(long)]
     pool_file: Option<PathBuf>,
+    #[arg(long = "no-progress", default_value_t = true, action = clap::ArgAction::SetFalse)]
+    progress: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -70,6 +92,8 @@ pub struct ChartArgs {
     runtime_root: Option<PathBuf>,
     #[arg(long, default_value_t = 4)]
     chart_workers: usize,
+    #[arg(long = "no-progress", default_value_t = true, action = clap::ArgAction::SetFalse)]
+    progress: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -77,7 +101,9 @@ pub struct ReviewArgs {
     #[arg(long)]
     method: Method,
     #[arg(long)]
-    pick_date: NaiveDate,
+    pick_date: Option<NaiveDate>,
+    #[arg(long)]
+    intraday: bool,
     #[arg(long)]
     dsn: Option<String>,
     #[arg(long)]
@@ -111,6 +137,8 @@ pub struct ReviewListArgs {
     #[arg(long)]
     pub pick_date: NaiveDate,
     #[arg(long)]
+    pub intraday: bool,
+    #[arg(long)]
     pub runtime_root: Option<PathBuf>,
     #[arg(long)]
     pub dsn: Option<String>,
@@ -122,6 +150,8 @@ pub struct ReviewListArgs {
 pub struct RunArgs {
     #[command(flatten)]
     review: ReviewArgs,
+    #[arg(long, env = "TUSHARE_TOKEN", hide_env_values = true)]
+    tushare_token: Option<String>,
     #[arg(long)]
     recompute: bool,
     #[arg(long, default_value = "turnover-top")]
@@ -130,6 +160,40 @@ pub struct RunArgs {
     pool_file: Option<PathBuf>,
     #[arg(long, default_value_t = 4)]
     chart_workers: usize,
+    #[arg(long = "no-progress", default_value_t = true, action = clap::ArgAction::SetFalse)]
+    progress: bool,
+}
+
+#[derive(Debug, Parser, Clone)]
+pub struct AnalyzeSymbolArgs {
+    #[arg(long)]
+    pub method: Method,
+    #[arg(long)]
+    pub symbol: String,
+    #[arg(long)]
+    pub pick_date: Option<NaiveDate>,
+    #[arg(long)]
+    pub dsn: Option<String>,
+    #[arg(long)]
+    pub runtime_root: Option<PathBuf>,
+    #[arg(long)]
+    pub environment_state: Option<String>,
+    #[arg(long)]
+    pub environment_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntradayScreenArgs {
+    pub method: Method,
+    pub trade_date: NaiveDate,
+    pub run_id: String,
+    pub dsn: Option<String>,
+    pub runtime_root: Option<PathBuf>,
+    pub recompute: bool,
+    pub pool_source: PoolSource,
+    pub pool_file: Option<PathBuf>,
+    pub tushare_token: Option<String>,
+    pub progress: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,10 +228,7 @@ impl FromStr for PoolSource {
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Screen(args) => run_screen(args, |dsn, start, end| {
-            crate::db::fetch_daily_window(dsn, start, end)
-        })
-        .map(|path| {
+        Commands::Screen(args) => run_screen_command(args).map(|path| {
             eprintln!("[screen] wrote {}", path.display());
         }),
         Commands::Chart(args) => run_chart(args).map(|path| {
@@ -189,7 +250,354 @@ pub fn run() -> anyhow::Result<()> {
             }
         }),
         Commands::Run(args) => run_hybrid(args),
+        Commands::AnalyzeSymbol(args) => run_analyze_symbol(args).map(|path| {
+            println!("{}", path.display());
+        }),
+        Commands::Completions(args) => {
+            write_completion_script(args.shell, &mut io::stdout());
+            Ok(())
+        }
     }
+}
+
+pub fn generate_completion_script(shell: &str) -> anyhow::Result<String> {
+    let shell = shell
+        .parse::<Shell>()
+        .map_err(|_| anyhow::anyhow!("unsupported completion shell: {shell}"))?;
+    let mut output = Vec::new();
+    write_completion_script(shell, &mut output);
+    String::from_utf8(output).context("completion script is not valid UTF-8")
+}
+
+fn write_completion_script<W: io::Write>(shell: Shell, writer: &mut W) {
+    let mut command = Cli::command();
+    clap_complete::generate(shell, &mut command, "stock-select-rs", writer);
+}
+
+pub fn run_analyze_symbol(args: AnalyzeSymbolArgs) -> anyhow::Result<PathBuf> {
+    run_analyze_symbol_with_loaders(
+        args,
+        |dsn, symbol, start, end| crate::db::fetch_symbol_history(dsn, symbol, start, end),
+        |dsn, symbol| crate::db::fetch_latest_symbol_trade_date(dsn, symbol),
+        |code, rows, out_path| crate::native_chart::render_single_chart(code, rows, out_path),
+    )
+}
+
+pub fn run_analyze_symbol_with_loaders<Load, Latest, Render>(
+    args: AnalyzeSymbolArgs,
+    history_loader: Load,
+    latest_date_loader: Latest,
+    chart_renderer: Render,
+) -> anyhow::Result<PathBuf>
+where
+    Load: FnOnce(&str, &str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+    Latest: FnOnce(&str, &str) -> anyhow::Result<NaiveDate>,
+    Render: FnOnce(&str, &[PreparedRow], &std::path::Path) -> anyhow::Result<()>,
+{
+    if !matches!(args.method, Method::B1 | Method::B2) {
+        anyhow::bail!("analyze-symbol is currently implemented only for b1 and b2");
+    }
+    let symbol = normalize_stock_code_token(&args.symbol)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported ts_code: {}", args.symbol))?;
+    let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
+    let dsn = resolve_dsn_from_env(args.dsn.as_deref())?;
+    let pick_date = match args.pick_date {
+        Some(pick_date) => pick_date,
+        None => latest_date_loader(&dsn, &symbol)?,
+    };
+    let start_date = pick_date - Duration::days(366);
+    let history = history_loader(&dsn, &symbol, start_date, pick_date)?;
+    if history.is_empty() {
+        anyhow::bail!("No daily history found for symbol: {symbol}");
+    }
+    if !history
+        .iter()
+        .any(|row| row.ts_code == symbol && row.trade_date == pick_date)
+    {
+        anyhow::bail!("No end-of-day data found for symbol {symbol} on pick_date {pick_date}.");
+    }
+    let prepared = prepare_rows(&history);
+    let prepared_history = prepared
+        .iter()
+        .filter(|row| row.ts_code == symbol && row.trade_date <= pick_date)
+        .cloned()
+        .collect::<Vec<_>>();
+    if prepared_history.is_empty() {
+        anyhow::bail!("Prepared history not found for symbol: {symbol}");
+    }
+    let strategy = run_strategy(args.method, &prepared_history, pick_date);
+    let selected = strategy
+        .candidates
+        .iter()
+        .find(|candidate| candidate.code == symbol);
+    let signal = selected.and_then(|candidate| candidate.signal.clone());
+    let result_dir = runtime_root.join("ad_hoc").join(format!(
+        "{}.{}.{}",
+        pick_date.format("%Y-%m-%d"),
+        args.method.as_str(),
+        symbol
+    ));
+    std::fs::create_dir_all(&result_dir)?;
+    let chart_path = result_dir.join(format!("{symbol}_day.png"));
+    chart_renderer(&symbol, &prepared_history, &chart_path)?;
+    let baseline_review = crate::native_review::build_single_symbol_baseline_review(
+        args.method,
+        &symbol,
+        pick_date,
+        &prepared_history,
+        &chart_path,
+        signal.as_deref(),
+        args.environment_state,
+        args.environment_reason,
+    )?;
+    let latest = prepared_history
+        .iter()
+        .rev()
+        .find(|row| row.trade_date == pick_date)
+        .ok_or_else(|| {
+            anyhow::anyhow!("No prepared row found for symbol {symbol} on {pick_date}")
+        })?;
+    let payload = serde_json::json!({
+        "code": symbol,
+        "pick_date": pick_date,
+        "method": args.method.as_str(),
+        "signal": signal,
+        "selected_as_candidate": selected.is_some(),
+        "screen_conditions": analyze_symbol_screen_conditions(args.method, selected.is_some(), &strategy.stats),
+        "latest_metrics": {
+            "trade_date": pick_date,
+            "open": round3(latest.open),
+            "high": round3(latest.high),
+            "low": round3(latest.low),
+            "close": round3(latest.close),
+            "volume": round3(latest.volume),
+            "j": round3(latest.j),
+        },
+        "baseline_review": baseline_review,
+        "chart_path": chart_path.canonicalize().unwrap_or(chart_path.clone()).display().to_string(),
+    });
+    let result_path = result_dir.join("result.json");
+    atomic_write_json(&result_path, &payload)?;
+    Ok(result_path)
+}
+
+fn analyze_symbol_screen_conditions(
+    method: Method,
+    selected: bool,
+    stats: &std::collections::BTreeMap<String, usize>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "eligible": stats.get("eligible").copied().unwrap_or(0) > 0,
+        "selected": selected,
+        "first_failed_condition": if selected {
+            None
+        } else {
+            resolve_analyze_symbol_failed_condition(method, stats)
+        },
+    })
+}
+
+fn resolve_analyze_symbol_failed_condition(
+    method: Method,
+    stats: &std::collections::BTreeMap<String, usize>,
+) -> Option<String> {
+    let ordered = match method {
+        Method::B1 => vec![
+            "fail_insufficient_history",
+            "fail_j",
+            "fail_close_zxdkx",
+            "fail_zxdq_zxdkx",
+            "fail_weekly_ma",
+            "fail_max_vol",
+            "fail_chg_cap",
+            "fail_v_shrink",
+            "fail_safe_mode",
+            "fail_lt_filter",
+        ],
+        Method::B2 => vec!["fail_insufficient_history", "fail_no_signal"],
+        Method::Dribull => vec![],
+    };
+    ordered
+        .into_iter()
+        .find(|key| stats.get(*key).copied().unwrap_or(0) > 0)
+        .map(|key| key.trim_start_matches("fail_").to_string())
+}
+
+fn round3(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+pub fn run_intraday_screen_with_provider<P, Prev, Load>(
+    args: IntradayScreenArgs,
+    provider: &P,
+    fallback_trade_time: &str,
+    previous_trade_date_loader: Prev,
+    history_loader: Load,
+) -> anyhow::Result<PathBuf>
+where
+    P: crate::intraday::IntradaySnapshotProvider,
+    Prev: FnOnce(&str, NaiveDate) -> anyhow::Result<NaiveDate>,
+    Load: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+{
+    let started = Instant::now();
+    let progress = ProgressReporter::new(args.progress);
+    let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
+    let dsn = resolve_dsn_from_env(args.dsn.as_deref())?;
+    progress.step(
+        "screen",
+        "intraday-snapshot",
+        "start",
+        [
+            ("trade_date", args.trade_date.to_string()),
+            ("run_id", args.run_id.clone()),
+        ],
+    );
+    let previous_trade_date = previous_trade_date_loader(&dsn, args.trade_date)?;
+    let start_date = previous_trade_date - Duration::days(366);
+    let snapshot =
+        crate::intraday::fetch_rt_k_snapshot(provider, args.trade_date, fallback_trade_time)?;
+    progress.step(
+        "screen",
+        "intraday-snapshot",
+        "done",
+        [
+            ("rows", snapshot.len().to_string()),
+            ("previous_trade_date", previous_trade_date.to_string()),
+        ],
+    );
+    progress.step(
+        "screen",
+        "fetch-history",
+        "start",
+        [("window", format!("{start_date}..{previous_trade_date}"))],
+    );
+    let history = history_loader(&dsn, start_date, previous_trade_date)?;
+    if history.is_empty() {
+        anyhow::bail!("No market rows found between {start_date} and {previous_trade_date}.");
+    }
+    progress.step(
+        "screen",
+        "fetch-history",
+        "done",
+        [("rows", history.len().to_string())],
+    );
+    let market_rows =
+        crate::intraday::build_intraday_market_rows(history, &snapshot, args.trade_date);
+    progress.step(
+        "screen",
+        "prepare",
+        "start",
+        [("rows", market_rows.len().to_string())],
+    );
+    let prepared = prepare_rows(&market_rows);
+    write_intraday_prepared_cache(
+        &runtime_root,
+        args.method,
+        args.trade_date,
+        start_date,
+        previous_trade_date,
+        &args.run_id,
+        &prepared,
+    )?;
+    progress.step(
+        "screen",
+        "prepare",
+        "done",
+        [("rows", prepared.len().to_string())],
+    );
+
+    if !prepared.iter().any(|row| row.trade_date == args.trade_date) {
+        anyhow::bail!(
+            "No prepared rows found for intraday trade_date {}.",
+            args.trade_date
+        );
+    }
+
+    progress.step(
+        "screen",
+        "pool",
+        "start",
+        [("source", args.pool_source.as_str().to_string())],
+    );
+    let pool_selection = filter_pool(
+        &prepared,
+        args.trade_date,
+        args.pool_source,
+        args.pool_file.clone(),
+        &runtime_root,
+    )?;
+    progress.step(
+        "screen",
+        "pool",
+        "done",
+        [
+            ("source", args.pool_source.as_str().to_string()),
+            (
+                "symbols",
+                unique_symbol_count(&pool_selection.rows).to_string(),
+            ),
+        ],
+    );
+    progress.step(
+        "screen",
+        "strategy",
+        "start",
+        [("method", args.method.as_str().to_string())],
+    );
+    let strategy = run_strategy(args.method, &pool_selection.rows, args.trade_date);
+    progress.step(
+        "screen",
+        "strategy",
+        "done",
+        [
+            ("method", args.method.as_str().to_string()),
+            ("candidates", strategy.candidates.len().to_string()),
+        ],
+    );
+    let mut result = build_screen_result_with_pool(
+        args.method,
+        args.trade_date,
+        args.pool_source.as_str().to_string(),
+        pool_selection
+            .pool_file
+            .map(|path| path.to_string_lossy().to_string()),
+        strategy.candidates,
+        strategy.stats,
+    );
+    result.mode = Some("intraday_snapshot".to_string());
+    result.trade_date = Some(args.trade_date);
+    result.fetched_at = Some(args.run_id.clone());
+    result.run_id = Some(args.run_id.clone());
+    result.source = Some("tushare_rt_k".to_string());
+    let artifact_key = intraday_artifact_key(args.trade_date);
+    let output_path = intraday_candidate_output_path(&runtime_root, &artifact_key, args.method);
+    atomic_write_json(&output_path, &result)?;
+    progress.step(
+        "screen",
+        "write-candidates",
+        "done",
+        [
+            ("candidates", result.candidates.len().to_string()),
+            ("path", output_path.display().to_string()),
+            ("artifact_key", artifact_key),
+            ("run_id", args.run_id.clone()),
+        ],
+    );
+    progress.step(
+        "screen",
+        "total",
+        "done",
+        [(
+            "elapsed_s",
+            format!("{:.3}", started.elapsed().as_secs_f64()),
+        )],
+    );
+    eprintln!(
+        "[screen] intraday wrote {} elapsed={:.3}s",
+        output_path.display(),
+        started.elapsed().as_secs_f64()
+    );
+    Ok(output_path)
 }
 
 pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
@@ -201,6 +609,9 @@ pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
         runtime_root,
         codes: None,
         chart_workers: args.chart_workers,
+        artifact_key: None,
+        intraday: false,
+        progress: args.progress,
     })?;
     eprintln!(
         "[chart] total elapsed={:.3}s",
@@ -209,25 +620,72 @@ pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
     Ok(output_path)
 }
 
+fn run_screen_command(args: ScreenArgs) -> anyhow::Result<PathBuf> {
+    if args.intraday {
+        if args.pick_date.is_some() {
+            anyhow::bail!("--pick-date and --intraday are mutually exclusive.");
+        }
+        let trade_date = current_local_date();
+        let run_id = format_intraday_run_id();
+        let token = resolve_tushare_token(args.tushare_token.as_deref())?;
+        let provider = crate::intraday::TushareRestProvider::new(token)?;
+        let fallback_trade_time = current_local_time_string();
+        return run_intraday_screen_with_provider(
+            IntradayScreenArgs {
+                method: args.method,
+                trade_date,
+                run_id,
+                dsn: args.dsn,
+                runtime_root: args.runtime_root,
+                recompute: args.recompute,
+                pool_source: args.pool_source,
+                pool_file: args.pool_file,
+                tushare_token: args.tushare_token,
+                progress: args.progress,
+            },
+            &provider,
+            &fallback_trade_time,
+            |dsn, trade_date| crate::db::resolve_previous_trade_date(dsn, trade_date),
+            |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+        );
+    }
+    let pick_date = require_pick_date(args.pick_date)?;
+    run_screen(
+        ScreenArgs {
+            pick_date: Some(pick_date),
+            ..args
+        },
+        |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+    )
+}
+
 pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
+    if args.intraday {
+        anyhow::bail!(
+            "review --intraday is not implemented yet; use run --intraday after intraday review is wired"
+        );
+    }
+    let pick_date = require_pick_date(args.pick_date)?;
     let started = Instant::now();
     let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
     let (environment_state, environment_reason) = resolve_review_environment_args(
         &runtime_root,
-        args.pick_date,
+        pick_date,
         args.dsn.as_deref(),
         args.environment_state,
         args.environment_reason,
     )?;
     let output_path = run_native_review(NativeReviewArgs {
         method: args.method,
-        pick_date: args.pick_date,
+        pick_date,
         runtime_root,
         environment_state,
         environment_reason,
         llm_min_baseline_score: args.llm_min_baseline_score,
         llm_review_limit: args.llm_review_limit,
         require_chart_files: true,
+        artifact_key: None,
+        intraday: false,
     })?;
     eprintln!(
         "[review] total elapsed={:.3}s",
@@ -261,6 +719,7 @@ where
         &runtime_root,
         args.pick_date,
         args.method,
+        args.intraday,
         args.verdict.as_str(),
     )?;
     let codes = reviews
@@ -281,16 +740,18 @@ fn load_reviews_for_verdict(
     runtime_root: &std::path::Path,
     pick_date: NaiveDate,
     method: Method,
+    intraday: bool,
     verdict: &str,
 ) -> anyhow::Result<Vec<Value>> {
     let normalized = normalize_verdict(verdict)?;
+    let review_key = if intraday {
+        format!("{}.intraday", pick_date.format("%Y-%m-%d"))
+    } else {
+        pick_date.format("%Y-%m-%d").to_string()
+    };
     let summary_path = runtime_root
         .join("reviews")
-        .join(format!(
-            "{}.{}",
-            pick_date.format("%Y-%m-%d"),
-            method.as_str()
-        ))
+        .join(format!("{}.{}", review_key, method.as_str()))
         .join("summary.json");
     let summary: Value = serde_json::from_slice(
         &std::fs::read(&summary_path)
@@ -369,7 +830,10 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(default_runtime_root);
     let method = args.review.method;
-    let pick_date = args.review.pick_date;
+    if args.review.intraday {
+        return run_intraday_hybrid(args);
+    }
+    let pick_date = require_pick_date(args.review.pick_date)?;
     let (environment_state, environment_reason) = resolve_review_environment_args(
         &runtime_root,
         pick_date,
@@ -382,12 +846,15 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
     let screen_path = run_screen(
         ScreenArgs {
             method,
-            pick_date,
+            pick_date: Some(pick_date),
+            intraday: false,
+            tushare_token: None,
             dsn: args.review.dsn.clone(),
             runtime_root: Some(runtime_root.clone()),
             recompute: args.recompute,
             pool_source: args.pool_source,
             pool_file: args.pool_file.clone(),
+            progress: args.progress,
         },
         |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
     )?;
@@ -407,6 +874,8 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         llm_min_baseline_score: args.review.llm_min_baseline_score,
         llm_review_limit: args.review.llm_review_limit,
         require_chart_files: false,
+        artifact_key: None,
+        intraday: false,
     })?;
     eprintln!(
         "[run] review elapsed={:.3}s",
@@ -422,6 +891,9 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
             runtime_root: runtime_root.clone(),
             codes: Some(chart_codes),
             chart_workers: args.chart_workers,
+            artifact_key: None,
+            intraday: false,
+            progress: args.progress,
         })?;
         eprintln!(
             "[run] chart elapsed={:.3}s",
@@ -432,6 +904,101 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
     }
     eprintln!(
         "[run] total elapsed={:.3}s",
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+fn run_intraday_hybrid(args: RunArgs) -> anyhow::Result<()> {
+    if args.review.pick_date.is_some() {
+        anyhow::bail!("--pick-date and --intraday are mutually exclusive.");
+    }
+    let started = Instant::now();
+    let runtime_root = args
+        .review
+        .runtime_root
+        .clone()
+        .unwrap_or_else(default_runtime_root);
+    let method = args.review.method;
+    let trade_date = current_local_date();
+    let run_id = format_intraday_run_id();
+    let token = resolve_tushare_token(args.tushare_token.as_deref())?;
+    let provider = crate::intraday::TushareRestProvider::new(token)?;
+    let fallback_trade_time = current_local_time_string();
+
+    let screen_started = Instant::now();
+    let screen_path = run_intraday_screen_with_provider(
+        IntradayScreenArgs {
+            method,
+            trade_date,
+            run_id: run_id.clone(),
+            dsn: args.review.dsn.clone(),
+            runtime_root: Some(runtime_root.clone()),
+            recompute: args.recompute,
+            pool_source: args.pool_source,
+            pool_file: args.pool_file.clone(),
+            tushare_token: args.tushare_token.clone(),
+            progress: args.progress,
+        },
+        &provider,
+        &fallback_trade_time,
+        |dsn, trade_date| crate::db::resolve_previous_trade_date(dsn, trade_date),
+        |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+    )?;
+    eprintln!(
+        "[run] intraday screen wrote {} run_id={} elapsed={:.3}s",
+        screen_path.display(),
+        run_id,
+        screen_started.elapsed().as_secs_f64()
+    );
+
+    let (environment_state, environment_reason) = resolve_review_environment_args(
+        &runtime_root,
+        trade_date,
+        args.review.dsn.as_deref(),
+        args.review.environment_state.clone(),
+        args.review.environment_reason.clone(),
+    )?;
+    let review_started = Instant::now();
+    let summary_path = run_native_review(NativeReviewArgs {
+        method,
+        pick_date: trade_date,
+        runtime_root: runtime_root.clone(),
+        environment_state,
+        environment_reason,
+        llm_min_baseline_score: args.review.llm_min_baseline_score,
+        llm_review_limit: args.review.llm_review_limit,
+        require_chart_files: false,
+        artifact_key: Some(intraday_artifact_key(trade_date)),
+        intraday: true,
+    })?;
+    eprintln!(
+        "[run] intraday review elapsed={:.3}s",
+        review_started.elapsed().as_secs_f64()
+    );
+
+    if args.review.llm_min_baseline_score.is_some() || args.review.llm_review_limit.is_some() {
+        let chart_started = Instant::now();
+        let chart_codes = load_llm_review_task_codes(&summary_path)?;
+        run_native_chart(NativeChartArgs {
+            method,
+            pick_date: trade_date,
+            runtime_root: runtime_root.clone(),
+            codes: Some(chart_codes),
+            chart_workers: args.chart_workers,
+            artifact_key: Some(intraday_artifact_key(trade_date)),
+            intraday: true,
+            progress: args.progress,
+        })?;
+        eprintln!(
+            "[run] intraday chart elapsed={:.3}s",
+            chart_started.elapsed().as_secs_f64()
+        );
+    } else {
+        eprintln!("[run] intraday chart skipped reason=no-llm-review-threshold");
+    }
+    eprintln!(
+        "[run] intraday total elapsed={:.3}s",
         started.elapsed().as_secs_f64()
     );
     Ok(())
@@ -455,6 +1022,34 @@ fn load_llm_review_task_codes(summary_path: &std::path::Path) -> anyhow::Result<
         .filter_map(|task| task.get("code").and_then(Value::as_str))
         .map(str::to_string)
         .collect())
+}
+
+fn resolve_tushare_token(cli_token: Option<&str>) -> anyhow::Result<String> {
+    resolve_config_value(cli_token, "TUSHARE_TOKEN")
+        .ok_or_else(|| anyhow::anyhow!("A Tushare token is required for intraday mode."))
+}
+
+fn require_pick_date(pick_date: Option<NaiveDate>) -> anyhow::Result<NaiveDate> {
+    pick_date.ok_or_else(|| anyhow::anyhow!("--pick-date is required unless --intraday is set."))
+}
+
+fn current_local_date() -> NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+fn current_local_time_string() -> String {
+    chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+fn intraday_artifact_key(trade_date: NaiveDate) -> String {
+    format!("{}.intraday", trade_date.format("%Y-%m-%d"))
+}
+
+fn format_intraday_run_id() -> String {
+    chrono::Local::now()
+        .format("%Y-%m-%dT%H-%M-%S-%6f%:z")
+        .to_string()
+        .replace(':', "-")
 }
 
 fn resolve_review_environment_args(
@@ -538,26 +1133,43 @@ where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
     let started = Instant::now();
+    let progress = ProgressReporter::new(args.progress);
+    if args.intraday {
+        anyhow::bail!("run_screen handles EOD only; use run_screen_command for --intraday");
+    }
+    let pick_date = require_pick_date(args.pick_date)?;
     let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
     let dsn = resolve_dsn_from_env(args.dsn.as_deref())?;
-    let (start_date, end_date) = screen_window(args.pick_date);
+    let (start_date, end_date) = screen_window(pick_date);
+    progress.step(
+        "screen",
+        "load-prepared",
+        "start",
+        [
+            ("pick_date", pick_date.to_string()),
+            ("window", format!("{start_date}..{end_date}")),
+        ],
+    );
 
     let prepared = if !args.recompute {
-        match load_prepared_cache(
-            &runtime_root,
-            args.method,
-            args.pick_date,
-            start_date,
-            end_date,
-        ) {
+        match load_prepared_cache(&runtime_root, args.method, pick_date, start_date, end_date) {
             Ok(Some(rows)) => {
                 eprintln!("[screen] reuse prepared rows={}", rows.len());
+                progress.step(
+                    "screen",
+                    "load-prepared",
+                    "done",
+                    [
+                        ("rows", rows.len().to_string()),
+                        ("source", "cache".to_string()),
+                    ],
+                );
                 rows
             }
             Ok(None) => load_and_prepare(
                 &runtime_root,
                 args.method,
-                args.pick_date,
+                pick_date,
                 start_date,
                 end_date,
                 &dsn,
@@ -568,7 +1180,7 @@ where
                 load_and_prepare(
                     &runtime_root,
                     args.method,
-                    args.pick_date,
+                    pick_date,
                     start_date,
                     end_date,
                     &dsn,
@@ -580,22 +1192,34 @@ where
         load_and_prepare(
             &runtime_root,
             args.method,
-            args.pick_date,
+            pick_date,
             start_date,
             end_date,
             &dsn,
             loader,
         )?
     };
+    progress.step(
+        "screen",
+        "prepare",
+        "done",
+        [("rows", prepared.len().to_string())],
+    );
 
-    if !prepared.iter().any(|row| row.trade_date == args.pick_date) {
-        anyhow::bail!("No prepared rows found for pick_date {}.", args.pick_date);
+    if !prepared.iter().any(|row| row.trade_date == pick_date) {
+        anyhow::bail!("No prepared rows found for pick_date {}.", pick_date);
     }
 
     let pool_started = Instant::now();
+    progress.step(
+        "screen",
+        "pool",
+        "start",
+        [("source", args.pool_source.as_str().to_string())],
+    );
     let pool_selection = filter_pool(
         &prepared,
-        args.pick_date,
+        pick_date,
         args.pool_source,
         args.pool_file.clone(),
         &runtime_root,
@@ -606,18 +1230,45 @@ where
         unique_symbol_count(&pool_selection.rows),
         pool_started.elapsed().as_secs_f64()
     );
+    progress.step(
+        "screen",
+        "pool",
+        "done",
+        [
+            ("source", args.pool_source.as_str().to_string()),
+            (
+                "symbols",
+                unique_symbol_count(&pool_selection.rows).to_string(),
+            ),
+        ],
+    );
 
     let strategy_started = Instant::now();
-    let strategy = run_strategy(args.method, &pool_selection.rows, args.pick_date);
+    progress.step(
+        "screen",
+        "strategy",
+        "start",
+        [("method", args.method.as_str().to_string())],
+    );
+    let strategy = run_strategy(args.method, &pool_selection.rows, pick_date);
     eprintln!(
         "[screen] strategy method={} candidates={} elapsed={:.3}s",
         args.method.as_str(),
         strategy.candidates.len(),
         strategy_started.elapsed().as_secs_f64()
     );
+    progress.step(
+        "screen",
+        "strategy",
+        "done",
+        [
+            ("method", args.method.as_str().to_string()),
+            ("candidates", strategy.candidates.len().to_string()),
+        ],
+    );
     let result = build_screen_result_with_pool(
         args.method,
-        args.pick_date,
+        pick_date,
         args.pool_source.as_str().to_string(),
         pool_selection
             .pool_file
@@ -626,9 +1277,27 @@ where
         strategy.stats,
     );
     let output_path = write_screen_result(&runtime_root, &result)?;
+    progress.step(
+        "screen",
+        "write-candidates",
+        "done",
+        [
+            ("candidates", result.candidates.len().to_string()),
+            ("path", output_path.display().to_string()),
+        ],
+    );
     eprintln!(
         "[screen] total elapsed={:.3}s",
         started.elapsed().as_secs_f64()
+    );
+    progress.step(
+        "screen",
+        "total",
+        "done",
+        [(
+            "elapsed_s",
+            format!("{:.3}", started.elapsed().as_secs_f64()),
+        )],
     );
     Ok(output_path)
 }
@@ -672,10 +1341,7 @@ fn resolve_custom_pool_codes(
 ) -> anyhow::Result<ResolvedCustomPool> {
     let path = match pool_file {
         Some(path) => expand_home(path),
-        None => std::env::var("STOCK_SELECT_POOL_FILE")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+        None => resolve_config_value(None, "STOCK_SELECT_POOL_FILE")
             .map(|value| expand_home(PathBuf::from(value)))
             .unwrap_or_else(|| runtime_root.join("custom-pool.txt")),
     };
@@ -892,12 +1558,15 @@ mod tests {
         let pick = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
         let args = ScreenArgs {
             method: Method::B2,
-            pick_date: pick,
+            pick_date: Some(pick),
+            intraday: false,
+            tushare_token: None,
             dsn: Some("postgresql://example".to_string()),
             runtime_root: Some(temp.path().to_path_buf()),
             recompute: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
+            progress: false,
         };
         let path = run_screen(args, |_dsn, _start, _end| {
             Ok(vec![

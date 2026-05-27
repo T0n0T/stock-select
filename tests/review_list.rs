@@ -71,6 +71,7 @@ fn review_list_reads_requested_verdict_section_from_summary() {
         ReviewListArgs {
             method: Method::B2,
             pick_date: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+            intraday: false,
             runtime_root: Some(temp.path().to_path_buf()),
             dsn: None,
             verdict: "WATCH".to_string(),
@@ -83,4 +84,40 @@ fn review_list_reads_requested_verdict_section_from_summary() {
         output,
         "300221.SZ\t-\tB3\ttrend_start\n603308.SH\t-\t-\trebound"
     );
+}
+
+#[test]
+fn review_list_reads_intraday_date_scoped_summary_when_requested() {
+    let temp = tempfile::tempdir().unwrap();
+    let review_dir = temp.path().join("reviews/2026-05-25.intraday.b2");
+    fs::create_dir_all(&review_dir).unwrap();
+    fs::write(
+        review_dir.join("summary.json"),
+        serde_json::to_vec_pretty(&json!({
+            "pick_date": "2026-05-25",
+            "method": "b2",
+            "recommendations": [
+                review("300221.SZ", 4.04, "WATCH", Some("B3"), "trend_start")
+            ],
+            "excluded": [],
+            "failures": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = run_review_list(
+        ReviewListArgs {
+            method: Method::B2,
+            pick_date: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+            intraday: true,
+            runtime_root: Some(temp.path().to_path_buf()),
+            dsn: None,
+            verdict: "WATCH".to_string(),
+        },
+        |_codes| Ok(BTreeMap::new()),
+    )
+    .unwrap();
+
+    assert_eq!(output, "300221.SZ\t-\tB3\ttrend_start");
 }

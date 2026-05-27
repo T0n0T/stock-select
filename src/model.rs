@@ -94,8 +94,18 @@ pub struct Candidate {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     pub method: Method,
     pub pick_date: NaiveDate,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trade_date: Option<NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub pool_source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_file: Option<String>,

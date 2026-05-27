@@ -6,7 +6,10 @@ use anyhow::Context;
 use chrono::NaiveDate;
 use serde_json::{Map, Value, json};
 
-use crate::cache::{atomic_write_json, candidate_output_path, load_prepared_cache};
+use crate::cache::{
+    atomic_write_json, candidate_output_path, intraday_candidate_output_path,
+    intraday_prepared_cache_data_path, load_prepared_cache,
+};
 use crate::config::screen_window;
 use crate::environment_profiles::{MethodEnvironmentProfile, get_method_environment_profile};
 use crate::macd_trends::{
@@ -41,6 +44,8 @@ pub struct NativeReviewArgs {
     pub llm_min_baseline_score: Option<f64>,
     pub llm_review_limit: Option<usize>,
     pub require_chart_files: bool,
+    pub artifact_key: Option<String>,
+    pub intraday: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,43 +195,60 @@ pub fn run_native_review_merge(args: NativeReviewMergeArgs) -> anyhow::Result<Pa
 }
 
 fn run_native_method_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
-    let candidate_path = candidate_output_path(&args.runtime_root, args.pick_date, args.method);
+    let candidate_path = if args.intraday {
+        intraday_candidate_output_path(
+            &args.runtime_root,
+            args.artifact_key
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("intraday review requires artifact_key"))?,
+            args.method,
+        )
+    } else {
+        candidate_output_path(&args.runtime_root, args.pick_date, args.method)
+    };
     let candidate_payload: ScreenResult = serde_json::from_slice(
         &fs::read(&candidate_path)
             .with_context(|| format!("read candidate file {}", candidate_path.display()))?,
     )
     .with_context(|| format!("parse candidate file {}", candidate_path.display()))?;
 
-    let (start_date, end_date) = screen_window(args.pick_date);
-    let prepared = load_prepared_cache(
-        &args.runtime_root,
-        args.method,
-        args.pick_date,
-        start_date,
-        end_date,
-    )?
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "prepared cache not found for native review; run screen first for {} {}",
+    let prepared = if args.intraday {
+        let data_path = intraday_prepared_cache_data_path(&args.runtime_root, args.pick_date);
+        crate::cache::decode_prepared_cache_rows(&data_path)?
+    } else {
+        let (start_date, end_date) = screen_window(args.pick_date);
+        load_prepared_cache(
+            &args.runtime_root,
+            args.method,
             args.pick_date,
-            args.method.as_str()
-        )
-    })?;
+            start_date,
+            end_date,
+        )?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "prepared cache not found for native review; run screen first for {} {}",
+                args.pick_date,
+                args.method.as_str()
+            )
+        })?
+    };
     let histories = group_histories_by_code(&prepared, args.pick_date);
     let env =
         resolve_environment_context(args.method, args.environment_state, args.environment_reason)?;
 
-    let review_dir = args.runtime_root.join("reviews").join(format!(
-        "{}.{}",
-        args.pick_date.format("%Y-%m-%d"),
-        args.method.as_str()
-    ));
+    let review_key = args
+        .artifact_key
+        .clone()
+        .unwrap_or_else(|| args.pick_date.format("%Y-%m-%d").to_string());
+    let review_dir =
+        args.runtime_root
+            .join("reviews")
+            .join(format!("{}.{}", review_key, args.method.as_str()));
     fs::create_dir_all(&review_dir)?;
-    let chart_dir = args.runtime_root.join("charts").join(format!(
-        "{}.{}",
-        args.pick_date.format("%Y-%m-%d"),
-        args.method.as_str()
-    ));
+    let chart_dir =
+        args.runtime_root
+            .join("charts")
+            .join(format!("{}.{}", review_key, args.method.as_str()));
 
     let mut reviews = Vec::with_capacity(candidate_payload.candidates.len());
     let mut failures = Vec::new();
@@ -341,6 +363,29 @@ fn build_baseline_review(
         }
         _ => anyhow::bail!("native review is currently implemented only for b1 and b2"),
     }
+}
+
+pub fn build_single_symbol_baseline_review(
+    method: Method,
+    code: &str,
+    pick_date: NaiveDate,
+    history: &[PreparedRow],
+    chart_path: &Path,
+    signal: Option<&str>,
+    environment_state: Option<String>,
+    environment_reason: Option<String>,
+) -> anyhow::Result<Value> {
+    let env = resolve_environment_context(method, environment_state, environment_reason)?;
+    Ok(build_baseline_review(
+        method,
+        code,
+        pick_date,
+        history,
+        chart_path,
+        signal,
+        &env.profile,
+    )?
+    .review)
 }
 
 fn build_b1_baseline_review(

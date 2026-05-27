@@ -30,8 +30,13 @@ pub fn build_screen_result_with_pool(
     stats: std::collections::BTreeMap<String, usize>,
 ) -> ScreenResult {
     ScreenResult {
+        mode: None,
         method,
         pick_date,
+        trade_date: None,
+        fetched_at: None,
+        run_id: None,
+        source: None,
         pool_source,
         pool_file,
         screen_version: (method == Method::B1).then_some(2),
