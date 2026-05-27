@@ -43,9 +43,10 @@
 1. `stock-select-rs screen` 已是 Rust 原生路径。
 2. `stock-select-rs chart` 已迁到本仓库内置 chart runner：Rust 读取 prepared cache 并调用 `scripts/render_charts.py`，不再调用源 Python CLI 项目。
 3. `stock-select-rs review` 直接调用 Rust native review；当前 `b1`、`b2` 已完成原生 parity，其他方法会显式返回未实现错误。
-4. `stock-select-rs run` 当前是 Rust screen + 本仓库 chart runner + Rust native review；`b1`、`b2` 完整可用。
-5. `review` / `run` 已接入 Rust 原生自动环境评估。显式传入 `--environment-state` 时手动值优先；未传入时会读取或生成 `runtime/environment/` 下的环境记录。
-6. `screen` / `run` 已支持自定义票池：`--pool-source custom`，可配合 `--pool-file` 使用；路径优先级为 `--pool-file`、`STOCK_SELECT_POOL_FILE`、`<runtime-root>/custom-pool.txt`。
+4. `stock-select-rs review-merge` 已是 Rust 原生命令，负责校验 `llm_review_results/<code>.json`、合并回个股 review 并重写 `summary.json`。
+5. `stock-select-rs run` 当前是 Rust screen + 本仓库 chart runner + Rust native review；`b1`、`b2` 完整可用。
+6. `review` / `run` 已接入 Rust 原生自动环境评估。显式传入 `--environment-state` 时手动值优先；未传入时会读取或生成 `runtime/environment/` 下的环境记录。
+7. `screen` / `run` 已支持自定义票池：`--pool-source custom`，可配合 `--pool-file` 使用；路径优先级为 `--pool-file`、`STOCK_SELECT_POOL_FILE`、`<runtime-root>/custom-pool.txt`。
 
 ## 文档规则
 

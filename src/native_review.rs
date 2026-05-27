@@ -43,6 +43,14 @@ pub struct NativeReviewArgs {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct NativeReviewMergeArgs {
+    pub method: Method,
+    pub pick_date: NaiveDate,
+    pub runtime_root: PathBuf,
+    pub codes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 struct EnvironmentContext {
     state: String,
     reason: Option<String>,
@@ -77,6 +85,107 @@ pub fn run_native_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
             args.method.as_str()
         ),
     }
+}
+
+pub fn run_native_review_merge(args: NativeReviewMergeArgs) -> anyhow::Result<PathBuf> {
+    let review_dir = args.runtime_root.join("reviews").join(format!(
+        "{}.{}",
+        args.pick_date.format("%Y-%m-%d"),
+        args.method.as_str()
+    ));
+    if !review_dir.exists() {
+        anyhow::bail!("Review directory not found: {}", review_dir.display());
+    }
+    let llm_results_dir = review_dir.join("llm_review_results");
+    if !llm_results_dir.exists() {
+        anyhow::bail!(
+            "LLM review result directory not found: {}",
+            llm_results_dir.display()
+        );
+    }
+
+    let selected_codes = args
+        .codes
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let restrict_codes = !selected_codes.is_empty();
+    let existing_summary = fs::read(review_dir.join("summary.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+
+    let mut review_paths = fs::read_dir(&review_dir)
+        .with_context(|| format!("read review directory {}", review_dir.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    review_paths.sort();
+
+    let mut merged_reviews = Vec::new();
+    let mut failures = Vec::new();
+    for review_path in review_paths {
+        if review_path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if matches!(
+            review_path.file_name().and_then(|value| value.to_str()),
+            Some("summary.json" | "llm_review_tasks.json")
+        ) {
+            continue;
+        }
+        let mut existing_review: Value = serde_json::from_slice(
+            &fs::read(&review_path)
+                .with_context(|| format!("read review file {}", review_path.display()))?,
+        )
+        .with_context(|| format!("parse review file {}", review_path.display()))?;
+        let code = existing_review
+            .get("code")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                anyhow::anyhow!("review file missing code: {}", review_path.display())
+            })?;
+        if restrict_codes && !selected_codes.contains(&code) {
+            merged_reviews.push(existing_review);
+            continue;
+        }
+
+        let llm_path = llm_results_dir.join(format!("{code}.json"));
+        if !llm_path.exists() {
+            failures.push(json!({
+                "code": code,
+                "reason": format!("LLM review result not found: {}", llm_path.display()),
+            }));
+            merged_reviews.push(existing_review);
+            continue;
+        }
+
+        match merge_llm_review(&mut existing_review, &llm_path) {
+            Ok(()) => {
+                atomic_write_json(&review_path, &existing_review)?;
+                merged_reviews.push(existing_review);
+            }
+            Err(err) => {
+                failures.push(json!({
+                    "code": code,
+                    "reason": err.to_string(),
+                }));
+                merged_reviews.push(existing_review);
+            }
+        }
+    }
+
+    let mut summary = summarize_reviews(args.pick_date, args.method, &merged_reviews, &failures);
+    if let Some(environment_snapshot) =
+        existing_summary.and_then(|summary| summary.get("environment_snapshot").cloned())
+    {
+        summary
+            .as_object_mut()
+            .expect("summary object")
+            .insert("environment_snapshot".to_string(), environment_snapshot);
+    }
+    let summary_path = review_dir.join("summary.json");
+    atomic_write_json(&summary_path, &summary)?;
+    Ok(summary_path)
 }
 
 fn run_native_method_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
@@ -724,6 +833,10 @@ fn maybe_merge_llm_review(review: &mut Value, llm_path: &Path) -> anyhow::Result
     if !llm_path.exists() {
         return Ok(());
     }
+    merge_llm_review(review, llm_path)
+}
+
+fn merge_llm_review(review: &mut Value, llm_path: &Path) -> anyhow::Result<()> {
     let llm_review: Value = serde_json::from_slice(
         &fs::read(llm_path).with_context(|| format!("read llm review {}", llm_path.display()))?,
     )

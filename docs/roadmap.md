@@ -270,10 +270,11 @@ Rust CLI 当前暴露：
 screen
 chart
 review
+review-merge
 run
 ```
 
-`chart` 已迁到本仓库 runner。`review` 和 `run` 只走 Rust native review；当前 b1、b2 可用，其他方法会显式报未实现。`review` 和 `run` 会处理：
+`chart` 已迁到本仓库 runner。`review`、`review-merge` 和 `run` 只走 Rust native review；当前 b1、b2 可用，其他方法会显式报未实现。`review` 和 `run` 会处理：
 
 ```text
 --dsn
@@ -282,6 +283,17 @@ run
 --llm-min-baseline-score
 --llm-review-limit
 ```
+
+`review-merge` 会处理：
+
+```text
+--method
+--pick-date
+--runtime-root
+--codes <comma-separated optional list>
+```
+
+`review-merge` 会读取 `reviews/<pick_date>.<method>/llm_review_results/<code>.json`，校验 LLM review schema，合并回个股 review 文件，并重写 `summary.json`。传入 `--codes` 时只尝试合并指定代码，未指定代码保持原 review 状态。
 
 `screen` 和 `run` 会处理：
 
@@ -487,7 +499,8 @@ uv run scripts/render_charts.py --input <runtime>/charts/<pick_date>.<method>.pa
 Task 1: review/run 自动环境评估 - completed
 Task 2: screen/run custom-pool - completed
 Task 3: 重新跑 cargo fmt/test 与 b1/b2 smoke - completed
-Task 4: 根据验证结果提交 - pending
+Task 4: review-merge 原生命令 - completed
+Task 5: 根据验证结果提交 - pending
 ```
 
 已验证：
@@ -519,9 +532,17 @@ runtime_root=/tmp/stock-select-rs-env-regression-b1
 screen parity: PASS candidates=104/104
 review parity: PASS reviewed=104 recommendations=3
 chart smoke: PASS charts=104
+
+review-merge b2 regression:
+runtime_root=/tmp/stock-select-rs-review-merge-b2
+copied llm_review_results/603308.SH.json from Python golden
+stock-select-rs review-merge --method b2 --pick-date 2026-05-25 --codes 603308.SH
+screen parity: PASS candidates=139/139
+review parity after merge: PASS reviewed=139 recommendations=0
+chart smoke: PASS charts=139
 ```
 
-注意：`/tmp/stock-select-rs-auto-env` 的 b2 自动环境 run 使用 Rust 自动评估得到 `neutral`，因此不用于和 Python weak-profile golden 做 review parity。显式传入 Python golden 的 weak 环境后，纯 baseline review 与 Python golden 的已知差异仍只来自 `603308.SH`：Python golden 是 review-merge 后的 WATCH，Rust 当前 `review` 命令输出纯 baseline PASS，仓库暂无 `review-merge` 子命令。
+注意：`/tmp/stock-select-rs-auto-env` 的 b2 自动环境 run 使用 Rust 自动评估得到 `neutral`，因此不用于和 Python weak-profile golden 做 review parity。Python golden 的 `603308.SH` 是 review-merge 后的 WATCH；Rust 现在可通过 `review-merge --codes 603308.SH` 合并同一份 LLM 结果，并通过 Python golden parity。
 
 后续可继续推进：
 

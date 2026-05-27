@@ -13,7 +13,9 @@ use crate::market_environment::{
 };
 use crate::model::{MarketRow, Method, PreparedRow};
 use crate::native_chart::{NativeChartArgs, run_native_chart};
-use crate::native_review::{NativeReviewArgs, run_native_review};
+use crate::native_review::{
+    NativeReviewArgs, NativeReviewMergeArgs, run_native_review, run_native_review_merge,
+};
 use crate::output::{build_screen_result_with_pool, write_screen_result};
 use crate::prepare::prepare_rows;
 use crate::strategies::run_strategy;
@@ -31,6 +33,7 @@ enum Commands {
     Screen(ScreenArgs),
     Chart(ChartArgs),
     Review(ReviewArgs),
+    ReviewMerge(ReviewMergeArgs),
     Run(RunArgs),
 }
 
@@ -82,6 +85,18 @@ pub struct ReviewArgs {
     llm_min_baseline_score: Option<f64>,
     #[arg(long)]
     llm_review_limit: Option<usize>,
+}
+
+#[derive(Debug, Parser)]
+pub struct ReviewMergeArgs {
+    #[arg(long)]
+    method: Method,
+    #[arg(long)]
+    pick_date: NaiveDate,
+    #[arg(long)]
+    runtime_root: Option<PathBuf>,
+    #[arg(long, value_delimiter = ',')]
+    codes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Parser)]
@@ -140,6 +155,9 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Review(args) => run_review(args).map(|path| {
             eprintln!("[review] wrote {}", path.display());
         }),
+        Commands::ReviewMerge(args) => run_review_merge(args).map(|path| {
+            eprintln!("[review-merge] wrote {}", path.display());
+        }),
         Commands::Run(args) => run_hybrid(args),
     }
 }
@@ -180,6 +198,22 @@ pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
     })?;
     eprintln!(
         "[review] total elapsed={:.3}s",
+        started.elapsed().as_secs_f64()
+    );
+    Ok(output_path)
+}
+
+pub fn run_review_merge(args: ReviewMergeArgs) -> anyhow::Result<PathBuf> {
+    let started = Instant::now();
+    let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
+    let output_path = run_native_review_merge(NativeReviewMergeArgs {
+        method: args.method,
+        pick_date: args.pick_date,
+        runtime_root,
+        codes: args.codes,
+    })?;
+    eprintln!(
+        "[review-merge] total elapsed={:.3}s",
         started.elapsed().as_secs_f64()
     );
     Ok(output_path)
