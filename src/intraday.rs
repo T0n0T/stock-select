@@ -186,7 +186,7 @@ pub fn parse_tushare_rt_k_response(response: TushareRtKResponse) -> anyhow::Resu
         .into_iter()
         .map(|item| {
             let mut object = Map::new();
-            for (field, value) in data.fields.iter().zip(item.into_iter()) {
+            for (field, value) in data.fields.iter().zip(item) {
                 object.insert(field.clone(), value);
             }
             RawRtKRow::from_value(Value::Object(object))
