@@ -449,7 +449,7 @@ python3 scripts/backfill_baseline_reviews.py \
   --dry-run
 ```
 
-脚本从 PostgreSQL `daily_market` 读取交易日，按日期范围或 `--sample-size` 选取目标交易日；当 `reviews/<date>.<method>/summary.json` 和 `environment/daily/<date>.*.json` 都存在时默认跳过。实际执行时调用 `stock-select-rs run` 生成 Rust native baseline review；默认不传 `--llm-min-baseline-score` 或 `--llm-review-limit`，因此不会触发 chart 阶段。如需同时生成 LLM/subagent review tasks，可显式传入这两个参数。
+脚本从 PostgreSQL `daily_market` 读取交易日，按日期范围或 `--sample-size` 选取目标交易日；当 `reviews/<date>.<method>/summary.json` 和 `environment/daily/<date>.*.json` 都存在时默认跳过。实际执行时调用 `stock-select-rs run` 生成 Rust native baseline review。由于多个 run 共享同一个 runtime cache，脚本默认 `--max-workers 1` 串行回填；确认可接受失败后重试时，才显式提高并发。Rust 侧对 environment history/latest/daily 的读改写使用 runtime lock，atomic write 临时文件使用进程级唯一后缀，避免并发进程复用同一个 `.tmp` 路径。默认不传 `--llm-min-baseline-score` 或 `--llm-review-limit`，因此不会触发 chart 阶段。如需同时生成 LLM/subagent review tasks，可显式传入这两个参数。
 
 PASS topN 胜率统计脚本：
 

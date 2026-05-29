@@ -1,56 +1,56 @@
 # stock-select
 
-`stock-select` is the Rust-native CLI for A-share screening, chart generation, native baseline review, review merge/list workflows, intraday snapshots, watch-pool recording, and review statistics.
+`stock-select` 是面向 A 股的 Rust 原生 CLI，支持筛选、图表生成、原生基线复盘、复盘合并/列表、盘中快照、观察池记录和复盘统计。
 
-This repository is the successor to the original Python CLI. The Python CLI has reached its final release and should remain available only as a historical/secondary branch for golden references and migration checks. New production work should target the Rust CLI.
+本仓库是原 Python CLI 的后续重构项目。Python CLI 已进入最终发布状态，后续只作为 golden 参考和迁移校验的历史/辅助分支保留；新的生产能力应优先在 Rust CLI 中实现。
 
-## Status
+## 当前状态
 
-- Rust binary: `stock-select-rs`
-- Primary branch target: Rust CLI
-- Historical Python implementation: keep as a secondary branch after the final Python release
-- Supported native methods: `b1`, `b2`, `dribull`
-- Unsupported method: `hcr`
+- Rust 二进制：`stock-select-rs`
+- 主分支目标：Rust CLI
+- 历史 Python 实现：最终 Python 版本发布后保留为辅助分支
+- 已支持的原生方法：`b1`、`b2`、`dribull`
+- 暂不支持的方法：`hcr`
 
-The production path no longer falls back to the upstream Python CLI. Chart rendering still uses controlled Python scripts in this repository for `matplotlib`/`mplfinance`, not the historical Python CLI.
+生产路径不再回退到上游 Python CLI。图表渲染仍通过本仓库内受控 Python 脚本调用 `matplotlib`/`mplfinance`，不会调用历史 Python CLI。
 
-## Build
+## 构建
 
 ```bash
 cargo build --release
 cp target/release/stock-select-rs ~/.local/bin/
 ```
 
-Generate shell completions:
+生成 shell completion：
 
 ```bash
 stock-select-rs completions zsh > /tmp/_stock-select-rs
 stock-select-rs completions bash > /tmp/stock-select-rs.bash
 ```
 
-## Configuration
+## 配置
 
-Configuration precedence:
+配置优先级：
 
 ```text
-CLI argument > process environment > current working directory .env
+CLI 参数 > 进程环境变量 > 当前工作目录 .env
 ```
 
-Supported keys:
+支持的配置项：
 
 - `POSTGRES_DSN`
 - `TUSHARE_TOKEN`
 - `STOCK_SELECT_POOL_FILE`
 
-Default runtime root:
+默认 runtime 根目录：
 
 ```text
 ~/.agents/skills/stock-select/runtime
 ```
 
-## Common Commands
+## 常用命令
 
-End-of-day run:
+日线运行：
 
 ```bash
 stock-select-rs run \
@@ -60,7 +60,7 @@ stock-select-rs run \
   --recompute
 ```
 
-Intraday run:
+盘中运行：
 
 ```bash
 stock-select-rs run \
@@ -69,7 +69,7 @@ stock-select-rs run \
   --runtime-root ~/.agents/skills/stock-select/runtime
 ```
 
-Review existing screen output:
+复盘已有筛选结果：
 
 ```bash
 stock-select-rs review \
@@ -78,7 +78,7 @@ stock-select-rs review \
   --runtime-root ~/.agents/skills/stock-select/runtime
 ```
 
-List review results:
+查看复盘结果：
 
 ```bash
 stock-select-rs review-list \
@@ -87,7 +87,7 @@ stock-select-rs review-list \
   --verdict WATCH
 ```
 
-Analyze a single stock:
+分析单只股票：
 
 ```bash
 stock-select-rs analyze-symbol \
@@ -96,15 +96,15 @@ stock-select-rs analyze-symbol \
   --pick-date 2026-04-21
 ```
 
-## Watch Pool
+## 观察池
 
-Add `--record` to `run` or `review` to import same-day `PASS` and `WATCH` results into:
+在 `run` 或 `review` 中追加 `--record`，可将当天 `PASS` 和 `WATCH` 结果导入：
 
 ```text
 <runtime-root>/watch_pool.csv
 ```
 
-Rows are keyed by `method + code`. Repeated selections refresh the saved pick date, verdict, score, comment, and `recorded_at`.
+记录以 `method + code` 为键。重复入选时会刷新保存的选股日期、结论、分数、备注和 `recorded_at`。
 
 ```bash
 stock-select-rs run \
@@ -113,7 +113,7 @@ stock-select-rs run \
   --record
 ```
 
-Retention defaults to 15 trade dates:
+默认保留最近 15 个交易日：
 
 ```bash
 stock-select-rs review \
@@ -123,9 +123,9 @@ stock-select-rs review \
   --record-window-trading-days 20
 ```
 
-## Batch And Stats Scripts
+## 批处理和统计脚本
 
-Backfill baseline reviews:
+补跑基线复盘：
 
 ```bash
 python3 scripts/backfill_baseline_reviews.py \
@@ -135,7 +135,9 @@ python3 scripts/backfill_baseline_reviews.py \
   --runtime-root ~/.agents/skills/stock-select/runtime
 ```
 
-Compute PASS topN win-rate statistics:
+补跑脚本默认使用 `--max-workers 1`，因为每次运行会共享同一个 runtime cache。只有在可以接受失败日期重试时，才建议显式调大并发数。
+
+计算 PASS topN 胜率统计：
 
 ```bash
 python3 scripts/review_top3_win_stats.py \
@@ -145,18 +147,18 @@ python3 scripts/review_top3_win_stats.py \
   --runtime-root ~/.agents/skills/stock-select/runtime
 ```
 
-The stats script prioritizes win proportion, not average forward return:
+统计脚本优先关注胜率比例，而不是平均远期收益：
 
 - `win_rate_ret3_pct`
 - `win_rate_ret5_pct`
 - `day_hit_rate_ret3_pct`
 - `day_hit_rate_ret5_pct`
 
-This avoids overvaluing a PASS top3 set because of a small number of extreme winners.
+这样可以避免因为少数极端上涨样本而高估 PASS top3 集合。
 
-## Runtime Layout
+## Runtime 布局
 
-End-of-day artifacts:
+日线产物：
 
 ```text
 candidates/<pick_date>.<method>.json
@@ -166,7 +168,7 @@ reviews/<pick_date>.<method>/summary.json
 reviews/<pick_date>.<method>/llm_review_tasks.json
 ```
 
-Intraday artifacts use a date-scoped key:
+盘中产物使用按日期划分的 key：
 
 ```text
 candidates/<trade_date>.intraday.<method>.json
@@ -176,9 +178,9 @@ prepared/<trade_date>.intraday.bin
 prepared/<trade_date>.intraday.meta.json
 ```
 
-## Verification
+## 验证
 
-Before merging Rust changes:
+合并 Rust 改动前运行：
 
 ```bash
 cargo fmt --check
@@ -192,10 +194,10 @@ python3 -m py_compile \
   scripts/review_top3_win_stats.py
 ```
 
-Python golden parity checks should read historical artifacts from:
+Python golden 对齐校验默认读取历史产物：
 
 ```text
 ~/.agents/skills/stock-select/runtime
 ```
 
-Do not recompute Python golden outputs unless explicitly needed.
+除非明确需要，不要重新计算 Python golden 输出。

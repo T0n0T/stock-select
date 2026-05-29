@@ -61,6 +61,29 @@ fn missing_environment_uses_evaluator_and_persists_daily_record() {
 }
 
 #[test]
+fn environment_write_releases_runtime_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+
+    ensure_market_environment_for_test(temp.path(), pick_date, None, None, || {
+        Ok(EnvironmentEvaluation {
+            state: "neutral".to_string(),
+            score_based_state: "neutral".to_string(),
+            rule_based_state: "neutral".to_string(),
+            vote_based_state: "neutral".to_string(),
+            evaluate_date: pick_date,
+            source: "scheduled".to_string(),
+            reason: "neutral".to_string(),
+            total_score: 0.0,
+            score_based_total: 0.0,
+        })
+    })
+    .unwrap();
+
+    assert!(!temp.path().join("environment/.environment.lock").exists());
+}
+
+#[test]
 fn cli_environment_resolver_keeps_manual_override_and_returns_review_args() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
