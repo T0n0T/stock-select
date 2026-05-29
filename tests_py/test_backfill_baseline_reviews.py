@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,6 +12,19 @@ backfill = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = backfill
 spec.loader.exec_module(backfill)
+
+
+def test_script_declares_runtime_dependencies_for_uv() -> None:
+    header = SCRIPT_PATH.read_text(encoding="utf-8").splitlines()[:6]
+
+    assert header == [
+        "# /// script",
+        "# dependencies = [",
+        "#   \"psycopg[binary]\",",
+        "# ]",
+        "# ///",
+        "from __future__ import annotations",
+    ]
 
 
 def test_collect_target_trade_dates_uses_range_or_latest_sample() -> None:
@@ -28,6 +42,21 @@ def test_collect_target_trade_dates_uses_range_or_latest_sample() -> None:
         end_date="2026-05-22",
         sample_size=2,
     ) == ["2026-05-21", "2026-05-22"]
+
+
+def test_parse_args_defaults_to_serial_backfill() -> None:
+    args = backfill.parse_args([])
+
+    assert args.max_workers == 1
+
+
+def test_default_stock_select_bin_prefers_local_debug_binary() -> None:
+    local_debug = SCRIPT_PATH.parents[1] / "target" / "debug" / "stock-select-rs"
+
+    if local_debug.exists():
+        assert backfill.default_stock_select_bin() == str(local_debug)
+    else:
+        assert backfill.default_stock_select_bin() == "stock-select-rs"
 
 
 def test_plan_backfill_skips_existing_summary_and_environment(tmp_path: Path) -> None:
@@ -76,3 +105,19 @@ def test_build_run_command_defaults_to_baseline_only_run(tmp_path: Path) -> None
         "--recompute",
         "--no-progress",
     ]
+
+
+def test_run_single_backfill_reports_child_stderr() -> None:
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('child failure detail\\n'); raise SystemExit(7)",
+    ]
+
+    try:
+        backfill.run_single_backfill(index=1, total=1, command=command, pick_date="2026-05-21")
+    except subprocess.CalledProcessError as exc:
+        assert exc.returncode == 7
+        assert "child failure detail" in exc.stderr
+    else:
+        raise AssertionError("run_single_backfill should raise CalledProcessError")

@@ -1,5 +1,9 @@
 use std::fs;
+use std::fs::{File, OpenOptions};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration as StdDuration, Instant};
 
 use anyhow::Context;
 use chrono::{Duration, NaiveDate};
@@ -312,11 +316,46 @@ fn score_index_environment(
 }
 
 fn upsert_environment_record(runtime_root: &Path, record: EnvironmentRecord) -> anyhow::Result<()> {
+    let _lock = EnvironmentLock::acquire(runtime_root)?;
     let mut records = load_environment_records(runtime_root).unwrap_or_default();
     records.retain(|item| item.pick_date != record.pick_date);
     records.push(record);
     records.sort_by_key(|item| item.pick_date);
     write_environment_records(runtime_root, &records)
+}
+
+struct EnvironmentLock {
+    path: PathBuf,
+    _file: File,
+}
+
+impl EnvironmentLock {
+    fn acquire(runtime_root: &Path) -> anyhow::Result<Self> {
+        fs::create_dir_all(environment_dir(runtime_root))?;
+        let path = environment_dir(runtime_root).join(".environment.lock");
+        let started = Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => return Ok(Self { path, _file: file }),
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                    if started.elapsed() > StdDuration::from_secs(30) {
+                        anyhow::bail!("Timed out waiting for environment lock: {}", path.display());
+                    }
+                    thread::sleep(StdDuration::from_millis(50));
+                }
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("create environment lock {}", path.display()));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for EnvironmentLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn load_environment_records(runtime_root: &Path) -> anyhow::Result<Vec<EnvironmentRecord>> {

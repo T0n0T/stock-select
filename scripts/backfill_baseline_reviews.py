@@ -1,3 +1,8 @@
+# /// script
+# dependencies = [
+#   "psycopg[binary]",
+# ]
+# ///
 from __future__ import annotations
 
 import argparse
@@ -15,11 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_METHOD = "b2"
 DEFAULT_SAMPLE_SIZE = 5
 DEFAULT_END_DATE = "2026-04-30"
-DEFAULT_MAX_WORKERS_BY_METHOD = {
-    "b1": 4,
-    "b2": 4,
-    "dribull": 4,
-}
+SUPPORTED_METHODS = {"b1", "b2", "dribull"}
+DEFAULT_MAX_WORKERS = 1
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,13 @@ class BackfillPlan:
 
 def default_runtime_root() -> Path:
     return Path.home() / ".agents" / "skills" / "stock-select" / "runtime"
+
+
+def default_stock_select_bin() -> str:
+    local_debug = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
+    if local_debug.exists():
+        return str(local_debug)
+    return "stock-select-rs"
 
 
 def load_dotenv_value(env_path: Path, key: str) -> str | None:
@@ -62,7 +71,7 @@ def resolve_dsn(cli_dsn: str | None) -> str:
 
 def validate_method(value: str) -> str:
     normalized = value.strip().lower()
-    if normalized not in DEFAULT_MAX_WORKERS_BY_METHOD:
+    if normalized not in SUPPORTED_METHODS:
         raise argparse.ArgumentTypeError("method must be one of: b1, b2, dribull.")
     return normalized
 
@@ -199,8 +208,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sample-size", type=validate_positive_int, default=DEFAULT_SAMPLE_SIZE)
     parser.add_argument("--dsn")
     parser.add_argument("--runtime-root", type=Path, default=default_runtime_root())
-    parser.add_argument("--stock-select-bin", default="stock-select-rs")
-    parser.add_argument("--max-workers", type=validate_positive_int)
+    parser.add_argument("--stock-select-bin", default=default_stock_select_bin())
+    parser.add_argument(
+        "--max-workers",
+        type=validate_positive_int,
+        default=DEFAULT_MAX_WORKERS,
+        help="parallel run count; defaults to 1 because backfills share one runtime cache",
+    )
     parser.add_argument("--llm-min-baseline-score", type=float)
     parser.add_argument("--llm-review-limit", type=validate_positive_int)
     parser.add_argument("--recompute", action="store_true")
@@ -210,8 +224,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.start_date and args.start_date > args.end_date:
         parser.error(f"start_date ({args.start_date}) cannot be after end_date ({args.end_date}).")
-    if args.max_workers is None:
-        args.max_workers = DEFAULT_MAX_WORKERS_BY_METHOD[args.method]
     return args
 
 
@@ -223,7 +235,11 @@ def print_plan(*, target_dates: Sequence[str], plan: BackfillPlan) -> None:
 
 def run_single_backfill(*, index: int, total: int, command: Sequence[str], pick_date: str) -> str:
     print(f"[{index}/{total}] running: {' '.join(command)}")
-    subprocess.run(command, check=True)
+    completed = subprocess.run(command, text=True, capture_output=True, check=True)
+    if completed.stdout:
+        print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
+    if completed.stderr:
+        print(completed.stderr, end="" if completed.stderr.endswith("\n") else "\n")
     return pick_date
 
 
@@ -246,6 +262,11 @@ def run_missing_dates(
     worker_count = min(max_workers, total)
     failures: list[tuple[str, list[str], BaseException]] = []
     print(f"starting {total} backfill runs with max_workers={worker_count}")
+    if worker_count > 1:
+        print(
+            "warning: concurrent backfills share one runtime root; "
+            "Rust protects environment writes, but resource pressure can still require retrying failed dates."
+        )
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_job = {}
         for index, pick_date in enumerate(missing_dates, start=1):
@@ -269,6 +290,13 @@ def run_missing_dates(
             except BaseException as exc:
                 failures.append((pick_date, command, exc))
                 print(f"failed {pick_date}: {' '.join(command)}")
+                if isinstance(exc, subprocess.CalledProcessError):
+                    if exc.stdout:
+                        print(f"--- stdout {pick_date} ---")
+                        print(exc.stdout, end="" if exc.stdout.endswith("\n") else "\n")
+                    if exc.stderr:
+                        print(f"--- stderr {pick_date} ---")
+                        print(exc.stderr, end="" if exc.stderr.endswith("\n") else "\n")
     if failures:
         failed_dates = ", ".join(pick_date for pick_date, _, _ in failures)
         raise RuntimeError(f"Backfill failed for {len(failures)} date(s): {failed_dates}") from failures[0][2]

@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -219,12 +220,7 @@ pub fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp_path = path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("json")
-    ));
+    let tmp_path = unique_tmp_path(path);
     let bytes = serde_json::to_vec_pretty(value)?;
     fs::write(&tmp_path, bytes)?;
     fs::rename(tmp_path, path)?;
@@ -235,15 +231,25 @@ fn atomic_write_binary(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp_path = path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("bin")
-    ));
+    let tmp_path = unique_tmp_path(path);
     fs::write(&tmp_path, bytes)?;
     fs::rename(tmp_path, path)?;
     Ok(())
+}
+
+fn unique_tmp_path(path: &Path) -> PathBuf {
+    let suffix = format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    );
+    path.with_extension(match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => format!("{ext}.{suffix}"),
+        None => suffix,
+    })
 }
 
 fn encode_prepared_rows(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
@@ -500,5 +506,16 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded, rows);
+    }
+
+    #[test]
+    fn atomic_json_write_does_not_use_shared_tmp_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("summary.json");
+
+        atomic_write_json(&path, &serde_json::json!({"ok": true})).unwrap();
+
+        assert!(path.exists());
+        assert!(!path.with_extension("json.tmp").exists());
     }
 }
