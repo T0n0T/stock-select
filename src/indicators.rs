@@ -156,7 +156,7 @@ pub fn barslast(condition: &[bool]) -> Vec<f64> {
 pub fn barslast_with_default(condition: &[bool], default_distance: Option<f64>) -> Vec<f64> {
     let mut out = Vec::with_capacity(condition.len());
     let mut last_true: Option<usize> = None;
-    let default_distance = default_distance.unwrap_or_else(|| condition.len() as f64 + 1.0);
+    let default_distance = default_distance.unwrap_or(condition.len() as f64 + 1.0);
     for (idx, value) in condition.iter().enumerate() {
         if *value {
             last_true = Some(idx);

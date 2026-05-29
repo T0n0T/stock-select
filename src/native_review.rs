@@ -312,7 +312,6 @@ fn run_native_method_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
             "reason": env.reason,
         }),
     );
-    let mut tasks = tasks;
     limit_llm_review_tasks(&mut tasks, args.llm_review_limit);
     let mut tasks_payload = json!({
         "pick_date": args.pick_date.format("%Y-%m-%d").to_string(),
@@ -897,8 +896,8 @@ fn build_review_result(
         "score_layer",
         "score_layer_score",
     ] {
-        if let Some(value) = primary.get(key) {
-            if !value.is_null()
+        if let Some(value) = primary.get(key)
+            && (!value.is_null()
                 || matches!(
                     key,
                     "watch_reason"
@@ -907,10 +906,9 @@ fn build_review_result(
                         | "pass_family"
                         | "score_layer"
                         | "score_layer_score"
-                )
-            {
-                out.insert(key.to_string(), value.clone());
-            }
+                ))
+        {
+            out.insert(key.to_string(), value.clone());
         }
     }
     Value::Object(out)
@@ -1005,20 +1003,20 @@ fn normalize_llm_review_schema(payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if !object.contains_key("scores") {
-        if let Some(scores) = object.get("llm_scores").cloned() {
-            object.insert("scores".to_string(), scores);
-        }
+    if !object.contains_key("scores")
+        && let Some(scores) = object.get("llm_scores").cloned()
+    {
+        object.insert("scores".to_string(), scores);
     }
-    if !object.contains_key("total_score") {
-        if let Some(total_score) = object.get("llm_total_score").cloned() {
-            object.insert("total_score".to_string(), total_score);
-        }
+    if !object.contains_key("total_score")
+        && let Some(total_score) = object.get("llm_total_score").cloned()
+    {
+        object.insert("total_score".to_string(), total_score);
     }
-    if !object.contains_key("verdict") {
-        if let Some(verdict) = object.get("llm_verdict").cloned() {
-            object.insert("verdict".to_string(), verdict);
-        }
+    if !object.contains_key("verdict")
+        && let Some(verdict) = object.get("llm_verdict").cloned()
+    {
+        object.insert("verdict".to_string(), verdict);
     }
 }
 
@@ -1304,17 +1302,15 @@ fn infer_b2_weak_relaunch_override(input: B2WeakRelaunchInput<'_>) -> B2Relaunch
             };
         }
         let mut watch_tier = Some("WATCH-A");
-        if input.signal_type == "trend_start" {
-            watch_tier = Some("WATCH-B");
-        } else if signal_in(input.signal, &["B3", "B3+"]) && input.signal_type == "rebound" {
-            watch_tier = Some("WATCH-B");
-        } else if input.signal_type == "rebound"
-            && ((support_slopes.zxdq_5d.unwrap_or(0.0) <= -1.5
-                && support_positions.close_vs_ma25.unwrap_or(0.0) <= 0.0
-                && support_positions.close_vs_zxdq.unwrap_or(0.0) <= 0.0)
-                || (input.macd_phase >= 4.2
-                    && support_positions.close_vs_zxdkx.unwrap_or(0.0) >= 8.0))
-        {
+        let downgrade_watch_tier = input.signal_type == "trend_start"
+            || (input.signal_type == "rebound"
+                && (signal_in(input.signal, &["B3", "B3+"])
+                    || (support_slopes.zxdq_5d.unwrap_or(0.0) <= -1.5
+                        && support_positions.close_vs_ma25.unwrap_or(0.0) <= 0.0
+                        && support_positions.close_vs_zxdq.unwrap_or(0.0) <= 0.0)
+                    || (input.macd_phase >= 4.2
+                        && support_positions.close_vs_zxdkx.unwrap_or(0.0) >= 8.0)));
+        if downgrade_watch_tier {
             watch_tier = Some("WATCH-B");
         }
         return B2RelaunchOverride {

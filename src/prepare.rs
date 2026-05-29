@@ -109,10 +109,10 @@ fn weekly_ma_bull(dates: &[NaiveDate], close: &[f64]) -> Vec<bool> {
             if let Some(last_date) = weekly_dates.last_mut() {
                 *last_date = *date;
             }
-            if !close[idx].is_nan() {
-                if let Some(last_close) = weekly_close.last_mut() {
-                    *last_close = close[idx];
-                }
+            if !close[idx].is_nan()
+                && let Some(last_close) = weekly_close.last_mut()
+            {
+                *last_close = close[idx];
             }
         }
     }

@@ -91,7 +91,7 @@ fn build_signals(history: &[&PreparedRow], code: &str) -> Vec<Option<String>> {
     let c_days = barslast(&cross_up);
     let mut lt_dir = vec![1.0; len];
     for idx in 0..len {
-        let is_new = idx + 1 <= 114;
+        let is_new = idx < 114;
         if !is_new {
             lt_dir[idx] = if idx > 0
                 && lt_r[idx].is_some()
@@ -116,7 +116,7 @@ fn build_signals(history: &[&PreparedRow], code: &str) -> Vec<Option<String>> {
     let flip_c = rolling_sum(&flip_values, 30, 1);
     let tr_ok = (0..len)
         .map(|idx| {
-            let is_new = idx + 1 <= 114;
+            let is_new = idx < 114;
             if is_new {
                 return true;
             }
@@ -134,7 +134,7 @@ fn build_signals(history: &[&PreparedRow], code: &str) -> Vec<Option<String>> {
         .collect::<Vec<_>>();
     let above_lt = (0..len)
         .map(|idx| {
-            let is_new = idx + 1 <= 114;
+            let is_new = idx < 114;
             is_new || lt_r[idx].is_some_and(|lt| history[idx].close > lt)
         })
         .collect::<Vec<_>>();

@@ -37,7 +37,12 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
             increment(&mut stats, "fail_recent_j");
             continue;
         }
-        if !(row.zxdq.unwrap_or(f64::NEG_INFINITY) > row.zxdkx.unwrap_or(f64::INFINITY)) {
+        if !matches!(
+            row.zxdq
+                .unwrap_or(f64::NEG_INFINITY)
+                .partial_cmp(&row.zxdkx.unwrap_or(f64::INFINITY)),
+            Some(std::cmp::Ordering::Greater)
+        ) {
             increment(&mut stats, "fail_zxdq_zxdkx");
             continue;
         }

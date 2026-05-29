@@ -135,7 +135,7 @@ pub fn resolve_market_environment(
     intervals
         .into_iter()
         .filter(|interval| {
-            interval.start <= pick_date && interval.end.map_or(true, |end| pick_date <= end)
+            interval.start <= pick_date && interval.end.is_none_or(|end| pick_date <= end)
         })
         .max_by_key(|interval| {
             (
@@ -464,11 +464,7 @@ fn vote_state(states: &[&str]) -> String {
 fn combine_rule_state(sse: &str, cn2000: &str) -> String {
     if (sse == "strong" || cn2000 == "strong") && sse != "weak" && cn2000 != "weak" {
         "strong".to_string()
-    } else if sse == "weak" && cn2000 == "weak" {
-        "weak".to_string()
-    } else if sse == "weak" && cn2000 != "strong" {
-        "weak".to_string()
-    } else if cn2000 == "weak" && sse != "strong" {
+    } else if (sse == "weak" && cn2000 != "strong") || (cn2000 == "weak" && sse != "strong") {
         "weak".to_string()
     } else {
         "neutral".to_string()

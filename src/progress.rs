@@ -22,7 +22,7 @@ impl ProgressReporter {
         fields: impl IntoIterator<Item = (&'static str, String)>,
     ) {
         let mut stderr = std::io::stderr();
-        let _ = self.write_step(&mut stderr, stage, step, status, fields);
+        self.write_step(&mut stderr, stage, step, status, fields);
     }
 
     pub fn write_step<W, K, V>(

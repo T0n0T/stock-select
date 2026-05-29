@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 pub mod cache;
 pub mod cli;
 pub mod config;

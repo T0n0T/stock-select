@@ -284,9 +284,9 @@ fn write_completion_script<W: io::Write>(shell: Shell, writer: &mut W) {
 pub fn run_analyze_symbol(args: AnalyzeSymbolArgs) -> anyhow::Result<PathBuf> {
     run_analyze_symbol_with_loaders(
         args,
-        |dsn, symbol, start, end| crate::db::fetch_symbol_history(dsn, symbol, start, end),
-        |dsn, symbol| crate::db::fetch_latest_symbol_trade_date(dsn, symbol),
-        |code, rows, out_path| crate::native_chart::render_single_chart(code, rows, out_path),
+        crate::db::fetch_symbol_history,
+        crate::db::fetch_latest_symbol_trade_date,
+        crate::native_chart::render_single_chart,
     )
 }
 
@@ -652,8 +652,8 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<PathBuf> {
             },
             &provider,
             &fallback_trade_time,
-            |dsn, trade_date| crate::db::resolve_previous_trade_date(dsn, trade_date),
-            |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+            crate::db::resolve_previous_trade_date,
+            crate::db::fetch_daily_window,
         );
     }
     let pick_date = require_pick_date(args.pick_date)?;
@@ -662,7 +662,7 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<PathBuf> {
             pick_date: Some(pick_date),
             ..args
         },
-        |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+        crate::db::fetch_daily_window,
     )
 }
 
@@ -875,7 +875,7 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
             pool_file: args.pool_file.clone(),
             progress: args.progress,
         },
-        |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+        crate::db::fetch_daily_window,
     )?;
     let candidates_count = load_candidate_count(&screen_path);
     eprintln!(
@@ -973,8 +973,8 @@ fn run_intraday_hybrid(args: RunArgs) -> anyhow::Result<()> {
         },
         &provider,
         &fallback_trade_time,
-        |dsn, trade_date| crate::db::resolve_previous_trade_date(dsn, trade_date),
-        |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
+        crate::db::resolve_previous_trade_date,
+        crate::db::fetch_daily_window,
     )?;
     let candidates_count = load_candidate_count(&screen_path);
     eprintln!(
@@ -1587,10 +1587,10 @@ fn resolve_custom_pool_codes(
     })?;
     let mut codes = Vec::new();
     for token in content.split_whitespace() {
-        if let Some(code) = normalize_stock_code_token(token) {
-            if !codes.contains(&code) {
-                codes.push(code);
-            }
+        if let Some(code) = normalize_stock_code_token(token)
+            && !codes.contains(&code)
+        {
+            codes.push(code);
         }
     }
     if codes.is_empty() {

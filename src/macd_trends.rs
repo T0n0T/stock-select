@@ -1039,9 +1039,8 @@ fn map_state_machine_trend_fields(state: &StateMachineResult) -> (String, String
 }
 
 fn resolve_state_machine_wave_stage(state_stage: &str, legacy_stage: &str) -> String {
-    if ["修复", "金叉临近", "等待启动"].contains(&state_stage) {
-        state_stage.to_string()
-    } else if legacy_stage.is_empty() {
+    if ["修复", "金叉临近", "等待启动"].contains(&state_stage) || legacy_stage.is_empty()
+    {
         state_stage.to_string()
     } else {
         legacy_stage.to_string()
@@ -1647,15 +1646,7 @@ fn derive_score_stage(trend: &MacdTrendState) -> ScoreStage {
     if trend.metrics.bottom_divergence_valid == Some(false) {
         risk_flags.push("bottom_divergence_invalid".to_string());
     }
-    let top_divergence_level = if wave_cycle_phase == "odd_confirmed"
-        && odd_push_stage != "stage1_hist_dominant"
-        && trend.is_top_divergence
-    {
-        "none"
-    } else {
-        "none"
-    }
-    .to_string();
+    let top_divergence_level = "none".to_string();
     ScoreStage {
         wave_cycle_phase,
         current_wave_index,

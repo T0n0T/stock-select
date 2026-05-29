@@ -52,7 +52,10 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
             increment(&mut stats, "fail_insufficient_history");
             continue;
         };
-        if !(row.close > zxdkx) {
+        if !matches!(
+            row.close.partial_cmp(&zxdkx),
+            Some(std::cmp::Ordering::Greater)
+        ) {
             increment(&mut stats, "fail_close_zxdkx");
             continue;
         }
@@ -60,7 +63,7 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
             increment(&mut stats, "fail_zxdq_zxdkx");
             continue;
         };
-        if !(zxdq > zxdkx) {
+        if !matches!(zxdq.partial_cmp(&zxdkx), Some(std::cmp::Ordering::Greater)) {
             increment(&mut stats, "fail_zxdq_zxdkx");
             continue;
         }
@@ -72,7 +75,10 @@ pub fn run(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
             increment(&mut stats, "fail_max_vol");
             continue;
         }
-        if !(row.chg_d.unwrap_or(f64::NAN) <= 4.0) {
+        if !matches!(
+            row.chg_d.unwrap_or(f64::NAN).partial_cmp(&4.0),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        ) {
             increment(&mut stats, "fail_chg_cap");
             continue;
         }
