@@ -53,6 +53,28 @@ fn llm_review(score: f64, verdict: &str) -> Value {
     })
 }
 
+fn legacy_llm_review(score: f64, verdict: &str) -> Value {
+    json!({
+        "trend_reasoning": "trend ok",
+        "position_reasoning": "position ok",
+        "volume_reasoning": "volume ok",
+        "abnormal_move_reasoning": "risk ok",
+        "macd_reasoning": "macd ok",
+        "signal_reasoning": "signal ok",
+        "llm_scores": {
+            "trend_structure": 4.0,
+            "price_position": 4.0,
+            "volume_behavior": 3.0,
+            "previous_abnormal_move": 5.0,
+            "macd_phase": 3.0
+        },
+        "llm_total_score": score,
+        "signal_type": "rebound",
+        "llm_verdict": verdict,
+        "comment": "legacy llm merged"
+    })
+}
+
 #[test]
 fn review_merge_merges_valid_llm_results_and_rewrites_summary() {
     let temp = tempfile::tempdir().unwrap();
@@ -104,6 +126,41 @@ fn review_merge_merges_valid_llm_results_and_rewrites_summary() {
     assert!(summary["recommendations"].as_array().unwrap().is_empty());
     assert_eq!(summary["excluded"].as_array().unwrap().len(), 2);
     assert!(summary["failures"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn review_merge_accepts_legacy_llm_result_field_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let review_dir = temp.path().join("reviews/2026-05-25.b2");
+    let llm_dir = review_dir.join("llm_review_results");
+    fs::create_dir_all(&llm_dir).unwrap();
+    fs::write(
+        review_dir.join("000001.SZ.json"),
+        serde_json::to_vec_pretty(&baseline_review("000001.SZ", 3.59, "PASS")).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        llm_dir.join("000001.SZ.json"),
+        serde_json::to_vec_pretty(&legacy_llm_review(3.3, "WATCH")).unwrap(),
+    )
+    .unwrap();
+
+    run_native_review_merge(NativeReviewMergeArgs {
+        method: Method::B2,
+        pick_date: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        runtime_root: temp.path().to_path_buf(),
+        codes: Some(vec!["000001.SZ".to_string()]),
+    })
+    .unwrap();
+
+    let merged: Value =
+        serde_json::from_slice(&fs::read(review_dir.join("000001.SZ.json")).unwrap()).unwrap();
+    assert_eq!(merged["review_mode"], "merged");
+    assert_eq!(merged["llm_score"], 3.3);
+    assert_eq!(merged["llm_review"]["scores"]["volume_behavior"], 3.0);
+    assert_eq!(merged["llm_review"]["total_score"], 3.3);
+    assert_eq!(merged["llm_review"]["verdict"], "WATCH");
+    assert_eq!(merged["comment"], "legacy llm merged");
 }
 
 #[test]

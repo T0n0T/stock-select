@@ -152,6 +152,22 @@ pub fn resolve_previous_trade_date(dsn: &str, trade_date: NaiveDate) -> anyhow::
         .ok_or_else(|| anyhow::anyhow!("No previous trade date found before {trade_date}."))
 }
 
+pub fn fetch_available_trade_dates(dsn: &str) -> anyhow::Result<Vec<NaiveDate>> {
+    let mut client = Client::connect(dsn, NoTls)?;
+    let rows = client.query(
+        "
+        SELECT trade_date
+        FROM daily_market
+        GROUP BY trade_date
+        ORDER BY trade_date ASC
+        ",
+        &[],
+    )?;
+    rows.into_iter()
+        .map(|row| row.try_get("trade_date").map_err(Into::into))
+        .collect()
+}
+
 pub fn fetch_instrument_names(
     dsn: &str,
     symbols: &[String],

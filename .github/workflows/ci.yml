@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      # Golden 测试需要 ~/.agents/skills/stock-select/runtime 数据，CI 中跳过
+      - name: Run tests (skip golden)
+        run: |
+          cargo test --no-fail-fast -- \
+            --skip b1_decision_matches_python_golden \
+            --skip b2_python_golden_fixture_shape
+
+  python-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m py_compile scripts/check_charts.py
+          python3 -m py_compile scripts/compare_screen.py
+          python3 -m py_compile scripts/compare_review.py
+          python3 -m py_compile scripts/render_charts.py
+          python3 -m py_compile scripts/backfill_baseline_reviews.py
+          python3 -m py_compile scripts/review_top3_win_stats.py

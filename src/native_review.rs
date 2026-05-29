@@ -18,7 +18,9 @@ use crate::macd_trends::{
     map_b2_macd_phase_score,
 };
 use crate::model::{Method, PreparedRow, ScreenResult};
-use crate::review_protocol::{compute_weighted_total_for_profile, infer_signal_type};
+use crate::review_protocol::{
+    compute_weighted_total, compute_weighted_total_for_profile, infer_signal_type, infer_verdict,
+};
 use crate::reviewers::b1::{B1DecisionInput, decide_b1_review};
 use crate::reviewers::b1_scoring::{
     PreviousAbnormalMoveMode, PricePositionMode, compute_b1_environment_gate, compute_bbi,
@@ -26,9 +28,10 @@ use crate::reviewers::b1_scoring::{
     score_b1_volume_behavior,
 };
 use crate::reviewers::b2_scoring::{
-    B2VerdictInput, B2WatchInput, infer_b2_elastic_watch, infer_b2_verdict, infer_b2_watch_tier,
-    previous_abnormal_move_mode, price_position_mode, score_b2_previous_abnormal_move,
-    score_b2_price_position, score_b2_trend_structure, score_b2_volume_behavior, score_b2_watch,
+    B2PreviousAbnormalMoveMode, B2PricePositionMode, B2VerdictInput, B2WatchInput,
+    infer_b2_elastic_watch, infer_b2_verdict, infer_b2_watch_tier, previous_abnormal_move_mode,
+    price_position_mode, score_b2_previous_abnormal_move, score_b2_price_position,
+    score_b2_trend_structure, score_b2_volume_behavior, score_b2_watch,
 };
 
 const PYTHON_STOCK_SELECT_ROOT: &str = "/home/pi/Documents/agents/stock-select";
@@ -85,11 +88,7 @@ struct BaselineOutput {
 
 pub fn run_native_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
     match args.method {
-        Method::B1 | Method::B2 => run_native_method_review(args),
-        _ => anyhow::bail!(
-            "native review is currently implemented only for b1 and b2; method={}",
-            args.method.as_str()
-        ),
+        Method::B1 | Method::B2 | Method::Dribull => run_native_method_review(args),
     }
 }
 
@@ -281,12 +280,6 @@ fn run_native_method_review(args: NativeReviewArgs) -> anyhow::Result<PathBuf> {
         )?;
         let mut review =
             build_review_result(code, args.pick_date, &chart_path, baseline_output.review);
-        maybe_merge_llm_review(
-            &mut review,
-            &review_dir
-                .join("llm_review_results")
-                .join(format!("{code}.json")),
-        )?;
         if let Some(yellow_b1) = candidate.yellow_b1 {
             review
                 .as_object_mut()
@@ -361,7 +354,7 @@ fn build_baseline_review(
         Method::B2 => {
             build_b2_baseline_review(code, pick_date, history, chart_path, signal, profile)
         }
-        _ => anyhow::bail!("native review is currently implemented only for b1 and b2"),
+        Method::Dribull => build_dribull_baseline_review(code, pick_date, history, chart_path),
     }
 }
 
@@ -775,6 +768,91 @@ fn build_b2_baseline_review(
     })
 }
 
+fn build_dribull_baseline_review(
+    code: &str,
+    pick_date: NaiveDate,
+    history: &[PreparedRow],
+    chart_path: &Path,
+) -> anyhow::Result<BaselineOutput> {
+    if history.is_empty() {
+        anyhow::bail!("No daily history available for review.");
+    }
+    let open = history.iter().map(|row| row.open).collect::<Vec<_>>();
+    let high = history.iter().map(|row| row.high).collect::<Vec<_>>();
+    let low = history.iter().map(|row| row.low).collect::<Vec<_>>();
+    let close = history.iter().map(|row| row.close).collect::<Vec<_>>();
+    let volume = history.iter().map(|row| row.volume).collect::<Vec<_>>();
+    let ma25 = history.iter().map(|row| row.ma25).collect::<Vec<_>>();
+    let zxdkx = history.iter().map(|row| row.zxdkx).collect::<Vec<_>>();
+    let weekly_trend = classify_weekly_macd_trend(history);
+    let daily_trend = classify_daily_macd_trend(history);
+
+    let trend_structure = score_b2_trend_structure(
+        &close,
+        &low,
+        &ma25,
+        &zxdkx,
+        Some(&weekly_trend),
+        Some(&daily_trend),
+        None,
+    );
+    let price_position = score_b2_price_position(&close, &high, &low, B2PricePositionMode::Default);
+    let volume_behavior = score_b2_volume_behavior(&close, &volume);
+    let previous_abnormal_move = score_b2_previous_abnormal_move(
+        &open,
+        &close,
+        &volume,
+        B2PreviousAbnormalMoveMode::Default,
+    );
+    let macd_phase = map_dribull_macd_phase_score(history.len(), &weekly_trend, &daily_trend);
+    let total_score = compute_weighted_total(&[
+        ("trend_structure", trend_structure),
+        ("price_position", price_position),
+        ("volume_behavior", volume_behavior),
+        ("previous_abnormal_move", previous_abnormal_move),
+        ("macd_phase", macd_phase),
+    ]);
+    let signal_type = infer_signal_type(
+        *close.last().unwrap_or(&f64::NAN),
+        *open.last().unwrap_or(&f64::NAN),
+        trend_structure,
+        volume_behavior,
+        price_position,
+        false,
+    );
+    let mut verdict = infer_verdict(total_score, volume_behavior, signal_type, "dribull");
+    verdict = refine_dribull_verdict(
+        verdict,
+        total_score,
+        trend_structure,
+        price_position,
+        volume_behavior,
+        previous_abnormal_move,
+        macd_phase,
+    );
+    let comment = build_dribull_comment(&weekly_trend, &daily_trend, verdict);
+    let wave_context = describe_dribull_macd_context(&weekly_trend, &daily_trend);
+    let baseline_review = json!({
+        "code": code,
+        "pick_date": pick_date.format("%Y-%m-%d").to_string(),
+        "chart_path": chart_path.to_string_lossy(),
+        "review_type": "baseline",
+        "trend_structure": trend_structure,
+        "price_position": price_position,
+        "volume_behavior": volume_behavior,
+        "previous_abnormal_move": previous_abnormal_move,
+        "macd_phase": macd_phase,
+        "total_score": total_score,
+        "signal_type": signal_type,
+        "verdict": verdict,
+        "comment": comment,
+    });
+    Ok(BaselineOutput {
+        review: baseline_review,
+        wave_context,
+    })
+}
+
 fn build_review_result(
     code: &str,
     pick_date: NaiveDate,
@@ -875,18 +953,12 @@ fn summarize_reviews(
     })
 }
 
-fn maybe_merge_llm_review(review: &mut Value, llm_path: &Path) -> anyhow::Result<()> {
-    if !llm_path.exists() {
-        return Ok(());
-    }
-    merge_llm_review(review, llm_path)
-}
-
 fn merge_llm_review(review: &mut Value, llm_path: &Path) -> anyhow::Result<()> {
-    let llm_review: Value = serde_json::from_slice(
+    let mut llm_review: Value = serde_json::from_slice(
         &fs::read(llm_path).with_context(|| format!("read llm review {}", llm_path.display()))?,
     )
     .with_context(|| format!("parse llm review {}", llm_path.display()))?;
+    normalize_llm_review_schema(&mut llm_review);
     validate_llm_review(&llm_review)?;
 
     let baseline_score = review
@@ -927,6 +999,27 @@ fn merge_llm_review(review: &mut Value, llm_path: &Path) -> anyhow::Result<()> {
             .unwrap_or_else(|| json!("")),
     );
     Ok(())
+}
+
+fn normalize_llm_review_schema(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    if !object.contains_key("scores") {
+        if let Some(scores) = object.get("llm_scores").cloned() {
+            object.insert("scores".to_string(), scores);
+        }
+    }
+    if !object.contains_key("total_score") {
+        if let Some(total_score) = object.get("llm_total_score").cloned() {
+            object.insert("total_score".to_string(), total_score);
+        }
+    }
+    if !object.contains_key("verdict") {
+        if let Some(verdict) = object.get("llm_verdict").cloned() {
+            object.insert("verdict".to_string(), verdict);
+        }
+    }
 }
 
 fn validate_llm_review(payload: &Value) -> anyhow::Result<()> {
@@ -1106,6 +1199,18 @@ fn resolve_environment_context(
     environment_state: Option<String>,
     environment_reason: Option<String>,
 ) -> anyhow::Result<EnvironmentContext> {
+    if method == Method::Dribull {
+        return Ok(EnvironmentContext {
+            state: "neutral".to_string(),
+            reason: environment_reason,
+            source: if environment_state.is_some() {
+                "manual_override_ignored".to_string()
+            } else {
+                "method_default".to_string()
+            },
+            profile: dribull_environment_profile(),
+        });
+    }
     let state = environment_state
         .unwrap_or_else(|| "neutral".to_string())
         .trim()
@@ -1117,6 +1222,28 @@ fn resolve_environment_context(
         source: "manual_override".to_string(),
         profile,
     })
+}
+
+fn dribull_environment_profile() -> MethodEnvironmentProfile {
+    MethodEnvironmentProfile {
+        method: "dribull".to_string(),
+        state: "neutral".to_string(),
+        weights: [
+            ("trend_structure".to_string(), 0.18),
+            ("price_position".to_string(), 0.18),
+            ("volume_behavior".to_string(), 0.24),
+            ("previous_abnormal_move".to_string(), 0.20),
+            ("macd_phase".to_string(), 0.20),
+        ]
+        .into_iter()
+        .collect(),
+        signal_weight: None,
+        pass_threshold: 4.0,
+        watch_threshold: 3.2,
+        subscore_mode: BTreeMap::new(),
+        llm_focus: "dribull 重点看双周期 MACD 组合是否仍健康，PASS 需要结构、位置和 MACD 共振同时较顺，WATCH 保留结构尚可但发动时点未完全对齐的样本。"
+            .to_string(),
+    }
 }
 
 fn pct_above_option(numerator: f64, denominator: Option<f64>) -> Option<f64> {
@@ -1648,6 +1775,63 @@ fn calibrate_b2_selection_score(
     round2(selected.clamp(1.0, 5.0))
 }
 
+fn map_dribull_macd_phase_score(
+    history_len: usize,
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+) -> f64 {
+    map_b2_macd_phase_score(history_len, weekly_trend, daily_trend, None, "strong")
+}
+
+fn refine_dribull_verdict(
+    verdict: &'static str,
+    total_score: f64,
+    trend_structure: f64,
+    price_position: f64,
+    volume_behavior: f64,
+    previous_abnormal_move: f64,
+    macd_phase: f64,
+) -> &'static str {
+    if verdict == "WATCH"
+        && is_dribull_elastic_pass(
+            total_score,
+            trend_structure,
+            price_position,
+            volume_behavior,
+            previous_abnormal_move,
+            macd_phase,
+        )
+    {
+        return "PASS";
+    }
+    if verdict != "PASS" {
+        return verdict;
+    }
+    if total_score < 4.2 {
+        return "WATCH";
+    }
+    if price_position < 4.0 || volume_behavior < 4.0 {
+        return "WATCH";
+    }
+    verdict
+}
+
+fn is_dribull_elastic_pass(
+    total_score: f64,
+    trend_structure: f64,
+    price_position: f64,
+    volume_behavior: f64,
+    previous_abnormal_move: f64,
+    macd_phase: f64,
+) -> bool {
+    (3.9..4.2).contains(&total_score)
+        && trend_structure >= 4.0
+        && price_position >= 5.0
+        && volume_behavior >= 2.0
+        && previous_abnormal_move >= 5.0
+        && macd_phase >= 4.0
+}
+
 fn round2(value: f64) -> f64 {
     format!("{value:.2}")
         .parse::<f64>()
@@ -1690,7 +1874,7 @@ fn review_focus_context(method: Method, profile: &MethodEnvironmentProfile) -> S
             "当前 review 重点：右侧启动确认和 MACD 共振质量；识别 B2/B3/B3+/B4/B5 信号后的延续性、过热风险和可交易冗余。 环境附加重点：{}",
             profile.llm_focus
         ),
-        _ => profile.llm_focus.clone(),
+        Method::Dribull => profile.llm_focus.clone(),
     }
 }
 
@@ -1732,6 +1916,51 @@ fn build_b2_comment(
     )
 }
 
+fn build_dribull_comment(
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+    verdict: &str,
+) -> String {
+    let combo_text = if is_constructive_macd_trend_combo(weekly_trend, daily_trend) {
+        "符合"
+    } else {
+        "不符合"
+    };
+    format!(
+        "{}、{}，该MACD组合{}dribull，当前结论为{}。",
+        describe_macd_trend_state("周线", weekly_trend),
+        describe_macd_trend_state("日线", daily_trend),
+        combo_text,
+        verdict
+    )
+}
+
+fn describe_dribull_macd_context(
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+) -> WaveTaskContext {
+    WaveTaskContext {
+        weekly_wave_context: format!(
+            "确定性识别结果：{}；原因：{}。",
+            describe_macd_trend_state("周线", weekly_trend),
+            weekly_trend.reason
+        ),
+        daily_wave_context: format!(
+            "确定性识别结果：{}；原因：{}。",
+            describe_macd_trend_state("日线", daily_trend),
+            daily_trend.reason
+        ),
+        wave_combo_context: format!(
+            "组合判定：{} dribull 候选要求。",
+            if is_constructive_macd_trend_combo(weekly_trend, daily_trend) {
+                "符合"
+            } else {
+                "不符合"
+            }
+        ),
+    }
+}
+
 fn tail_slope_pct(values: &[Option<f64>], periods: usize) -> Option<f64> {
     let filtered = values.iter().copied().flatten().collect::<Vec<_>>();
     if filtered.len() <= periods {
@@ -1766,4 +1995,37 @@ fn resolve_strong_negative_macd_guard(history: &[PreparedRow]) -> bool {
         .into_iter()
         .fold(latest_hist.abs(), |current, value| current.max(value));
     recent_peak <= 0.0 || latest_hist.abs() < recent_peak * 0.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dribull_elastic_pass_upgrades_strong_watch() {
+        let verdict = refine_dribull_verdict("WATCH", 4.04, 4.0, 5.0, 4.0, 5.0, 4.2);
+        assert_eq!(verdict, "PASS");
+    }
+
+    #[test]
+    fn dribull_pass_requires_strong_total_position_and_volume() {
+        assert_eq!(
+            refine_dribull_verdict("PASS", 4.19, 5.0, 5.0, 5.0, 5.0, 5.0),
+            "WATCH"
+        );
+        assert_eq!(
+            refine_dribull_verdict("PASS", 4.2, 5.0, 3.0, 5.0, 5.0, 5.0),
+            "WATCH"
+        );
+        assert_eq!(
+            refine_dribull_verdict("PASS", 4.2, 5.0, 5.0, 3.0, 5.0, 5.0),
+            "WATCH"
+        );
+    }
+
+    #[test]
+    fn dribull_refinement_does_not_apply_macd_verdict_gate() {
+        let verdict = refine_dribull_verdict("PASS", 4.2, 4.0, 5.0, 4.0, 5.0, 1.0);
+        assert_eq!(verdict, "PASS");
+    }
 }

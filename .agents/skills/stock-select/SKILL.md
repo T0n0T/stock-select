@@ -11,7 +11,15 @@ Use this skill for the Rust repository at:
 /home/pi/Documents/agents/stock-select-rs
 ```
 
-The Rust CLI is `stock-select-rs`. Do not call the upstream Python `stock-select` CLI from this skill unless the user explicitly asks for a Python comparison or golden parity check.
+The Rust CLI binary is `stock-select-rs`. Build with:
+
+```bash
+cargo build --release && cp target/release/stock-select-rs ~/.local/bin/
+```
+
+Do not call the upstream Python `stock-select` CLI from this skill unless the user explicitly asks for a Python comparison or golden parity check.
+
+When the Rust CLI is stable enough to replace the Python version entirely, rename the binary to `stock-select` and update references accordingly.
 
 ## Configuration
 
@@ -39,7 +47,7 @@ For Rust/Python parity checks, keep Rust runtime under `/tmp` unless the user as
 
 - `b1`: native screen, chart, review, run
 - `b2`: native screen, chart, review, run
-- `dribull`: native screen and chart; review/run review path is not implemented and should fail clearly
+- `dribull`: native screen, chart, review, run
 - `hcr`: not supported by the current Rust CLI
 
 Current command set:
@@ -59,20 +67,20 @@ completions
 
 ## Common Workflows
 
-End-of-day b1/b2 run:
+End-of-day b1/b2/dribull run:
 
 ```bash
-cargo run --release -- run \
+stock-select-rs run \
   --method b2 \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-run-b2 \
   --recompute
 ```
 
-Intraday b1/b2 run:
+Intraday b1/b2/dribull run:
 
 ```bash
-cargo run --release -- run \
+stock-select-rs run \
   --method b2 \
   --intraday \
   --runtime-root /tmp/stock-select-rs-intraday-b2
@@ -80,13 +88,15 @@ cargo run --release -- run \
 
 `run` performs screen + native review. It skips chart unless `--llm-review-limit` or `--llm-min-baseline-score` is set. With a threshold, it reviews first, writes `llm_review_tasks.json`, then charts only the task codes.
 
+Add `--record` to `run` or `review` to write same-day PASS/WATCH results into `<runtime-root>/watch_pool.csv`. Rows are keyed by `method + code`; repeated selections refresh the saved pick date and review fields. The retention window defaults to 15 trade dates and can be changed with `--record-window-trading-days`.
+
 `screen`、`chart`、`run` 默认向 stderr 输出结构化进度行，例如 `[screen] step=strategy status=done candidates=139`。需要安静运行时追加 `--no-progress`；普通结果路径或列表仍保持 stdout。
 
 生成 shell completion：
 
 ```bash
-cargo run --release -- completions zsh > /tmp/_stock-select-rs
-cargo run --release -- completions bash > /tmp/stock-select-rs.bash
+stock-select-rs completions zsh > /tmp/_stock-select-rs
+stock-select-rs completions bash > /tmp/stock-select-rs.bash
 ```
 
 支持 `bash`、`zsh`、`fish`、`powershell`、`elvish`。
@@ -94,7 +104,7 @@ cargo run --release -- completions bash > /tmp/stock-select-rs.bash
 Generate charts for all candidates explicitly:
 
 ```bash
-cargo run --release -- chart \
+stock-select-rs chart \
   --method b2 \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-run-b2 \
@@ -104,7 +114,7 @@ cargo run --release -- chart \
 Run review against existing candidates/prepared cache:
 
 ```bash
-cargo run --release -- review \
+stock-select-rs review \
   --method b2 \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-run-b2 \
@@ -114,7 +124,7 @@ cargo run --release -- review \
 Inspect review results:
 
 ```bash
-cargo run --release -- review-list \
+stock-select-rs review-list \
   --method b2 \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-run-b2 \
@@ -124,7 +134,7 @@ cargo run --release -- review-list \
 Inspect intraday review results for the refreshed date-scoped group:
 
 ```bash
-cargo run --release -- review-list \
+stock-select-rs review-list \
   --method b2 \
   --pick-date 2026-05-27 \
   --intraday \
@@ -135,7 +145,7 @@ cargo run --release -- review-list \
 Merge validated LLM/subagent results:
 
 ```bash
-cargo run --release -- review-merge \
+stock-select-rs review-merge \
   --method b2 \
   --pick-date 2026-05-25 \
   --runtime-root /tmp/stock-select-rs-run-b2
@@ -154,7 +164,7 @@ Independent `review --intraday` is currently not exposed. Use `run --intraday`.
 Custom pool workflow:
 
 ```bash
-cargo run --release -- run \
+stock-select-rs run \
   --method b2 \
   --pick-date 2026-05-25 \
   --pool-source custom \
@@ -173,7 +183,7 @@ For a single named stock request, first resolve a TS code. If the user wants the
 If the user asks for “score this stock even if it would not enter the candidate pool”, use Rust `analyze-symbol` when the method is `b1` or `b2` and the request is end-of-day:
 
 ```bash
-cargo run --release -- analyze-symbol \
+stock-select-rs analyze-symbol \
   --method b2 \
   --symbol 002350.SZ \
   --pick-date 2026-04-21

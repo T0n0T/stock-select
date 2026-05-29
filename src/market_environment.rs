@@ -75,11 +75,37 @@ where
         return resolve_market_environment(runtime_root, pick_date);
     }
 
-    if let Ok(resolved) = resolve_market_environment(runtime_root, pick_date) {
-        return Ok(resolved);
-    }
-
-    let evaluation = evaluator()?;
+    let evaluation = match evaluator() {
+        Ok(eval) => eval,
+        Err(err) => {
+            // 盘中可能没有当日指数数据，默认使用上一交易日环境
+            if let Ok(resolved) = resolve_market_environment(runtime_root, pick_date) {
+                eprintln!(
+                    "[environment] no index data for {pick_date}, using previous trade day state={} source={}",
+                    resolved.state, resolved.source,
+                );
+                eprintln!(
+                    "[environment] hint: use --environment-state <weak|neutral|strong> to override"
+                );
+                let record = EnvironmentRecord {
+                    pick_date,
+                    state: normalize_environment_state(&resolved.state)?,
+                    score_based_state: normalize_environment_state(&resolved.state)?,
+                    rule_based_state: normalize_environment_state(&resolved.state)?,
+                    vote_based_state: normalize_environment_state(&resolved.state)?,
+                    evaluate_date: pick_date,
+                    source: resolved.source,
+                    reason: resolved.reason.unwrap_or_default(),
+                    total_score: 0.0,
+                    score_based_total: 0.0,
+                    manual_override: false,
+                };
+                upsert_environment_record(runtime_root, record)?;
+                return resolve_market_environment(runtime_root, pick_date);
+            }
+            return Err(err);
+        }
+    };
     let record = EnvironmentRecord {
         pick_date,
         state: normalize_environment_state(&evaluation.state)?,

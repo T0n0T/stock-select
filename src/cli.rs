@@ -19,6 +19,7 @@ use crate::config::{
 };
 use crate::market_environment::{
     EnvironmentEvaluation, ensure_market_environment, evaluate_market_environment,
+    resolve_market_environment,
 };
 use crate::model::{MarketRow, Method, PreparedRow};
 use crate::native_chart::{NativeChartArgs, run_native_chart};
@@ -116,6 +117,10 @@ pub struct ReviewArgs {
     llm_min_baseline_score: Option<f64>,
     #[arg(long)]
     llm_review_limit: Option<usize>,
+    #[arg(long)]
+    record: bool,
+    #[arg(long, default_value_t = 15)]
+    record_window_trading_days: usize,
 }
 
 #[derive(Debug, Parser)]
@@ -245,7 +250,9 @@ pub fn run() -> anyhow::Result<()> {
             crate::db::fetch_instrument_names(&dsn, codes)
         })
         .map(|output| {
-            if !output.is_empty() {
+            if output.is_empty() {
+                println!("no matching stocks");
+            } else {
                 println!("{output}");
             }
         }),
@@ -606,7 +613,7 @@ pub fn run_chart(args: ChartArgs) -> anyhow::Result<PathBuf> {
     let output_path = run_native_chart(NativeChartArgs {
         method: args.method,
         pick_date: args.pick_date,
-        runtime_root,
+        runtime_root: runtime_root.clone(),
         codes: None,
         chart_workers: args.chart_workers,
         artifact_key: None,
@@ -668,7 +675,8 @@ pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
     let pick_date = require_pick_date(args.pick_date)?;
     let started = Instant::now();
     let runtime_root = args.runtime_root.unwrap_or_else(default_runtime_root);
-    let (environment_state, environment_reason) = resolve_review_environment_args(
+    let (environment_state, environment_reason) = resolve_method_review_environment_args(
+        args.method,
         &runtime_root,
         pick_date,
         args.dsn.as_deref(),
@@ -678,7 +686,7 @@ pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
     let output_path = run_native_review(NativeReviewArgs {
         method: args.method,
         pick_date,
-        runtime_root,
+        runtime_root: runtime_root.clone(),
         environment_state,
         environment_reason,
         llm_min_baseline_score: args.llm_min_baseline_score,
@@ -691,6 +699,16 @@ pub fn run_review(args: ReviewArgs) -> anyhow::Result<PathBuf> {
         "[review] total elapsed={:.3}s",
         started.elapsed().as_secs_f64()
     );
+    if args.record {
+        record_watch_after_review(
+            args.method,
+            pick_date,
+            &runtime_root,
+            &output_path,
+            args.dsn.as_deref(),
+            args.record_window_trading_days,
+        )?;
+    }
     Ok(output_path)
 }
 
@@ -834,7 +852,8 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         return run_intraday_hybrid(args);
     }
     let pick_date = require_pick_date(args.review.pick_date)?;
-    let (environment_state, environment_reason) = resolve_review_environment_args(
+    let (environment_state, environment_reason) = resolve_method_review_environment_args(
+        method,
         &runtime_root,
         pick_date,
         args.review.dsn.as_deref(),
@@ -858,8 +877,10 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         },
         |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
     )?;
+    let candidates_count = load_candidate_count(&screen_path);
     eprintln!(
-        "[run] screen wrote {} elapsed={:.3}s",
+        "[run] screen candidates={} path={} elapsed={:.3}s",
+        candidates_count,
         screen_path.display(),
         screen_started.elapsed().as_secs_f64()
     );
@@ -901,6 +922,16 @@ pub fn run_hybrid(args: RunArgs) -> anyhow::Result<()> {
         );
     } else {
         eprintln!("[run] chart skipped reason=no-llm-review-threshold");
+    }
+    if args.review.record {
+        record_watch_after_review(
+            method,
+            pick_date,
+            &runtime_root,
+            &summary_path,
+            args.review.dsn.as_deref(),
+            args.review.record_window_trading_days,
+        )?;
     }
     eprintln!(
         "[run] total elapsed={:.3}s",
@@ -945,14 +976,17 @@ fn run_intraday_hybrid(args: RunArgs) -> anyhow::Result<()> {
         |dsn, trade_date| crate::db::resolve_previous_trade_date(dsn, trade_date),
         |dsn, start, end| crate::db::fetch_daily_window(dsn, start, end),
     )?;
+    let candidates_count = load_candidate_count(&screen_path);
     eprintln!(
-        "[run] intraday screen wrote {} run_id={} elapsed={:.3}s",
+        "[run] intraday screen candidates={} path={} run_id={} elapsed={:.3}s",
+        candidates_count,
         screen_path.display(),
         run_id,
         screen_started.elapsed().as_secs_f64()
     );
 
-    let (environment_state, environment_reason) = resolve_review_environment_args(
+    let (environment_state, environment_reason) = resolve_method_intraday_review_environment_args(
+        method,
         &runtime_root,
         trade_date,
         args.review.dsn.as_deref(),
@@ -997,6 +1031,16 @@ fn run_intraday_hybrid(args: RunArgs) -> anyhow::Result<()> {
     } else {
         eprintln!("[run] intraday chart skipped reason=no-llm-review-threshold");
     }
+    if args.review.record {
+        record_watch_after_review(
+            method,
+            trade_date,
+            &runtime_root,
+            &summary_path,
+            args.review.dsn.as_deref(),
+            args.review.record_window_trading_days,
+        )?;
+    }
     eprintln!(
         "[run] intraday total elapsed={:.3}s",
         started.elapsed().as_secs_f64()
@@ -1024,6 +1068,37 @@ fn load_llm_review_task_codes(summary_path: &std::path::Path) -> anyhow::Result<
         .collect())
 }
 
+fn record_watch_after_review(
+    method: Method,
+    pick_date: NaiveDate,
+    runtime_root: &std::path::Path,
+    summary_path: &std::path::Path,
+    dsn_arg: Option<&str>,
+    window_trading_days: usize,
+) -> anyhow::Result<()> {
+    let dsn = resolve_dsn_from_env(dsn_arg)?;
+    let trade_dates = crate::db::fetch_available_trade_dates(&dsn)?;
+    let result =
+        crate::watch_pool::record_watch_from_summary(crate::watch_pool::RecordWatchArgs {
+            method,
+            pick_date,
+            runtime_root: runtime_root.to_path_buf(),
+            summary_path: summary_path.to_path_buf(),
+            trade_dates,
+            window_trading_days,
+            recorded_at: recorded_at_timestamp(),
+        })?;
+    eprintln!(
+        "[record-watch] imported={} refreshed={} trimmed={} cutoff_trade_date={} path={}",
+        result.imported,
+        result.refreshed,
+        result.trimmed,
+        result.cutoff_trade_date,
+        result.path.display()
+    );
+    Ok(())
+}
+
 fn resolve_tushare_token(cli_token: Option<&str>) -> anyhow::Result<String> {
     resolve_config_value(cli_token, "TUSHARE_TOKEN")
         .ok_or_else(|| anyhow::anyhow!("A Tushare token is required for intraday mode."))
@@ -1039,6 +1114,12 @@ fn current_local_date() -> NaiveDate {
 
 fn current_local_time_string() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+fn recorded_at_timestamp() -> String {
+    chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string()
 }
 
 fn intraday_artifact_key(trade_date: NaiveDate) -> String {
@@ -1076,6 +1157,70 @@ fn resolve_review_environment_args(
     )
 }
 
+fn resolve_method_review_environment_args(
+    method: Method,
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    dsn_arg: Option<&str>,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    if method == Method::Dribull {
+        return Ok((None, manual_reason));
+    }
+    resolve_review_environment_args(
+        runtime_root,
+        pick_date,
+        dsn_arg,
+        manual_state,
+        manual_reason,
+    )
+}
+
+fn resolve_intraday_review_environment_args(
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    dsn_arg: Option<&str>,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    resolve_intraday_review_environment_args_with_evaluator(
+        runtime_root,
+        pick_date,
+        manual_state,
+        manual_reason,
+        || {
+            let dsn = resolve_dsn_from_env(dsn_arg)?;
+            let start_date = pick_date - Duration::days(180);
+            let sse = crate::db::fetch_index_history(&dsn, "000001.SH", start_date, pick_date)
+                .context("fetch SSE index history for intraday market environment")?;
+            let cn2000 = crate::db::fetch_index_history(&dsn, "399303.SZ", start_date, pick_date)
+                .context("fetch CN2000 index history for intraday market environment")?;
+            evaluate_market_environment(pick_date, &sse, &cn2000)
+        },
+    )
+}
+
+fn resolve_method_intraday_review_environment_args(
+    method: Method,
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    dsn_arg: Option<&str>,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    if method == Method::Dribull {
+        return Ok((None, manual_reason));
+    }
+    resolve_intraday_review_environment_args(
+        runtime_root,
+        pick_date,
+        dsn_arg,
+        manual_state,
+        manual_reason,
+    )
+}
+
 fn resolve_review_environment_args_with_evaluator<F>(
     runtime_root: &std::path::Path,
     pick_date: NaiveDate,
@@ -1109,6 +1254,52 @@ where
     Ok((Some(resolved.state), resolved.reason))
 }
 
+fn resolve_intraday_review_environment_args_with_evaluator<F>(
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+    evaluator: F,
+) -> anyhow::Result<(Option<String>, Option<String>)>
+where
+    F: FnOnce() -> anyhow::Result<EnvironmentEvaluation>,
+{
+    if let Some(state) = manual_state {
+        let normalized = normalize_intraday_environment_state(&state)?;
+        eprintln!("[environment] intraday state={normalized} source=manual_override");
+        return Ok((Some(normalized), manual_reason));
+    }
+
+    match evaluator() {
+        Ok(evaluation) => {
+            let state = normalize_intraday_environment_state(&evaluation.state)?;
+            eprintln!(
+                "[environment] intraday state={} source={} mode=temporary",
+                state, evaluation.source
+            );
+            Ok((Some(state), Some(evaluation.reason)))
+        }
+        Err(err) => {
+            let resolved = resolve_market_environment(runtime_root, pick_date)
+                .with_context(|| format!("intraday environment evaluation failed: {err}"))?;
+            eprintln!(
+                "[environment] intraday state={} source={} mode=temporary-fallback",
+                resolved.state, resolved.source
+            );
+            Ok((Some(resolved.state), resolved.reason))
+        }
+    }
+}
+
+fn normalize_intraday_environment_state(value: &str) -> anyhow::Result<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "weak" | "neutral" | "strong") {
+        Ok(normalized)
+    } else {
+        anyhow::bail!("Unsupported environment state '{value}', expected weak, neutral, or strong")
+    }
+}
+
 pub fn resolve_review_environment_args_for_test<F>(
     runtime_root: &std::path::Path,
     pick_date: NaiveDate,
@@ -1120,6 +1311,48 @@ where
     F: FnOnce() -> anyhow::Result<EnvironmentEvaluation>,
 {
     resolve_review_environment_args_with_evaluator(
+        runtime_root,
+        pick_date,
+        manual_state,
+        manual_reason,
+        evaluator,
+    )
+}
+
+pub fn resolve_method_review_environment_args_for_test<F>(
+    method: Method,
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+    evaluator: F,
+) -> anyhow::Result<(Option<String>, Option<String>)>
+where
+    F: FnOnce() -> anyhow::Result<EnvironmentEvaluation>,
+{
+    if method == Method::Dribull {
+        return Ok((None, manual_reason));
+    }
+    resolve_review_environment_args_with_evaluator(
+        runtime_root,
+        pick_date,
+        manual_state,
+        manual_reason,
+        evaluator,
+    )
+}
+
+pub fn resolve_intraday_review_environment_args_for_test<F>(
+    runtime_root: &std::path::Path,
+    pick_date: NaiveDate,
+    manual_state: Option<String>,
+    manual_reason: Option<String>,
+    evaluator: F,
+) -> anyhow::Result<(Option<String>, Option<String>)>
+where
+    F: FnOnce() -> anyhow::Result<EnvironmentEvaluation>,
+{
+    resolve_intraday_review_environment_args_with_evaluator(
         runtime_root,
         pick_date,
         manual_state,
@@ -1492,6 +1725,19 @@ fn unique_symbol_count(rows: &[PreparedRow]) -> usize {
         .map(|row| row.ts_code.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len()
+}
+
+fn load_candidate_count(screen_path: &std::path::Path) -> usize {
+    std::fs::read(screen_path)
+        .ok()
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+        .and_then(|value| {
+            value
+                .get("candidates")
+                .and_then(|c| c.as_array())
+                .map(|c| c.len())
+        })
+        .unwrap_or(0)
 }
 
 fn load_and_prepare<F>(

@@ -1849,7 +1849,11 @@ fn score_combo(
         if weekly_stage.wave_cycle_phase == "odd_confirmed"
             && weekly_stage.odd_push_stage == "stage1_hist_dominant"
         {
-            let score = if signal == "B3" { 20.0 } else { 18.0 };
+            let score = if matches!(signal, "B3" | "B3+") {
+                20.0
+            } else {
+                18.0
+            };
             return match environment_state {
                 "weak" => score - 15.0,
                 "strong" => score - 12.0,
@@ -1859,7 +1863,11 @@ fn score_combo(
         if weekly_stage.wave_cycle_phase == "odd_confirmed"
             && weekly_stage.odd_push_stage == "stage3_hist_lagging"
         {
-            let score = if signal == "B3" { 10.0 } else { 8.0 };
+            let score = if matches!(signal, "B3" | "B3+") {
+                10.0
+            } else {
+                8.0
+            };
             return if environment_state == "strong" {
                 score - 2.0
             } else {
@@ -1931,7 +1939,11 @@ fn score_b2_method_bias(weekly_stage: &ScoreStage, daily_stage: &ScoreStage, sig
     if daily_stage.current_opportunity_phase == "pre_odd_imminent"
         && daily_stage.current_wave_index == 3
     {
-        if signal == "B3" { 4.0 } else { 2.0 }
+        if matches!(signal, "B3" | "B3+") {
+            4.0
+        } else {
+            2.0
+        }
     } else if daily_stage.wave_cycle_phase == "even_repairing" {
         1.0
     } else {

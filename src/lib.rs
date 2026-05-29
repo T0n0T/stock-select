@@ -16,3 +16,4 @@ pub mod progress;
 pub mod review_protocol;
 pub mod reviewers;
 pub mod strategies;
+pub mod watch_pool;

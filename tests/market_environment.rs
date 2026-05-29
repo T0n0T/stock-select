@@ -1,8 +1,12 @@
 use chrono::NaiveDate;
-use stock_select_rs::cli::resolve_review_environment_args_for_test;
+use stock_select_rs::cli::{
+    resolve_intraday_review_environment_args_for_test,
+    resolve_method_review_environment_args_for_test, resolve_review_environment_args_for_test,
+};
 use stock_select_rs::market_environment::{
     EnvironmentEvaluation, ensure_market_environment_for_test, resolve_market_environment_for_test,
 };
+use stock_select_rs::model::Method;
 
 #[test]
 fn manual_environment_writes_history_and_resolves_snapshot() {
@@ -106,4 +110,74 @@ fn cli_environment_resolver_evaluates_missing_environment_and_returns_review_arg
             .join("environment/daily/2026-05-25.neutral.json")
             .exists()
     );
+}
+
+#[test]
+fn dribull_review_skips_market_environment_resolution() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+
+    let (state, reason) = resolve_method_review_environment_args_for_test(
+        Method::Dribull,
+        temp.path(),
+        pick_date,
+        Some("weak".to_string()),
+        Some("manual dribull note".to_string()),
+        || panic!("dribull review must not evaluate market environment"),
+    )
+    .unwrap();
+
+    assert!(state.is_none());
+    assert_eq!(reason.as_deref(), Some("manual dribull note"));
+    assert!(!temp.path().join("environment").exists());
+}
+
+#[test]
+fn intraday_environment_resolver_evaluates_without_persisting_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 28).unwrap();
+
+    let (state, reason) = resolve_intraday_review_environment_args_for_test(
+        temp.path(),
+        pick_date,
+        None,
+        None,
+        || {
+            Ok(EnvironmentEvaluation {
+                state: "neutral".to_string(),
+                score_based_state: "neutral".to_string(),
+                rule_based_state: "neutral".to_string(),
+                vote_based_state: "neutral".to_string(),
+                evaluate_date: pick_date,
+                source: "intraday_temporary".to_string(),
+                reason: "temporary intraday environment".to_string(),
+                total_score: 0.0,
+                score_based_total: 0.0,
+            })
+        },
+    )
+    .unwrap();
+
+    assert_eq!(state.as_deref(), Some("neutral"));
+    assert_eq!(reason.as_deref(), Some("temporary intraday environment"));
+    assert!(!temp.path().join("environment").exists());
+}
+
+#[test]
+fn intraday_environment_resolver_uses_manual_override_without_persisting_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 28).unwrap();
+
+    let (state, reason) = resolve_intraday_review_environment_args_for_test(
+        temp.path(),
+        pick_date,
+        Some("weak".to_string()),
+        Some("manual intraday".to_string()),
+        || panic!("manual intraday override must not call evaluator"),
+    )
+    .unwrap();
+
+    assert_eq!(state.as_deref(), Some("weak"));
+    assert_eq!(reason.as_deref(), Some("manual intraday"));
+    assert!(!temp.path().join("environment").exists());
 }
