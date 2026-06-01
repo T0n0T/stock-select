@@ -643,6 +643,25 @@ fn build_b2_baseline_review(
         volume_behavior,
         previous_abnormal_move,
     );
+    let signal_type = infer_signal_type(
+        *close.last().unwrap_or(&f64::NAN),
+        *open.last().unwrap_or(&f64::NAN),
+        trend_structure,
+        volume_behavior,
+        price_position,
+        true,
+    );
+    let bottom_repair_profile = b2_refined_bottom_repair_profile(history);
+    macd_phase = adjust_b2_bottom_repair_macd_phase(
+        macd_phase,
+        &profile.state,
+        bottom_repair_profile.as_ref(),
+        signal,
+        signal_type,
+        trend_structure,
+        price_position,
+        previous_abnormal_move,
+    );
     let base_total_score = compute_weighted_total_for_profile(
         &[
             ("trend_structure", trend_structure),
@@ -653,14 +672,6 @@ fn build_b2_baseline_review(
         ],
         profile,
         signal,
-    );
-    let signal_type = infer_signal_type(
-        *close.last().unwrap_or(&f64::NAN),
-        *open.last().unwrap_or(&f64::NAN),
-        trend_structure,
-        volume_behavior,
-        price_position,
-        true,
     );
     let close_above_ma25_pct = pct_above_option(
         *close.last().unwrap_or(&f64::NAN),
@@ -706,6 +717,9 @@ fn build_b2_baseline_review(
             macd_phase,
             signal,
             signal_type,
+            bottom_repair_refined: bottom_repair_profile
+                .as_ref()
+                .is_some_and(|profile| profile.refined),
             current_verdict: verdict,
         })
     } else {
@@ -1276,6 +1290,7 @@ struct B2WeakRelaunchInput<'a> {
     macd_phase: f64,
     signal: Option<&'a str>,
     signal_type: &'a str,
+    bottom_repair_refined: bool,
     current_verdict: &'static str,
 }
 
@@ -1292,6 +1307,7 @@ fn infer_b2_weak_relaunch_override(input: B2WeakRelaunchInput<'_>) -> B2Relaunch
             && signal_eq(input.signal, "B2")
             && input.signal_type == "rebound"
             && input.macd_phase < 4.0
+            && input.bottom_repair_refined
             && !(support_slopes.zxdq_5d.unwrap_or(0.0) <= -1.0
                 && input.volume_behavior >= 3.0
                 && input.macd_phase >= 3.5)
@@ -1993,6 +2009,194 @@ fn resolve_strong_negative_macd_guard(history: &[PreparedRow]) -> bool {
     recent_peak <= 0.0 || latest_hist.abs() < recent_peak * 0.5
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct B2BottomRepairProfile {
+    refined: bool,
+    price_profile: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct B2MacdSegment {
+    sign: i8,
+    end: usize,
+    high: f64,
+    low: f64,
+}
+
+fn adjust_b2_bottom_repair_macd_phase(
+    macd_phase: f64,
+    environment_state: &str,
+    profile: Option<&B2BottomRepairProfile>,
+    signal: Option<&str>,
+    signal_type: &str,
+    trend_structure: f64,
+    price_position: f64,
+    previous_abnormal_move: f64,
+) -> f64 {
+    let Some(profile) = profile else {
+        return macd_phase;
+    };
+    let adjustment = if profile.refined {
+        match environment_state {
+            "weak" => 0.20,
+            "neutral" => 0.10,
+            _ => 0.0,
+        }
+    } else if b2_bottom_repair_sensitive_slice(
+        environment_state,
+        signal,
+        signal_type,
+        trend_structure,
+        price_position,
+        previous_abnormal_move,
+    ) {
+        match environment_state {
+            "weak" => -0.20,
+            "neutral" => -0.10,
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
+    round2((macd_phase + adjustment).clamp(1.0, 5.0))
+}
+
+fn b2_bottom_repair_sensitive_slice(
+    environment_state: &str,
+    signal: Option<&str>,
+    signal_type: &str,
+    trend_structure: f64,
+    price_position: f64,
+    previous_abnormal_move: f64,
+) -> bool {
+    matches!(environment_state, "weak" | "neutral")
+        && signal == Some("B2")
+        && signal_type == "rebound"
+        && (trend_structure - 3.0).abs() < f64::EPSILON
+        && (price_position - 4.0).abs() < f64::EPSILON
+        && (previous_abnormal_move - 5.0).abs() < f64::EPSILON
+}
+
+fn b2_refined_bottom_repair_profile(history: &[PreparedRow]) -> Option<B2BottomRepairProfile> {
+    const TOLERANCE: f64 = 0.05;
+    const LEFT_BOTTOM_BUFFER: f64 = 0.15;
+    const MAX_VOLUME_RATIO_5D: f64 = 2.0;
+
+    let segments = b2_macd_hist_segments(history);
+    let latest_idx = segments.len().checked_sub(1)?;
+    let current_green_idx = if segments[latest_idx].sign < 0 {
+        latest_idx
+    } else {
+        latest_idx.checked_sub(1)?
+    };
+    if current_green_idx < 3 || segments[current_green_idx].sign >= 0 {
+        return None;
+    }
+    let previous_red = segments[current_green_idx - 3];
+    let previous_green = segments[current_green_idx - 2];
+    let current_red = segments[current_green_idx - 1];
+    let current_green = segments[current_green_idx];
+    if previous_red.sign <= 0
+        || previous_green.sign >= 0
+        || current_red.sign <= 0
+        || current_green.sign >= 0
+    {
+        return None;
+    }
+
+    let latest_close = history.last()?.close;
+    let current_top = current_red.high;
+    let left_top = previous_red.high;
+    let left_bottom = previous_green.low;
+    let pullback_low = current_green.low;
+    if !latest_close.is_finite()
+        || !current_top.is_finite()
+        || !left_top.is_finite()
+        || !left_bottom.is_finite()
+        || !pullback_low.is_finite()
+        || left_top <= 0.0
+        || left_bottom <= 0.0
+    {
+        return None;
+    }
+
+    let breaks_top = current_top >= left_top * (1.0 + TOLERANCE);
+    let close_holds_top = latest_close >= left_top * (1.0 - TOLERANCE);
+    let bottom_buffer = pullback_low >= left_bottom * (1.0 + LEFT_BOTTOM_BUFFER);
+    let volume_ratio = latest_volume_ratio(history, 5)?;
+    let refined =
+        breaks_top && close_holds_top && bottom_buffer && volume_ratio <= MAX_VOLUME_RATIO_5D;
+    let price_profile = if breaks_top && close_holds_top {
+        "breaks_top_close_holds_top"
+    } else if breaks_top {
+        "breaks_top_close_below_top"
+    } else {
+        "no_break_top"
+    };
+
+    Some(B2BottomRepairProfile {
+        refined,
+        price_profile,
+    })
+}
+
+fn latest_volume_ratio(history: &[PreparedRow], window: usize) -> Option<f64> {
+    if history.len() < 2 {
+        return None;
+    }
+    let latest = history.last()?.volume;
+    if !latest.is_finite() {
+        return None;
+    }
+    let previous = history
+        .iter()
+        .rev()
+        .skip(1)
+        .take(window.saturating_sub(1))
+        .map(|row| row.volume)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .collect::<Vec<_>>();
+    if previous.is_empty() {
+        return None;
+    }
+    let avg = previous.iter().sum::<f64>() / previous.len() as f64;
+    if avg <= 0.0 {
+        return None;
+    }
+    Some(latest / avg)
+}
+
+fn b2_macd_hist_segments(history: &[PreparedRow]) -> Vec<B2MacdSegment> {
+    let mut segments: Vec<B2MacdSegment> = Vec::new();
+    for (idx, row) in history.iter().enumerate() {
+        if !row.macd_hist.is_finite() {
+            continue;
+        }
+        let sign = if row.macd_hist > 0.0 {
+            1
+        } else if row.macd_hist < 0.0 {
+            -1
+        } else {
+            continue;
+        };
+        if let Some(last) = segments.last_mut()
+            && last.sign == sign
+        {
+            last.end = idx;
+            last.high = last.high.max(row.high);
+            last.low = last.low.min(row.low);
+            continue;
+        }
+        segments.push(B2MacdSegment {
+            sign,
+            end: idx,
+            high: row.high,
+            low: row.low,
+        });
+    }
+    segments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2023,5 +2227,177 @@ mod tests {
     fn dribull_refinement_does_not_apply_macd_verdict_gate() {
         let verdict = refine_dribull_verdict("PASS", 4.2, 4.0, 5.0, 4.0, 5.0, 1.0);
         assert_eq!(verdict, "PASS");
+    }
+
+    #[test]
+    fn b2_bottom_repair_bonus_requires_left_top_reclaim_and_left_bottom_buffer() {
+        let history = b2_bottom_repair_history(10.0, 8.0, 12.0, 9.4, 10.0, 1.5);
+
+        let profile = b2_refined_bottom_repair_profile(&history).unwrap();
+        assert!(profile.refined);
+        assert_eq!(profile.price_profile, "breaks_top_close_holds_top");
+
+        let shallow_buffer = b2_bottom_repair_history(10.0, 8.0, 12.0, 8.7, 10.0, 1.5);
+        assert!(
+            !b2_refined_bottom_repair_profile(&shallow_buffer)
+                .unwrap()
+                .refined
+        );
+
+        let heavy_volume = b2_bottom_repair_history(10.0, 8.0, 12.0, 9.4, 10.0, 2.1);
+        assert!(
+            !b2_refined_bottom_repair_profile(&heavy_volume)
+                .unwrap()
+                .refined
+        );
+    }
+
+    #[test]
+    fn b2_bottom_repair_bonus_is_environment_sensitive() {
+        let history = b2_bottom_repair_history(10.0, 8.0, 12.0, 9.4, 10.0, 1.5);
+        let profile = b2_refined_bottom_repair_profile(&history);
+
+        assert_eq!(
+            adjust_b2_bottom_repair_macd_phase(
+                2.33,
+                "weak",
+                profile.as_ref(),
+                Some("B2"),
+                "rebound",
+                3.0,
+                4.0,
+                5.0
+            ),
+            2.53
+        );
+        assert_eq!(
+            adjust_b2_bottom_repair_macd_phase(
+                2.33,
+                "neutral",
+                profile.as_ref(),
+                Some("B2"),
+                "rebound",
+                3.0,
+                4.0,
+                5.0
+            ),
+            2.43
+        );
+        assert_eq!(
+            adjust_b2_bottom_repair_macd_phase(
+                2.33,
+                "strong",
+                profile.as_ref(),
+                Some("B2"),
+                "rebound",
+                3.0,
+                4.0,
+                5.0
+            ),
+            2.33
+        );
+    }
+
+    #[test]
+    fn b2_bottom_repair_penalizes_sensitive_slice_without_refined_repair() {
+        let weak_history = b2_bottom_repair_history(10.0, 8.0, 12.0, 8.7, 10.0, 1.5);
+        let weak_profile = b2_refined_bottom_repair_profile(&weak_history);
+
+        assert_eq!(
+            adjust_b2_bottom_repair_macd_phase(
+                2.33,
+                "weak",
+                weak_profile.as_ref(),
+                Some("B2"),
+                "rebound",
+                3.0,
+                4.0,
+                5.0
+            ),
+            2.13
+        );
+        assert_eq!(
+            adjust_b2_bottom_repair_macd_phase(
+                2.33,
+                "weak",
+                weak_profile.as_ref(),
+                Some("B3"),
+                "trend_start",
+                4.0,
+                5.0,
+                5.0
+            ),
+            2.33
+        );
+    }
+
+    fn b2_bottom_repair_history(
+        left_top: f64,
+        left_bottom: f64,
+        current_top: f64,
+        pullback_low: f64,
+        latest_close: f64,
+        latest_volume_ratio: f64,
+    ) -> Vec<PreparedRow> {
+        let mut rows = Vec::new();
+        let mut day = 1;
+        for (hist, high, low, close, volume) in [
+            (0.10, left_top, 9.5, left_top * 0.98, 100.0),
+            (0.20, left_top * 0.99, 9.6, left_top * 0.97, 100.0),
+            (-0.10, 9.8, left_bottom, left_bottom * 1.04, 100.0),
+            (-0.20, 9.6, left_bottom * 1.02, left_bottom * 1.06, 100.0),
+            (0.10, current_top * 0.96, 9.7, current_top * 0.94, 100.0),
+            (0.20, current_top, 9.8, current_top * 0.95, 100.0),
+            (-0.10, 10.5, pullback_low, left_top * 0.96, 100.0),
+            (
+                -0.20,
+                10.4,
+                pullback_low * 1.01,
+                latest_close,
+                100.0 * latest_volume_ratio,
+            ),
+        ] {
+            rows.push(prepared_row(day, hist, high, low, close, volume));
+            day += 1;
+        }
+        rows
+    }
+
+    fn prepared_row(
+        day: u32,
+        hist: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+        volume: f64,
+    ) -> PreparedRow {
+        PreparedRow {
+            ts_code: "TEST.SZ".to_string(),
+            trade_date: NaiveDate::from_ymd_opt(2026, 1, day).unwrap(),
+            open: close,
+            high,
+            low,
+            close,
+            volume,
+            turnover_n: 0.0,
+            k: 0.0,
+            d: 0.0,
+            j: 0.0,
+            zxdq: None,
+            zxdkx: None,
+            dif: 0.0,
+            dea: 0.0,
+            macd_hist: hist,
+            ma25: None,
+            ma60: None,
+            ma144: None,
+            chg_d: None,
+            weekly_ma_bull: false,
+            max_vol_not_bearish: false,
+            v_shrink: false,
+            safe_mode: false,
+            lt_filter: false,
+            yellow_b1: false,
+        }
     }
 }

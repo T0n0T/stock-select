@@ -893,6 +893,8 @@ for 2026-05-25.
 
 ## 实现约束
 
+- 2026-06-01 b2 review 调参记录：已试验弱环境 `B2 rebound` 的底背离不破顶/底部修复口径。当前实现把 refined 底部修复在 weak/neutral 下映射到 `macd_phase` 小幅加分，并把 weak 环境 relaunch PASS 特例收窄为必须满足 refined 底部修复，否则保留为 WATCH。2026-03-01..2026-05-29 回测中，weak pass top5 从 14 个样本/8 天收缩到 3 个样本/3 天，3 日和 5 日正收益率由 50.0%/42.9% 提升到 100.0%/100.0%；strong/neutral pass top 统计不变。该版本提纯有效但覆盖明显收缩，并误伤 2026-03-24 603601.SH、2026-04-01 601975.SH 等正例，后续需要继续拆分“非 refined 但仍可 PASS”的形态。
+
 - b1 native review 开发期间不要重算 Python golden artifacts。
 - parity validation 使用 `/tmp` 下的 Rust runtime 临时目录。
 - `prepare cache` 内部可以不同于 Python，但 CLI 使用方式和最终 runtime artifacts 必须保持一致。
