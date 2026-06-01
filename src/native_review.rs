@@ -750,8 +750,32 @@ fn build_b2_baseline_review(
     if verdict == "WATCH" && relaunch_override.watch_tier.is_some() {
         watch_tier = relaunch_override.watch_tier;
     }
-    let total_score =
+    let mut total_score =
         calibrate_b2_selection_score(structure_score, verdict, watch_score, watch_tier);
+    let top_divergence_risk = weekly_trend.is_top_divergence || daily_trend.is_top_divergence;
+    total_score = adjust_b2_strong_pass_selection_score(
+        total_score,
+        &profile.state,
+        verdict,
+        signal,
+        signal_type,
+        trend_structure,
+        price_position,
+        volume_behavior,
+        previous_abnormal_move,
+        macd_phase,
+    );
+    total_score = adjust_b2_neutral_tight_repair_selection_score(
+        total_score,
+        &profile.state,
+        bottom_repair_profile.as_ref(),
+        top_divergence_risk,
+        signal,
+        signal_type,
+        trend_structure,
+        price_position,
+        previous_abnormal_move,
+    );
     let comment = build_b2_comment(&weekly_trend, &daily_trend, verdict);
     let wave_context = describe_b2_macd_score_context(&weekly_trend, &daily_trend, "");
     let baseline_review = json!({
@@ -1203,7 +1227,7 @@ fn review_sort_key(review: &Value) -> (f64, f64) {
         .get("total_score")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
-    (baseline_score, total_score)
+    (total_score, baseline_score)
 }
 
 fn resolve_environment_context(
@@ -1787,6 +1811,60 @@ fn calibrate_b2_selection_score(
     round2(selected.clamp(1.0, 5.0))
 }
 
+fn adjust_b2_strong_pass_selection_score(
+    total_score: f64,
+    environment_state: &str,
+    verdict: &str,
+    signal: Option<&str>,
+    signal_type: &str,
+    trend_structure: f64,
+    price_position: f64,
+    volume_behavior: f64,
+    previous_abnormal_move: f64,
+    macd_phase: f64,
+) -> f64 {
+    let high_elastic_trend_start = environment_state == "strong"
+        && verdict.eq_ignore_ascii_case("PASS")
+        && signal_in(signal, &["B3", "B3+"])
+        && signal_type == "trend_start"
+        && trend_structure >= 4.0
+        && price_position >= 5.0
+        && volume_behavior >= 5.0
+        && previous_abnormal_move >= 5.0
+        && (3.0..3.8).contains(&macd_phase);
+    if high_elastic_trend_start {
+        round2((total_score + 0.30).clamp(1.0, 5.0))
+    } else {
+        round2(total_score.clamp(1.0, 5.0))
+    }
+}
+
+fn adjust_b2_neutral_tight_repair_selection_score(
+    total_score: f64,
+    environment_state: &str,
+    profile: Option<&B2BottomRepairProfile>,
+    top_divergence_risk: bool,
+    signal: Option<&str>,
+    signal_type: &str,
+    trend_structure: f64,
+    price_position: f64,
+    previous_abnormal_move: f64,
+) -> f64 {
+    let boost = environment_state == "neutral"
+        && top_divergence_risk
+        && signal_eq(signal, "B2")
+        && signal_type == "rebound"
+        && (trend_structure - 3.0).abs() < f64::EPSILON
+        && (price_position - 4.0).abs() < f64::EPSILON
+        && (previous_abnormal_move - 5.0).abs() < f64::EPSILON
+        && profile.is_some_and(|profile| profile.neutral_tight_repair);
+    if boost {
+        round2((total_score + 0.20).clamp(1.0, 5.0))
+    } else {
+        round2(total_score.clamp(1.0, 5.0))
+    }
+}
+
 fn map_dribull_macd_phase_score(
     history_len: usize,
     weekly_trend: &crate::macd_trends::MacdTrendState,
@@ -2013,6 +2091,7 @@ fn resolve_strong_negative_macd_guard(history: &[PreparedRow]) -> bool {
 struct B2BottomRepairProfile {
     refined: bool,
     price_profile: &'static str,
+    neutral_tight_repair: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2126,6 +2205,13 @@ fn b2_refined_bottom_repair_profile(history: &[PreparedRow]) -> Option<B2BottomR
     let volume_ratio = latest_volume_ratio(history, 5)?;
     let refined =
         breaks_top && close_holds_top && bottom_buffer && volume_ratio <= MAX_VOLUME_RATIO_5D;
+    let zxdq_slope_5d = tail_slope_pct(&history.iter().map(|row| row.zxdq).collect::<Vec<_>>(), 5);
+    let neutral_tight_repair = current_top >= left_top * 1.02
+        && latest_close >= left_top * 0.98
+        && current_top <= left_top * 1.80
+        && latest_close >= current_top * 0.65
+        && volume_ratio <= 1.50
+        && zxdq_slope_5d.is_none_or(|slope| slope >= -1.0);
     let price_profile = if breaks_top && close_holds_top {
         "breaks_top_close_holds_top"
     } else if breaks_top {
@@ -2137,6 +2223,7 @@ fn b2_refined_bottom_repair_profile(history: &[PreparedRow]) -> Option<B2BottomR
     Some(B2BottomRepairProfile {
         refined,
         price_profile,
+        neutral_tight_repair,
     })
 }
 
@@ -2328,6 +2415,119 @@ mod tests {
                 5.0
             ),
             2.33
+        );
+    }
+
+    #[test]
+    fn b2_strong_pass_selection_score_prioritizes_high_elastic_trend_start() {
+        assert_eq!(
+            adjust_b2_strong_pass_selection_score(
+                4.24,
+                "strong",
+                "PASS",
+                Some("B3"),
+                "trend_start",
+                4.0,
+                5.0,
+                5.0,
+                5.0,
+                3.39,
+            ),
+            4.54
+        );
+        assert_eq!(
+            adjust_b2_strong_pass_selection_score(
+                4.24,
+                "neutral",
+                "PASS",
+                Some("B3"),
+                "trend_start",
+                4.0,
+                5.0,
+                5.0,
+                5.0,
+                3.39,
+            ),
+            4.24
+        );
+        assert_eq!(
+            adjust_b2_strong_pass_selection_score(
+                4.24,
+                "strong",
+                "PASS",
+                Some("B3"),
+                "rebound",
+                4.0,
+                5.0,
+                5.0,
+                5.0,
+                3.39,
+            ),
+            4.24
+        );
+    }
+
+    #[test]
+    fn review_sort_key_prefers_selection_score_before_baseline_score() {
+        let review = json!({
+            "total_score": 4.54,
+            "baseline_review": {
+                "total_score": 4.24
+            }
+        });
+
+        assert_eq!(review_sort_key(&review), (4.54, 4.24));
+    }
+
+    #[test]
+    fn b2_neutral_tight_repair_selection_score_boosts_top_divergence_repair() {
+        let profile = B2BottomRepairProfile {
+            refined: false,
+            price_profile: "breaks_top_close_holds_top",
+            neutral_tight_repair: true,
+        };
+
+        assert_eq!(
+            adjust_b2_neutral_tight_repair_selection_score(
+                3.52,
+                "neutral",
+                Some(&profile),
+                true,
+                Some("B2"),
+                "rebound",
+                3.0,
+                4.0,
+                5.0,
+            ),
+            3.72
+        );
+        assert_eq!(
+            adjust_b2_neutral_tight_repair_selection_score(
+                3.52,
+                "weak",
+                Some(&profile),
+                true,
+                Some("B2"),
+                "rebound",
+                3.0,
+                4.0,
+                5.0,
+            ),
+            3.52
+        );
+        assert_eq!(
+            adjust_b2_neutral_tight_repair_selection_score(
+                3.52,
+                "neutral",
+                Some(&profile),
+                false,
+                Some("B2"),
+                "rebound",
+                3.0,
+                4.0,
+                5.0,
+            ),
+            3.52
         );
     }
 

@@ -894,6 +894,7 @@ for 2026-05-25.
 ## 实现约束
 
 - 2026-06-01 b2 review 调参记录：已试验弱环境 `B2 rebound` 的底背离不破顶/底部修复口径。当前实现把 refined 底部修复在 weak/neutral 下映射到 `macd_phase` 小幅加分，并把 weak 环境 relaunch PASS 特例收窄为必须满足 refined 底部修复，否则保留为 WATCH。2026-03-01..2026-05-29 回测中，weak pass top5 从 14 个样本/8 天收缩到 3 个样本/3 天，3 日和 5 日正收益率由 50.0%/42.9% 提升到 100.0%/100.0%；strong/neutral pass top 统计不变。该版本提纯有效但覆盖明显收缩，并误伤 2026-03-24 603601.SH、2026-04-01 601975.SH 等正例，后续需要继续拆分“非 refined 但仍可 PASS”的形态。
+- 2026-06-01 b2 strong PASS 内部排序记录：strong 环境中 `B3/B3+ trend_start + trend>=4 + price=5 + volume=5 + previous_abnormal=5 + macd_phase 3.0..3.8` 作为高弹性形态，在 PASS 内部 selection score 上加 0.30，并将 review summary 排序调整为优先顶层 selection `total_score`、baseline score 作为次级键。2026-03-01..2026-05-29 回测中，strong pass top3 的 3 日/5 日胜率从 61.1%/58.3% 提升到 63.9%/61.1%，ret5 均值从约 1.53% 提升到 2.00%；strong top5 基本不变。
 
 - b1 native review 开发期间不要重算 Python golden artifacts。
 - parity validation 使用 `/tmp` 下的 Rust runtime 临时目录。
@@ -907,6 +908,288 @@ for 2026-05-25.
   - gate flags
   - final decision fields
   - summary/recommendation fields
+
+## b2 Review 层重构 Roadmap
+
+目标：不再以现有 `PASS/WATCH/FAIL` 或五维总分作为唯一建模起点，而是先在 b2 筛选池内建立能区分不同涨幅层级的 review/ranking 体系。后续允许重写原评分体系；不需要为了兼容旧五维而保留无效逻辑。
+
+### 目标标签
+
+第一阶段以 `ret3` 为主标签，`ret5` 作为稳健性验证：
+
+```text
+A: ret3 >= 10%
+B: 5% <= ret3 < 10%
+C: 0% < ret3 < 5%
+D: -5% < ret3 <= 0%
+E: -10% < ret3 <= -5%
+F: ret3 <= -10%
+```
+
+核心目标：
+
+- A/B 组在同日同环境排序中明显前移。
+- D/E/F 组在同日同环境排序中明显后移。
+- `PASS/WATCH/FAIL` 作为最后映射，而不是第一判断依据。
+- 分环境验证：weak、neutral、strong 分别比较，不把不同环境样本混合下结论。
+
+### Phase 1：离线诊断数据集
+
+新增诊断脚本，先不改生产逻辑：
+
+```text
+scripts/b2_review_layer_diagnostics.py
+```
+
+固定初始样本范围：
+
+```text
+method=b2
+date=2026-03-01..2026-05-29
+sample=进入 b2 筛选池的全部股票
+label=ret3_bucket + ret3 + ret5
+environment=weak/neutral/strong
+```
+
+输出：
+
+```text
+diagnostics/b2_review_layer/features.csv
+diagnostics/b2_review_layer/summary.md
+diagnostics/b2_review_layer/segments.json
+diagnostics/b2_review_layer/misclassified_samples.md
+diagnostics/b2_review_layer/recommendations.json
+```
+
+每行至少包含：
+
+```text
+date, code, env, current_verdict, current_score, ret3, ret5, ret3_bucket,
+trend_structure, price_position, volume_behavior, previous_abnormal_move, macd_phase,
+signal, signal_type
+```
+
+### Phase 2：补全可解释因子
+
+从当前五维开始扩展，不引入未来收益字段作为生产特征。
+
+MACD 浪型因子：
+
+```text
+daily_macd_phase_type
+daily_macd_wave_index
+daily_macd_wave_stage
+daily_macd_rising_or_falling
+daily_macd_bottom_divergence
+daily_macd_top_divergence
+daily_macd_divergence_price_relation
+weekly_macd_phase_type
+weekly_macd_wave_index
+weekly_macd_wave_stage
+weekly_macd_bottom_divergence
+weekly_macd_top_divergence
+weekly_daily_combo_type
+```
+
+价格结构因子：
+
+```text
+price_vs_90d_high
+price_vs_90d_low
+price_vs_90d_mid
+pullback_confirm_vs_90d_mid
+pullback_confirm_vs_left_high
+left_high_reclaim_ratio
+left_high_hold_tolerance
+current_top_vs_left_top
+current_low_vs_left_bottom
+```
+
+均线和支撑因子：
+
+```text
+close_vs_zxdkx
+close_vs_bbi
+close_vs_ma25
+close_vs_ma60
+ma25_vs_ma60
+zxdkx_slope_5d
+bbi_slope_5d
+ma25_slope_5d
+ma60_slope_5d
+support_stack_type
+```
+
+横盘和压缩因子：
+
+```text
+sideways_days
+range_compression_20d
+range_compression_40d
+breakout_after_sideways
+days_since_last_high
+days_since_last_low
+```
+
+量能因子：
+
+```text
+volume_ratio_5d
+volume_ratio_10d
+breakout_volume_ratio
+pullback_volume_ratio
+volume_shrink_on_pullback
+abnormal_volume_without_breakout
+```
+
+KDJ 因子：
+
+```text
+k_value
+d_value
+j_value
+j_vs_k
+j_vs_d
+j_overheat
+j_repair_from_low
+kdj_cross_state
+```
+
+### Phase 3：环境内分层比较
+
+每个环境单独比较：
+
+```text
+A+B vs D+E+F
+A vs E/F
+B vs D
+```
+
+每个环境输出：
+
+```text
+高涨幅组高频组合
+低涨幅/负收益组高频组合
+胜负不明确但样本多的组合
+当前 PASS 命中的正例
+当前 PASS 命中的负例
+当前 WATCH 漏配的高涨幅例
+当前 FAIL 漏配的高涨幅例
+```
+
+组合分析优先级：
+
+```text
+env + signal + signal_type + 日MACD浪型 + 周MACD浪型 + 价格回踩关系 + 量能状态 + 支撑斜率
+```
+
+### Phase 4：错配和漏配分类
+
+诊断输出按三类组织：
+
+```text
+错配：当前 PASS，但 ret3/ret5 表现差。
+漏配：当前 WATCH/FAIL，但 ret3 >= 5% 或 ret3 >= 10%。
+排序错配：同一天 PASS+WATCH 池内，高涨幅票存在，但当前排序靠后。
+```
+
+每类给出：
+
+```text
+组合样本数
+ret3>=5% 数量
+ret3<=0% 数量
+ret3 均值/中位数
+ret5 均值/中位数
+当前 verdict 分布
+典型样本列表
+```
+
+### Phase 5：重建 Review 分层结构
+
+生产 review 层最终拆为三层：
+
+```text
+1. environment profile
+决定 weak/neutral/strong 下哪些形态允许进攻，哪些只能观察。
+
+2. pattern family
+识别具体形态族，例如：
+- weak refined bottom repair
+- neutral B3 low-macd rebound
+- neutral B3 trend_start volume-confirm
+- strong high-elastic trend_start
+- high-wave top-divergence exhaustion
+- failed breakout with heavy volume
+
+3. ranking score
+用于同一候选池内排序，目标是提高 ret3>=5% / ret3>=10% 的前排覆盖率。
+```
+
+建议 review 输出结构逐步演化为：
+
+```json
+{
+  "environment": "neutral",
+  "pattern_family": "neutral_b3_low_macd_rebound",
+  "risk_family": "none",
+  "quality_flags": [],
+  "risk_flags": [],
+  "review_score": 4.12,
+  "rank_score": 4.35,
+  "verdict": "PASS"
+}
+```
+
+### Phase 6：实施顺序
+
+优先改排序，后改 verdict：
+
+```text
+1. PASS+WATCH 内 rank_score
+目标：每日 ret3 前5/前10 更靠前。
+
+2. WATCH -> PASS override
+目标：放入当前漏配的高涨幅 WATCH。
+
+3. PASS -> WATCH/FAIL
+目标：剔除当前 PASS 负例。
+```
+
+每次只改一个形态族，必须列出新增正例、误伤样本和环境分层结果。
+
+### Phase 7：验证指标
+
+每次调整后至少输出：
+
+```text
+按环境：
+PASS top3/top5 ret3/ret5 胜率
+PASS top3/top5 ret3/ret5 均值、中位数
+PASS+WATCH top5 ret3 均值
+PASS+WATCH top10 ret3 均值
+ret3>=5% 样本在 top5/top10 的覆盖率
+ret3<=-5% 样本进入 top5/top10 的比例
+```
+
+错配指标：
+
+```text
+新增 PASS 中 ret3<=0 的数量
+被降级 PASS 中 ret3>=5 的数量
+新增 top5 中 ret3<=0 的数量
+被挤出 top5 中 ret3>=5 的数量
+```
+
+当前优先级：
+
+```text
+1. 建立 b2_review_layer_diagnostics.py
+2. 先分析 ret3>=5% vs ret3<=0%，按环境拆分。
+3. 先从当前五维 + signal/signal_type + MACD浪型做组合分层。
+4. 再逐步加入价格回踩、均线支撑、横盘、量能、KDJ。
+5. 确认高涨幅 WATCH 的稳定形态后，再实现 WATCH -> PASS 放宽。
+```
 
 ## 验证基线
 
