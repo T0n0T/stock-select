@@ -1,0 +1,2992 @@
+{
+  "scope": "env=strong and verdict=PASS",
+  "sample_count": 46,
+  "summary": {
+    "sample_count": 46,
+    "ret3_ge_5_count": 12,
+    "ret3_le_0_count": 16,
+    "ret3_mean": 1.81,
+    "ret3_median": 1.25,
+    "ret5_mean": 2.58,
+    "ret5_median": 1.71,
+    "ret3_bucket_distribution": {
+      "A": 5,
+      "B": 7,
+      "C": 18,
+      "D": 9,
+      "E": 6,
+      "F": 1
+    },
+    "current_verdict_distribution": {
+      "PASS": 46
+    },
+    "typical_samples": [
+      {
+        "date": "2026-05-08",
+        "code": "300292.SZ",
+        "verdict": "PASS",
+        "score": 4.27,
+        "ret3": 24.68,
+        "ret5": 18.87
+      },
+      {
+        "date": "2026-05-06",
+        "code": "603938.SH",
+        "verdict": "PASS",
+        "score": 4.32,
+        "ret3": 19.79,
+        "ret5": 42.41
+      },
+      {
+        "date": "2026-04-28",
+        "code": "603557.SH",
+        "verdict": "PASS",
+        "score": 4.22,
+        "ret3": 14.95,
+        "ret5": 15.93
+      },
+      {
+        "date": "2026-04-28",
+        "code": "603580.SH",
+        "verdict": "PASS",
+        "score": 4.25,
+        "ret3": 13.68,
+        "ret5": 25.32
+      },
+      {
+        "date": "2026-05-07",
+        "code": "000791.SZ",
+        "verdict": "PASS",
+        "score": 4.64,
+        "ret3": 12.18,
+        "ret5": 10.46
+      },
+      {
+        "date": "2026-05-08",
+        "code": "603838.SH",
+        "verdict": "PASS",
+        "score": 4.77,
+        "ret3": 9.74,
+        "ret5": 8.57
+      },
+      {
+        "date": "2026-05-12",
+        "code": "300866.SZ",
+        "verdict": "PASS",
+        "score": 4.16,
+        "ret3": 6.49,
+        "ret5": 2.67
+      },
+      {
+        "date": "2026-04-29",
+        "code": "600236.SH",
+        "verdict": "PASS",
+        "score": 4.02,
+        "ret3": 6.29,
+        "ret5": 16.18
+      }
+    ],
+    "positive_rate": 0.261,
+    "negative_rate": 0.348
+  },
+  "family_distribution": {
+    "other": {
+      "sample_count": 39,
+      "ret3_ge_5_count": 10,
+      "ret3_le_0_count": 14,
+      "ret3_mean": 1.97,
+      "ret3_median": 1.21,
+      "ret5_mean": 2.19,
+      "ret5_median": 1.47,
+      "ret3_bucket_distribution": {
+        "A": 4,
+        "B": 6,
+        "C": 15,
+        "D": 9,
+        "E": 5
+      },
+      "current_verdict_distribution": {
+        "PASS": 39
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-08",
+          "code": "300292.SZ",
+          "verdict": "PASS",
+          "score": 4.27,
+          "ret3": 24.68,
+          "ret5": 18.87
+        },
+        {
+          "date": "2026-04-28",
+          "code": "603557.SH",
+          "verdict": "PASS",
+          "score": 4.22,
+          "ret3": 14.95,
+          "ret5": 15.93
+        },
+        {
+          "date": "2026-04-28",
+          "code": "603580.SH",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": 13.68,
+          "ret5": 25.32
+        },
+        {
+          "date": "2026-05-07",
+          "code": "000791.SZ",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 12.18,
+          "ret5": 10.46
+        },
+        {
+          "date": "2026-05-08",
+          "code": "603838.SH",
+          "verdict": "PASS",
+          "score": 4.77,
+          "ret3": 9.74,
+          "ret5": 8.57
+        },
+        {
+          "date": "2026-05-12",
+          "code": "300866.SZ",
+          "verdict": "PASS",
+          "score": 4.16,
+          "ret3": 6.49,
+          "ret5": 2.67
+        },
+        {
+          "date": "2026-04-29",
+          "code": "600236.SH",
+          "verdict": "PASS",
+          "score": 4.02,
+          "ret3": 6.29,
+          "ret5": 16.18
+        },
+        {
+          "date": "2026-04-28",
+          "code": "300672.SZ",
+          "verdict": "PASS",
+          "score": 4.54,
+          "ret3": 6.15,
+          "ret5": 19.87
+        }
+      ],
+      "share": 0.848,
+      "positive_rate": 0.256,
+      "negative_rate": 0.359
+    },
+    "S-A": {
+      "sample_count": 3,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -5.05,
+      "ret3_median": 1.26,
+      "ret5_mean": -5.98,
+      "ret5_median": -0.21,
+      "ret3_bucket_distribution": {
+        "B": 1,
+        "C": 1,
+        "F": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 3
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "002962.SZ",
+          "verdict": "PASS",
+          "score": 4.7,
+          "ret3": 5.9,
+          "ret5": 8.26
+        },
+        {
+          "date": "2026-05-06",
+          "code": "300099.SZ",
+          "verdict": "PASS",
+          "score": 4.73,
+          "ret3": 1.26,
+          "ret5": -0.21
+        },
+        {
+          "date": "2026-05-15",
+          "code": "300651.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": -22.31,
+          "ret5": -25.98
+        }
+      ],
+      "share": 0.065,
+      "positive_rate": 0.333,
+      "negative_rate": 0.333
+    },
+    "S-B": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 1,
+      "ret3_mean": 7.17,
+      "ret3_median": 7.17,
+      "ret5_mean": 21.01,
+      "ret5_median": 21.01,
+      "ret3_bucket_distribution": {
+        "A": 1,
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "603938.SH",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 19.79,
+          "ret5": 42.41
+        },
+        {
+          "date": "2026-05-13",
+          "code": "002042.SZ",
+          "verdict": "PASS",
+          "score": 4.62,
+          "ret3": -5.44,
+          "ret5": -0.39
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.5,
+      "negative_rate": 0.5
+    },
+    "S-C": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.67,
+      "ret3_median": 3.67,
+      "ret5_mean": 4.54,
+      "ret5_median": 4.54,
+      "ret3_bucket_distribution": {
+        "C": 2
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "000420.SZ",
+          "verdict": "PASS",
+          "score": 4.49,
+          "ret3": 3.93,
+          "ret5": 2.06
+        },
+        {
+          "date": "2026-05-06",
+          "code": "603912.SH",
+          "verdict": "PASS",
+          "score": 4.39,
+          "ret3": 3.41,
+          "ret5": 7.01
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    }
+  },
+  "signal_distribution": {
+    "B3|trend_start": {
+      "sample_count": 20,
+      "ret3_ge_5_count": 5,
+      "ret3_le_0_count": 6,
+      "ret3_mean": 2.24,
+      "ret3_median": 1.22,
+      "ret5_mean": 2.25,
+      "ret5_median": 1.64,
+      "ret3_bucket_distribution": {
+        "A": 2,
+        "B": 3,
+        "C": 9,
+        "D": 3,
+        "E": 3
+      },
+      "current_verdict_distribution": {
+        "PASS": 20
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-08",
+          "code": "300292.SZ",
+          "verdict": "PASS",
+          "score": 4.27,
+          "ret3": 24.68,
+          "ret5": 18.87
+        },
+        {
+          "date": "2026-05-07",
+          "code": "000791.SZ",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 12.18,
+          "ret5": 10.46
+        },
+        {
+          "date": "2026-05-08",
+          "code": "603838.SH",
+          "verdict": "PASS",
+          "score": 4.77,
+          "ret3": 9.74,
+          "ret5": 8.57
+        },
+        {
+          "date": "2026-04-28",
+          "code": "300672.SZ",
+          "verdict": "PASS",
+          "score": 4.54,
+          "ret3": 6.15,
+          "ret5": 19.87
+        },
+        {
+          "date": "2026-05-07",
+          "code": "300684.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 5.15,
+          "ret5": 2.23
+        },
+        {
+          "date": "2026-04-21",
+          "code": "600869.SH",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 3.84,
+          "ret5": 11.27
+        },
+        {
+          "date": "2026-05-19",
+          "code": "603626.SH",
+          "verdict": "PASS",
+          "score": 4.23,
+          "ret3": 3.7,
+          "ret5": -1.88
+        },
+        {
+          "date": "2026-05-07",
+          "code": "600268.SH",
+          "verdict": "PASS",
+          "score": 4.3,
+          "ret3": 2.8,
+          "ret5": -0.25
+        }
+      ],
+      "share": 0.435,
+      "positive_rate": 0.25,
+      "negative_rate": 0.3
+    },
+    "B3|rebound": {
+      "sample_count": 15,
+      "ret3_ge_5_count": 3,
+      "ret3_le_0_count": 7,
+      "ret3_mean": 0.87,
+      "ret3_median": 0.32,
+      "ret5_mean": 2.04,
+      "ret5_median": 1.47,
+      "ret3_bucket_distribution": {
+        "A": 1,
+        "B": 2,
+        "C": 5,
+        "D": 5,
+        "E": 2
+      },
+      "current_verdict_distribution": {
+        "PASS": 15
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-28",
+          "code": "603580.SH",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": 13.68,
+          "ret5": 25.32
+        },
+        {
+          "date": "2026-05-12",
+          "code": "300866.SZ",
+          "verdict": "PASS",
+          "score": 4.16,
+          "ret3": 6.49,
+          "ret5": 2.67
+        },
+        {
+          "date": "2026-04-29",
+          "code": "600236.SH",
+          "verdict": "PASS",
+          "score": 4.02,
+          "ret3": 6.29,
+          "ret5": 16.18
+        },
+        {
+          "date": "2026-05-07",
+          "code": "301165.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 3.73,
+          "ret5": -1.39
+        },
+        {
+          "date": "2026-05-19",
+          "code": "301393.SZ",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": 2.88,
+          "ret5": -3.45
+        },
+        {
+          "date": "2026-04-22",
+          "code": "300931.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 1.86,
+          "ret5": 15.4
+        },
+        {
+          "date": "2026-03-02",
+          "code": "002826.SZ",
+          "verdict": "PASS",
+          "score": 4.44,
+          "ret3": 1.05,
+          "ret5": 5.75
+        },
+        {
+          "date": "2026-05-20",
+          "code": "002678.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 0.32,
+          "ret5": -9.09
+        }
+      ],
+      "share": 0.326,
+      "positive_rate": 0.2,
+      "negative_rate": 0.467
+    },
+    "B2|trend_start": {
+      "sample_count": 10,
+      "ret3_ge_5_count": 3,
+      "ret3_le_0_count": 3,
+      "ret3_mean": 1.05,
+      "ret3_median": 2.92,
+      "ret5_mean": 2.7,
+      "ret5_median": 0.93,
+      "ret3_bucket_distribution": {
+        "A": 1,
+        "B": 2,
+        "C": 4,
+        "D": 1,
+        "E": 1,
+        "F": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 10
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "603938.SH",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 19.79,
+          "ret5": 42.41
+        },
+        {
+          "date": "2026-05-07",
+          "code": "002962.SZ",
+          "verdict": "PASS",
+          "score": 4.7,
+          "ret3": 5.9,
+          "ret5": 8.26
+        },
+        {
+          "date": "2026-04-30",
+          "code": "000042.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 5.5,
+          "ret5": 6.44
+        },
+        {
+          "date": "2026-05-06",
+          "code": "000420.SZ",
+          "verdict": "PASS",
+          "score": 4.49,
+          "ret3": 3.93,
+          "ret5": 2.06
+        },
+        {
+          "date": "2026-05-06",
+          "code": "603912.SH",
+          "verdict": "PASS",
+          "score": 4.39,
+          "ret3": 3.41,
+          "ret5": 7.01
+        },
+        {
+          "date": "2026-05-13",
+          "code": "603788.SH",
+          "verdict": "PASS",
+          "score": 4.42,
+          "ret3": 2.42,
+          "ret5": -4.84
+        },
+        {
+          "date": "2026-05-06",
+          "code": "300099.SZ",
+          "verdict": "PASS",
+          "score": 4.73,
+          "ret3": 1.26,
+          "ret5": -0.21
+        },
+        {
+          "date": "2026-03-02",
+          "code": "688301.SH",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": -4.01,
+          "ret5": -7.8
+        }
+      ],
+      "share": 0.217,
+      "positive_rate": 0.3,
+      "negative_rate": 0.3
+    },
+    "B3+|trend_start": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 14.95,
+      "ret3_median": 14.95,
+      "ret5_mean": 15.93,
+      "ret5_median": 15.93,
+      "ret3_bucket_distribution": {
+        "A": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-28",
+          "code": "603557.SH",
+          "verdict": "PASS",
+          "score": 4.22,
+          "ret3": 14.95,
+          "ret5": 15.93
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    }
+  },
+  "factor_distribution": {
+    "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising": {
+      "sample_count": 9,
+      "ret3_ge_5_count": 3,
+      "ret3_le_0_count": 2,
+      "ret3_mean": 4.94,
+      "ret3_median": 1.23,
+      "ret5_mean": 6.44,
+      "ret5_median": 1.94,
+      "ret3_bucket_distribution": {
+        "A": 2,
+        "B": 1,
+        "C": 4,
+        "D": 2
+      },
+      "current_verdict_distribution": {
+        "PASS": 9
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-08",
+          "code": "300292.SZ",
+          "verdict": "PASS",
+          "score": 4.27,
+          "ret3": 24.68,
+          "ret5": 18.87
+        },
+        {
+          "date": "2026-05-07",
+          "code": "000791.SZ",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 12.18,
+          "ret5": 10.46
+        },
+        {
+          "date": "2026-04-28",
+          "code": "300672.SZ",
+          "verdict": "PASS",
+          "score": 4.54,
+          "ret3": 6.15,
+          "ret5": 19.87
+        },
+        {
+          "date": "2026-05-07",
+          "code": "600268.SH",
+          "verdict": "PASS",
+          "score": 4.3,
+          "ret3": 2.8,
+          "ret5": -0.25
+        },
+        {
+          "date": "2026-04-29",
+          "code": "301081.SZ",
+          "verdict": "PASS",
+          "score": 4.3,
+          "ret3": 1.23,
+          "ret5": 3.88
+        },
+        {
+          "date": "2026-05-07",
+          "code": "002126.SZ",
+          "verdict": "PASS",
+          "score": 4.66,
+          "ret3": 1.21,
+          "ret5": 1.94
+        },
+        {
+          "date": "2026-04-30",
+          "code": "688638.SH",
+          "verdict": "PASS",
+          "score": 4.11,
+          "ret3": 0.96,
+          "ret5": 1.33
+        },
+        {
+          "date": "2026-04-30",
+          "code": "300457.SZ",
+          "verdict": "PASS",
+          "score": 4.14,
+          "ret3": -1.69,
+          "ret5": 0.9
+        }
+      ],
+      "share": 0.196,
+      "positive_rate": 0.333,
+      "negative_rate": 0.222
+    },
+    "strong|B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising": {
+      "sample_count": 6,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 2,
+      "ret3_mean": 1.45,
+      "ret3_median": 0.69,
+      "ret5_mean": -0.64,
+      "ret5_median": 0.39,
+      "ret3_bucket_distribution": {
+        "B": 1,
+        "C": 3,
+        "D": 2
+      },
+      "current_verdict_distribution": {
+        "PASS": 6
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-12",
+          "code": "300866.SZ",
+          "verdict": "PASS",
+          "score": 4.16,
+          "ret3": 6.49,
+          "ret5": 2.67
+        },
+        {
+          "date": "2026-05-07",
+          "code": "301165.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 3.73,
+          "ret5": -1.39
+        },
+        {
+          "date": "2026-03-02",
+          "code": "002826.SZ",
+          "verdict": "PASS",
+          "score": 4.44,
+          "ret3": 1.05,
+          "ret5": 5.75
+        },
+        {
+          "date": "2026-05-20",
+          "code": "002678.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 0.32,
+          "ret5": -9.09
+        },
+        {
+          "date": "2026-05-07",
+          "code": "300096.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": -1.24,
+          "ret5": -3.93
+        },
+        {
+          "date": "2026-04-22",
+          "code": "001286.SZ",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": -1.64,
+          "ret5": 2.16
+        }
+      ],
+      "share": 0.13,
+      "positive_rate": 0.167,
+      "negative_rate": 0.333
+    },
+    "strong|B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising": {
+      "sample_count": 5,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 2,
+      "ret3_mean": 0.16,
+      "ret3_median": 0.42,
+      "ret5_mean": 0.62,
+      "ret5_median": 3.05,
+      "ret3_bucket_distribution": {
+        "B": 1,
+        "C": 2,
+        "D": 1,
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 5
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-08",
+          "code": "603838.SH",
+          "verdict": "PASS",
+          "score": 4.77,
+          "ret3": 9.74,
+          "ret5": 8.57
+        },
+        {
+          "date": "2026-05-06",
+          "code": "605016.SH",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 1.41,
+          "ret5": 3.05
+        },
+        {
+          "date": "2026-04-30",
+          "code": "605117.SH",
+          "verdict": "PASS",
+          "score": 4.01,
+          "ret3": 0.42,
+          "ret5": 5.44
+        },
+        {
+          "date": "2026-05-13",
+          "code": "000949.SZ",
+          "verdict": "PASS",
+          "score": 4.02,
+          "ret3": -4.63,
+          "ret5": -7.55
+        },
+        {
+          "date": "2026-05-20",
+          "code": "603229.SH",
+          "verdict": "PASS",
+          "score": 4.77,
+          "ret3": -6.14,
+          "ret5": -6.43
+        }
+      ],
+      "share": 0.109,
+      "positive_rate": 0.2,
+      "negative_rate": 0.4
+    },
+    "strong|B3|rebound|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising": {
+      "sample_count": 4,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 3,
+      "ret3_mean": -2.78,
+      "ret3_median": -4.0,
+      "ret5_mean": 2.99,
+      "ret5_median": 3.29,
+      "ret3_bucket_distribution": {
+        "C": 1,
+        "D": 2,
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 4
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-22",
+          "code": "300931.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 1.86,
+          "ret5": 15.4
+        },
+        {
+          "date": "2026-05-14",
+          "code": "603332.SH",
+          "verdict": "PASS",
+          "score": 4.36,
+          "ret3": -3.69,
+          "ret5": -10.04
+        },
+        {
+          "date": "2026-05-07",
+          "code": "688345.SH",
+          "verdict": "PASS",
+          "score": 4.3,
+          "ret3": -4.3,
+          "ret5": 5.11
+        },
+        {
+          "date": "2026-05-12",
+          "code": "301607.SZ",
+          "verdict": "PASS",
+          "score": 4.28,
+          "ret3": -5.0,
+          "ret5": 1.47
+        }
+      ],
+      "share": 0.087,
+      "positive_rate": 0.0,
+      "negative_rate": 0.75
+    },
+    "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral": {
+      "sample_count": 4,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 2,
+      "ret3_mean": -1.25,
+      "ret3_median": -1.37,
+      "ret5_mean": -6.89,
+      "ret5_median": -6.23,
+      "ret3_bucket_distribution": {
+        "B": 1,
+        "C": 1,
+        "E": 2
+      },
+      "current_verdict_distribution": {
+        "PASS": 4
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "300684.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 5.15,
+          "ret5": 2.23
+        },
+        {
+          "date": "2026-05-19",
+          "code": "603626.SH",
+          "verdict": "PASS",
+          "score": 4.23,
+          "ret3": 3.7,
+          "ret5": -1.88
+        },
+        {
+          "date": "2026-05-20",
+          "code": "301252.SZ",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": -6.44,
+          "ret5": -17.34
+        },
+        {
+          "date": "2026-05-07",
+          "code": "600590.SH",
+          "verdict": "PASS",
+          "score": 4.59,
+          "ret3": -7.41,
+          "ret5": -10.59
+        }
+      ],
+      "share": 0.087,
+      "positive_rate": 0.25,
+      "negative_rate": 0.5
+    },
+    "strong|B2|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=normal|volume=expanding|kdj=rising": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 1,
+      "ret3_mean": 0.75,
+      "ret3_median": 0.75,
+      "ret5_mean": -0.68,
+      "ret5_median": -0.68,
+      "ret3_bucket_distribution": {
+        "B": 1,
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-30",
+          "code": "000042.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 5.5,
+          "ret5": 6.44
+        },
+        {
+          "date": "2026-03-02",
+          "code": "688301.SH",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": -4.01,
+          "ret5": -7.8
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.5,
+      "negative_rate": 0.5
+    },
+    "strong|B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=neutral": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -10.52,
+      "ret3_median": -10.52,
+      "ret5_mean": -13.1,
+      "ret5_median": -13.1,
+      "ret3_bucket_distribution": {
+        "C": 1,
+        "F": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "300099.SZ",
+          "verdict": "PASS",
+          "score": 4.73,
+          "ret3": 1.26,
+          "ret5": -0.21
+        },
+        {
+          "date": "2026-05-15",
+          "code": "300651.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": -22.31,
+          "ret5": -25.98
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.0,
+      "negative_rate": 0.5
+    },
+    "strong|B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 1,
+      "ret3_mean": 7.17,
+      "ret3_median": 7.17,
+      "ret5_mean": 21.01,
+      "ret5_median": 21.01,
+      "ret3_bucket_distribution": {
+        "A": 1,
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "603938.SH",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 19.79,
+          "ret5": 42.41
+        },
+        {
+          "date": "2026-05-13",
+          "code": "002042.SZ",
+          "verdict": "PASS",
+          "score": 4.62,
+          "ret3": -5.44,
+          "ret5": -0.39
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.5,
+      "negative_rate": 0.5
+    },
+    "strong|B3|rebound|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=repair_from_low": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 2,
+      "ret3_mean": -3.71,
+      "ret3_median": -3.71,
+      "ret5_mean": -7.79,
+      "ret5_median": -7.79,
+      "ret3_bucket_distribution": {
+        "D": 1,
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-22",
+          "code": "600389.SH",
+          "verdict": "PASS",
+          "score": 4.22,
+          "ret3": -0.44,
+          "ret5": -1.08
+        },
+        {
+          "date": "2026-05-15",
+          "code": "300804.SZ",
+          "verdict": "PASS",
+          "score": 4.21,
+          "ret3": -6.98,
+          "ret5": -14.5
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "strong|B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=shrinking|kdj=rising": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 2.27,
+      "ret3_median": 2.27,
+      "ret5_mean": 5.81,
+      "ret5_median": 5.81,
+      "ret3_bucket_distribution": {
+        "C": 2
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-21",
+          "code": "600869.SH",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 3.84,
+          "ret5": 11.27
+        },
+        {
+          "date": "2026-05-07",
+          "code": "603912.SH",
+          "verdict": "PASS",
+          "score": 4.24,
+          "ret3": 0.71,
+          "ret5": 0.35
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "strong|B2|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=rising": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.93,
+      "ret3_median": 3.93,
+      "ret5_mean": 2.06,
+      "ret5_median": 2.06,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "000420.SZ",
+          "verdict": "PASS",
+          "score": 4.49,
+          "ret3": 3.93,
+          "ret5": 2.06
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "strong|B2|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.41,
+      "ret3_median": 3.41,
+      "ret5_mean": 7.01,
+      "ret5_median": 7.01,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "603912.SH",
+          "verdict": "PASS",
+          "score": 4.39,
+          "ret3": 3.41,
+          "ret5": 7.01
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "strong|B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=repair_from_low": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 5.9,
+      "ret3_median": 5.9,
+      "ret5_mean": 8.26,
+      "ret5_median": 8.26,
+      "ret3_bucket_distribution": {
+        "B": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "002962.SZ",
+          "verdict": "PASS",
+          "score": 4.7,
+          "ret3": 5.9,
+          "ret5": 8.26
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "strong|B2|trend_start|price=upper|midline=pullback_confirm|support=bull_stack|compression=tight|volume=expanding|kdj=rising": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 2.42,
+      "ret3_median": 2.42,
+      "ret5_mean": -4.84,
+      "ret5_median": -4.84,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-13",
+          "code": "603788.SH",
+          "verdict": "PASS",
+          "score": 4.42,
+          "ret3": 2.42,
+          "ret5": -4.84
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "strong|B3+|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=shrinking|kdj=repair_from_low": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 14.95,
+      "ret3_median": 14.95,
+      "ret5_mean": 15.93,
+      "ret5_median": 15.93,
+      "ret3_bucket_distribution": {
+        "A": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-28",
+          "code": "603557.SH",
+          "verdict": "PASS",
+          "score": 4.22,
+          "ret3": 14.95,
+          "ret5": 15.93
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "strong|B3|rebound|price=middle|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 6.29,
+      "ret3_median": 6.29,
+      "ret5_mean": 16.18,
+      "ret5_median": 16.18,
+      "ret3_bucket_distribution": {
+        "B": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-29",
+          "code": "600236.SH",
+          "verdict": "PASS",
+          "score": 4.02,
+          "ret3": 6.29,
+          "ret5": 16.18
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "strong|B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=normal|volume=normal|kdj=rising": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 2.88,
+      "ret3_median": 2.88,
+      "ret5_mean": -3.45,
+      "ret5_median": -3.45,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-19",
+          "code": "301393.SZ",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": 2.88,
+          "ret5": -3.45
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "strong|B3|rebound|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 13.68,
+      "ret3_median": 13.68,
+      "ret5_mean": 25.32,
+      "ret5_median": 25.32,
+      "ret3_bucket_distribution": {
+        "A": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-28",
+          "code": "603580.SH",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": 13.68,
+          "ret5": 25.32
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    }
+  },
+  "macd_wave_distribution": {
+    "W:idle:0:等待启动|D:falling:2:金叉临近": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -1.51,
+      "ret3_median": -1.51,
+      "ret5_mean": -2.61,
+      "ret5_median": -2.61,
+      "ret3_bucket_distribution": {
+        "C": 1,
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-13",
+          "code": "603788.SH",
+          "verdict": "PASS",
+          "score": 4.42,
+          "ret3": 2.42,
+          "ret5": -4.84
+        },
+        {
+          "date": "2026-05-13",
+          "code": "002042.SZ",
+          "verdict": "PASS",
+          "score": 4.62,
+          "ret3": -5.44,
+          "ret5": -0.39
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.0,
+      "negative_rate": 0.5
+    },
+    "W:idle:0:等待启动|D:rising:2:背离": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 1,
+      "ret3_mean": 1.4,
+      "ret3_median": 1.4,
+      "ret5_mean": -3.68,
+      "ret5_median": -3.68,
+      "ret3_bucket_distribution": {
+        "B": 1,
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-12",
+          "code": "300866.SZ",
+          "verdict": "PASS",
+          "score": 4.16,
+          "ret3": 6.49,
+          "ret5": 2.67
+        },
+        {
+          "date": "2026-05-14",
+          "code": "603332.SH",
+          "verdict": "PASS",
+          "score": 4.36,
+          "ret3": -3.69,
+          "ret5": -10.04
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.5,
+      "negative_rate": 0.5
+    },
+    "W:rising:2:分歧|D:rising:4:背离": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -6.28,
+      "ret3_median": -6.28,
+      "ret5_mean": -8.71,
+      "ret5_median": -8.71,
+      "ret3_bucket_distribution": {
+        "B": 1,
+        "F": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-08",
+          "code": "603838.SH",
+          "verdict": "PASS",
+          "score": 4.77,
+          "ret3": 9.74,
+          "ret5": 8.57
+        },
+        {
+          "date": "2026-05-15",
+          "code": "300651.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": -22.31,
+          "ret5": -25.98
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.5,
+      "negative_rate": 0.5
+    },
+    "W:rising:3:背离|D:falling:6:修复": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -0.75,
+      "ret3_median": -0.75,
+      "ret5_mean": 2.43,
+      "ret5_median": 2.43,
+      "ret3_bucket_distribution": {
+        "C": 1,
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "600268.SH",
+          "verdict": "PASS",
+          "score": 4.3,
+          "ret3": 2.8,
+          "ret5": -0.25
+        },
+        {
+          "date": "2026-05-07",
+          "code": "688345.SH",
+          "verdict": "PASS",
+          "score": 4.3,
+          "ret3": -4.3,
+          "ret5": 5.11
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.0,
+      "negative_rate": 0.5
+    },
+    "W:rising:3:背离|D:rising:0:背离": {
+      "sample_count": 2,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 6.25,
+      "ret3_median": 6.25,
+      "ret5_mean": 0.69,
+      "ret5_median": 0.69,
+      "ret3_bucket_distribution": {
+        "A": 1,
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 2
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "000791.SZ",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 12.18,
+          "ret5": 10.46
+        },
+        {
+          "date": "2026-05-20",
+          "code": "002678.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 0.32,
+          "ret5": -9.09
+        }
+      ],
+      "share": 0.043,
+      "positive_rate": 0.5,
+      "negative_rate": 0.0
+    },
+    "W:falling:2:修复|D:falling:2:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 5.15,
+      "ret3_median": 5.15,
+      "ret5_mean": 2.23,
+      "ret5_median": 2.23,
+      "ret3_bucket_distribution": {
+        "B": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "300684.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 5.15,
+          "ret5": 2.23
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:falling:2:修复|D:rising:0:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -3.03,
+      "ret3_median": -3.03,
+      "ret5_mean": 0.92,
+      "ret5_median": 0.92,
+      "ret3_bucket_distribution": {
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-19",
+          "code": "002452.SZ",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": -3.03,
+          "ret5": 0.92
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:falling:2:修复|D:rising:2:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -1.69,
+      "ret3_median": -1.69,
+      "ret5_mean": 0.9,
+      "ret5_median": 0.9,
+      "ret3_bucket_distribution": {
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-30",
+          "code": "300457.SZ",
+          "verdict": "PASS",
+          "score": 4.14,
+          "ret3": -1.69,
+          "ret5": 0.9
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:falling:4:修复|D:rising:1:分歧": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.7,
+      "ret3_median": 3.7,
+      "ret5_mean": -1.88,
+      "ret5_median": -1.88,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-19",
+          "code": "603626.SH",
+          "verdict": "PASS",
+          "score": 4.23,
+          "ret3": 3.7,
+          "ret5": -1.88
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:falling:4:背离|D:rising:0:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 1.21,
+      "ret3_median": 1.21,
+      "ret5_mean": 1.94,
+      "ret5_median": 1.94,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "002126.SZ",
+          "verdict": "PASS",
+          "score": 4.66,
+          "ret3": 1.21,
+          "ret5": 1.94
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:0:分歧|D:falling:2:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 1.41,
+      "ret3_median": 1.41,
+      "ret5_mean": 3.05,
+      "ret5_median": 3.05,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "605016.SH",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 1.41,
+          "ret5": 3.05
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:0:背离|D:falling:6:金叉临近": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -7.41,
+      "ret3_median": -7.41,
+      "ret5_mean": -10.59,
+      "ret5_median": -10.59,
+      "ret3_bucket_distribution": {
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "600590.SH",
+          "verdict": "PASS",
+          "score": 4.59,
+          "ret3": -7.41,
+          "ret5": -10.59
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:0:背离|D:rising:1:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -5.0,
+      "ret3_median": -5.0,
+      "ret5_mean": 1.47,
+      "ret5_median": 1.47,
+      "ret3_bucket_distribution": {
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-12",
+          "code": "301607.SZ",
+          "verdict": "PASS",
+          "score": 4.28,
+          "ret3": -5.0,
+          "ret5": 1.47
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:0:背离|D:rising:2:强势": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -6.14,
+      "ret3_median": -6.14,
+      "ret5_mean": -6.43,
+      "ret5_median": -6.43,
+      "ret3_bucket_distribution": {
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-20",
+          "code": "603229.SH",
+          "verdict": "PASS",
+          "score": 4.77,
+          "ret3": -6.14,
+          "ret5": -6.43
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:0:背离|D:rising:4:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -4.01,
+      "ret3_median": -4.01,
+      "ret5_mean": -7.8,
+      "ret5_median": -7.8,
+      "ret3_bucket_distribution": {
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-03-02",
+          "code": "688301.SH",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": -4.01,
+          "ret5": -7.8
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:1:分歧|D:falling:4:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 14.95,
+      "ret3_median": 14.95,
+      "ret5_mean": 15.93,
+      "ret5_median": 15.93,
+      "ret3_bucket_distribution": {
+        "A": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-28",
+          "code": "603557.SH",
+          "verdict": "PASS",
+          "score": 4.22,
+          "ret3": 14.95,
+          "ret5": 15.93
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:1:分歧|D:falling:6:金叉临近": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.41,
+      "ret3_median": 3.41,
+      "ret5_mean": 7.01,
+      "ret5_median": 7.01,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "603912.SH",
+          "verdict": "PASS",
+          "score": 4.39,
+          "ret3": 3.41,
+          "ret5": 7.01
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:1:分歧|D:rising:6:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 0.71,
+      "ret3_median": 0.71,
+      "ret5_mean": 0.35,
+      "ret5_median": 0.35,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "603912.SH",
+          "verdict": "PASS",
+          "score": 4.24,
+          "ret3": 0.71,
+          "ret5": 0.35
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:1:强势|D:rising:1:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 24.68,
+      "ret3_median": 24.68,
+      "ret5_mean": 18.87,
+      "ret5_median": 18.87,
+      "ret3_bucket_distribution": {
+        "A": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-08",
+          "code": "300292.SZ",
+          "verdict": "PASS",
+          "score": 4.27,
+          "ret3": 24.68,
+          "ret5": 18.87
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:1:背离|D:falling:10:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 0.42,
+      "ret3_median": 0.42,
+      "ret5_mean": 5.44,
+      "ret5_median": 5.44,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-30",
+          "code": "605117.SH",
+          "verdict": "PASS",
+          "score": 4.01,
+          "ret3": 0.42,
+          "ret5": 5.44
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:1:背离|D:falling:2:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 2.88,
+      "ret3_median": 2.88,
+      "ret5_mean": -3.45,
+      "ret5_median": -3.45,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-19",
+          "code": "301393.SZ",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": 2.88,
+          "ret5": -3.45
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:1:背离|D:falling:8:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -6.98,
+      "ret3_median": -6.98,
+      "ret5_mean": -14.5,
+      "ret5_median": -14.5,
+      "ret3_bucket_distribution": {
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-15",
+          "code": "300804.SZ",
+          "verdict": "PASS",
+          "score": 4.21,
+          "ret3": -6.98,
+          "ret5": -14.5
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:2:背离|D:falling:2:金叉临近": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 1.26,
+      "ret3_median": 1.26,
+      "ret5_mean": -0.21,
+      "ret5_median": -0.21,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "300099.SZ",
+          "verdict": "PASS",
+          "score": 4.73,
+          "ret3": 1.26,
+          "ret5": -0.21
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:2:背离|D:falling:6:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -1.24,
+      "ret3_median": -1.24,
+      "ret5_mean": -3.93,
+      "ret5_median": -3.93,
+      "ret3_bucket_distribution": {
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "300096.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": -1.24,
+          "ret5": -3.93
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:2:背离|D:rising:0:分歧": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 19.79,
+      "ret3_median": 19.79,
+      "ret5_mean": 42.41,
+      "ret5_median": 42.41,
+      "ret3_bucket_distribution": {
+        "A": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "603938.SH",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 19.79,
+          "ret5": 42.41
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:2:背离|D:rising:0:强势": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 5.5,
+      "ret3_median": 5.5,
+      "ret5_mean": 6.44,
+      "ret5_median": 6.44,
+      "ret3_bucket_distribution": {
+        "B": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-30",
+          "code": "000042.SZ",
+          "verdict": "PASS",
+          "score": 4.32,
+          "ret3": 5.5,
+          "ret5": 6.44
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:3:强势|D:falling:2:金叉临近": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 5.9,
+      "ret3_median": 5.9,
+      "ret5_mean": 8.26,
+      "ret5_median": 8.26,
+      "ret3_bucket_distribution": {
+        "B": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "002962.SZ",
+          "verdict": "PASS",
+          "score": 4.7,
+          "ret3": 5.9,
+          "ret5": 8.26
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:3:强势|D:rising:3:分歧": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 13.68,
+      "ret3_median": 13.68,
+      "ret5_mean": 25.32,
+      "ret5_median": 25.32,
+      "ret3_bucket_distribution": {
+        "A": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-28",
+          "code": "603580.SH",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": 13.68,
+          "ret5": 25.32
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:3:背离|D:falling:0:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -4.63,
+      "ret3_median": -4.63,
+      "ret5_mean": -7.55,
+      "ret5_median": -7.55,
+      "ret3_bucket_distribution": {
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-13",
+          "code": "000949.SZ",
+          "verdict": "PASS",
+          "score": 4.02,
+          "ret3": -4.63,
+          "ret5": -7.55
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:3:背离|D:falling:2:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 0.96,
+      "ret3_median": 0.96,
+      "ret5_mean": 1.33,
+      "ret5_median": 1.33,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-30",
+          "code": "688638.SH",
+          "verdict": "PASS",
+          "score": 4.11,
+          "ret3": 0.96,
+          "ret5": 1.33
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:3:背离|D:falling:4:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -0.44,
+      "ret3_median": -0.44,
+      "ret5_mean": -1.08,
+      "ret5_median": -1.08,
+      "ret3_bucket_distribution": {
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-22",
+          "code": "600389.SH",
+          "verdict": "PASS",
+          "score": 4.22,
+          "ret3": -0.44,
+          "ret5": -1.08
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:3:背离|D:falling:4:金叉临近": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.84,
+      "ret3_median": 3.84,
+      "ret5_mean": 11.27,
+      "ret5_median": 11.27,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-21",
+          "code": "600869.SH",
+          "verdict": "PASS",
+          "score": 4.64,
+          "ret3": 3.84,
+          "ret5": 11.27
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:3:背离|D:rising:2:分歧": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 1.86,
+      "ret3_median": 1.86,
+      "ret5_mean": 15.4,
+      "ret5_median": 15.4,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-22",
+          "code": "300931.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 1.86,
+          "ret5": 15.4
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:3:背离|D:rising:3:分歧": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -6.44,
+      "ret3_median": -6.44,
+      "ret5_mean": -17.34,
+      "ret5_median": -17.34,
+      "ret3_bucket_distribution": {
+        "E": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-20",
+          "code": "301252.SZ",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": -6.44,
+          "ret5": -17.34
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    },
+    "W:rising:3:背离|D:rising:6:分歧": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 6.15,
+      "ret3_median": 6.15,
+      "ret5_mean": 19.87,
+      "ret5_median": 19.87,
+      "ret3_bucket_distribution": {
+        "B": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-28",
+          "code": "300672.SZ",
+          "verdict": "PASS",
+          "score": 4.54,
+          "ret3": 6.15,
+          "ret5": 19.87
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:4:背离|D:falling:4:金叉临近": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 1.05,
+      "ret3_median": 1.05,
+      "ret5_mean": 5.75,
+      "ret5_median": 5.75,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-03-02",
+          "code": "002826.SZ",
+          "verdict": "PASS",
+          "score": 4.44,
+          "ret3": 1.05,
+          "ret5": 5.75
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:5:强势|D:falling:4:金叉临近": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.93,
+      "ret3_median": 3.93,
+      "ret5_mean": 2.06,
+      "ret5_median": 2.06,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-06",
+          "code": "000420.SZ",
+          "verdict": "PASS",
+          "score": 4.49,
+          "ret3": 3.93,
+          "ret5": 2.06
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:5:背离|D:falling:4:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 1,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 6.29,
+      "ret3_median": 6.29,
+      "ret5_mean": 16.18,
+      "ret5_median": 16.18,
+      "ret3_bucket_distribution": {
+        "B": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-29",
+          "code": "600236.SH",
+          "verdict": "PASS",
+          "score": 4.02,
+          "ret3": 6.29,
+          "ret5": 16.18
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 1.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:5:背离|D:falling:6:修复": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 1.23,
+      "ret3_median": 1.23,
+      "ret5_mean": 3.88,
+      "ret5_median": 3.88,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-29",
+          "code": "301081.SZ",
+          "verdict": "PASS",
+          "score": 4.3,
+          "ret3": 1.23,
+          "ret5": 3.88
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:5:背离|D:rising:2:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 0,
+      "ret3_mean": 3.73,
+      "ret3_median": 3.73,
+      "ret5_mean": -1.39,
+      "ret5_median": -1.39,
+      "ret3_bucket_distribution": {
+        "C": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-05-07",
+          "code": "301165.SZ",
+          "verdict": "PASS",
+          "score": 4.34,
+          "ret3": 3.73,
+          "ret5": -1.39
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 0.0
+    },
+    "W:rising:5:背离|D:rising:3:背离": {
+      "sample_count": 1,
+      "ret3_ge_5_count": 0,
+      "ret3_le_0_count": 1,
+      "ret3_mean": -1.64,
+      "ret3_median": -1.64,
+      "ret5_mean": 2.16,
+      "ret5_median": 2.16,
+      "ret3_bucket_distribution": {
+        "D": 1
+      },
+      "current_verdict_distribution": {
+        "PASS": 1
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-22",
+          "code": "001286.SZ",
+          "verdict": "PASS",
+          "score": 4.25,
+          "ret3": -1.64,
+          "ret5": 2.16
+        }
+      ],
+      "share": 0.022,
+      "positive_rate": 0.0,
+      "negative_rate": 1.0
+    }
+  },
+  "indicator_hit_rates": {
+    "b2_trend_start": 0.217,
+    "bull_stack": 1.0,
+    "kdj_constructive": 0.304,
+    "macd_weekly_push_daily_repair": 0.326,
+    "midline_above_hold": 0.978,
+    "price_upper_or_near_high": 0.978,
+    "tight_compression": 0.935,
+    "volume_confirm": 0.152
+  },
+  "typical_samples": [
+    {
+      "date": "2026-05-08",
+      "code": "300292.SZ",
+      "verdict": "PASS",
+      "score": 4.27,
+      "ret3": 24.68,
+      "ret5": 18.87,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:1|rising:1",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:1:强势|D:rising:1:背离"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "603938.SH",
+      "verdict": "PASS",
+      "score": 4.32,
+      "ret3": 19.79,
+      "ret5": 42.41,
+      "signal": "B2",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:2|rising:0",
+      "support_stack_type": "bull_stack",
+      "family": "S-B",
+      "factor_segment": "strong|B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral",
+      "macd_wave_rule": "W:rising:2:背离|D:rising:0:分歧"
+    },
+    {
+      "date": "2026-04-28",
+      "code": "603557.SH",
+      "verdict": "PASS",
+      "score": 4.22,
+      "ret3": 14.95,
+      "ret5": 15.93,
+      "signal": "B3+",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:1|falling:4",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3+|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=shrinking|kdj=repair_from_low",
+      "macd_wave_rule": "W:rising:1:分歧|D:falling:4:修复"
+    },
+    {
+      "date": "2026-04-28",
+      "code": "603580.SH",
+      "verdict": "PASS",
+      "score": 4.25,
+      "ret3": 13.68,
+      "ret5": 25.32,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "rising:3|rising:3",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral",
+      "macd_wave_rule": "W:rising:3:强势|D:rising:3:分歧"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "000791.SZ",
+      "verdict": "PASS",
+      "score": 4.64,
+      "ret3": 12.18,
+      "ret5": 10.46,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:3|rising:0",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:3:背离|D:rising:0:背离"
+    },
+    {
+      "date": "2026-05-08",
+      "code": "603838.SH",
+      "verdict": "PASS",
+      "score": 4.77,
+      "ret3": 9.74,
+      "ret5": 8.57,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:2|rising:4",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:2:分歧|D:rising:4:背离"
+    },
+    {
+      "date": "2026-05-12",
+      "code": "300866.SZ",
+      "verdict": "PASS",
+      "score": 4.16,
+      "ret3": 6.49,
+      "ret5": 2.67,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "idle:0|rising:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:idle:0:等待启动|D:rising:2:背离"
+    },
+    {
+      "date": "2026-04-29",
+      "code": "600236.SH",
+      "verdict": "PASS",
+      "score": 4.02,
+      "ret3": 6.29,
+      "ret5": 16.18,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "rising:5|falling:4",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=middle|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral",
+      "macd_wave_rule": "W:rising:5:背离|D:falling:4:修复"
+    },
+    {
+      "date": "2026-04-28",
+      "code": "300672.SZ",
+      "verdict": "PASS",
+      "score": 4.54,
+      "ret3": 6.15,
+      "ret5": 19.87,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:3|rising:6",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:3:背离|D:rising:6:分歧"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "002962.SZ",
+      "verdict": "PASS",
+      "score": 4.7,
+      "ret3": 5.9,
+      "ret5": 8.26,
+      "signal": "B2",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:3|falling:2",
+      "support_stack_type": "bull_stack",
+      "family": "S-A",
+      "factor_segment": "strong|B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=repair_from_low",
+      "macd_wave_rule": "W:rising:3:强势|D:falling:2:金叉临近"
+    },
+    {
+      "date": "2026-04-30",
+      "code": "000042.SZ",
+      "verdict": "PASS",
+      "score": 4.32,
+      "ret3": 5.5,
+      "ret5": 6.44,
+      "signal": "B2",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:2|rising:0",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B2|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=normal|volume=expanding|kdj=rising",
+      "macd_wave_rule": "W:rising:2:背离|D:rising:0:强势"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "300684.SZ",
+      "verdict": "PASS",
+      "score": 4.32,
+      "ret3": 5.15,
+      "ret5": 2.23,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "falling:2|falling:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral",
+      "macd_wave_rule": "W:falling:2:修复|D:falling:2:修复"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "000420.SZ",
+      "verdict": "PASS",
+      "score": 4.49,
+      "ret3": 3.93,
+      "ret5": 2.06,
+      "signal": "B2",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:5|falling:4",
+      "support_stack_type": "bull_stack",
+      "family": "S-C",
+      "factor_segment": "strong|B2|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=rising",
+      "macd_wave_rule": "W:rising:5:强势|D:falling:4:金叉临近"
+    },
+    {
+      "date": "2026-04-21",
+      "code": "600869.SH",
+      "verdict": "PASS",
+      "score": 4.64,
+      "ret3": 3.84,
+      "ret5": 11.27,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:3|falling:4",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=shrinking|kdj=rising",
+      "macd_wave_rule": "W:rising:3:背离|D:falling:4:金叉临近"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "301165.SZ",
+      "verdict": "PASS",
+      "score": 4.34,
+      "ret3": 3.73,
+      "ret5": -1.39,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "rising:5|rising:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:5:背离|D:rising:2:背离"
+    },
+    {
+      "date": "2026-05-19",
+      "code": "603626.SH",
+      "verdict": "PASS",
+      "score": 4.23,
+      "ret3": 3.7,
+      "ret5": -1.88,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "falling:4|rising:1",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral",
+      "macd_wave_rule": "W:falling:4:修复|D:rising:1:分歧"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "603912.SH",
+      "verdict": "PASS",
+      "score": 4.39,
+      "ret3": 3.41,
+      "ret5": 7.01,
+      "signal": "B2",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:1|falling:6",
+      "support_stack_type": "bull_stack",
+      "family": "S-C",
+      "factor_segment": "strong|B2|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:1:分歧|D:falling:6:金叉临近"
+    },
+    {
+      "date": "2026-05-19",
+      "code": "301393.SZ",
+      "verdict": "PASS",
+      "score": 4.25,
+      "ret3": 2.88,
+      "ret5": -3.45,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "rising:1|falling:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=normal|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:1:背离|D:falling:2:修复"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "600268.SH",
+      "verdict": "PASS",
+      "score": 4.3,
+      "ret3": 2.8,
+      "ret5": -0.25,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:3|falling:6",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:3:背离|D:falling:6:修复"
+    },
+    {
+      "date": "2026-05-13",
+      "code": "603788.SH",
+      "verdict": "PASS",
+      "score": 4.42,
+      "ret3": 2.42,
+      "ret5": -4.84,
+      "signal": "B2",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "idle:0|falling:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B2|trend_start|price=upper|midline=pullback_confirm|support=bull_stack|compression=tight|volume=expanding|kdj=rising",
+      "macd_wave_rule": "W:idle:0:等待启动|D:falling:2:金叉临近"
+    },
+    {
+      "date": "2026-04-22",
+      "code": "300931.SZ",
+      "verdict": "PASS",
+      "score": 4.34,
+      "ret3": 1.86,
+      "ret5": 15.4,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "rising:3|rising:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:3:背离|D:rising:2:分歧"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "605016.SH",
+      "verdict": "PASS",
+      "score": 4.64,
+      "ret3": 1.41,
+      "ret5": 3.05,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:0|falling:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:0:分歧|D:falling:2:修复"
+    },
+    {
+      "date": "2026-05-06",
+      "code": "300099.SZ",
+      "verdict": "PASS",
+      "score": 4.73,
+      "ret3": 1.26,
+      "ret5": -0.21,
+      "signal": "B2",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:2|falling:2",
+      "support_stack_type": "bull_stack",
+      "family": "S-A",
+      "factor_segment": "strong|B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=neutral",
+      "macd_wave_rule": "W:rising:2:背离|D:falling:2:金叉临近"
+    },
+    {
+      "date": "2026-04-29",
+      "code": "301081.SZ",
+      "verdict": "PASS",
+      "score": 4.3,
+      "ret3": 1.23,
+      "ret5": 3.88,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:5|falling:6",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:5:背离|D:falling:6:修复"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "002126.SZ",
+      "verdict": "PASS",
+      "score": 4.66,
+      "ret3": 1.21,
+      "ret5": 1.94,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "falling:4|rising:0",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:falling:4:背离|D:rising:0:背离"
+    },
+    {
+      "date": "2026-03-02",
+      "code": "002826.SZ",
+      "verdict": "PASS",
+      "score": 4.44,
+      "ret3": 1.05,
+      "ret5": 5.75,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "rising:4|falling:4",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:4:背离|D:falling:4:金叉临近"
+    },
+    {
+      "date": "2026-04-30",
+      "code": "688638.SH",
+      "verdict": "PASS",
+      "score": 4.11,
+      "ret3": 0.96,
+      "ret5": 1.33,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:3|falling:2",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:3:背离|D:falling:2:修复"
+    },
+    {
+      "date": "2026-05-07",
+      "code": "603912.SH",
+      "verdict": "PASS",
+      "score": 4.24,
+      "ret3": 0.71,
+      "ret5": 0.35,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:1|rising:6",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=shrinking|kdj=rising",
+      "macd_wave_rule": "W:rising:1:分歧|D:rising:6:背离"
+    },
+    {
+      "date": "2026-04-30",
+      "code": "605117.SH",
+      "verdict": "PASS",
+      "score": 4.01,
+      "ret3": 0.42,
+      "ret5": 5.44,
+      "signal": "B3",
+      "signal_type": "trend_start",
+      "weekly_daily_combo_type": "rising:1|falling:10",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:1:背离|D:falling:10:修复"
+    },
+    {
+      "date": "2026-05-20",
+      "code": "002678.SZ",
+      "verdict": "PASS",
+      "score": 4.34,
+      "ret3": 0.32,
+      "ret5": -9.09,
+      "signal": "B3",
+      "signal_type": "rebound",
+      "weekly_daily_combo_type": "rising:3|rising:0",
+      "support_stack_type": "bull_stack",
+      "family": "other",
+      "factor_segment": "strong|B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "macd_wave_rule": "W:rising:3:背离|D:rising:0:背离"
+    }
+  ],
+  "diagnosis": "Current strong PASS is mostly not S-A; it is dominated by B3/B3+ structures. S-A is a high-quality strong WATCH family and should not be treated as the current PASS basis."
+}

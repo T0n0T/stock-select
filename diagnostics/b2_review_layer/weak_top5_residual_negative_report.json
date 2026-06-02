@@ -1,0 +1,1370 @@
+{
+  "scope": "weak actual PASS+WATCH daily top5 residual negatives after midline bucket fix",
+  "baseline": {
+    "top3": {
+      "ret3_count": 72,
+      "ret3_ge_5": 21,
+      "ret3_ge_5_rate": 0.2917,
+      "ret3_gt_0": 32,
+      "ret3_gt_0_rate": 0.4444,
+      "ret3_le_0": 40,
+      "ret3_le_0_rate": 0.5556,
+      "ret3_mean": -0.011,
+      "ret3_median": -2.0001,
+      "ret5_count": 69,
+      "ret5_ge_5": 16,
+      "ret5_ge_5_rate": 0.2319,
+      "ret5_gt_0": 28,
+      "ret5_gt_0_rate": 0.4058,
+      "ret5_mean": -1.3015,
+      "ret5_median": -2.1898,
+      "sample_count": 75
+    },
+    "top5": {
+      "ret3_count": 120,
+      "ret3_ge_5": 30,
+      "ret3_ge_5_rate": 0.25,
+      "ret3_gt_0": 52,
+      "ret3_gt_0_rate": 0.4333,
+      "ret3_le_0": 68,
+      "ret3_le_0_rate": 0.5667,
+      "ret3_mean": -0.5152,
+      "ret3_median": -1.41,
+      "ret5_count": 115,
+      "ret5_ge_5": 26,
+      "ret5_ge_5_rate": 0.2261,
+      "ret5_gt_0": 47,
+      "ret5_gt_0_rate": 0.4087,
+      "ret5_mean": -1.7731,
+      "ret5_median": -2.9431,
+      "sample_count": 125
+    },
+    "top5_negative_count": 68,
+    "top5_ge5_count": 30
+  },
+  "diagnosis": [
+    "实际 top5 剩余负例没有出现足够大的单一干净负例组；多数高频组同时包含较多 ret3>=5 正例。",
+    "B3 upper/near_high + above_hold + bull_stack + tight + normal + rising 在 top5 中负例多，但全量同组仍有 23/110 个 ret3>=5，粗扣会误伤。",
+    "最干净的窄风险组是 B2 extended + expanding + repair_from_low + green MACD + price_turnover_rise，但全量只有 5 个样本，只适合继续观察或极小 top5 风险扣分候选。",
+    "BBI/BIAS/OBV 在剩余 top5 负例中没有形成独立 veto；high_positive bias 甚至在 B2 above_hold 子集里均值偏正，不能作为扣分条件。"
+  ],
+  "negative_groups_factor": [
+    {
+      "group": "B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral",
+      "top5_negative": {
+        "n": 4,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 4,
+        "mean": -5.1952
+      },
+      "universe": {
+        "n": 64,
+        "gt0": 25,
+        "ge5": 13,
+        "le0": 39,
+        "mean": -0.7073
+      },
+      "samples": [
+        {
+          "date": "2026-03-16",
+          "code": "601975.SH",
+          "order": 2,
+          "ret3": -2.7027,
+          "ret5": -8.7318,
+          "score": 3.87,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-17",
+          "code": "002506.SZ",
+          "order": 3,
+          "ret3": -4.6181,
+          "ret5": 4.2629,
+          "score": 3.85,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-18",
+          "code": "001400.SZ",
+          "order": 4,
+          "ret3": -5.1743,
+          "ret5": 5.4104,
+          "score": 3.9,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-18",
+          "code": "688158.SH",
+          "order": 5,
+          "ret3": -8.2858,
+          "ret5": -8.3703,
+          "score": 3.89,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "top5_negative": {
+        "n": 3,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 3,
+        "mean": -7.1528
+      },
+      "universe": {
+        "n": 29,
+        "gt0": 15,
+        "ge5": 7,
+        "le0": 14,
+        "mean": 0.3414
+      },
+      "samples": [
+        {
+          "date": "2026-03-05",
+          "code": "300747.SZ",
+          "order": 4,
+          "ret3": -0.9094,
+          "ret5": 0.0909,
+          "score": 3.91,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-09",
+          "code": "688118.SH",
+          "order": 1,
+          "ret3": -6.3569,
+          "ret5": -9.6351,
+          "score": 4.08,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-16",
+          "code": "002356.SZ",
+          "order": 1,
+          "ret3": -14.1921,
+          "ret5": -21.6157,
+          "score": 3.91,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=extended_or_unknown|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=repair_from_low",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -4.5791
+      },
+      "universe": {
+        "n": 5,
+        "gt0": 1,
+        "ge5": 0,
+        "le0": 4,
+        "mean": -4.042
+      },
+      "samples": [
+        {
+          "date": "2026-04-01",
+          "code": "688158.SH",
+          "order": 3,
+          "ret3": -8.7517,
+          "ret5": 4.3419,
+          "score": 3.84,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-05-27",
+          "code": "601016.SH",
+          "order": 5,
+          "ret3": -0.4065,
+          "ret5": null,
+          "score": 3.87,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B3|trend_start|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -7.7684
+      },
+      "universe": {
+        "n": 10,
+        "gt0": 5,
+        "ge5": 2,
+        "le0": 5,
+        "mean": 0.701
+      },
+      "samples": [
+        {
+          "date": "2026-03-25",
+          "code": "002797.SZ",
+          "order": 4,
+          "ret3": -3.3898,
+          "ret5": -4.5632,
+          "score": 3.94,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-27",
+          "code": "300736.SZ",
+          "order": 1,
+          "ret3": -12.1471,
+          "ret5": -10.9068,
+          "score": 4.04,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B3|rebound|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -5.0618
+      },
+      "universe": {
+        "n": 20,
+        "gt0": 8,
+        "ge5": 3,
+        "le0": 12,
+        "mean": -1.2985
+      },
+      "samples": [
+        {
+          "date": "2026-03-11",
+          "code": "603256.SH",
+          "order": 5,
+          "ret3": -2.2584,
+          "ret5": -5.1465,
+          "score": 3.92,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-24",
+          "code": "300080.SZ",
+          "order": 2,
+          "ret3": -7.8652,
+          "ret5": -20.0642,
+          "score": 3.99,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=extended_or_unknown|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=low",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -5.9486
+      },
+      "universe": {
+        "n": 13,
+        "gt0": 4,
+        "ge5": 3,
+        "le0": 9,
+        "mean": -3.3415
+      },
+      "samples": [
+        {
+          "date": "2026-03-19",
+          "code": "600759.SH",
+          "order": 5,
+          "ret3": -10.3064,
+          "ret5": -13.7883,
+          "score": 3.85,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-24",
+          "code": "002498.SZ",
+          "order": 5,
+          "ret3": -1.5909,
+          "ret5": 0.2273,
+          "score": 3.87,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=low",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -5.6969
+      },
+      "universe": {
+        "n": 28,
+        "gt0": 13,
+        "ge5": 7,
+        "le0": 15,
+        "mean": -0.8604
+      },
+      "samples": [
+        {
+          "date": "2026-03-17",
+          "code": "300393.SZ",
+          "order": 2,
+          "ret3": -7.3733,
+          "ret5": -8.5714,
+          "score": 3.87,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-04-01",
+          "code": "603803.SH",
+          "order": 2,
+          "ret3": -4.0205,
+          "ret5": 4.8246,
+          "score": 3.86,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B3|rebound|price=near_high|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -6.8261
+      },
+      "universe": {
+        "n": 38,
+        "gt0": 18,
+        "ge5": 11,
+        "le0": 20,
+        "mean": 0.5779
+      },
+      "samples": [
+        {
+          "date": "2026-03-26",
+          "code": "300201.SZ",
+          "order": 5,
+          "ret3": -7.7257,
+          "ret5": -9.5486,
+          "score": 3.58,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-31",
+          "code": "603211.SH",
+          "order": 2,
+          "ret3": -5.9265,
+          "ret5": 3.0818,
+          "score": 3.59,
+          "verdict": "WATCH"
+        }
+      ]
+    }
+  ],
+  "negative_groups_factor_macd": [
+    {
+      "group": "B3|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=rising|hist=red_expanding|turnover=price_up_turnover_not",
+      "top5_negative": {
+        "n": 3,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 3,
+        "mean": -7.1528
+      },
+      "universe": {
+        "n": 9,
+        "gt0": 5,
+        "ge5": 2,
+        "le0": 4,
+        "mean": -0.2644
+      },
+      "samples": [
+        {
+          "date": "2026-03-05",
+          "code": "300747.SZ",
+          "order": 4,
+          "ret3": -0.9094,
+          "ret5": 0.0909,
+          "score": 3.91,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-09",
+          "code": "688118.SH",
+          "order": 1,
+          "ret3": -6.3569,
+          "ret5": -9.6351,
+          "score": 4.08,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-16",
+          "code": "002356.SZ",
+          "order": 1,
+          "ret3": -14.1921,
+          "ret5": -21.6157,
+          "score": 3.91,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=extended_or_unknown|midline=above_hold|support=bull_stack|compression=tight|volume=expanding|kdj=repair_from_low|hist=green_or_zero|turnover=price_turnover_rise",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -4.5791
+      },
+      "universe": {
+        "n": 5,
+        "gt0": 1,
+        "ge5": 0,
+        "le0": 4,
+        "mean": -4.042
+      },
+      "samples": [
+        {
+          "date": "2026-04-01",
+          "code": "688158.SH",
+          "order": 3,
+          "ret3": -8.7517,
+          "ret5": 4.3419,
+          "score": 3.84,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-05-27",
+          "code": "601016.SH",
+          "order": 5,
+          "ret3": -0.4065,
+          "ret5": null,
+          "score": 3.87,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=extended_or_unknown|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=low|hist=green_or_zero|turnover=price_turnover_rise",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -5.9486
+      },
+      "universe": {
+        "n": 11,
+        "gt0": 4,
+        "ge5": 3,
+        "le0": 7,
+        "mean": -2.3982
+      },
+      "samples": [
+        {
+          "date": "2026-03-19",
+          "code": "600759.SH",
+          "order": 5,
+          "ret3": -10.3064,
+          "ret5": -13.7883,
+          "score": 3.85,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-24",
+          "code": "002498.SZ",
+          "order": 5,
+          "ret3": -1.5909,
+          "ret5": 0.2273,
+          "score": 3.87,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral|hist=green_or_zero|turnover=price_turnover_rise",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -3.6604
+      },
+      "universe": {
+        "n": 40,
+        "gt0": 15,
+        "ge5": 5,
+        "le0": 25,
+        "mean": -1.5493
+      },
+      "samples": [
+        {
+          "date": "2026-03-16",
+          "code": "601975.SH",
+          "order": 2,
+          "ret3": -2.7027,
+          "ret5": -8.7318,
+          "score": 3.87,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-17",
+          "code": "002506.SZ",
+          "order": 3,
+          "ret3": -4.6181,
+          "ret5": 4.2629,
+          "score": 3.85,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=neutral|hist=red_expanding|turnover=price_turnover_rise",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -6.7301
+      },
+      "universe": {
+        "n": 18,
+        "gt0": 7,
+        "ge5": 5,
+        "le0": 11,
+        "mean": -0.0367
+      },
+      "samples": [
+        {
+          "date": "2026-03-18",
+          "code": "001400.SZ",
+          "order": 4,
+          "ret3": -5.1743,
+          "ret5": 5.4104,
+          "score": 3.9,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-18",
+          "code": "688158.SH",
+          "order": 5,
+          "ret3": -8.2858,
+          "ret5": -8.3703,
+          "score": 3.89,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "group": "B2|trend_start|price=upper|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=low|hist=green_or_zero|turnover=price_turnover_rise",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -5.6969
+      },
+      "universe": {
+        "n": 27,
+        "gt0": 13,
+        "ge5": 7,
+        "le0": 14,
+        "mean": -0.8833
+      },
+      "samples": [
+        {
+          "date": "2026-03-17",
+          "code": "300393.SZ",
+          "order": 2,
+          "ret3": -7.3733,
+          "ret5": -8.5714,
+          "score": 3.87,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-04-01",
+          "code": "603803.SH",
+          "order": 2,
+          "ret3": -4.0205,
+          "ret5": 4.8246,
+          "score": 3.86,
+          "verdict": "WATCH"
+        }
+      ]
+    }
+  ],
+  "negative_groups_factor_macd_indicator": [
+    {
+      "group": "B2|trend_start|price=extended_or_unknown|midline=above_hold|support=bull_stack|compression=tight|volume=normal|kdj=low|hist=green_or_zero|turnover=price_turnover_rise|bbi=below_near|bias=neutral|obv=flat",
+      "top5_negative": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -5.9486
+      },
+      "universe": {
+        "n": 6,
+        "gt0": 3,
+        "ge5": 2,
+        "le0": 3,
+        "mean": 0.06
+      },
+      "samples": [
+        {
+          "date": "2026-03-19",
+          "code": "600759.SH",
+          "order": 5,
+          "ret3": -10.3064,
+          "ret5": -13.7883,
+          "score": 3.85,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-24",
+          "code": "002498.SZ",
+          "order": 5,
+          "ret3": -1.5909,
+          "ret5": 0.2273,
+          "score": 3.87,
+          "verdict": "WATCH"
+        }
+      ]
+    }
+  ],
+  "candidate_predicates": [
+    {
+      "name": "b2_extended_expanding_repair_green_turnover_rise",
+      "universe": {
+        "n": 5,
+        "gt0": 1,
+        "ge5": 0,
+        "le0": 4,
+        "mean": -4.042
+      },
+      "top3": {
+        "n": 1,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 1,
+        "mean": -8.7517
+      },
+      "top5": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -4.5791
+      },
+      "top5_samples": [
+        {
+          "date": "2026-04-01",
+          "code": "688158.SH",
+          "order": 3,
+          "ret3": -8.7517,
+          "ret5": 4.3419,
+          "score": 3.84,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-05-27",
+          "code": "601016.SH",
+          "order": 5,
+          "ret3": -0.4065,
+          "ret5": null,
+          "score": 3.87,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "name": "b2_extended_normal_low_green_turnover_rise",
+      "universe": {
+        "n": 11,
+        "gt0": 4,
+        "ge5": 3,
+        "le0": 7,
+        "mean": -2.3982
+      },
+      "top3": {
+        "n": 1,
+        "gt0": 1,
+        "ge5": 0,
+        "le0": 0,
+        "mean": 0.9177
+      },
+      "top5": {
+        "n": 3,
+        "gt0": 1,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -3.6599
+      },
+      "top5_samples": [
+        {
+          "date": "2026-03-19",
+          "code": "600759.SH",
+          "order": 5,
+          "ret3": -10.3064,
+          "ret5": -13.7883,
+          "score": 3.85,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-24",
+          "code": "002498.SZ",
+          "order": 5,
+          "ret3": -1.5909,
+          "ret5": 0.2273,
+          "score": 3.87,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-04-01",
+          "code": "300257.SZ",
+          "order": 1,
+          "ret3": 0.9177,
+          "ret5": 4.0109,
+          "score": 3.87,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "name": "b2_upper_normal_neutral_green_turnover_rise",
+      "universe": {
+        "n": 47,
+        "gt0": 22,
+        "ge5": 5,
+        "le0": 25,
+        "mean": -0.9864
+      },
+      "top3": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -3.6604
+      },
+      "top5": {
+        "n": 2,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 2,
+        "mean": -3.6604
+      },
+      "top5_samples": [
+        {
+          "date": "2026-03-16",
+          "code": "601975.SH",
+          "order": 2,
+          "ret3": -2.7027,
+          "ret5": -8.7318,
+          "score": 3.87,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-17",
+          "code": "002506.SZ",
+          "order": 3,
+          "ret3": -4.6181,
+          "ret5": 4.2629,
+          "score": 3.85,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "name": "b3_upper_turnover_mixed_or_not",
+      "universe": {
+        "n": 203,
+        "gt0": 88,
+        "ge5": 38,
+        "le0": 115,
+        "mean": -0.7519
+      },
+      "top3": {
+        "n": 15,
+        "gt0": 4,
+        "ge5": 2,
+        "le0": 11,
+        "mean": -4.9535
+      },
+      "top5": {
+        "n": 29,
+        "gt0": 10,
+        "ge5": 6,
+        "le0": 19,
+        "mean": -2.8575
+      },
+      "top5_samples": [
+        {
+          "date": "2026-03-05",
+          "code": "300747.SZ",
+          "order": 4,
+          "ret3": -0.9094,
+          "ret5": 0.0909,
+          "score": 3.91,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-06",
+          "code": "300259.SZ",
+          "order": 1,
+          "ret3": 5.1896,
+          "ret5": 2.994,
+          "score": 4.13,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-06",
+          "code": "688201.SH",
+          "order": 2,
+          "ret3": 2.1161,
+          "ret5": -5.3204,
+          "score": 4.12,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-06",
+          "code": "300980.SZ",
+          "order": 5,
+          "ret3": -0.2155,
+          "ret5": -4.39,
+          "score": 3.92,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-09",
+          "code": "688118.SH",
+          "order": 1,
+          "ret3": -6.3569,
+          "ret5": -9.6351,
+          "score": 4.08,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-09",
+          "code": "002286.SZ",
+          "order": 2,
+          "ret3": -3.857,
+          "ret5": 1.4111,
+          "score": 3.98,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-09",
+          "code": "301299.SZ",
+          "order": 5,
+          "ret3": 3.602,
+          "ret5": 2.7315,
+          "score": 3.91,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-11",
+          "code": "603601.SH",
+          "order": 1,
+          "ret3": -7.3896,
+          "ret5": -5.4618,
+          "score": 4.01,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "name": "b3_trend_upper_normal_rising_red_no_turnover_confirm",
+      "universe": {
+        "n": 15,
+        "gt0": 8,
+        "ge5": 4,
+        "le0": 7,
+        "mean": 0.3467
+      },
+      "top3": {
+        "n": 4,
+        "gt0": 1,
+        "ge5": 1,
+        "le0": 3,
+        "mean": -6.8766
+      },
+      "top5": {
+        "n": 6,
+        "gt0": 2,
+        "ge5": 1,
+        "le0": 4,
+        "mean": -4.1357
+      },
+      "top5_samples": [
+        {
+          "date": "2026-03-05",
+          "code": "300747.SZ",
+          "order": 4,
+          "ret3": -0.9094,
+          "ret5": 0.0909,
+          "score": 3.91,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-06",
+          "code": "300259.SZ",
+          "order": 1,
+          "ret3": 5.1896,
+          "ret5": 2.994,
+          "score": 4.13,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-09",
+          "code": "688118.SH",
+          "order": 1,
+          "ret3": -6.3569,
+          "ret5": -9.6351,
+          "score": 4.08,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-09",
+          "code": "301299.SZ",
+          "order": 5,
+          "ret3": 3.602,
+          "ret5": 2.7315,
+          "score": 3.91,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-16",
+          "code": "002356.SZ",
+          "order": 1,
+          "ret3": -14.1921,
+          "ret5": -21.6157,
+          "score": 3.91,
+          "verdict": "WATCH"
+        },
+        {
+          "date": "2026-03-27",
+          "code": "300736.SZ",
+          "order": 1,
+          "ret3": -12.1471,
+          "ret5": -10.9068,
+          "score": 4.04,
+          "verdict": "WATCH"
+        }
+      ]
+    },
+    {
+      "name": "b3_rebound_upper_normal_rising_green",
+      "universe": {
+        "n": 31,
+        "gt0": 11,
+        "ge5": 3,
+        "le0": 20,
+        "mean": -2.3997
+      },
+      "top3": {
+        "n": 0,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 0,
+        "mean": 0
+      },
+      "top5": {
+        "n": 1,
+        "gt0": 0,
+        "ge5": 0,
+        "le0": 1,
+        "mean": -7.7257
+      },
+      "top5_samples": [
+        {
+          "date": "2026-03-26",
+          "code": "300201.SZ",
+          "order": 5,
+          "ret3": -7.7257,
+          "ret5": -9.5486,
+          "score": 3.58,
+          "verdict": "WATCH"
+        }
+      ]
+    }
+  ],
+  "factor_prevalence_top5_negative_vs_ge5": [
+    {
+      "factor": "signal",
+      "values": [
+        {
+          "value": "B2",
+          "negative_count": 39,
+          "negative_rate": 0.5735,
+          "ge5_count": 20,
+          "ge5_rate": 0.6667
+        },
+        {
+          "value": "B3",
+          "negative_count": 28,
+          "negative_rate": 0.4118,
+          "ge5_count": 9,
+          "ge5_rate": 0.3
+        },
+        {
+          "value": "B3+",
+          "negative_count": 1,
+          "negative_rate": 0.0147,
+          "ge5_count": 1,
+          "ge5_rate": 0.0333
+        }
+      ]
+    },
+    {
+      "factor": "signal_type",
+      "values": [
+        {
+          "value": "trend_start",
+          "negative_count": 50,
+          "negative_rate": 0.7353,
+          "ge5_count": 22,
+          "ge5_rate": 0.7333
+        },
+        {
+          "value": "rebound",
+          "negative_count": 18,
+          "negative_rate": 0.2647,
+          "ge5_count": 8,
+          "ge5_rate": 0.2667
+        }
+      ]
+    },
+    {
+      "factor": "price_bucket",
+      "values": [
+        {
+          "value": "upper",
+          "negative_count": 35,
+          "negative_rate": 0.5147,
+          "ge5_count": 17,
+          "ge5_rate": 0.5667
+        },
+        {
+          "value": "near_high",
+          "negative_count": 13,
+          "negative_rate": 0.1912,
+          "ge5_count": 4,
+          "ge5_rate": 0.1333
+        },
+        {
+          "value": "extended_or_unknown",
+          "negative_count": 11,
+          "negative_rate": 0.1618,
+          "ge5_count": 6,
+          "ge5_rate": 0.2
+        },
+        {
+          "value": "middle",
+          "negative_count": 8,
+          "negative_rate": 0.1176,
+          "ge5_count": 3,
+          "ge5_rate": 0.1
+        },
+        {
+          "value": "near_low",
+          "negative_count": 1,
+          "negative_rate": 0.0147,
+          "ge5_count": 0,
+          "ge5_rate": 0.0
+        }
+      ]
+    },
+    {
+      "factor": "midline_state",
+      "values": [
+        {
+          "value": "above_hold",
+          "negative_count": 46,
+          "negative_rate": 0.6765,
+          "ge5_count": 24,
+          "ge5_rate": 0.8
+        },
+        {
+          "value": "pullback_confirm",
+          "negative_count": 14,
+          "negative_rate": 0.2059,
+          "ge5_count": 2,
+          "ge5_rate": 0.0667
+        },
+        {
+          "value": "reclaim_volume",
+          "negative_count": 7,
+          "negative_rate": 0.1029,
+          "ge5_count": 3,
+          "ge5_rate": 0.1
+        },
+        {
+          "value": "below_midline",
+          "negative_count": 1,
+          "negative_rate": 0.0147,
+          "ge5_count": 1,
+          "ge5_rate": 0.0333
+        }
+      ]
+    },
+    {
+      "factor": "support_stack",
+      "values": [
+        {
+          "value": "bull_stack",
+          "negative_count": 64,
+          "negative_rate": 0.9412,
+          "ge5_count": 25,
+          "ge5_rate": 0.8333
+        },
+        {
+          "value": "close_above_ma60",
+          "negative_count": 4,
+          "negative_rate": 0.0588,
+          "ge5_count": 5,
+          "ge5_rate": 0.1667
+        }
+      ]
+    },
+    {
+      "factor": "compression",
+      "values": [
+        {
+          "value": "tight",
+          "negative_count": 53,
+          "negative_rate": 0.7794,
+          "ge5_count": 25,
+          "ge5_rate": 0.8333
+        },
+        {
+          "value": "normal",
+          "negative_count": 13,
+          "negative_rate": 0.1912,
+          "ge5_count": 5,
+          "ge5_rate": 0.1667
+        },
+        {
+          "value": "wide",
+          "negative_count": 2,
+          "negative_rate": 0.0294,
+          "ge5_count": 0,
+          "ge5_rate": 0.0
+        }
+      ]
+    },
+    {
+      "factor": "volume",
+      "values": [
+        {
+          "value": "normal",
+          "negative_count": 40,
+          "negative_rate": 0.5882,
+          "ge5_count": 17,
+          "ge5_rate": 0.5667
+        },
+        {
+          "value": "expanding",
+          "negative_count": 26,
+          "negative_rate": 0.3824,
+          "ge5_count": 11,
+          "ge5_rate": 0.3667
+        },
+        {
+          "value": "shrinking",
+          "negative_count": 2,
+          "negative_rate": 0.0294,
+          "ge5_count": 2,
+          "ge5_rate": 0.0667
+        }
+      ]
+    },
+    {
+      "factor": "kdj",
+      "values": [
+        {
+          "value": "rising",
+          "negative_count": 28,
+          "negative_rate": 0.4118,
+          "ge5_count": 14,
+          "ge5_rate": 0.4667
+        },
+        {
+          "value": "neutral",
+          "negative_count": 17,
+          "negative_rate": 0.25,
+          "ge5_count": 8,
+          "ge5_rate": 0.2667
+        },
+        {
+          "value": "repair_from_low",
+          "negative_count": 14,
+          "negative_rate": 0.2059,
+          "ge5_count": 4,
+          "ge5_rate": 0.1333
+        },
+        {
+          "value": "low",
+          "negative_count": 9,
+          "negative_rate": 0.1324,
+          "ge5_count": 4,
+          "ge5_rate": 0.1333
+        }
+      ]
+    },
+    {
+      "factor": "macd_hist",
+      "values": [
+        {
+          "value": "green_or_zero",
+          "negative_count": 43,
+          "negative_rate": 0.6324,
+          "ge5_count": 24,
+          "ge5_rate": 0.8
+        },
+        {
+          "value": "red_expanding",
+          "negative_count": 25,
+          "negative_rate": 0.3676,
+          "ge5_count": 6,
+          "ge5_rate": 0.2
+        }
+      ]
+    },
+    {
+      "factor": "turnover_sync",
+      "values": [
+        {
+          "value": "price_turnover_rise",
+          "negative_count": 39,
+          "negative_rate": 0.5735,
+          "ge5_count": 20,
+          "ge5_rate": 0.6667
+        },
+        {
+          "value": "price_up_turnover_not",
+          "negative_count": 15,
+          "negative_rate": 0.2206,
+          "ge5_count": 6,
+          "ge5_rate": 0.2
+        },
+        {
+          "value": "mixed",
+          "negative_count": 14,
+          "negative_rate": 0.2059,
+          "ge5_count": 4,
+          "ge5_rate": 0.1333
+        }
+      ]
+    },
+    {
+      "factor": "bbi_bias",
+      "values": [
+        {
+          "value": "above_extended",
+          "negative_count": 39,
+          "negative_rate": 0.5735,
+          "ge5_count": 15,
+          "ge5_rate": 0.5
+        },
+        {
+          "value": "above",
+          "negative_count": 21,
+          "negative_rate": 0.3088,
+          "ge5_count": 9,
+          "ge5_rate": 0.3
+        },
+        {
+          "value": "below_near",
+          "negative_count": 8,
+          "negative_rate": 0.1176,
+          "ge5_count": 5,
+          "ge5_rate": 0.1667
+        },
+        {
+          "value": "below_deep",
+          "negative_count": 0,
+          "negative_rate": 0.0,
+          "ge5_count": 1,
+          "ge5_rate": 0.0333
+        }
+      ]
+    },
+    {
+      "factor": "bias_bucket",
+      "values": [
+        {
+          "value": "neutral",
+          "negative_count": 34,
+          "negative_rate": 0.5,
+          "ge5_count": 13,
+          "ge5_rate": 0.4333
+        },
+        {
+          "value": "positive",
+          "negative_count": 26,
+          "negative_rate": 0.3824,
+          "ge5_count": 15,
+          "ge5_rate": 0.5
+        },
+        {
+          "value": "high_positive",
+          "negative_count": 8,
+          "negative_rate": 0.1176,
+          "ge5_count": 1,
+          "ge5_rate": 0.0333
+        },
+        {
+          "value": "negative",
+          "negative_count": 0,
+          "negative_rate": 0.0,
+          "ge5_count": 1,
+          "ge5_rate": 0.0333
+        }
+      ]
+    },
+    {
+      "factor": "obv",
+      "values": [
+        {
+          "value": "flat",
+          "negative_count": 58,
+          "negative_rate": 0.8529,
+          "ge5_count": 27,
+          "ge5_rate": 0.9
+        },
+        {
+          "value": "rising",
+          "negative_count": 10,
+          "negative_rate": 0.1471,
+          "ge5_count": 2,
+          "ge5_rate": 0.0667
+        },
+        {
+          "value": "falling",
+          "negative_count": 0,
+          "negative_rate": 0.0,
+          "ge5_count": 1,
+          "ge5_rate": 0.0333
+        }
+      ]
+    }
+  ],
+  "recommendation": {
+    "production_change": "暂不追加 weak top5 生产扣分；当前剩余负例以混杂组为主，继续扣分更容易牺牲 ret3>=5 捕捉。",
+    "watchlist": "保留 b2_extended_expanding_repair_green_turnover_rise 和 b2_extended_normal_low_green_turnover_rise 为后续样本扩展后的 top5-only 风险观察。",
+    "boundary": "不改 PASS/WATCH verdict，不做 broad B3 或 broad B2 upper 扣分。"
+  }
+}

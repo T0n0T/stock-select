@@ -1,0 +1,4358 @@
+{
+  "neutral": {
+    "baseline": {
+      "sample_count": 1152,
+      "ret3_ge_5_count": 216,
+      "ret3_le_0_count": 650,
+      "ret3_mean": -0.47,
+      "ret3_median": -0.92,
+      "ret5_mean": -0.8,
+      "ret5_median": -1.31,
+      "ret3_bucket_distribution": {
+        "A": 85,
+        "B": 131,
+        "C": 285,
+        "D": 356,
+        "E": 203,
+        "F": 91
+      },
+      "current_verdict_distribution": {
+        "FAIL": 186,
+        "PASS": 8,
+        "WATCH": 958
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-09",
+          "code": "301667.SZ",
+          "verdict": "FAIL",
+          "score": 2.55,
+          "ret3": 34.27,
+          "ret5": 25.22
+        },
+        {
+          "date": "2026-04-09",
+          "code": "002580.SZ",
+          "verdict": "WATCH",
+          "score": 3.86,
+          "ret3": 33.16,
+          "ret5": 61.16
+        },
+        {
+          "date": "2026-05-25",
+          "code": "600726.SH",
+          "verdict": "WATCH",
+          "score": 3.54,
+          "ret3": 33.09,
+          "ret5": 37.28
+        },
+        {
+          "date": "2026-05-21",
+          "code": "688347.SH",
+          "verdict": "WATCH",
+          "score": 4.01,
+          "ret3": 31.61,
+          "ret5": 47.72
+        },
+        {
+          "date": "2026-05-22",
+          "code": "300626.SZ",
+          "verdict": "WATCH",
+          "score": 3.96,
+          "ret3": 29.52,
+          "ret5": 9.13
+        },
+        {
+          "date": "2026-05-22",
+          "code": "300373.SZ",
+          "verdict": "WATCH",
+          "score": 4.19,
+          "ret3": 27.37,
+          "ret5": 24.01
+        },
+        {
+          "date": "2026-04-08",
+          "code": "301667.SZ",
+          "verdict": "FAIL",
+          "score": 2.5,
+          "ret3": 26.95,
+          "ret5": 20.38
+        },
+        {
+          "date": "2026-04-09",
+          "code": "688525.SH",
+          "verdict": "WATCH",
+          "score": 3.97,
+          "ret3": 26.63,
+          "ret5": 26.05
+        }
+      ],
+      "positive_rate": 0.188,
+      "negative_rate": 0.564
+    },
+    "positive_rules": [],
+    "all_push_wave_rules": [
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 69,
+        "ret3_ge_5_count": 6,
+        "ret3_le_0_count": 47,
+        "ret3_mean": -2.47,
+        "ret3_median": -3.46,
+        "ret5_mean": -3.52,
+        "ret5_median": -4.35,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 4,
+          "C": 16,
+          "D": 27,
+          "E": 9,
+          "F": 11
+        },
+        "current_verdict_distribution": {
+          "FAIL": 6,
+          "WATCH": 63
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-09",
+            "code": "688525.SH",
+            "verdict": "WATCH",
+            "score": 3.97,
+            "ret3": 26.63,
+            "ret5": 26.05
+          },
+          {
+            "date": "2026-04-08",
+            "code": "688525.SH",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 11.39,
+            "ret5": 24.26
+          },
+          {
+            "date": "2026-05-28",
+            "code": "300620.SZ",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 9.23,
+            "ret5": null
+          },
+          {
+            "date": "2026-05-21",
+            "code": "603976.SH",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 6.27,
+            "ret5": -1.73
+          },
+          {
+            "date": "2026-04-09",
+            "code": "002913.SZ",
+            "verdict": "WATCH",
+            "score": 4.17,
+            "ret3": 5.09,
+            "ret5": 2.02
+          },
+          {
+            "date": "2026-04-08",
+            "code": "605366.SH",
+            "verdict": "WATCH",
+            "score": 4.05,
+            "ret3": 5.07,
+            "ret5": 15.21
+          },
+          {
+            "date": "2026-04-09",
+            "code": "300939.SZ",
+            "verdict": "FAIL",
+            "score": 3.23,
+            "ret3": 4.4,
+            "ret5": 4.68
+          },
+          {
+            "date": "2026-04-08",
+            "code": "002913.SZ",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 4.19,
+            "ret5": 2.19
+          }
+        ],
+        "positive_rate": 0.087,
+        "negative_rate": 0.681,
+        "positive_rate_uplift": -0.101,
+        "negative_rate_uplift": 0.117
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 52,
+        "ret3_ge_5_count": 15,
+        "ret3_le_0_count": 21,
+        "ret3_mean": 1.11,
+        "ret3_median": 0.99,
+        "ret5_mean": 2.14,
+        "ret5_median": 1.2,
+        "ret3_bucket_distribution": {
+          "A": 6,
+          "B": 9,
+          "C": 16,
+          "D": 11,
+          "E": 7,
+          "F": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 7,
+          "PASS": 3,
+          "WATCH": 42
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-09",
+            "code": "001896.SZ",
+            "verdict": "WATCH",
+            "score": 3.45,
+            "ret3": 17.66,
+            "ret5": 33.28
+          },
+          {
+            "date": "2026-05-28",
+            "code": "301205.SZ",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 16.13,
+            "ret5": null
+          },
+          {
+            "date": "2026-05-25",
+            "code": "600110.SH",
+            "verdict": "WATCH",
+            "score": 3.64,
+            "ret3": 14.19,
+            "ret5": 22.72
+          },
+          {
+            "date": "2026-05-26",
+            "code": "002181.SZ",
+            "verdict": "FAIL",
+            "score": 3.08,
+            "ret3": 13.94,
+            "ret5": 12.77
+          },
+          {
+            "date": "2026-04-08",
+            "code": "301317.SZ",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 10.86,
+            "ret5": 19.48
+          },
+          {
+            "date": "2026-04-08",
+            "code": "001896.SZ",
+            "verdict": "WATCH",
+            "score": 3.33,
+            "ret3": 10.0,
+            "ret5": 26.49
+          },
+          {
+            "date": "2026-04-13",
+            "code": "600773.SH",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 9.09,
+            "ret5": 17.2
+          },
+          {
+            "date": "2026-05-28",
+            "code": "688097.SH",
+            "verdict": "WATCH",
+            "score": 3.52,
+            "ret3": 8.91,
+            "ret5": null
+          }
+        ],
+        "positive_rate": 0.288,
+        "negative_rate": 0.404,
+        "positive_rate_uplift": 0.1,
+        "negative_rate_uplift": -0.16
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:idle:0:等待启动",
+        "push_wave_side": "weekly",
+        "sample_count": 32,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 19,
+        "ret3_mean": 0.4,
+        "ret3_median": -0.92,
+        "ret5_mean": 2.48,
+        "ret5_median": 1.24,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 1,
+          "C": 10,
+          "D": 16,
+          "E": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 21,
+          "WATCH": 11
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-22",
+            "code": "002733.SZ",
+            "verdict": "FAIL",
+            "score": 3.2,
+            "ret3": 21.8,
+            "ret5": 20.43
+          },
+          {
+            "date": "2026-04-08",
+            "code": "605060.SH",
+            "verdict": "FAIL",
+            "score": 3.22,
+            "ret3": 10.36,
+            "ret5": 1.15
+          },
+          {
+            "date": "2026-04-09",
+            "code": "301248.SZ",
+            "verdict": "FAIL",
+            "score": 3.07,
+            "ret3": 5.28,
+            "ret5": 28.0
+          },
+          {
+            "date": "2026-04-08",
+            "code": "688593.SH",
+            "verdict": "FAIL",
+            "score": 3.22,
+            "ret3": 4.74,
+            "ret5": 0.65
+          },
+          {
+            "date": "2026-04-09",
+            "code": "300099.SZ",
+            "verdict": "WATCH",
+            "score": 3.6,
+            "ret3": 4.63,
+            "ret5": 7.76
+          },
+          {
+            "date": "2026-04-08",
+            "code": "603045.SH",
+            "verdict": "WATCH",
+            "score": 3.81,
+            "ret3": 3.99,
+            "ret5": 5.71
+          },
+          {
+            "date": "2026-04-09",
+            "code": "688229.SH",
+            "verdict": "FAIL",
+            "score": 2.82,
+            "ret3": 3.79,
+            "ret5": 5.24
+          },
+          {
+            "date": "2026-04-09",
+            "code": "300846.SZ",
+            "verdict": "WATCH",
+            "score": 3.46,
+            "ret3": 2.4,
+            "ret5": 4.28
+          }
+        ],
+        "positive_rate": 0.094,
+        "negative_rate": 0.594,
+        "positive_rate_uplift": -0.094,
+        "negative_rate_uplift": 0.03
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 27,
+        "ret3_ge_5_count": 4,
+        "ret3_le_0_count": 15,
+        "ret3_mean": -1.49,
+        "ret3_median": -2.71,
+        "ret5_mean": -1.34,
+        "ret5_median": -3.49,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 2,
+          "C": 8,
+          "D": 8,
+          "E": 4,
+          "F": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 6,
+          "PASS": 1,
+          "WATCH": 20
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-10",
+            "code": "300938.SZ",
+            "verdict": "WATCH",
+            "score": 3.65,
+            "ret3": 15.81,
+            "ret5": 25.2
+          },
+          {
+            "date": "2026-04-09",
+            "code": "300938.SZ",
+            "verdict": "WATCH",
+            "score": 3.95,
+            "ret3": 10.97,
+            "ret5": 26.18
+          },
+          {
+            "date": "2026-03-03",
+            "code": "002952.SZ",
+            "verdict": "WATCH",
+            "score": 4.05,
+            "ret3": 6.96,
+            "ret5": 11.67
+          },
+          {
+            "date": "2026-05-18",
+            "code": "688010.SH",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 6.32,
+            "ret5": 25.52
+          },
+          {
+            "date": "2026-03-10",
+            "code": "688253.SH",
+            "verdict": "WATCH",
+            "score": 4.06,
+            "ret3": 4.89,
+            "ret5": 4.03
+          },
+          {
+            "date": "2026-03-10",
+            "code": "601339.SH",
+            "verdict": "WATCH",
+            "score": 3.98,
+            "ret3": 3.86,
+            "ret5": -1.1
+          },
+          {
+            "date": "2026-05-18",
+            "code": "688805.SH",
+            "verdict": "FAIL",
+            "score": 2.92,
+            "ret3": 3.84,
+            "ret5": 10.82
+          },
+          {
+            "date": "2026-05-28",
+            "code": "600743.SH",
+            "verdict": "FAIL",
+            "score": 2.59,
+            "ret3": 3.27,
+            "ret5": null
+          }
+        ],
+        "positive_rate": 0.148,
+        "negative_rate": 0.556,
+        "positive_rate_uplift": -0.04,
+        "negative_rate_uplift": -0.008
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 27,
+        "ret3_ge_5_count": 4,
+        "ret3_le_0_count": 12,
+        "ret3_mean": -0.57,
+        "ret3_median": 0.51,
+        "ret5_mean": -3.01,
+        "ret5_median": -3.62,
+        "ret3_bucket_distribution": {
+          "B": 4,
+          "C": 11,
+          "D": 5,
+          "E": 5,
+          "F": 2
+        },
+        "current_verdict_distribution": {
+          "FAIL": 4,
+          "WATCH": 23
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-21",
+            "code": "002952.SZ",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 9.33,
+            "ret5": 2.07
+          },
+          {
+            "date": "2026-04-08",
+            "code": "603052.SH",
+            "verdict": "WATCH",
+            "score": 3.96,
+            "ret3": 8.96,
+            "ret5": 7.01
+          },
+          {
+            "date": "2026-04-10",
+            "code": "603557.SH",
+            "verdict": "WATCH",
+            "score": 3.52,
+            "ret3": 7.67,
+            "ret5": 13.23
+          },
+          {
+            "date": "2026-05-28",
+            "code": "600032.SH",
+            "verdict": "FAIL",
+            "score": 2.82,
+            "ret3": 5.0,
+            "ret5": null
+          },
+          {
+            "date": "2026-03-10",
+            "code": "603876.SH",
+            "verdict": "WATCH",
+            "score": 4.07,
+            "ret3": 4.87,
+            "ret5": 5.22
+          },
+          {
+            "date": "2026-03-10",
+            "code": "301252.SZ",
+            "verdict": "WATCH",
+            "score": 3.97,
+            "ret3": 4.5,
+            "ret5": -6.1
+          },
+          {
+            "date": "2026-05-25",
+            "code": "600310.SH",
+            "verdict": "FAIL",
+            "score": 3.15,
+            "ret3": 3.39,
+            "ret5": 4.1
+          },
+          {
+            "date": "2026-04-08",
+            "code": "603113.SH",
+            "verdict": "FAIL",
+            "score": 3.23,
+            "ret3": 3.08,
+            "ret5": 0.84
+          }
+        ],
+        "positive_rate": 0.148,
+        "negative_rate": 0.444,
+        "positive_rate_uplift": -0.04,
+        "negative_rate_uplift": -0.12
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 24,
+        "ret3_ge_5_count": 4,
+        "ret3_le_0_count": 16,
+        "ret3_mean": -2.47,
+        "ret3_median": -2.82,
+        "ret5_mean": -2.49,
+        "ret5_median": -5.65,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "B": 3,
+          "C": 4,
+          "D": 9,
+          "E": 4,
+          "F": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 2,
+          "WATCH": 22
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-09",
+            "code": "300499.SZ",
+            "verdict": "WATCH",
+            "score": 3.64,
+            "ret3": 11.35,
+            "ret5": 11.48
+          },
+          {
+            "date": "2026-05-25",
+            "code": "601101.SH",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 9.27,
+            "ret5": 22.98
+          },
+          {
+            "date": "2026-04-08",
+            "code": "300499.SZ",
+            "verdict": "WATCH",
+            "score": 3.38,
+            "ret3": 8.13,
+            "ret5": 9.84
+          },
+          {
+            "date": "2026-05-28",
+            "code": "002789.SZ",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 5.84,
+            "ret5": null
+          },
+          {
+            "date": "2026-04-17",
+            "code": "600573.SH",
+            "verdict": "FAIL",
+            "score": 3.16,
+            "ret3": 4.28,
+            "ret5": 5.59
+          },
+          {
+            "date": "2026-05-28",
+            "code": "000791.SZ",
+            "verdict": "WATCH",
+            "score": 3.94,
+            "ret3": 4.13,
+            "ret5": null
+          },
+          {
+            "date": "2026-04-08",
+            "code": "002638.SZ",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 3.44,
+            "ret5": 8.49
+          },
+          {
+            "date": "2026-05-25",
+            "code": "688141.SH",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 0.29,
+            "ret5": -13.84
+          }
+        ],
+        "positive_rate": 0.167,
+        "negative_rate": 0.667,
+        "positive_rate_uplift": -0.021,
+        "negative_rate_uplift": 0.103
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:6:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 16,
+        "ret3_ge_5_count": 5,
+        "ret3_le_0_count": 9,
+        "ret3_mean": 1.18,
+        "ret3_median": -0.87,
+        "ret5_mean": 2.31,
+        "ret5_median": 2.5,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "B": 2,
+          "C": 2,
+          "D": 4,
+          "E": 4,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 1,
+          "WATCH": 15
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-15",
+            "code": "603268.SH",
+            "verdict": "WATCH",
+            "score": 3.33,
+            "ret3": 22.56,
+            "ret5": 23.41
+          },
+          {
+            "date": "2026-04-16",
+            "code": "603268.SH",
+            "verdict": "WATCH",
+            "score": 3.87,
+            "ret3": 16.54,
+            "ret5": 20.78
+          },
+          {
+            "date": "2026-04-08",
+            "code": "300739.SZ",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 10.39,
+            "ret5": 10.58
+          },
+          {
+            "date": "2026-04-08",
+            "code": "603738.SH",
+            "verdict": "WATCH",
+            "score": 3.94,
+            "ret3": 7.45,
+            "ret5": 3.67
+          },
+          {
+            "date": "2026-03-10",
+            "code": "300236.SZ",
+            "verdict": "WATCH",
+            "score": 3.84,
+            "ret3": 6.56,
+            "ret5": 2.35
+          },
+          {
+            "date": "2026-04-08",
+            "code": "000533.SZ",
+            "verdict": "WATCH",
+            "score": 3.38,
+            "ret3": 1.24,
+            "ret5": 10.71
+          },
+          {
+            "date": "2026-05-18",
+            "code": "605318.SH",
+            "verdict": "WATCH",
+            "score": 3.92,
+            "ret3": 0.77,
+            "ret5": -0.82
+          },
+          {
+            "date": "2026-04-17",
+            "code": "300816.SZ",
+            "verdict": "WATCH",
+            "score": 3.99,
+            "ret3": -0.58,
+            "ret5": -4.56
+          }
+        ],
+        "positive_rate": 0.312,
+        "negative_rate": 0.562,
+        "positive_rate_uplift": 0.124,
+        "negative_rate_uplift": -0.002
+      },
+      {
+        "wave_rule": "W:idle:0:等待启动|D:rising:1:背离",
+        "push_wave_side": "daily",
+        "sample_count": 15,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 10,
+        "ret3_mean": -5.13,
+        "ret3_median": -5.74,
+        "ret5_mean": -8.61,
+        "ret5_median": -8.22,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "B": 2,
+          "C": 2,
+          "D": 2,
+          "E": 4,
+          "F": 4
+        },
+        "current_verdict_distribution": {
+          "FAIL": 5,
+          "WATCH": 10
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-08",
+            "code": "600537.SH",
+            "verdict": "FAIL",
+            "score": 3.23,
+            "ret3": 10.5,
+            "ret5": 11.02
+          },
+          {
+            "date": "2026-05-18",
+            "code": "603380.SH",
+            "verdict": "WATCH",
+            "score": 3.84,
+            "ret3": 8.98,
+            "ret5": 4.34
+          },
+          {
+            "date": "2026-05-18",
+            "code": "300031.SZ",
+            "verdict": "WATCH",
+            "score": 4.05,
+            "ret3": 5.26,
+            "ret5": 3.24
+          },
+          {
+            "date": "2026-05-25",
+            "code": "688584.SH",
+            "verdict": "WATCH",
+            "score": 3.64,
+            "ret3": 2.34,
+            "ret5": -8.22
+          },
+          {
+            "date": "2026-05-25",
+            "code": "002030.SZ",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 1.62,
+            "ret5": -1.32
+          },
+          {
+            "date": "2026-05-22",
+            "code": "300665.SZ",
+            "verdict": "WATCH",
+            "score": 3.43,
+            "ret3": -2.56,
+            "ret5": -1.13
+          },
+          {
+            "date": "2026-04-14",
+            "code": "300204.SZ",
+            "verdict": "FAIL",
+            "score": 2.88,
+            "ret3": -3.01,
+            "ret5": -4.48
+          },
+          {
+            "date": "2026-05-25",
+            "code": "688484.SH",
+            "verdict": "WATCH",
+            "score": 4.05,
+            "ret3": -5.74,
+            "ret5": -16.76
+          }
+        ],
+        "positive_rate": 0.2,
+        "negative_rate": 0.667,
+        "positive_rate_uplift": 0.012,
+        "negative_rate_uplift": 0.103
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 13,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 8,
+        "ret3_mean": 0.96,
+        "ret3_median": -2.01,
+        "ret5_mean": 4.45,
+        "ret5_median": 3.87,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "C": 2,
+          "D": 4,
+          "E": 4
+        },
+        "current_verdict_distribution": {
+          "FAIL": 1,
+          "WATCH": 12
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-15",
+            "code": "600683.SH",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 21.59,
+            "ret5": 32.69
+          },
+          {
+            "date": "2026-04-08",
+            "code": "301018.SZ",
+            "verdict": "WATCH",
+            "score": 3.84,
+            "ret3": 14.65,
+            "ret5": 20.53
+          },
+          {
+            "date": "2026-04-15",
+            "code": "002498.SZ",
+            "verdict": "WATCH",
+            "score": 3.52,
+            "ret3": 10.59,
+            "ret5": 5.41
+          },
+          {
+            "date": "2026-05-21",
+            "code": "001896.SZ",
+            "verdict": "WATCH",
+            "score": 3.33,
+            "ret3": 1.1,
+            "ret5": -4.15
+          },
+          {
+            "date": "2026-04-08",
+            "code": "003035.SZ",
+            "verdict": "FAIL",
+            "score": 3.08,
+            "ret3": 0.53,
+            "ret5": 2.5
+          },
+          {
+            "date": "2026-05-22",
+            "code": "001896.SZ",
+            "verdict": "WATCH",
+            "score": 3.45,
+            "ret3": -0.13,
+            "ret5": 3.87
+          },
+          {
+            "date": "2026-04-14",
+            "code": "688106.SH",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": -2.01,
+            "ret5": 17.07
+          },
+          {
+            "date": "2026-04-08",
+            "code": "002498.SZ",
+            "verdict": "WATCH",
+            "score": 3.38,
+            "ret3": -3.02,
+            "ret5": 7.05
+          }
+        ],
+        "positive_rate": 0.231,
+        "negative_rate": 0.615,
+        "positive_rate_uplift": 0.043,
+        "negative_rate_uplift": 0.051
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:falling:6:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 11,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 5,
+        "ret3_mean": 1.08,
+        "ret3_median": 0.3,
+        "ret5_mean": 1.4,
+        "ret5_median": -0.43,
+        "ret3_bucket_distribution": {
+          "B": 3,
+          "C": 3,
+          "D": 3,
+          "E": 2
+        },
+        "current_verdict_distribution": {
+          "WATCH": 11
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-08",
+            "code": "600152.SH",
+            "verdict": "WATCH",
+            "score": 3.84,
+            "ret3": 8.43,
+            "ret5": 21.06
+          },
+          {
+            "date": "2026-04-08",
+            "code": "688662.SH",
+            "verdict": "WATCH",
+            "score": 3.84,
+            "ret3": 7.5,
+            "ret5": 7.16
+          },
+          {
+            "date": "2026-03-10",
+            "code": "002627.SZ",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": 6.78,
+            "ret5": 6.44
+          },
+          {
+            "date": "2026-04-16",
+            "code": "600251.SH",
+            "verdict": "WATCH",
+            "score": 3.96,
+            "ret3": 3.73,
+            "ret5": 3.3
+          },
+          {
+            "date": "2026-05-22",
+            "code": "600791.SH",
+            "verdict": "WATCH",
+            "score": 3.85,
+            "ret3": 1.14,
+            "ret5": -2.53
+          },
+          {
+            "date": "2026-04-09",
+            "code": "688158.SH",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 0.3,
+            "ret5": 2.58
+          },
+          {
+            "date": "2026-05-22",
+            "code": "603261.SH",
+            "verdict": "WATCH",
+            "score": 3.65,
+            "ret3": -0.43,
+            "ret5": -6.4
+          },
+          {
+            "date": "2026-04-08",
+            "code": "688158.SH",
+            "verdict": "WATCH",
+            "score": 3.82,
+            "ret3": -2.15,
+            "ret5": -0.43
+          }
+        ],
+        "positive_rate": 0.273,
+        "negative_rate": 0.455,
+        "positive_rate_uplift": 0.085,
+        "negative_rate_uplift": -0.109
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:idle:0:等待启动",
+        "push_wave_side": "weekly",
+        "sample_count": 10,
+        "ret3_ge_5_count": 1,
+        "ret3_le_0_count": 5,
+        "ret3_mean": 0.48,
+        "ret3_median": 0.25,
+        "ret5_mean": 0.49,
+        "ret5_median": 0.88,
+        "ret3_bucket_distribution": {
+          "B": 1,
+          "C": 4,
+          "D": 4,
+          "E": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 8,
+          "WATCH": 2
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-17",
+            "code": "300393.SZ",
+            "verdict": "WATCH",
+            "score": 3.9,
+            "ret3": 7.0,
+            "ret5": 1.9
+          },
+          {
+            "date": "2026-04-09",
+            "code": "300881.SZ",
+            "verdict": "FAIL",
+            "score": 3.12,
+            "ret3": 3.91,
+            "ret5": 6.95
+          },
+          {
+            "date": "2026-04-08",
+            "code": "300881.SZ",
+            "verdict": "FAIL",
+            "score": 2.97,
+            "ret3": 3.47,
+            "ret5": 1.93
+          },
+          {
+            "date": "2026-04-09",
+            "code": "300296.SZ",
+            "verdict": "FAIL",
+            "score": 3.1,
+            "ret3": 2.64,
+            "ret5": 1.32
+          },
+          {
+            "date": "2026-04-08",
+            "code": "002380.SZ",
+            "verdict": "FAIL",
+            "score": 2.7,
+            "ret3": 1.66,
+            "ret5": -0.39
+          },
+          {
+            "date": "2026-04-13",
+            "code": "600367.SH",
+            "verdict": "FAIL",
+            "score": 2.95,
+            "ret3": -1.16,
+            "ret5": 3.9
+          },
+          {
+            "date": "2026-04-09",
+            "code": "301045.SZ",
+            "verdict": "WATCH",
+            "score": 3.46,
+            "ret3": -1.3,
+            "ret5": 0.43
+          },
+          {
+            "date": "2026-04-08",
+            "code": "300296.SZ",
+            "verdict": "FAIL",
+            "score": 2.95,
+            "ret3": -1.94,
+            "ret5": -0.39
+          }
+        ],
+        "positive_rate": 0.1,
+        "negative_rate": 0.5,
+        "positive_rate_uplift": -0.088,
+        "negative_rate_uplift": -0.064
+      }
+    ]
+  },
+  "strong": {
+    "baseline": {
+      "sample_count": 975,
+      "ret3_ge_5_count": 296,
+      "ret3_le_0_count": 426,
+      "ret3_mean": 1.98,
+      "ret3_median": 1.23,
+      "ret5_mean": 2.78,
+      "ret5_median": 1.32,
+      "ret3_bucket_distribution": {
+        "A": 141,
+        "B": 155,
+        "C": 253,
+        "D": 247,
+        "E": 135,
+        "F": 44
+      },
+      "current_verdict_distribution": {
+        "FAIL": 81,
+        "PASS": 46,
+        "WATCH": 848
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-20",
+          "code": "688268.SH",
+          "verdict": "WATCH",
+          "score": 3.99,
+          "ret3": 48.52,
+          "ret5": 83.47
+        },
+        {
+          "date": "2026-04-28",
+          "code": "300209.SZ",
+          "verdict": "WATCH",
+          "score": 4.15,
+          "ret3": 47.29,
+          "ret5": 63.78
+        },
+        {
+          "date": "2026-05-20",
+          "code": "300835.SZ",
+          "verdict": "WATCH",
+          "score": 4.08,
+          "ret3": 44.53,
+          "ret5": 45.46
+        },
+        {
+          "date": "2026-05-14",
+          "code": "300721.SZ",
+          "verdict": "WATCH",
+          "score": 4.16,
+          "ret3": 40.54,
+          "ret5": 28.48
+        },
+        {
+          "date": "2026-04-30",
+          "code": "688069.SH",
+          "verdict": "WATCH",
+          "score": 4.29,
+          "ret3": 40.23,
+          "ret5": 42.38
+        },
+        {
+          "date": "2026-04-27",
+          "code": "300632.SZ",
+          "verdict": "WATCH",
+          "score": 3.9,
+          "ret3": 39.03,
+          "ret5": 40.74
+        },
+        {
+          "date": "2026-04-29",
+          "code": "688400.SH",
+          "verdict": "WATCH",
+          "score": 3.99,
+          "ret3": 34.92,
+          "ret5": 34.43
+        },
+        {
+          "date": "2026-05-20",
+          "code": "688001.SH",
+          "verdict": "WATCH",
+          "score": 3.82,
+          "ret3": 34.64,
+          "ret5": 26.15
+        }
+      ],
+      "positive_rate": 0.304,
+      "negative_rate": 0.437
+    },
+    "positive_rules": [
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 11,
+        "ret3_ge_5_count": 6,
+        "ret3_le_0_count": 3,
+        "ret3_mean": 4.79,
+        "ret3_median": 5.6,
+        "ret5_mean": 2.9,
+        "ret5_median": 0.87,
+        "ret3_bucket_distribution": {
+          "A": 4,
+          "B": 2,
+          "C": 2,
+          "D": 1,
+          "E": 1,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 3,
+          "PASS": 1,
+          "WATCH": 7
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-11",
+            "code": "600488.SH",
+            "verdict": "FAIL",
+            "score": 3.2,
+            "ret3": 18.03,
+            "ret5": -4.39
+          },
+          {
+            "date": "2026-04-30",
+            "code": "688090.SH",
+            "verdict": "WATCH",
+            "score": 4.17,
+            "ret3": 16.97,
+            "ret5": 22.29
+          },
+          {
+            "date": "2026-04-24",
+            "code": "301630.SZ",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 12.55,
+            "ret5": 9.82
+          },
+          {
+            "date": "2026-05-07",
+            "code": "300868.SZ",
+            "verdict": "WATCH",
+            "score": 3.89,
+            "ret3": 10.12,
+            "ret5": 6.73
+          },
+          {
+            "date": "2026-04-24",
+            "code": "301560.SZ",
+            "verdict": "WATCH",
+            "score": 3.66,
+            "ret3": 6.64,
+            "ret5": 0.87
+          },
+          {
+            "date": "2026-05-06",
+            "code": "000601.SZ",
+            "verdict": "FAIL",
+            "score": 3.07,
+            "ret3": 5.6,
+            "ret5": 27.87
+          },
+          {
+            "date": "2026-05-19",
+            "code": "301393.SZ",
+            "verdict": "PASS",
+            "score": 4.25,
+            "ret3": 2.88,
+            "ret5": -3.45
+          },
+          {
+            "date": "2026-04-23",
+            "code": "001299.SZ",
+            "verdict": "WATCH",
+            "score": 3.48,
+            "ret3": 2.16,
+            "ret5": -28.4
+          }
+        ],
+        "positive_rate": 0.545,
+        "negative_rate": 0.273,
+        "positive_rate_uplift": 0.241,
+        "negative_rate_uplift": -0.164
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:6:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 40,
+        "ret3_ge_5_count": 15,
+        "ret3_le_0_count": 14,
+        "ret3_mean": 2.62,
+        "ret3_median": 2.84,
+        "ret5_mean": 3.03,
+        "ret5_median": 3.41,
+        "ret3_bucket_distribution": {
+          "A": 6,
+          "B": 9,
+          "C": 11,
+          "D": 8,
+          "E": 3,
+          "F": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 3,
+          "PASS": 2,
+          "WATCH": 35
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-06",
+            "code": "300400.SZ",
+            "verdict": "WATCH",
+            "score": 3.68,
+            "ret3": 22.35,
+            "ret5": 20.2
+          },
+          {
+            "date": "2026-05-07",
+            "code": "688307.SH",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 17.29,
+            "ret5": 32.88
+          },
+          {
+            "date": "2026-05-07",
+            "code": "688167.SH",
+            "verdict": "WATCH",
+            "score": 4.13,
+            "ret3": 12.47,
+            "ret5": 19.33
+          },
+          {
+            "date": "2026-05-07",
+            "code": "300720.SZ",
+            "verdict": "WATCH",
+            "score": 4.05,
+            "ret3": 12.0,
+            "ret5": -2.92
+          },
+          {
+            "date": "2026-05-06",
+            "code": "300303.SZ",
+            "verdict": "FAIL",
+            "score": 3.17,
+            "ret3": 11.1,
+            "ret5": 13.07
+          },
+          {
+            "date": "2026-04-20",
+            "code": "600522.SH",
+            "verdict": "WATCH",
+            "score": 4.17,
+            "ret3": 10.08,
+            "ret5": 15.61
+          },
+          {
+            "date": "2026-05-07",
+            "code": "688272.SH",
+            "verdict": "WATCH",
+            "score": 3.55,
+            "ret3": 9.38,
+            "ret5": 2.81
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301191.SZ",
+            "verdict": "WATCH",
+            "score": 4.03,
+            "ret3": 8.76,
+            "ret5": 5.4
+          }
+        ],
+        "positive_rate": 0.375,
+        "negative_rate": 0.35,
+        "positive_rate_uplift": 0.071,
+        "negative_rate_uplift": -0.087
+      },
+      {
+        "wave_rule": "W:rising:3:强势|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 14,
+        "ret3_ge_5_count": 5,
+        "ret3_le_0_count": 4,
+        "ret3_mean": 2.29,
+        "ret3_median": 4.07,
+        "ret5_mean": 1.16,
+        "ret5_median": 0.7,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "B": 2,
+          "C": 5,
+          "D": 2,
+          "E": 1,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "WATCH": 14
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-06",
+            "code": "600184.SH",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 16.58,
+            "ret5": 24.44
+          },
+          {
+            "date": "2026-05-14",
+            "code": "688112.SH",
+            "verdict": "WATCH",
+            "score": 4.13,
+            "ret3": 13.64,
+            "ret5": 13.48
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301189.SZ",
+            "verdict": "WATCH",
+            "score": 4.17,
+            "ret3": 10.19,
+            "ret5": 8.31
+          },
+          {
+            "date": "2026-04-24",
+            "code": "002821.SZ",
+            "verdict": "WATCH",
+            "score": 3.86,
+            "ret3": 8.3,
+            "ret5": 6.49
+          },
+          {
+            "date": "2026-04-27",
+            "code": "002821.SZ",
+            "verdict": "WATCH",
+            "score": 4.11,
+            "ret3": 6.66,
+            "ret5": 8.8
+          },
+          {
+            "date": "2026-05-15",
+            "code": "000695.SZ",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 4.52,
+            "ret5": 4.07
+          },
+          {
+            "date": "2026-05-07",
+            "code": "003023.SZ",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 4.29,
+            "ret5": 0.42
+          },
+          {
+            "date": "2026-05-08",
+            "code": "688137.SH",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 3.85,
+            "ret5": -2.23
+          }
+        ],
+        "positive_rate": 0.357,
+        "negative_rate": 0.286,
+        "positive_rate_uplift": 0.053,
+        "negative_rate_uplift": -0.151
+      }
+    ],
+    "all_push_wave_rules": [
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 62,
+        "ret3_ge_5_count": 19,
+        "ret3_le_0_count": 26,
+        "ret3_mean": 1.43,
+        "ret3_median": 0.54,
+        "ret5_mean": 2.06,
+        "ret5_median": -0.92,
+        "ret3_bucket_distribution": {
+          "A": 5,
+          "B": 14,
+          "C": 17,
+          "D": 15,
+          "E": 7,
+          "F": 4
+        },
+        "current_verdict_distribution": {
+          "FAIL": 1,
+          "PASS": 1,
+          "WATCH": 60
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-29",
+            "code": "688400.SH",
+            "verdict": "WATCH",
+            "score": 3.99,
+            "ret3": 34.92,
+            "ret5": 34.43
+          },
+          {
+            "date": "2026-05-19",
+            "code": "605376.SH",
+            "verdict": "WATCH",
+            "score": 3.63,
+            "ret3": 18.11,
+            "ret5": 22.89
+          },
+          {
+            "date": "2026-05-06",
+            "code": "300834.SZ",
+            "verdict": "WATCH",
+            "score": 3.43,
+            "ret3": 17.69,
+            "ret5": 20.84
+          },
+          {
+            "date": "2026-05-20",
+            "code": "603228.SH",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 13.98,
+            "ret5": 8.12
+          },
+          {
+            "date": "2026-05-07",
+            "code": "600105.SH",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 10.1,
+            "ret5": 13.62
+          },
+          {
+            "date": "2026-05-06",
+            "code": "603158.SH",
+            "verdict": "WATCH",
+            "score": 4.15,
+            "ret3": 9.4,
+            "ret5": 6.7
+          },
+          {
+            "date": "2026-04-30",
+            "code": "603757.SH",
+            "verdict": "WATCH",
+            "score": 3.93,
+            "ret3": 8.64,
+            "ret5": 19.65
+          },
+          {
+            "date": "2026-05-20",
+            "code": "603012.SH",
+            "verdict": "WATCH",
+            "score": 3.82,
+            "ret3": 8.63,
+            "ret5": 2.21
+          }
+        ],
+        "positive_rate": 0.306,
+        "negative_rate": 0.419,
+        "positive_rate_uplift": 0.002,
+        "negative_rate_uplift": -0.018
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 41,
+        "ret3_ge_5_count": 13,
+        "ret3_le_0_count": 19,
+        "ret3_mean": 1.14,
+        "ret3_median": 1.13,
+        "ret5_mean": 1.82,
+        "ret5_median": -0.22,
+        "ret3_bucket_distribution": {
+          "A": 5,
+          "B": 8,
+          "C": 9,
+          "D": 10,
+          "E": 6,
+          "F": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 2,
+          "PASS": 1,
+          "WATCH": 38
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-20",
+            "code": "688268.SH",
+            "verdict": "WATCH",
+            "score": 3.99,
+            "ret3": 48.52,
+            "ret5": 83.47
+          },
+          {
+            "date": "2026-05-20",
+            "code": "301312.SZ",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 19.98,
+            "ret5": 9.04
+          },
+          {
+            "date": "2026-05-08",
+            "code": "300502.SZ",
+            "verdict": "WATCH",
+            "score": 4.03,
+            "ret3": 14.02,
+            "ret5": 10.58
+          },
+          {
+            "date": "2026-05-06",
+            "code": "920047.BJ",
+            "verdict": "FAIL",
+            "score": 3.05,
+            "ret3": 13.55,
+            "ret5": 21.34
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301205.SZ",
+            "verdict": "WATCH",
+            "score": 3.98,
+            "ret3": 11.55,
+            "ret5": 12.95
+          },
+          {
+            "date": "2026-04-20",
+            "code": "300191.SZ",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 9.99,
+            "ret5": 4.21
+          },
+          {
+            "date": "2026-05-06",
+            "code": "300499.SZ",
+            "verdict": "WATCH",
+            "score": 4.03,
+            "ret3": 9.61,
+            "ret5": 14.62
+          },
+          {
+            "date": "2026-04-30",
+            "code": "920047.BJ",
+            "verdict": "FAIL",
+            "score": 2.9,
+            "ret3": 7.52,
+            "ret5": 19.14
+          }
+        ],
+        "positive_rate": 0.317,
+        "negative_rate": 0.463,
+        "positive_rate_uplift": 0.013,
+        "negative_rate_uplift": 0.026
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:6:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 40,
+        "ret3_ge_5_count": 15,
+        "ret3_le_0_count": 14,
+        "ret3_mean": 2.62,
+        "ret3_median": 2.84,
+        "ret5_mean": 3.03,
+        "ret5_median": 3.41,
+        "ret3_bucket_distribution": {
+          "A": 6,
+          "B": 9,
+          "C": 11,
+          "D": 8,
+          "E": 3,
+          "F": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 3,
+          "PASS": 2,
+          "WATCH": 35
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-06",
+            "code": "300400.SZ",
+            "verdict": "WATCH",
+            "score": 3.68,
+            "ret3": 22.35,
+            "ret5": 20.2
+          },
+          {
+            "date": "2026-05-07",
+            "code": "688307.SH",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 17.29,
+            "ret5": 32.88
+          },
+          {
+            "date": "2026-05-07",
+            "code": "688167.SH",
+            "verdict": "WATCH",
+            "score": 4.13,
+            "ret3": 12.47,
+            "ret5": 19.33
+          },
+          {
+            "date": "2026-05-07",
+            "code": "300720.SZ",
+            "verdict": "WATCH",
+            "score": 4.05,
+            "ret3": 12.0,
+            "ret5": -2.92
+          },
+          {
+            "date": "2026-05-06",
+            "code": "300303.SZ",
+            "verdict": "FAIL",
+            "score": 3.17,
+            "ret3": 11.1,
+            "ret5": 13.07
+          },
+          {
+            "date": "2026-04-20",
+            "code": "600522.SH",
+            "verdict": "WATCH",
+            "score": 4.17,
+            "ret3": 10.08,
+            "ret5": 15.61
+          },
+          {
+            "date": "2026-05-07",
+            "code": "688272.SH",
+            "verdict": "WATCH",
+            "score": 3.55,
+            "ret3": 9.38,
+            "ret5": 2.81
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301191.SZ",
+            "verdict": "WATCH",
+            "score": 4.03,
+            "ret3": 8.76,
+            "ret5": 5.4
+          }
+        ],
+        "positive_rate": 0.375,
+        "negative_rate": 0.35,
+        "positive_rate_uplift": 0.071,
+        "negative_rate_uplift": -0.087
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 21,
+        "ret3_ge_5_count": 7,
+        "ret3_le_0_count": 13,
+        "ret3_mean": 1.04,
+        "ret3_median": -1.0,
+        "ret5_mean": -0.79,
+        "ret5_median": -4.44,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "B": 4,
+          "C": 1,
+          "D": 8,
+          "E": 3,
+          "F": 2
+        },
+        "current_verdict_distribution": {
+          "WATCH": 21
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-27",
+            "code": "300632.SZ",
+            "verdict": "WATCH",
+            "score": 3.9,
+            "ret3": 39.03,
+            "ret5": 40.74
+          },
+          {
+            "date": "2026-05-07",
+            "code": "600345.SH",
+            "verdict": "WATCH",
+            "score": 4.03,
+            "ret3": 13.34,
+            "ret5": 12.96
+          },
+          {
+            "date": "2026-04-30",
+            "code": "601133.SH",
+            "verdict": "WATCH",
+            "score": 3.96,
+            "ret3": 12.73,
+            "ret5": 13.04
+          },
+          {
+            "date": "2026-05-07",
+            "code": "301055.SZ",
+            "verdict": "WATCH",
+            "score": 3.99,
+            "ret3": 9.38,
+            "ret5": 20.94
+          },
+          {
+            "date": "2026-04-29",
+            "code": "601133.SH",
+            "verdict": "WATCH",
+            "score": 3.99,
+            "ret3": 7.03,
+            "ret5": 14.4
+          },
+          {
+            "date": "2026-04-21",
+            "code": "600188.SH",
+            "verdict": "WATCH",
+            "score": 3.62,
+            "ret3": 5.94,
+            "ret5": 9.94
+          },
+          {
+            "date": "2026-05-06",
+            "code": "603387.SH",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": 5.08,
+            "ret5": 1.04
+          },
+          {
+            "date": "2026-05-20",
+            "code": "603637.SH",
+            "verdict": "WATCH",
+            "score": 3.89,
+            "ret3": 4.79,
+            "ret5": 9.96
+          }
+        ],
+        "positive_rate": 0.333,
+        "negative_rate": 0.619,
+        "positive_rate_uplift": 0.029,
+        "negative_rate_uplift": 0.182
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 15,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 6,
+        "ret3_mean": 1.32,
+        "ret3_median": 2.6,
+        "ret5_mean": 2.58,
+        "ret5_median": 3.44,
+        "ret3_bucket_distribution": {
+          "B": 3,
+          "C": 6,
+          "D": 4,
+          "E": 2
+        },
+        "current_verdict_distribution": {
+          "PASS": 1,
+          "WATCH": 14
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-11",
+            "code": "301606.SZ",
+            "verdict": "WATCH",
+            "score": 3.64,
+            "ret3": 7.76,
+            "ret5": 5.84
+          },
+          {
+            "date": "2026-04-29",
+            "code": "600236.SH",
+            "verdict": "PASS",
+            "score": 4.02,
+            "ret3": 6.29,
+            "ret5": 16.18
+          },
+          {
+            "date": "2026-05-07",
+            "code": "688309.SH",
+            "verdict": "WATCH",
+            "score": 4.06,
+            "ret3": 6.07,
+            "ret5": 3.44
+          },
+          {
+            "date": "2026-04-29",
+            "code": "601872.SH",
+            "verdict": "WATCH",
+            "score": 3.68,
+            "ret3": 4.66,
+            "ret5": 4.32
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301186.SZ",
+            "verdict": "WATCH",
+            "score": 3.99,
+            "ret3": 4.61,
+            "ret5": 2.29
+          },
+          {
+            "date": "2026-05-06",
+            "code": "603261.SH",
+            "verdict": "WATCH",
+            "score": 3.63,
+            "ret3": 3.98,
+            "ret5": 8.37
+          },
+          {
+            "date": "2026-04-28",
+            "code": "600236.SH",
+            "verdict": "WATCH",
+            "score": 3.95,
+            "ret3": 3.05,
+            "ret5": 4.04
+          },
+          {
+            "date": "2026-05-07",
+            "code": "603261.SH",
+            "verdict": "WATCH",
+            "score": 3.87,
+            "ret3": 2.6,
+            "ret5": 6.93
+          }
+        ],
+        "positive_rate": 0.2,
+        "negative_rate": 0.4,
+        "positive_rate_uplift": -0.104,
+        "negative_rate_uplift": -0.037
+      },
+      {
+        "wave_rule": "W:rising:3:强势|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 14,
+        "ret3_ge_5_count": 5,
+        "ret3_le_0_count": 4,
+        "ret3_mean": 2.29,
+        "ret3_median": 4.07,
+        "ret5_mean": 1.16,
+        "ret5_median": 0.7,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "B": 2,
+          "C": 5,
+          "D": 2,
+          "E": 1,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "WATCH": 14
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-06",
+            "code": "600184.SH",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 16.58,
+            "ret5": 24.44
+          },
+          {
+            "date": "2026-05-14",
+            "code": "688112.SH",
+            "verdict": "WATCH",
+            "score": 4.13,
+            "ret3": 13.64,
+            "ret5": 13.48
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301189.SZ",
+            "verdict": "WATCH",
+            "score": 4.17,
+            "ret3": 10.19,
+            "ret5": 8.31
+          },
+          {
+            "date": "2026-04-24",
+            "code": "002821.SZ",
+            "verdict": "WATCH",
+            "score": 3.86,
+            "ret3": 8.3,
+            "ret5": 6.49
+          },
+          {
+            "date": "2026-04-27",
+            "code": "002821.SZ",
+            "verdict": "WATCH",
+            "score": 4.11,
+            "ret3": 6.66,
+            "ret5": 8.8
+          },
+          {
+            "date": "2026-05-15",
+            "code": "000695.SZ",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 4.52,
+            "ret5": 4.07
+          },
+          {
+            "date": "2026-05-07",
+            "code": "003023.SZ",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 4.29,
+            "ret5": 0.42
+          },
+          {
+            "date": "2026-05-08",
+            "code": "688137.SH",
+            "verdict": "WATCH",
+            "score": 4.1,
+            "ret3": 3.85,
+            "ret5": -2.23
+          }
+        ],
+        "positive_rate": 0.357,
+        "negative_rate": 0.286,
+        "positive_rate_uplift": 0.053,
+        "negative_rate_uplift": -0.151
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:rising:2:背离",
+        "push_wave_side": "weekly",
+        "sample_count": 14,
+        "ret3_ge_5_count": 1,
+        "ret3_le_0_count": 7,
+        "ret3_mean": -0.62,
+        "ret3_median": 0.23,
+        "ret5_mean": 0.5,
+        "ret5_median": 0.1,
+        "ret3_bucket_distribution": {
+          "B": 1,
+          "C": 6,
+          "D": 4,
+          "E": 2,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "WATCH": 14
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-15",
+            "code": "002066.SZ",
+            "verdict": "WATCH",
+            "score": 4.18,
+            "ret3": 5.3,
+            "ret5": -1.19
+          },
+          {
+            "date": "2026-04-29",
+            "code": "688059.SH",
+            "verdict": "WATCH",
+            "score": 4.18,
+            "ret3": 4.12,
+            "ret5": 2.71
+          },
+          {
+            "date": "2026-04-20",
+            "code": "600498.SH",
+            "verdict": "WATCH",
+            "score": 3.88,
+            "ret3": 3.85,
+            "ret5": -2.59
+          },
+          {
+            "date": "2026-04-29",
+            "code": "300490.SZ",
+            "verdict": "WATCH",
+            "score": 4.11,
+            "ret3": 2.35,
+            "ret5": 1.4
+          },
+          {
+            "date": "2026-05-08",
+            "code": "603012.SH",
+            "verdict": "WATCH",
+            "score": 3.95,
+            "ret3": 1.78,
+            "ret5": -4.08
+          },
+          {
+            "date": "2026-05-06",
+            "code": "688525.SH",
+            "verdict": "WATCH",
+            "score": 4.18,
+            "ret3": 1.47,
+            "ret5": 5.58
+          },
+          {
+            "date": "2026-05-07",
+            "code": "603315.SH",
+            "verdict": "WATCH",
+            "score": 3.92,
+            "ret3": 0.74,
+            "ret5": 4.55
+          },
+          {
+            "date": "2026-04-21",
+            "code": "300931.SZ",
+            "verdict": "WATCH",
+            "score": 4.18,
+            "ret3": -0.29,
+            "ret5": 12.87
+          }
+        ],
+        "positive_rate": 0.071,
+        "negative_rate": 0.5,
+        "positive_rate_uplift": -0.233,
+        "negative_rate_uplift": 0.063
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:rising:0:背离",
+        "push_wave_side": "weekly",
+        "sample_count": 13,
+        "ret3_ge_5_count": 4,
+        "ret3_le_0_count": 3,
+        "ret3_mean": 3.82,
+        "ret3_median": 2.83,
+        "ret5_mean": 4.6,
+        "ret5_median": 2.9,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "B": 1,
+          "C": 6,
+          "D": 2,
+          "E": 1
+        },
+        "current_verdict_distribution": {
+          "PASS": 2,
+          "WATCH": 11
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-06",
+            "code": "000791.SZ",
+            "verdict": "WATCH",
+            "score": 4.05,
+            "ret3": 19.34,
+            "ret5": 20.05
+          },
+          {
+            "date": "2026-05-20",
+            "code": "301563.SZ",
+            "verdict": "WATCH",
+            "score": 3.82,
+            "ret3": 12.53,
+            "ret5": 18.38
+          },
+          {
+            "date": "2026-05-07",
+            "code": "000791.SZ",
+            "verdict": "PASS",
+            "score": 4.64,
+            "ret3": 12.18,
+            "ret5": 10.46
+          },
+          {
+            "date": "2026-04-29",
+            "code": "300196.SZ",
+            "verdict": "WATCH",
+            "score": 3.82,
+            "ret3": 5.1,
+            "ret5": 7.13
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301322.SZ",
+            "verdict": "WATCH",
+            "score": 4.18,
+            "ret3": 4.07,
+            "ret5": 2.9
+          },
+          {
+            "date": "2026-05-06",
+            "code": "300196.SZ",
+            "verdict": "WATCH",
+            "score": 3.95,
+            "ret3": 3.24,
+            "ret5": 2.15
+          },
+          {
+            "date": "2026-05-07",
+            "code": "300196.SZ",
+            "verdict": "WATCH",
+            "score": 4.07,
+            "ret3": 2.83,
+            "ret5": -1.6
+          },
+          {
+            "date": "2026-05-08",
+            "code": "605566.SH",
+            "verdict": "WATCH",
+            "score": 3.95,
+            "ret3": 2.51,
+            "ret5": 2.82
+          }
+        ],
+        "positive_rate": 0.308,
+        "negative_rate": 0.231,
+        "positive_rate_uplift": 0.004,
+        "negative_rate_uplift": -0.206
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 12,
+        "ret3_ge_5_count": 4,
+        "ret3_le_0_count": 3,
+        "ret3_mean": 4.04,
+        "ret3_median": 3.58,
+        "ret5_mean": 4.36,
+        "ret5_median": 1.38,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "B": 1,
+          "C": 5,
+          "D": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 3,
+          "WATCH": 9
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-20",
+            "code": "600310.SH",
+            "verdict": "FAIL",
+            "score": 2.7,
+            "ret3": 14.29,
+            "ret5": 14.07
+          },
+          {
+            "date": "2026-05-13",
+            "code": "688548.SH",
+            "verdict": "WATCH",
+            "score": 4.03,
+            "ret3": 12.27,
+            "ret5": 16.15
+          },
+          {
+            "date": "2026-05-06",
+            "code": "301070.SZ",
+            "verdict": "WATCH",
+            "score": 4.06,
+            "ret3": 10.33,
+            "ret5": 9.74
+          },
+          {
+            "date": "2026-05-20",
+            "code": "000062.SZ",
+            "verdict": "WATCH",
+            "score": 3.87,
+            "ret3": 5.14,
+            "ret5": -7.24
+          },
+          {
+            "date": "2026-05-20",
+            "code": "002025.SZ",
+            "verdict": "WATCH",
+            "score": 3.57,
+            "ret3": 4.2,
+            "ret5": -5.6
+          },
+          {
+            "date": "2026-05-06",
+            "code": "000767.SZ",
+            "verdict": "FAIL",
+            "score": 3.27,
+            "ret3": 4.19,
+            "ret5": 26.11
+          },
+          {
+            "date": "2026-05-06",
+            "code": "300166.SZ",
+            "verdict": "WATCH",
+            "score": 4.12,
+            "ret3": 2.97,
+            "ret5": 8.96
+          },
+          {
+            "date": "2026-05-19",
+            "code": "002025.SZ",
+            "verdict": "WATCH",
+            "score": 3.32,
+            "ret3": 2.59,
+            "ret5": 0.81
+          }
+        ],
+        "positive_rate": 0.333,
+        "negative_rate": 0.25,
+        "positive_rate_uplift": 0.029,
+        "negative_rate_uplift": -0.187
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 11,
+        "ret3_ge_5_count": 6,
+        "ret3_le_0_count": 3,
+        "ret3_mean": 4.79,
+        "ret3_median": 5.6,
+        "ret5_mean": 2.9,
+        "ret5_median": 0.87,
+        "ret3_bucket_distribution": {
+          "A": 4,
+          "B": 2,
+          "C": 2,
+          "D": 1,
+          "E": 1,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 3,
+          "PASS": 1,
+          "WATCH": 7
+        },
+        "typical_samples": [
+          {
+            "date": "2026-05-11",
+            "code": "600488.SH",
+            "verdict": "FAIL",
+            "score": 3.2,
+            "ret3": 18.03,
+            "ret5": -4.39
+          },
+          {
+            "date": "2026-04-30",
+            "code": "688090.SH",
+            "verdict": "WATCH",
+            "score": 4.17,
+            "ret3": 16.97,
+            "ret5": 22.29
+          },
+          {
+            "date": "2026-04-24",
+            "code": "301630.SZ",
+            "verdict": "WATCH",
+            "score": 4.04,
+            "ret3": 12.55,
+            "ret5": 9.82
+          },
+          {
+            "date": "2026-05-07",
+            "code": "300868.SZ",
+            "verdict": "WATCH",
+            "score": 3.89,
+            "ret3": 10.12,
+            "ret5": 6.73
+          },
+          {
+            "date": "2026-04-24",
+            "code": "301560.SZ",
+            "verdict": "WATCH",
+            "score": 3.66,
+            "ret3": 6.64,
+            "ret5": 0.87
+          },
+          {
+            "date": "2026-05-06",
+            "code": "000601.SZ",
+            "verdict": "FAIL",
+            "score": 3.07,
+            "ret3": 5.6,
+            "ret5": 27.87
+          },
+          {
+            "date": "2026-05-19",
+            "code": "301393.SZ",
+            "verdict": "PASS",
+            "score": 4.25,
+            "ret3": 2.88,
+            "ret5": -3.45
+          },
+          {
+            "date": "2026-04-23",
+            "code": "001299.SZ",
+            "verdict": "WATCH",
+            "score": 3.48,
+            "ret3": 2.16,
+            "ret5": -28.4
+          }
+        ],
+        "positive_rate": 0.545,
+        "negative_rate": 0.273,
+        "positive_rate_uplift": 0.241,
+        "negative_rate_uplift": -0.164
+      }
+    ]
+  },
+  "weak": {
+    "baseline": {
+      "sample_count": 1930,
+      "ret3_ge_5_count": 316,
+      "ret3_le_0_count": 1061,
+      "ret3_mean": -0.6,
+      "ret3_median": -0.72,
+      "ret5_mean": -1.39,
+      "ret5_median": -1.73,
+      "ret3_bucket_distribution": {
+        "A": 133,
+        "B": 183,
+        "C": 511,
+        "D": 585,
+        "E": 318,
+        "F": 158
+      },
+      "current_verdict_distribution": {
+        "FAIL": 856,
+        "PASS": 9,
+        "WATCH": 1065
+      },
+      "typical_samples": [
+        {
+          "date": "2026-04-02",
+          "code": "688485.SH",
+          "verdict": "WATCH",
+          "score": 3.44,
+          "ret3": 54.18,
+          "ret5": 55.29
+        },
+        {
+          "date": "2026-03-05",
+          "code": "688229.SH",
+          "verdict": "WATCH",
+          "score": 3.66,
+          "ret3": 40.75,
+          "ret5": 23.41
+        },
+        {
+          "date": "2026-03-04",
+          "code": "300323.SZ",
+          "verdict": "FAIL",
+          "score": 2.89,
+          "ret3": 37.12,
+          "ret5": 37.82
+        },
+        {
+          "date": "2026-03-06",
+          "code": "688158.SH",
+          "verdict": "WATCH",
+          "score": 3.49,
+          "ret3": 35.38,
+          "ret5": 13.72
+        },
+        {
+          "date": "2026-05-27",
+          "code": "000539.SZ",
+          "verdict": "WATCH",
+          "score": 3.94,
+          "ret3": 33.11,
+          "ret5": null
+        },
+        {
+          "date": "2026-03-20",
+          "code": "002309.SZ",
+          "verdict": "WATCH",
+          "score": 3.56,
+          "ret3": 33.07,
+          "ret5": 13.65
+        },
+        {
+          "date": "2026-03-09",
+          "code": "301396.SZ",
+          "verdict": "WATCH",
+          "score": 3.67,
+          "ret3": 31.23,
+          "ret5": 40.0
+        },
+        {
+          "date": "2026-03-24",
+          "code": "000767.SZ",
+          "verdict": "WATCH",
+          "score": 3.67,
+          "ret3": 30.85,
+          "ret5": 8.74
+        }
+      ],
+      "positive_rate": 0.164,
+      "negative_rate": 0.55
+    },
+    "positive_rules": [],
+    "all_push_wave_rules": [
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 164,
+        "ret3_ge_5_count": 25,
+        "ret3_le_0_count": 83,
+        "ret3_mean": -0.7,
+        "ret3_median": -1.08,
+        "ret5_mean": -1.49,
+        "ret5_median": -1.23,
+        "ret3_bucket_distribution": {
+          "A": 10,
+          "B": 15,
+          "C": 50,
+          "D": 47,
+          "E": 22,
+          "F": 14
+        },
+        "current_verdict_distribution": {
+          "FAIL": 81,
+          "WATCH": 83
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-06",
+            "code": "300246.SZ",
+            "verdict": "FAIL",
+            "score": 3.17,
+            "ret3": 29.73,
+            "ret5": 14.59
+          },
+          {
+            "date": "2026-03-16",
+            "code": "301248.SZ",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 22.24,
+            "ret5": -3.78
+          },
+          {
+            "date": "2026-03-09",
+            "code": "300246.SZ",
+            "verdict": "WATCH",
+            "score": 3.25,
+            "ret3": 17.57,
+            "ret5": 16.95
+          },
+          {
+            "date": "2026-04-07",
+            "code": "300975.SZ",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 16.43,
+            "ret5": 15.87
+          },
+          {
+            "date": "2026-03-25",
+            "code": "600110.SH",
+            "verdict": "WATCH",
+            "score": 3.62,
+            "ret3": 15.78,
+            "ret5": 15.52
+          },
+          {
+            "date": "2026-03-06",
+            "code": "688021.SH",
+            "verdict": "WATCH",
+            "score": 3.58,
+            "ret3": 14.61,
+            "ret5": 14.73
+          },
+          {
+            "date": "2026-03-24",
+            "code": "600163.SH",
+            "verdict": "WATCH",
+            "score": 3.68,
+            "ret3": 14.31,
+            "ret5": 11.24
+          },
+          {
+            "date": "2026-03-24",
+            "code": "301312.SZ",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": 12.52,
+            "ret5": 3.79
+          }
+        ],
+        "positive_rate": 0.152,
+        "negative_rate": 0.506,
+        "positive_rate_uplift": -0.012,
+        "negative_rate_uplift": -0.044
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 139,
+        "ret3_ge_5_count": 25,
+        "ret3_le_0_count": 80,
+        "ret3_mean": -0.52,
+        "ret3_median": -0.67,
+        "ret5_mean": -0.87,
+        "ret5_median": -1.71,
+        "ret3_bucket_distribution": {
+          "A": 12,
+          "B": 13,
+          "C": 34,
+          "D": 45,
+          "E": 27,
+          "F": 8
+        },
+        "current_verdict_distribution": {
+          "FAIL": 53,
+          "PASS": 1,
+          "WATCH": 85
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-23",
+            "code": "000688.SZ",
+            "verdict": "PASS",
+            "score": 3.61,
+            "ret3": 21.1,
+            "ret5": 30.06
+          },
+          {
+            "date": "2026-03-24",
+            "code": "601869.SH",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 17.55,
+            "ret5": 32.65
+          },
+          {
+            "date": "2026-04-01",
+            "code": "601975.SH",
+            "verdict": "WATCH",
+            "score": 3.74,
+            "ret3": 15.96,
+            "ret5": 10.42
+          },
+          {
+            "date": "2026-03-24",
+            "code": "002428.SZ",
+            "verdict": "WATCH",
+            "score": 3.52,
+            "ret3": 15.0,
+            "ret5": 9.52
+          },
+          {
+            "date": "2026-04-07",
+            "code": "603629.SH",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 13.56,
+            "ret5": 24.92
+          },
+          {
+            "date": "2026-04-02",
+            "code": "300480.SZ",
+            "verdict": "FAIL",
+            "score": 3.26,
+            "ret3": 12.93,
+            "ret5": 21.39
+          },
+          {
+            "date": "2026-04-01",
+            "code": "601872.SH",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 12.56,
+            "ret5": 9.72
+          },
+          {
+            "date": "2026-03-06",
+            "code": "001389.SZ",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 12.28,
+            "ret5": 8.18
+          }
+        ],
+        "positive_rate": 0.18,
+        "negative_rate": 0.576,
+        "positive_rate_uplift": 0.016,
+        "negative_rate_uplift": 0.026
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 57,
+        "ret3_ge_5_count": 11,
+        "ret3_le_0_count": 36,
+        "ret3_mean": 0.12,
+        "ret3_median": -1.23,
+        "ret5_mean": -1.86,
+        "ret5_median": -2.73,
+        "ret3_bucket_distribution": {
+          "A": 9,
+          "B": 2,
+          "C": 10,
+          "D": 19,
+          "E": 9,
+          "F": 8
+        },
+        "current_verdict_distribution": {
+          "FAIL": 16,
+          "WATCH": 41
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-06",
+            "code": "688158.SH",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": 35.38,
+            "ret5": 13.72
+          },
+          {
+            "date": "2026-05-27",
+            "code": "000539.SZ",
+            "verdict": "WATCH",
+            "score": 3.94,
+            "ret3": 33.11,
+            "ret5": null
+          },
+          {
+            "date": "2026-03-24",
+            "code": "600539.SH",
+            "verdict": "FAIL",
+            "score": 3.22,
+            "ret3": 21.04,
+            "ret5": 24.96
+          },
+          {
+            "date": "2026-03-05",
+            "code": "688031.SH",
+            "verdict": "WATCH",
+            "score": 3.58,
+            "ret3": 14.24,
+            "ret5": 2.97
+          },
+          {
+            "date": "2026-03-06",
+            "code": "688223.SH",
+            "verdict": "FAIL",
+            "score": 2.89,
+            "ret3": 14.17,
+            "ret5": 7.49
+          },
+          {
+            "date": "2026-03-24",
+            "code": "000155.SZ",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 14.04,
+            "ret5": 12.0
+          },
+          {
+            "date": "2026-03-24",
+            "code": "688796.SH",
+            "verdict": "WATCH",
+            "score": 3.53,
+            "ret3": 12.66,
+            "ret5": 12.83
+          },
+          {
+            "date": "2026-03-04",
+            "code": "300427.SZ",
+            "verdict": "FAIL",
+            "score": 2.97,
+            "ret3": 11.8,
+            "ret5": 7.72
+          }
+        ],
+        "positive_rate": 0.193,
+        "negative_rate": 0.632,
+        "positive_rate_uplift": 0.029,
+        "negative_rate_uplift": 0.082
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 40,
+        "ret3_ge_5_count": 8,
+        "ret3_le_0_count": 23,
+        "ret3_mean": 0.33,
+        "ret3_median": -1.04,
+        "ret5_mean": -1.14,
+        "ret5_median": -3.69,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 6,
+          "C": 9,
+          "D": 16,
+          "E": 5,
+          "F": 2
+        },
+        "current_verdict_distribution": {
+          "FAIL": 20,
+          "WATCH": 20
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-26",
+            "code": "300461.SZ",
+            "verdict": "WATCH",
+            "score": 3.41,
+            "ret3": 27.55,
+            "ret5": 42.17
+          },
+          {
+            "date": "2026-03-25",
+            "code": "300461.SZ",
+            "verdict": "FAIL",
+            "score": 3.17,
+            "ret3": 26.35,
+            "ret5": 38.6
+          },
+          {
+            "date": "2026-04-01",
+            "code": "600026.SH",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 9.73,
+            "ret5": 8.08
+          },
+          {
+            "date": "2026-03-04",
+            "code": "920062.BJ",
+            "verdict": "WATCH",
+            "score": 3.83,
+            "ret3": 9.51,
+            "ret5": 6.04
+          },
+          {
+            "date": "2026-03-24",
+            "code": "002479.SZ",
+            "verdict": "FAIL",
+            "score": 2.97,
+            "ret3": 8.92,
+            "ret5": 11.9
+          },
+          {
+            "date": "2026-03-06",
+            "code": "301535.SZ",
+            "verdict": "FAIL",
+            "score": 3.11,
+            "ret3": 8.23,
+            "ret5": 5.79
+          },
+          {
+            "date": "2026-03-09",
+            "code": "301535.SZ",
+            "verdict": "FAIL",
+            "score": 3.26,
+            "ret3": 7.6,
+            "ret5": 7.11
+          },
+          {
+            "date": "2026-03-09",
+            "code": "601339.SH",
+            "verdict": "WATCH",
+            "score": 3.63,
+            "ret3": 5.06,
+            "ret5": 0.0
+          }
+        ],
+        "positive_rate": 0.2,
+        "negative_rate": 0.575,
+        "positive_rate_uplift": 0.036,
+        "negative_rate_uplift": 0.025
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:idle:0:等待启动",
+        "push_wave_side": "weekly",
+        "sample_count": 34,
+        "ret3_ge_5_count": 8,
+        "ret3_le_0_count": 20,
+        "ret3_mean": -1.67,
+        "ret3_median": -1.74,
+        "ret5_mean": -0.67,
+        "ret5_median": -2.3,
+        "ret3_bucket_distribution": {
+          "A": 3,
+          "B": 5,
+          "C": 5,
+          "D": 6,
+          "E": 9,
+          "F": 5
+        },
+        "current_verdict_distribution": {
+          "FAIL": 24,
+          "WATCH": 10
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-25",
+            "code": "688607.SH",
+            "verdict": "WATCH",
+            "score": 4.02,
+            "ret3": 14.06,
+            "ret5": 16.15
+          },
+          {
+            "date": "2026-04-02",
+            "code": "603353.SH",
+            "verdict": "WATCH",
+            "score": 3.37,
+            "ret3": 12.27,
+            "ret5": 11.42
+          },
+          {
+            "date": "2026-03-17",
+            "code": "300342.SZ",
+            "verdict": "FAIL",
+            "score": 3.06,
+            "ret3": 11.38,
+            "ret5": 11.6
+          },
+          {
+            "date": "2026-03-24",
+            "code": "603061.SH",
+            "verdict": "FAIL",
+            "score": 2.91,
+            "ret3": 9.74,
+            "ret5": 14.63
+          },
+          {
+            "date": "2026-03-16",
+            "code": "300342.SZ",
+            "verdict": "FAIL",
+            "score": 2.91,
+            "ret3": 9.05,
+            "ret5": 12.18
+          },
+          {
+            "date": "2026-03-24",
+            "code": "688607.SH",
+            "verdict": "WATCH",
+            "score": 3.83,
+            "ret3": 7.63,
+            "ret5": 11.49
+          },
+          {
+            "date": "2026-04-07",
+            "code": "000039.SZ",
+            "verdict": "FAIL",
+            "score": 2.72,
+            "ret3": 6.82,
+            "ret5": 5.11
+          },
+          {
+            "date": "2026-03-25",
+            "code": "300757.SZ",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": 6.12,
+            "ret5": 7.82
+          }
+        ],
+        "positive_rate": 0.235,
+        "negative_rate": 0.588,
+        "positive_rate_uplift": 0.071,
+        "negative_rate_uplift": 0.038
+      },
+      {
+        "wave_rule": "W:rising:3:背离|D:falling:6:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 31,
+        "ret3_ge_5_count": 7,
+        "ret3_le_0_count": 15,
+        "ret3_mean": -0.16,
+        "ret3_median": -0.44,
+        "ret5_mean": -0.64,
+        "ret5_median": 1.04,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 5,
+          "C": 7,
+          "D": 7,
+          "E": 6,
+          "F": 2
+        },
+        "current_verdict_distribution": {
+          "FAIL": 14,
+          "PASS": 1,
+          "WATCH": 16
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-07",
+            "code": "002636.SZ",
+            "verdict": "FAIL",
+            "score": 3.05,
+            "ret3": 12.95,
+            "ret5": 21.94
+          },
+          {
+            "date": "2026-04-03",
+            "code": "300303.SZ",
+            "verdict": "FAIL",
+            "score": 3.28,
+            "ret3": 11.8,
+            "ret5": 6.89
+          },
+          {
+            "date": "2026-04-07",
+            "code": "688127.SH",
+            "verdict": "WATCH",
+            "score": 3.58,
+            "ret3": 9.5,
+            "ret5": 6.73
+          },
+          {
+            "date": "2026-03-24",
+            "code": "002491.SZ",
+            "verdict": "PASS",
+            "score": 3.61,
+            "ret3": 8.3,
+            "ret5": 17.76
+          },
+          {
+            "date": "2026-04-03",
+            "code": "688127.SH",
+            "verdict": "FAIL",
+            "score": 3.08,
+            "ret3": 8.19,
+            "ret5": 7.89
+          },
+          {
+            "date": "2026-04-07",
+            "code": "300303.SZ",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 7.42,
+            "ret5": 5.38
+          },
+          {
+            "date": "2026-04-07",
+            "code": "002631.SZ",
+            "verdict": "FAIL",
+            "score": 2.84,
+            "ret3": 6.15,
+            "ret5": 7.17
+          },
+          {
+            "date": "2026-04-07",
+            "code": "300243.SZ",
+            "verdict": "FAIL",
+            "score": 3.28,
+            "ret3": 4.1,
+            "ret5": 12.01
+          }
+        ],
+        "positive_rate": 0.226,
+        "negative_rate": 0.484,
+        "positive_rate_uplift": 0.062,
+        "negative_rate_uplift": -0.066
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:idle:0:等待启动",
+        "push_wave_side": "weekly",
+        "sample_count": 27,
+        "ret3_ge_5_count": 6,
+        "ret3_le_0_count": 15,
+        "ret3_mean": -1.25,
+        "ret3_median": -1.9,
+        "ret5_mean": -0.53,
+        "ret5_median": -3.75,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 4,
+          "C": 5,
+          "D": 6,
+          "E": 5,
+          "F": 4
+        },
+        "current_verdict_distribution": {
+          "FAIL": 19,
+          "PASS": 1,
+          "WATCH": 7
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-03",
+            "code": "920045.BJ",
+            "verdict": "FAIL",
+            "score": 2.58,
+            "ret3": 11.27,
+            "ret5": 30.06
+          },
+          {
+            "date": "2026-03-26",
+            "code": "002149.SZ",
+            "verdict": "FAIL",
+            "score": 3.0,
+            "ret3": 10.27,
+            "ret5": 5.16
+          },
+          {
+            "date": "2026-03-16",
+            "code": "002995.SZ",
+            "verdict": "FAIL",
+            "score": 3.02,
+            "ret3": 7.75,
+            "ret5": -5.17
+          },
+          {
+            "date": "2026-03-18",
+            "code": "300751.SZ",
+            "verdict": "PASS",
+            "score": 3.49,
+            "ret3": 7.38,
+            "ret5": 10.13
+          },
+          {
+            "date": "2026-04-02",
+            "code": "688809.SH",
+            "verdict": "FAIL",
+            "score": 3.01,
+            "ret3": 7.0,
+            "ret5": 8.29
+          },
+          {
+            "date": "2026-03-13",
+            "code": "301629.SZ",
+            "verdict": "FAIL",
+            "score": 2.86,
+            "ret3": 5.69,
+            "ret5": 2.88
+          },
+          {
+            "date": "2026-03-11",
+            "code": "301348.SZ",
+            "verdict": "WATCH",
+            "score": 3.47,
+            "ret3": 4.25,
+            "ret5": 8.61
+          },
+          {
+            "date": "2026-03-06",
+            "code": "688759.SH",
+            "verdict": "FAIL",
+            "score": 2.58,
+            "ret3": 2.26,
+            "ret5": -3.66
+          }
+        ],
+        "positive_rate": 0.222,
+        "negative_rate": 0.556,
+        "positive_rate_uplift": 0.058,
+        "negative_rate_uplift": 0.006
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 26,
+        "ret3_ge_5_count": 7,
+        "ret3_le_0_count": 9,
+        "ret3_mean": 1.4,
+        "ret3_median": 0.64,
+        "ret5_mean": 0.29,
+        "ret5_median": -1.39,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 5,
+          "C": 8,
+          "D": 6,
+          "E": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 14,
+          "WATCH": 12
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-02",
+            "code": "002384.SZ",
+            "verdict": "WATCH",
+            "score": 3.55,
+            "ret3": 12.86,
+            "ret5": 35.11
+          },
+          {
+            "date": "2026-03-24",
+            "code": "301571.SZ",
+            "verdict": "FAIL",
+            "score": 3.12,
+            "ret3": 10.99,
+            "ret5": 8.46
+          },
+          {
+            "date": "2026-05-27",
+            "code": "301319.SZ",
+            "verdict": "FAIL",
+            "score": 3.27,
+            "ret3": 8.75,
+            "ret5": null
+          },
+          {
+            "date": "2026-03-25",
+            "code": "603261.SH",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 7.95,
+            "ret5": 10.17
+          },
+          {
+            "date": "2026-04-03",
+            "code": "002952.SZ",
+            "verdict": "FAIL",
+            "score": 3.21,
+            "ret3": 7.94,
+            "ret5": 3.77
+          },
+          {
+            "date": "2026-03-25",
+            "code": "600313.SH",
+            "verdict": "FAIL",
+            "score": 2.83,
+            "ret3": 7.72,
+            "ret5": -1.39
+          },
+          {
+            "date": "2026-03-16",
+            "code": "301081.SZ",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 6.28,
+            "ret5": 4.47
+          },
+          {
+            "date": "2026-04-01",
+            "code": "688629.SH",
+            "verdict": "FAIL",
+            "score": 2.98,
+            "ret3": 4.84,
+            "ret5": 13.88
+          }
+        ],
+        "positive_rate": 0.269,
+        "negative_rate": 0.346,
+        "positive_rate_uplift": 0.105,
+        "negative_rate_uplift": -0.204
+      },
+      {
+        "wave_rule": "W:rising:5:背离|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 23,
+        "ret3_ge_5_count": 5,
+        "ret3_le_0_count": 12,
+        "ret3_mean": -0.29,
+        "ret3_median": -0.99,
+        "ret5_mean": -3.21,
+        "ret5_median": -5.46,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "B": 4,
+          "C": 5,
+          "D": 7,
+          "E": 4,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 8,
+          "WATCH": 15
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-07",
+            "code": "300209.SZ",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 18.48,
+            "ret5": 28.23
+          },
+          {
+            "date": "2026-03-05",
+            "code": "301105.SZ",
+            "verdict": "FAIL",
+            "score": 3.28,
+            "ret3": 8.55,
+            "ret5": 1.46
+          },
+          {
+            "date": "2026-03-16",
+            "code": "603353.SH",
+            "verdict": "WATCH",
+            "score": 3.86,
+            "ret3": 5.65,
+            "ret5": -13.46
+          },
+          {
+            "date": "2026-03-25",
+            "code": "600251.SH",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 5.25,
+            "ret5": 2.67
+          },
+          {
+            "date": "2026-04-07",
+            "code": "002350.SZ",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 5.24,
+            "ret5": -1.77
+          },
+          {
+            "date": "2026-03-04",
+            "code": "301105.SZ",
+            "verdict": "WATCH",
+            "score": 3.58,
+            "ret3": 3.43,
+            "ret5": 5.09
+          },
+          {
+            "date": "2026-03-27",
+            "code": "301317.SZ",
+            "verdict": "FAIL",
+            "score": 3.03,
+            "ret3": 2.16,
+            "ret5": -5.88
+          },
+          {
+            "date": "2026-03-06",
+            "code": "002634.SZ",
+            "verdict": "WATCH",
+            "score": 3.55,
+            "ret3": 1.68,
+            "ret5": -3.79
+          }
+        ],
+        "positive_rate": 0.217,
+        "negative_rate": 0.522,
+        "positive_rate_uplift": 0.053,
+        "negative_rate_uplift": -0.028
+      },
+      {
+        "wave_rule": "W:rising:3:强势|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 23,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 11,
+        "ret3_mean": 0.19,
+        "ret3_median": -0.15,
+        "ret5_mean": -1.03,
+        "ret5_median": -1.29,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 1,
+          "C": 8,
+          "D": 6,
+          "E": 4,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 9,
+          "WATCH": 14
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-04",
+            "code": "300042.SZ",
+            "verdict": "WATCH",
+            "score": 3.83,
+            "ret3": 12.84,
+            "ret5": 13.63
+          },
+          {
+            "date": "2026-03-05",
+            "code": "300016.SZ",
+            "verdict": "WATCH",
+            "score": 3.56,
+            "ret3": 10.68,
+            "ret5": 6.23
+          },
+          {
+            "date": "2026-03-04",
+            "code": "300215.SZ",
+            "verdict": "FAIL",
+            "score": 3.07,
+            "ret3": 9.69,
+            "ret5": 6.89
+          },
+          {
+            "date": "2026-03-04",
+            "code": "002692.SZ",
+            "verdict": "FAIL",
+            "score": 2.99,
+            "ret3": 4.96,
+            "ret5": 4.96
+          },
+          {
+            "date": "2026-03-05",
+            "code": "301313.SZ",
+            "verdict": "FAIL",
+            "score": 3.26,
+            "ret3": 4.44,
+            "ret5": -0.06
+          },
+          {
+            "date": "2026-03-06",
+            "code": "600137.SH",
+            "verdict": "WATCH",
+            "score": 3.41,
+            "ret3": 2.7,
+            "ret5": 2.97
+          },
+          {
+            "date": "2026-03-31",
+            "code": "300677.SZ",
+            "verdict": "WATCH",
+            "score": 3.55,
+            "ret3": 2.01,
+            "ret5": -1.11
+          },
+          {
+            "date": "2026-03-06",
+            "code": "300931.SZ",
+            "verdict": "WATCH",
+            "score": 3.61,
+            "ret3": 1.68,
+            "ret5": -2.06
+          }
+        ],
+        "positive_rate": 0.13,
+        "negative_rate": 0.478,
+        "positive_rate_uplift": -0.034,
+        "negative_rate_uplift": -0.072
+      },
+      {
+        "wave_rule": "W:rising:3:强势转分歧|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 19,
+        "ret3_ge_5_count": 4,
+        "ret3_le_0_count": 6,
+        "ret3_mean": 2.39,
+        "ret3_median": 1.02,
+        "ret5_mean": 2.66,
+        "ret5_median": -0.31,
+        "ret3_bucket_distribution": {
+          "A": 2,
+          "B": 2,
+          "C": 9,
+          "D": 5,
+          "E": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 11,
+          "WATCH": 8
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-05",
+            "code": "688328.SH",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 21.84,
+            "ret5": 27.21
+          },
+          {
+            "date": "2026-03-24",
+            "code": "605366.SH",
+            "verdict": "WATCH",
+            "score": 3.44,
+            "ret3": 13.44,
+            "ret5": 6.38
+          },
+          {
+            "date": "2026-03-06",
+            "code": "688663.SH",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 7.7,
+            "ret5": 3.53
+          },
+          {
+            "date": "2026-03-09",
+            "code": "688663.SH",
+            "verdict": "FAIL",
+            "score": 3.28,
+            "ret3": 6.67,
+            "ret5": 0.44
+          },
+          {
+            "date": "2026-03-24",
+            "code": "688309.SH",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 2.02,
+            "ret5": -1.06
+          },
+          {
+            "date": "2026-03-20",
+            "code": "300854.SZ",
+            "verdict": "FAIL",
+            "score": 3.18,
+            "ret3": 2.0,
+            "ret5": 8.77
+          },
+          {
+            "date": "2026-03-18",
+            "code": "603618.SH",
+            "verdict": "WATCH",
+            "score": 3.58,
+            "ret3": 1.69,
+            "ret5": 13.49
+          },
+          {
+            "date": "2026-03-05",
+            "code": "300227.SZ",
+            "verdict": "WATCH",
+            "score": 3.58,
+            "ret3": 1.06,
+            "ret5": -6.57
+          }
+        ],
+        "positive_rate": 0.211,
+        "negative_rate": 0.316,
+        "positive_rate_uplift": 0.047,
+        "negative_rate_uplift": -0.234
+      },
+      {
+        "wave_rule": "W:rising:3:强势转分歧|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 18,
+        "ret3_ge_5_count": 1,
+        "ret3_le_0_count": 14,
+        "ret3_mean": -2.94,
+        "ret3_median": -1.94,
+        "ret5_mean": -2.83,
+        "ret5_median": -3.01,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "C": 3,
+          "D": 7,
+          "E": 4,
+          "F": 3
+        },
+        "current_verdict_distribution": {
+          "FAIL": 6,
+          "WATCH": 12
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-03",
+            "code": "688345.SH",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 20.44,
+            "ret5": 23.84
+          },
+          {
+            "date": "2026-03-27",
+            "code": "600268.SH",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 4.54,
+            "ret5": -6.4
+          },
+          {
+            "date": "2026-03-06",
+            "code": "300385.SZ",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 2.91,
+            "ret5": 8.39
+          },
+          {
+            "date": "2026-03-24",
+            "code": "603738.SH",
+            "verdict": "FAIL",
+            "score": 3.27,
+            "ret3": 2.11,
+            "ret5": 1.05
+          },
+          {
+            "date": "2026-03-06",
+            "code": "002999.SZ",
+            "verdict": "WATCH",
+            "score": 3.64,
+            "ret3": -0.64,
+            "ret5": 0.39
+          },
+          {
+            "date": "2026-03-06",
+            "code": "002588.SZ",
+            "verdict": "WATCH",
+            "score": 3.63,
+            "ret3": -0.89,
+            "ret5": 5.44
+          },
+          {
+            "date": "2026-03-09",
+            "code": "300234.SZ",
+            "verdict": "FAIL",
+            "score": 3.23,
+            "ret3": -1.13,
+            "ret5": 3.24
+          },
+          {
+            "date": "2026-03-09",
+            "code": "002999.SZ",
+            "verdict": "FAIL",
+            "score": 3.23,
+            "ret3": -1.16,
+            "ret5": 1.94
+          }
+        ],
+        "positive_rate": 0.056,
+        "negative_rate": 0.778,
+        "positive_rate_uplift": -0.108,
+        "negative_rate_uplift": 0.228
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:6:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 14,
+        "ret3_ge_5_count": 2,
+        "ret3_le_0_count": 11,
+        "ret3_mean": -1.44,
+        "ret3_median": -1.65,
+        "ret5_mean": -1.41,
+        "ret5_median": -1.4,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "B": 1,
+          "C": 1,
+          "D": 8,
+          "E": 1,
+          "F": 2
+        },
+        "current_verdict_distribution": {
+          "FAIL": 7,
+          "WATCH": 7
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-25",
+            "code": "300054.SZ",
+            "verdict": "FAIL",
+            "score": 3.18,
+            "ret3": 11.59,
+            "ret5": 4.51
+          },
+          {
+            "date": "2026-03-26",
+            "code": "300054.SZ",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": 9.0,
+            "ret5": 5.09
+          },
+          {
+            "date": "2026-03-27",
+            "code": "688372.SH",
+            "verdict": "FAIL",
+            "score": 3.1,
+            "ret3": 3.99,
+            "ret5": 3.6
+          },
+          {
+            "date": "2026-03-24",
+            "code": "000338.SZ",
+            "verdict": "FAIL",
+            "score": 2.98,
+            "ret3": -0.89,
+            "ret5": 2.24
+          },
+          {
+            "date": "2026-03-25",
+            "code": "000039.SZ",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": -1.49,
+            "ret5": -4.39
+          },
+          {
+            "date": "2026-03-24",
+            "code": "000039.SZ",
+            "verdict": "FAIL",
+            "score": 2.84,
+            "ret3": -1.58,
+            "ret5": -5.0
+          },
+          {
+            "date": "2026-03-05",
+            "code": "300520.SZ",
+            "verdict": "WATCH",
+            "score": 3.48,
+            "ret3": -1.64,
+            "ret5": -6.87
+          },
+          {
+            "date": "2026-03-06",
+            "code": "603048.SH",
+            "verdict": "FAIL",
+            "score": 3.22,
+            "ret3": -1.66,
+            "ret5": -3.9
+          }
+        ],
+        "positive_rate": 0.143,
+        "negative_rate": 0.786,
+        "positive_rate_uplift": -0.021,
+        "negative_rate_uplift": 0.236
+      },
+      {
+        "wave_rule": "W:rising:3:分歧|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 13,
+        "ret3_ge_5_count": 2,
+        "ret3_le_0_count": 7,
+        "ret3_mean": -2.69,
+        "ret3_median": -0.31,
+        "ret5_mean": -3.69,
+        "ret5_median": -4.51,
+        "ret3_bucket_distribution": {
+          "B": 2,
+          "C": 4,
+          "D": 1,
+          "E": 4,
+          "F": 2
+        },
+        "current_verdict_distribution": {
+          "FAIL": 7,
+          "WATCH": 6
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-30",
+            "code": "688176.SH",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": 6.88,
+            "ret5": 3.74
+          },
+          {
+            "date": "2026-03-27",
+            "code": "688176.SH",
+            "verdict": "FAIL",
+            "score": 3.28,
+            "ret3": 6.76,
+            "ret5": 1.69
+          },
+          {
+            "date": "2026-03-06",
+            "code": "688201.SH",
+            "verdict": "WATCH",
+            "score": 4.12,
+            "ret3": 2.12,
+            "ret5": -5.32
+          },
+          {
+            "date": "2026-03-06",
+            "code": "301037.SZ",
+            "verdict": "WATCH",
+            "score": 3.56,
+            "ret3": 0.86,
+            "ret5": -0.18
+          },
+          {
+            "date": "2026-03-09",
+            "code": "001211.SZ",
+            "verdict": "WATCH",
+            "score": 3.6,
+            "ret3": 0.46,
+            "ret5": -0.46
+          },
+          {
+            "date": "2026-03-06",
+            "code": "301056.SZ",
+            "verdict": "FAIL",
+            "score": 3.26,
+            "ret3": 0.38,
+            "ret5": -2.85
+          },
+          {
+            "date": "2026-03-19",
+            "code": "688226.SH",
+            "verdict": "FAIL",
+            "score": 3.08,
+            "ret3": -0.31,
+            "ret5": 4.29
+          },
+          {
+            "date": "2026-03-27",
+            "code": "688663.SH",
+            "verdict": "WATCH",
+            "score": 3.62,
+            "ret3": -5.46,
+            "ret5": -8.44
+          }
+        ],
+        "positive_rate": 0.154,
+        "negative_rate": 0.538,
+        "positive_rate_uplift": -0.01,
+        "negative_rate_uplift": -0.012
+      },
+      {
+        "wave_rule": "W:rising:1:强势|D:falling:2:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 11,
+        "ret3_ge_5_count": 2,
+        "ret3_le_0_count": 7,
+        "ret3_mean": 1.5,
+        "ret3_median": -0.29,
+        "ret5_mean": -0.01,
+        "ret5_median": -1.2,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "B": 1,
+          "C": 1,
+          "D": 7
+        },
+        "current_verdict_distribution": {
+          "FAIL": 5,
+          "WATCH": 6
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-06",
+            "code": "000951.SZ",
+            "verdict": "WATCH",
+            "score": 3.58,
+            "ret3": 11.76,
+            "ret5": 8.47
+          },
+          {
+            "date": "2026-03-05",
+            "code": "301157.SZ",
+            "verdict": "WATCH",
+            "score": 3.51,
+            "ret3": 5.13,
+            "ret5": 1.84
+          },
+          {
+            "date": "2026-03-06",
+            "code": "603220.SH",
+            "verdict": "FAIL",
+            "score": 3.07,
+            "ret3": 4.74,
+            "ret5": -4.41
+          },
+          {
+            "date": "2026-03-06",
+            "code": "002219.SZ",
+            "verdict": "WATCH",
+            "score": 3.6,
+            "ret3": 0.0,
+            "ret5": -1.2
+          },
+          {
+            "date": "2026-03-06",
+            "code": "301113.SZ",
+            "verdict": "FAIL",
+            "score": 3.07,
+            "ret3": -0.18,
+            "ret5": -2.02
+          },
+          {
+            "date": "2026-03-09",
+            "code": "002219.SZ",
+            "verdict": "WATCH",
+            "score": 3.84,
+            "ret3": -0.4,
+            "ret5": -1.6
+          },
+          {
+            "date": "2026-03-06",
+            "code": "002381.SZ",
+            "verdict": "WATCH",
+            "score": 3.64,
+            "ret3": -0.42,
+            "ret5": -0.84
+          },
+          {
+            "date": "2026-03-24",
+            "code": "000951.SZ",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": -0.53,
+            "ret5": -1.2
+          }
+        ],
+        "positive_rate": 0.182,
+        "negative_rate": 0.636,
+        "positive_rate_uplift": 0.018,
+        "negative_rate_uplift": 0.086
+      },
+      {
+        "wave_rule": "W:rising:3:强势|D:rising:2:背离",
+        "push_wave_side": "weekly",
+        "sample_count": 11,
+        "ret3_ge_5_count": 2,
+        "ret3_le_0_count": 4,
+        "ret3_mean": -0.19,
+        "ret3_median": 1.43,
+        "ret5_mean": -3.95,
+        "ret5_median": -5.17,
+        "ret3_bucket_distribution": {
+          "B": 2,
+          "C": 5,
+          "D": 1,
+          "E": 1,
+          "F": 2
+        },
+        "current_verdict_distribution": {
+          "FAIL": 4,
+          "WATCH": 7
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-06",
+            "code": "688330.SH",
+            "verdict": "WATCH",
+            "score": 3.8,
+            "ret3": 9.97,
+            "ret5": 1.69
+          },
+          {
+            "date": "2026-03-05",
+            "code": "688689.SH",
+            "verdict": "FAIL",
+            "score": 3.19,
+            "ret3": 7.9,
+            "ret5": 1.02
+          },
+          {
+            "date": "2026-03-12",
+            "code": "688106.SH",
+            "verdict": "WATCH",
+            "score": 3.67,
+            "ret3": 4.28,
+            "ret5": 6.27
+          },
+          {
+            "date": "2026-04-03",
+            "code": "688226.SH",
+            "verdict": "WATCH",
+            "score": 3.67,
+            "ret3": 3.44,
+            "ret5": 2.78
+          },
+          {
+            "date": "2026-03-24",
+            "code": "002039.SZ",
+            "verdict": "FAIL",
+            "score": 3.19,
+            "ret3": 2.2,
+            "ret5": -7.05
+          },
+          {
+            "date": "2026-03-24",
+            "code": "300335.SZ",
+            "verdict": "WATCH",
+            "score": 3.67,
+            "ret3": 1.43,
+            "ret5": -11.19
+          },
+          {
+            "date": "2026-03-06",
+            "code": "600261.SH",
+            "verdict": "WATCH",
+            "score": 3.6,
+            "ret3": 0.51,
+            "ret5": 0.51
+          },
+          {
+            "date": "2026-03-04",
+            "code": "002357.SZ",
+            "verdict": "FAIL",
+            "score": 3.24,
+            "ret3": -2.06,
+            "ret5": -5.17
+          }
+        ],
+        "positive_rate": 0.182,
+        "negative_rate": 0.364,
+        "positive_rate_uplift": 0.018,
+        "negative_rate_uplift": -0.186
+      },
+      {
+        "wave_rule": "W:rising:1:强势|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 10,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 5,
+        "ret3_mean": -0.67,
+        "ret3_median": -1.97,
+        "ret5_mean": 0.36,
+        "ret5_median": -0.73,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "B": 2,
+          "C": 2,
+          "D": 1,
+          "E": 4
+        },
+        "current_verdict_distribution": {
+          "FAIL": 4,
+          "WATCH": 6
+        },
+        "typical_samples": [
+          {
+            "date": "2026-04-02",
+            "code": "301396.SZ",
+            "verdict": "FAIL",
+            "score": 3.28,
+            "ret3": 11.07,
+            "ret5": 14.99
+          },
+          {
+            "date": "2026-03-06",
+            "code": "603507.SH",
+            "verdict": "FAIL",
+            "score": 3.07,
+            "ret3": 7.68,
+            "ret5": 14.47
+          },
+          {
+            "date": "2026-03-05",
+            "code": "300895.SZ",
+            "verdict": "WATCH",
+            "score": 3.56,
+            "ret3": 6.19,
+            "ret5": 0.63
+          },
+          {
+            "date": "2026-03-11",
+            "code": "600428.SH",
+            "verdict": "FAIL",
+            "score": 3.22,
+            "ret3": 2.78,
+            "ret5": 1.45
+          },
+          {
+            "date": "2026-03-12",
+            "code": "600428.SH",
+            "verdict": "WATCH",
+            "score": 3.54,
+            "ret3": 0.85,
+            "ret5": -2.08
+          },
+          {
+            "date": "2026-03-12",
+            "code": "600740.SH",
+            "verdict": "WATCH",
+            "score": 3.57,
+            "ret3": -4.8,
+            "ret5": -8.0
+          },
+          {
+            "date": "2026-03-30",
+            "code": "000912.SZ",
+            "verdict": "WATCH",
+            "score": 3.9,
+            "ret3": -6.31,
+            "ret5": -5.05
+          },
+          {
+            "date": "2026-03-19",
+            "code": "600131.SH",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": -6.98,
+            "ret5": -11.89
+          }
+        ],
+        "positive_rate": 0.3,
+        "negative_rate": 0.5,
+        "positive_rate_uplift": 0.136,
+        "negative_rate_uplift": -0.05
+      },
+      {
+        "wave_rule": "W:rising:3:强势|D:falling:4:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 10,
+        "ret3_ge_5_count": 3,
+        "ret3_le_0_count": 5,
+        "ret3_mean": 0.07,
+        "ret3_median": -0.3,
+        "ret5_mean": -2.28,
+        "ret5_median": -1.78,
+        "ret3_bucket_distribution": {
+          "A": 1,
+          "B": 2,
+          "C": 2,
+          "D": 2,
+          "E": 2,
+          "F": 1
+        },
+        "current_verdict_distribution": {
+          "FAIL": 2,
+          "WATCH": 8
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-05",
+            "code": "300480.SZ",
+            "verdict": "FAIL",
+            "score": 3.13,
+            "ret3": 14.08,
+            "ret5": 8.35
+          },
+          {
+            "date": "2026-04-03",
+            "code": "002831.SZ",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 7.82,
+            "ret5": 5.81
+          },
+          {
+            "date": "2026-03-05",
+            "code": "301555.SZ",
+            "verdict": "WATCH",
+            "score": 3.59,
+            "ret3": 5.72,
+            "ret5": 7.13
+          },
+          {
+            "date": "2026-03-05",
+            "code": "002522.SZ",
+            "verdict": "WATCH",
+            "score": 3.5,
+            "ret3": 4.87,
+            "ret5": 5.71
+          },
+          {
+            "date": "2026-03-05",
+            "code": "688338.SH",
+            "verdict": "WATCH",
+            "score": 3.43,
+            "ret3": 0.64,
+            "ret5": 0.3
+          },
+          {
+            "date": "2026-03-05",
+            "code": "603058.SH",
+            "verdict": "FAIL",
+            "score": 3.12,
+            "ret3": -1.24,
+            "ret5": -3.86
+          },
+          {
+            "date": "2026-03-11",
+            "code": "600426.SH",
+            "verdict": "WATCH",
+            "score": 3.65,
+            "ret3": -2.44,
+            "ret5": -5.95
+          },
+          {
+            "date": "2026-03-24",
+            "code": "688248.SH",
+            "verdict": "WATCH",
+            "score": 3.61,
+            "ret3": -6.15,
+            "ret5": -13.9
+          }
+        ],
+        "positive_rate": 0.3,
+        "negative_rate": 0.5,
+        "positive_rate_uplift": 0.136,
+        "negative_rate_uplift": -0.05
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:14:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 10,
+        "ret3_ge_5_count": 1,
+        "ret3_le_0_count": 9,
+        "ret3_mean": -4.34,
+        "ret3_median": -4.77,
+        "ret5_mean": -4.79,
+        "ret5_median": -5.18,
+        "ret3_bucket_distribution": {
+          "B": 1,
+          "D": 4,
+          "E": 5
+        },
+        "current_verdict_distribution": {
+          "FAIL": 8,
+          "WATCH": 2
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-23",
+            "code": "000703.SZ",
+            "verdict": "FAIL",
+            "score": 3.05,
+            "ret3": 6.33,
+            "ret5": 4.31
+          },
+          {
+            "date": "2026-03-24",
+            "code": "605060.SH",
+            "verdict": "FAIL",
+            "score": 2.96,
+            "ret3": -0.81,
+            "ret5": -8.13
+          },
+          {
+            "date": "2026-03-25",
+            "code": "605060.SH",
+            "verdict": "FAIL",
+            "score": 3.25,
+            "ret3": -2.93,
+            "ret5": -5.69
+          },
+          {
+            "date": "2026-03-25",
+            "code": "002028.SZ",
+            "verdict": "FAIL",
+            "score": 2.77,
+            "ret3": -3.2,
+            "ret5": -1.81
+          },
+          {
+            "date": "2026-03-26",
+            "code": "002028.SZ",
+            "verdict": "FAIL",
+            "score": 2.92,
+            "ret3": -3.93,
+            "ret5": -0.31
+          },
+          {
+            "date": "2026-03-11",
+            "code": "000703.SZ",
+            "verdict": "WATCH",
+            "score": 3.67,
+            "ret3": -5.61,
+            "ret5": -11.15
+          },
+          {
+            "date": "2026-03-16",
+            "code": "605060.SH",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": -7.44,
+            "ret5": -14.01
+          },
+          {
+            "date": "2026-03-17",
+            "code": "605060.SH",
+            "verdict": "FAIL",
+            "score": 3.25,
+            "ret3": -7.54,
+            "ret5": -6.54
+          }
+        ],
+        "positive_rate": 0.1,
+        "negative_rate": 0.9,
+        "positive_rate_uplift": -0.064,
+        "negative_rate_uplift": 0.35
+      },
+      {
+        "wave_rule": "W:rising:1:背离|D:falling:10:修复",
+        "push_wave_side": "weekly",
+        "sample_count": 10,
+        "ret3_ge_5_count": 0,
+        "ret3_le_0_count": 9,
+        "ret3_mean": -2.89,
+        "ret3_median": -3.15,
+        "ret5_mean": -6.12,
+        "ret5_median": -5.79,
+        "ret3_bucket_distribution": {
+          "C": 1,
+          "D": 7,
+          "E": 2
+        },
+        "current_verdict_distribution": {
+          "FAIL": 3,
+          "WATCH": 7
+        },
+        "typical_samples": [
+          {
+            "date": "2026-03-24",
+            "code": "000582.SZ",
+            "verdict": "FAIL",
+            "score": 3.05,
+            "ret3": 1.21,
+            "ret5": 0.37
+          },
+          {
+            "date": "2026-03-25",
+            "code": "000582.SZ",
+            "verdict": "WATCH",
+            "score": 3.6,
+            "ret3": -0.27,
+            "ret5": -2.92
+          },
+          {
+            "date": "2026-03-24",
+            "code": "002478.SZ",
+            "verdict": "WATCH",
+            "score": 3.41,
+            "ret3": -1.19,
+            "ret5": -6.34
+          },
+          {
+            "date": "2026-03-11",
+            "code": "002532.SZ",
+            "verdict": "WATCH",
+            "score": 3.56,
+            "ret3": -1.76,
+            "ret5": -9.3
+          },
+          {
+            "date": "2026-03-24",
+            "code": "002358.SZ",
+            "verdict": "FAIL",
+            "score": 3.04,
+            "ret3": -2.31,
+            "ret5": -6.03
+          },
+          {
+            "date": "2026-03-25",
+            "code": "002478.SZ",
+            "verdict": "WATCH",
+            "score": 3.62,
+            "ret3": -3.98,
+            "ret5": -3.44
+          },
+          {
+            "date": "2026-03-05",
+            "code": "688027.SH",
+            "verdict": "WATCH",
+            "score": 3.49,
+            "ret3": -4.08,
+            "ret5": -8.71
+          },
+          {
+            "date": "2026-03-25",
+            "code": "002358.SZ",
+            "verdict": "FAIL",
+            "score": 3.19,
+            "ret3": -4.09,
+            "ret5": -5.11
+          }
+        ],
+        "positive_rate": 0.0,
+        "negative_rate": 0.9,
+        "positive_rate_uplift": -0.164,
+        "negative_rate_uplift": 0.35
+      }
+    ]
+  }
+}

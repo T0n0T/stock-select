@@ -702,8 +702,10 @@ fn build_b2_baseline_review(
         profile: Some(profile),
         strong_negative_macd_guard: resolve_strong_negative_macd_guard(history),
     });
+    let weak_watch_pattern_context =
+        b2_weak_watch_pattern_context(history, &weekly_trend, &daily_trend);
     let relaunch_override = if profile.state == "weak" {
-        infer_b2_weak_relaunch_override(B2WeakRelaunchInput {
+        let relaunch_override = infer_b2_weak_relaunch_override(B2WeakRelaunchInput {
             close: &close,
             high: &high,
             low: &low,
@@ -721,7 +723,8 @@ fn build_b2_baseline_review(
                 .as_ref()
                 .is_some_and(|profile| profile.refined),
             current_verdict: verdict,
-        })
+        });
+        relaunch_override
     } else {
         B2RelaunchOverride {
             verdict,
@@ -776,9 +779,26 @@ fn build_b2_baseline_review(
         price_position,
         previous_abnormal_move,
     );
+    total_score = adjust_b2_neutral_v1_selection_score(
+        total_score,
+        &profile.state,
+        verdict,
+        signal,
+        signal_type,
+        weak_watch_pattern_context,
+        top_divergence_risk || weak_watch_pattern_context.macd_risk_key.is_some(),
+    );
+    total_score = adjust_b2_weak_watch_selection_score(
+        total_score,
+        &profile.state,
+        verdict,
+        signal,
+        signal_type,
+        weak_watch_pattern_context,
+    );
     let comment = build_b2_comment(&weekly_trend, &daily_trend, verdict);
     let wave_context = describe_b2_macd_score_context(&weekly_trend, &daily_trend, "");
-    let baseline_review = json!({
+    let mut baseline_review = json!({
         "code": code,
         "pick_date": pick_date.format("%Y-%m-%d").to_string(),
         "chart_path": chart_path.to_string_lossy(),
@@ -799,6 +819,9 @@ fn build_b2_baseline_review(
         "watch_tier": watch_tier,
         "comment": comment,
     });
+    if let Some(object) = baseline_review.as_object_mut() {
+        object.extend(b2_macd_diagnostic_fields(&weekly_trend, &daily_trend));
+    }
     Ok(BaselineOutput {
         review: baseline_review,
         wave_context,
@@ -890,6 +913,68 @@ fn build_dribull_baseline_review(
     })
 }
 
+fn b2_macd_diagnostic_fields(
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+) -> Map<String, Value> {
+    let mut fields = Map::new();
+    fields.insert(
+        "daily_macd_phase_type".to_string(),
+        json!(daily_trend.phase),
+    );
+    fields.insert(
+        "daily_macd_wave_index".to_string(),
+        json!(daily_trend.metrics.state_machine_wave_index),
+    );
+    fields.insert(
+        "daily_macd_wave_stage".to_string(),
+        json!(daily_trend.wave_stage),
+    );
+    fields.insert(
+        "daily_macd_rising_or_falling".to_string(),
+        json!(daily_trend.direction),
+    );
+    fields.insert(
+        "daily_macd_bottom_divergence".to_string(),
+        json!(daily_trend.metrics.bottom_divergence_valid == Some(true)),
+    );
+    fields.insert(
+        "daily_macd_top_divergence".to_string(),
+        json!(daily_trend.is_top_divergence),
+    );
+    fields.insert(
+        "weekly_macd_phase_type".to_string(),
+        json!(weekly_trend.phase),
+    );
+    fields.insert(
+        "weekly_macd_wave_index".to_string(),
+        json!(weekly_trend.metrics.state_machine_wave_index),
+    );
+    fields.insert(
+        "weekly_macd_wave_stage".to_string(),
+        json!(weekly_trend.wave_stage),
+    );
+    fields.insert(
+        "weekly_macd_bottom_divergence".to_string(),
+        json!(weekly_trend.metrics.bottom_divergence_valid == Some(true)),
+    );
+    fields.insert(
+        "weekly_macd_top_divergence".to_string(),
+        json!(weekly_trend.is_top_divergence),
+    );
+    fields.insert(
+        "weekly_daily_combo_type".to_string(),
+        json!(format!(
+            "{}:{}|{}:{}",
+            weekly_trend.phase,
+            weekly_trend.metrics.state_machine_wave_index,
+            daily_trend.phase,
+            daily_trend.metrics.state_machine_wave_index
+        )),
+    );
+    fields
+}
+
 fn build_review_result(
     code: &str,
     pick_date: NaiveDate,
@@ -933,6 +1018,18 @@ fn build_review_result(
         "gate_weekly_macd_cooldown_active",
         "score_layer",
         "score_layer_score",
+        "daily_macd_phase_type",
+        "daily_macd_wave_index",
+        "daily_macd_wave_stage",
+        "daily_macd_rising_or_falling",
+        "daily_macd_bottom_divergence",
+        "daily_macd_top_divergence",
+        "weekly_macd_phase_type",
+        "weekly_macd_wave_index",
+        "weekly_macd_wave_stage",
+        "weekly_macd_bottom_divergence",
+        "weekly_macd_top_divergence",
+        "weekly_daily_combo_type",
     ] {
         if let Some(value) = primary.get(key)
             && (!value.is_null()
@@ -1865,6 +1962,541 @@ fn adjust_b2_neutral_tight_repair_selection_score(
     }
 }
 
+fn adjust_b2_neutral_v1_selection_score(
+    total_score: f64,
+    environment_state: &str,
+    verdict: &str,
+    signal: Option<&str>,
+    signal_type: &str,
+    context: B2WeakWatchPatternContext<'_>,
+    macd_bad: bool,
+) -> f64 {
+    if environment_state != "neutral"
+        || !(verdict.eq_ignore_ascii_case("PASS") || verdict.eq_ignore_ascii_case("WATCH"))
+    {
+        return round2(total_score.clamp(1.0, 5.0));
+    }
+    let mut adjusted = total_score;
+    if signal_type == "trend_start" {
+        adjusted += 0.10;
+    }
+    if signal_eq(signal, "B2") && signal_type == "trend_start" {
+        adjusted += 0.08;
+    }
+    if context.price_bucket == "upper" {
+        adjusted += 0.10;
+    }
+    if context.midline_state == "above_hold" {
+        adjusted += 0.16;
+    }
+    if context.support_stack_type == "bull_stack" {
+        adjusted += 0.08;
+    }
+    if context.compression_bucket == "tight" {
+        adjusted += 0.06;
+    }
+    if context.volume_bucket == "normal" {
+        adjusted += 0.04;
+    }
+
+    if signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && context.price_bucket == "near_high"
+        && context.volume_bucket == "expanding"
+        && context.kdj_bucket == "rising"
+        && macd_bad
+    {
+        adjusted -= 0.30;
+    }
+    if signal_eq(signal, "B2")
+        && signal_type == "rebound"
+        && context.price_bucket == "extended_or_unknown"
+        && context.daily_macd_hist_state == "green_or_zero"
+    {
+        adjusted -= 0.62;
+    }
+    if signal_eq(signal, "B3")
+        && signal_type == "rebound"
+        && context.price_bucket == "upper"
+        && context.volume_bucket == "normal"
+        && context.daily_macd_hist_state == "green_or_zero"
+    {
+        adjusted -= 0.18;
+    }
+    if signal_eq(signal, "B3")
+        && signal_type == "trend_start"
+        && context.price_bucket == "near_high"
+        && context.volume_bucket == "normal"
+        && context.price_turnover_state == "mixed"
+    {
+        adjusted -= 0.20;
+    }
+    round2(adjusted.clamp(1.0, 5.0))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct B2WeakWatchPatternContext<'a> {
+    price_bucket: &'a str,
+    midline_state: &'a str,
+    support_stack_type: &'a str,
+    compression_bucket: &'a str,
+    volume_bucket: &'a str,
+    kdj_bucket: &'a str,
+    macd_risk_key: Option<&'a str>,
+    macd_bad: bool,
+    price_turnover_state: &'a str,
+    daily_macd_hist_state: &'a str,
+}
+
+fn adjust_b2_weak_watch_selection_score(
+    total_score: f64,
+    environment_state: &str,
+    verdict: &str,
+    signal: Option<&str>,
+    signal_type: &str,
+    context: B2WeakWatchPatternContext<'_>,
+) -> f64 {
+    if environment_state != "weak" || !verdict.eq_ignore_ascii_case("WATCH") {
+        return round2(total_score.clamp(1.0, 5.0));
+    }
+    let weak_family = if signal_eq(signal, "B3")
+        && signal_type == "rebound"
+        && context.price_bucket == "near_high"
+        && context.midline_state == "above_hold"
+        && context.support_stack_type == "bull_stack"
+        && context.compression_bucket == "tight"
+        && matches!(context.volume_bucket, "normal" | "expanding")
+        && context.kdj_bucket == "rising"
+        && context.daily_macd_hist_state == "red_expanding"
+        && context.price_turnover_state == "price_up_turnover_not"
+    {
+        "W-A"
+    } else if signal_eq(signal, "B3")
+        && signal_type == "trend_start"
+        && context.price_bucket == "upper"
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "rising"
+        && context.price_turnover_state == "price_up_turnover_not"
+    {
+        "W-B"
+    } else if signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && context.price_bucket == "near_high"
+        && context.midline_state == "pullback_confirm"
+        && context.compression_bucket == "normal"
+        && context.volume_bucket == "expanding"
+        && context.kdj_bucket == "rising"
+    {
+        "W-C"
+    } else if signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && context.price_bucket == "extended_or_unknown"
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "neutral"
+        && context.daily_macd_hist_state == "green_or_zero"
+        && context.price_turnover_state == "price_turnover_rise"
+    {
+        "W-D"
+    } else {
+        "other"
+    };
+    let mut adjusted = total_score;
+    adjusted += match weak_family {
+        "W-A" => 0.25,
+        "W-B" => 0.16,
+        "W-C" => 0.14,
+        "W-D" => 0.10,
+        _ => 0.0,
+    };
+
+    let b3_rebound_extended_mixed = signal_eq(signal, "B3")
+        && signal_type == "rebound"
+        && context.price_bucket == "extended_or_unknown"
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "repair_from_low"
+        && context.daily_macd_hist_state == "green_or_zero"
+        && context.price_turnover_state == "mixed";
+    let b2_near_high_normal_rising_no_red = signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && context.price_bucket == "near_high"
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "rising"
+        && context.daily_macd_hist_state == "green_or_zero"
+        && context.price_turnover_state == "price_turnover_rise";
+    let b2_upper_expanding_neutral_red = signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && context.price_bucket == "upper"
+        && context.volume_bucket == "expanding"
+        && context.kdj_bucket == "neutral"
+        && context.daily_macd_hist_state == "red_expanding"
+        && context.price_turnover_state == "price_turnover_rise";
+    let macd_w2_div_d4_repair = context.macd_risk_key == Some("macd_w2_div_d4_repair");
+    let macd_w0_div_d4_repair = context.macd_risk_key == Some("macd_w0_div_d4_repair");
+
+    if b3_rebound_extended_mixed {
+        adjusted -= 0.45;
+    }
+    if b2_near_high_normal_rising_no_red {
+        adjusted -= 0.18;
+    }
+    if b2_upper_expanding_neutral_red {
+        adjusted -= 0.16;
+    }
+    if macd_w2_div_d4_repair {
+        adjusted -= 0.18;
+    }
+    if macd_w0_div_d4_repair {
+        adjusted -= 0.12;
+    }
+
+    if signal_eq(signal, "B2") && signal_type == "rebound" {
+        adjusted -= 0.08;
+    }
+    if matches!(weak_family, "W-A" | "W-C")
+        && !b3_rebound_extended_mixed
+        && !b2_near_high_normal_rising_no_red
+        && !b2_upper_expanding_neutral_red
+        && !macd_w2_div_d4_repair
+        && !macd_w0_div_d4_repair
+    {
+        adjusted += 0.05;
+    }
+
+    if signal_eq(signal, "B3")
+        && signal_type == "trend_start"
+        && matches!(context.price_bucket, "upper" | "near_high")
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "rising"
+        && context.daily_macd_hist_state == "red_expanding"
+        && context.price_turnover_state == "price_up_turnover_not"
+        && context.macd_bad
+    {
+        adjusted -= 0.22;
+    }
+    if signal_eq(signal, "B3")
+        && signal_type == "rebound"
+        && context.price_bucket == "upper"
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "rising"
+        && context.daily_macd_hist_state == "green_or_zero"
+    {
+        adjusted -= 0.20;
+    }
+    if signal_eq(signal, "B3")
+        && signal_type == "rebound"
+        && context.price_bucket == "upper"
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "rising"
+        && context.daily_macd_hist_state == "red_expanding"
+        && context.price_turnover_state == "mixed"
+    {
+        adjusted -= 0.18;
+    }
+    if signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && context.price_bucket == "extended_or_unknown"
+        && context.volume_bucket == "normal"
+        && context.kdj_bucket == "neutral"
+        && context.macd_bad
+    {
+        adjusted -= 0.18;
+    }
+    if signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && matches!(context.price_bucket, "middle" | "near_high")
+        && context.volume_bucket == "expanding"
+        && context.kdj_bucket == "rising"
+        && context.daily_macd_hist_state == "red_expanding"
+        && context.macd_bad
+    {
+        adjusted -= 0.16;
+    }
+
+    let weak_final_reclaim_penalty = signal_eq(signal, "B2")
+        && signal_type == "trend_start"
+        && context.price_bucket == "upper"
+        && context.midline_state == "reclaim_volume"
+        && context.support_stack_type == "bull_stack"
+        && context.compression_bucket == "tight"
+        && context.volume_bucket == "expanding"
+        && context.kdj_bucket == "rising";
+    if weak_final_reclaim_penalty {
+        adjusted -= 0.16;
+    }
+
+    round2(adjusted.clamp(1.0, 5.0))
+}
+
+fn b2_weak_watch_pattern_context<'a>(
+    history: &'a [PreparedRow],
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+) -> B2WeakWatchPatternContext<'a> {
+    B2WeakWatchPatternContext {
+        price_bucket: b2_price_bucket(history),
+        midline_state: b2_midline_state(history),
+        support_stack_type: b2_support_stack_type(history),
+        compression_bucket: b2_compression_bucket(history),
+        volume_bucket: b2_volume_bucket(history),
+        kdj_bucket: b2_kdj_bucket(history),
+        macd_risk_key: b2_weak_macd_risk_key(weekly_trend, daily_trend),
+        macd_bad: b2_weak_macd_bad(weekly_trend, daily_trend),
+        price_turnover_state: b2_price_turnover_state(history),
+        daily_macd_hist_state: b2_daily_macd_hist_state(history),
+    }
+}
+
+fn b2_weak_macd_bad(
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+) -> bool {
+    matches!(
+        weekly_trend.wave_stage.as_str(),
+        "背离" | "分歧" | "强势转分歧"
+    ) || matches!(
+        daily_trend.wave_stage.as_str(),
+        "背离" | "分歧" | "强势转分歧"
+    )
+}
+
+fn b2_price_bucket(history: &[PreparedRow]) -> &'static str {
+    let Some(latest_close) = history.last().map(|row| row.close) else {
+        return "extended_or_unknown";
+    };
+    let recent = history.iter().rev().take(90).collect::<Vec<_>>();
+    let high = recent
+        .iter()
+        .map(|row| row.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let low = recent
+        .iter()
+        .map(|row| row.low)
+        .fold(f64::INFINITY, f64::min);
+    if high.is_finite() && high > 0.0 {
+        let vs_high = (latest_close / high - 1.0) * 100.0;
+        if vs_high >= -5.0 {
+            return "near_high";
+        }
+        if vs_high >= -15.0 {
+            return "upper";
+        }
+    }
+    if low.is_finite() && low > 0.0 {
+        let vs_low = (latest_close / low - 1.0) * 100.0;
+        if vs_low <= 25.0 {
+            return "near_low";
+        }
+        if vs_low <= 60.0 {
+            return "middle";
+        }
+    }
+    "extended_or_unknown"
+}
+
+fn b2_midline_state(history: &[PreparedRow]) -> &'static str {
+    let Some(latest) = history.last() else {
+        return "unknown";
+    };
+    let recent = history.iter().rev().take(90).collect::<Vec<_>>();
+    let high = recent
+        .iter()
+        .map(|row| row.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let low = recent
+        .iter()
+        .map(|row| row.low)
+        .fold(f64::INFINITY, f64::min);
+    if !high.is_finite() || !low.is_finite() || high <= low {
+        return "unknown";
+    }
+    let mid = (high + low) / 2.0;
+
+    let previous_close = history.iter().rev().skip(1).next().map(|row| row.close);
+    let previous_volumes = history
+        .iter()
+        .rev()
+        .skip(1)
+        .take(5)
+        .map(|row| row.volume)
+        .collect::<Vec<_>>();
+    let volume_ratio_5d = if previous_volumes.is_empty() {
+        None
+    } else {
+        let average = previous_volumes.iter().sum::<f64>() / previous_volumes.len() as f64;
+        if average > 0.0 {
+            Some(latest.volume / average)
+        } else {
+            None
+        }
+    };
+
+    if previous_close.is_some_and(|close| close <= mid)
+        && latest.close > mid
+        && volume_ratio_5d.is_some_and(|ratio| ratio >= 1.30)
+    {
+        return "reclaim_volume";
+    }
+    if latest.close >= mid && latest.low <= mid * 1.02 && latest.low >= mid * 0.97 {
+        return "pullback_confirm";
+    }
+    if latest.close >= mid {
+        "above_hold"
+    } else {
+        "below_midline"
+    }
+}
+
+fn b2_support_stack_type(history: &[PreparedRow]) -> &'static str {
+    let Some(latest) = history.last() else {
+        return "unknown";
+    };
+    match (latest.ma25, latest.ma60) {
+        (Some(ma25), Some(ma60)) if latest.close >= ma25 && ma25 >= ma60 => "bull_stack",
+        (Some(ma25), _) if latest.close >= ma25 => "close_above_ma25",
+        (_, Some(ma60)) if latest.close >= ma60 => "close_above_ma60",
+        _ => "weak_support",
+    }
+}
+
+fn b2_compression_bucket(history: &[PreparedRow]) -> &'static str {
+    if history.len() < 20 {
+        return "unknown";
+    }
+    let recent_20 = history.iter().rev().take(20).collect::<Vec<_>>();
+    let high_20 = recent_20
+        .iter()
+        .map(|row| row.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let low_20 = recent_20
+        .iter()
+        .map(|row| row.low)
+        .fold(f64::INFINITY, f64::min);
+    let Some(latest) = history.last() else {
+        return "unknown";
+    };
+    if !high_20.is_finite()
+        || !low_20.is_finite()
+        || !latest.high.is_finite()
+        || !latest.low.is_finite()
+        || high_20 <= low_20
+    {
+        return "unknown";
+    }
+    let compression = (latest.high - latest.low) / (high_20 - low_20);
+    if compression <= 0.40 {
+        "tight"
+    } else if compression <= 0.75 {
+        "normal"
+    } else {
+        "wide"
+    }
+}
+
+fn b2_volume_bucket(history: &[PreparedRow]) -> &'static str {
+    let Some(latest_volume) = history.last().map(|row| row.volume) else {
+        return "unknown";
+    };
+    let previous = history
+        .iter()
+        .rev()
+        .skip(1)
+        .take(5)
+        .map(|row| row.volume)
+        .collect::<Vec<_>>();
+    if previous.is_empty() {
+        return "unknown";
+    }
+    let average = previous.iter().sum::<f64>() / previous.len() as f64;
+    if average <= 0.0 {
+        return "unknown";
+    }
+    let ratio = latest_volume / average;
+    if ratio >= 1.30 {
+        "expanding"
+    } else if ratio <= 0.75 {
+        "shrinking"
+    } else {
+        "normal"
+    }
+}
+
+fn b2_kdj_bucket(history: &[PreparedRow]) -> &'static str {
+    let Some(latest) = history.last() else {
+        return "unknown";
+    };
+    let j_vs_d = latest.j - latest.d;
+    if latest.j >= 100.0 {
+        "overheat"
+    } else if latest.j < 20.0 {
+        "low"
+    } else if latest.j < 50.0 && j_vs_d > 0.0 {
+        "repair_from_low"
+    } else if j_vs_d > 0.0 {
+        "rising"
+    } else {
+        "neutral"
+    }
+}
+
+fn b2_price_turnover_state(history: &[PreparedRow]) -> &'static str {
+    if history.len() < 2 {
+        return "mixed";
+    }
+    let latest = &history[history.len() - 1];
+    let previous = &history[history.len() - 2];
+    let price_up = latest.close > previous.close;
+    let turnover_up = latest.turnover_n > previous.turnover_n;
+    match (price_up, turnover_up) {
+        (true, true) => "price_turnover_rise",
+        (true, false) => "price_up_turnover_not",
+        _ => "mixed",
+    }
+}
+
+fn b2_daily_macd_hist_state(history: &[PreparedRow]) -> &'static str {
+    if history.len() < 2 {
+        return "green_or_zero";
+    }
+    let latest = history[history.len() - 1].macd_hist;
+    let previous = history[history.len() - 2].macd_hist;
+    if latest > 0.0 && latest > previous {
+        "red_expanding"
+    } else if latest > 0.0 {
+        "red_contracting"
+    } else {
+        "green_or_zero"
+    }
+}
+
+fn b2_weak_macd_risk_key(
+    weekly_trend: &crate::macd_trends::MacdTrendState,
+    daily_trend: &crate::macd_trends::MacdTrendState,
+) -> Option<&'static str> {
+    let weekly_stage = weekly_trend.wave_stage.as_str();
+    let daily_stage = daily_trend.wave_stage.as_str();
+    let weekly_index = weekly_trend.metrics.state_machine_wave_index;
+    let daily_index = daily_trend.metrics.state_machine_wave_index;
+    if weekly_trend.phase == "rising"
+        && weekly_index == 2
+        && weekly_stage == "背离"
+        && daily_trend.phase == "falling"
+        && daily_index == 4
+        && daily_stage == "修复"
+    {
+        Some("macd_w2_div_d4_repair")
+    } else if weekly_trend.phase == "rising"
+        && weekly_index == 0
+        && weekly_stage == "背离"
+        && daily_trend.phase == "falling"
+        && daily_index == 4
+        && daily_stage == "修复"
+    {
+        Some("macd_w0_div_d4_repair")
+    } else {
+        None
+    }
+}
+
 fn map_dribull_macd_phase_score(
     history_len: usize,
     weekly_trend: &crate::macd_trends::MacdTrendState,
@@ -2531,6 +3163,400 @@ mod tests {
         );
     }
 
+    #[test]
+    fn b2_neutral_v1_selection_score_uses_frozen_positive_skeleton() {
+        let context = B2WeakWatchPatternContext {
+            price_bucket: "upper",
+            midline_state: "above_hold",
+            support_stack_type: "bull_stack",
+            compression_bucket: "tight",
+            volume_bucket: "normal",
+            kdj_bucket: "neutral",
+            macd_risk_key: None,
+            macd_bad: false,
+            price_turnover_state: "price_up_turnover_not",
+            daily_macd_hist_state: "red_contracting",
+        };
+
+        assert_eq!(
+            adjust_b2_neutral_v1_selection_score(
+                3.58,
+                "neutral",
+                "WATCH",
+                Some("B2"),
+                "trend_start",
+                context,
+                false,
+            ),
+            4.20
+        );
+        assert_eq!(
+            adjust_b2_neutral_v1_selection_score(
+                3.58,
+                "weak",
+                "WATCH",
+                Some("B2"),
+                "trend_start",
+                context,
+                false,
+            ),
+            3.58
+        );
+    }
+
+    #[test]
+    fn b2_neutral_v1_selection_score_penalizes_frozen_risk_groups() {
+        let context = B2WeakWatchPatternContext {
+            price_bucket: "near_high",
+            midline_state: "above_hold",
+            support_stack_type: "bull_stack",
+            compression_bucket: "tight",
+            volume_bucket: "expanding",
+            kdj_bucket: "rising",
+            macd_risk_key: Some("macd_bad"),
+            macd_bad: true,
+            price_turnover_state: "price_turnover_rise",
+            daily_macd_hist_state: "red_expanding",
+        };
+
+        assert_eq!(
+            adjust_b2_neutral_v1_selection_score(
+                3.80,
+                "neutral",
+                "WATCH",
+                Some("B2"),
+                "trend_start",
+                context,
+                true,
+            ),
+            3.98
+        );
+    }
+
+    #[test]
+    fn b2_weak_watch_selection_score_boosts_rebound_volume_confirm() {
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B3"),
+                "rebound",
+                B2WeakWatchPatternContext {
+                    price_bucket: "near_high",
+                    midline_state: "above_hold",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "expanding",
+                    kdj_bucket: "rising",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "price_up_turnover_not",
+                    daily_macd_hist_state: "red_expanding",
+                },
+            ),
+            4.02
+        );
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "strong",
+                "WATCH",
+                Some("B3"),
+                "rebound",
+                B2WeakWatchPatternContext {
+                    price_bucket: "near_high",
+                    midline_state: "above_hold",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "expanding",
+                    kdj_bucket: "rising",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "price_up_turnover_not",
+                    daily_macd_hist_state: "red_expanding",
+                },
+            ),
+            3.72
+        );
+    }
+
+    #[test]
+    fn b2_weak_watch_selection_score_matches_frozen_v3_positive_families() {
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B3"),
+                "rebound",
+                B2WeakWatchPatternContext {
+                    price_bucket: "near_high",
+                    midline_state: "above_hold",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "normal",
+                    kdj_bucket: "rising",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "price_up_turnover_not",
+                    daily_macd_hist_state: "red_expanding",
+                },
+            ),
+            4.02
+        );
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B2"),
+                "trend_start",
+                B2WeakWatchPatternContext {
+                    price_bucket: "near_high",
+                    midline_state: "pullback_confirm",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "normal",
+                    volume_bucket: "expanding",
+                    kdj_bucket: "rising",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "mixed",
+                    daily_macd_hist_state: "red_expanding",
+                },
+            ),
+            3.91
+        );
+    }
+
+    #[test]
+    fn b2_weak_watch_selection_score_matches_frozen_v3_risk_groups() {
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B3"),
+                "trend_start",
+                B2WeakWatchPatternContext {
+                    price_bucket: "near_high",
+                    midline_state: "above_hold",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "normal",
+                    kdj_bucket: "rising",
+                    macd_risk_key: Some("macd_bad"),
+                    macd_bad: true,
+                    price_turnover_state: "price_up_turnover_not",
+                    daily_macd_hist_state: "red_expanding",
+                },
+            ),
+            3.50
+        );
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B2"),
+                "rebound",
+                B2WeakWatchPatternContext {
+                    price_bucket: "middle",
+                    midline_state: "above_hold",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "normal",
+                    kdj_bucket: "neutral",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "mixed",
+                    daily_macd_hist_state: "red_contracting",
+                },
+            ),
+            3.64
+        );
+    }
+
+    #[test]
+    fn b2_weak_watch_selection_score_penalizes_veto_groups() {
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B3"),
+                "rebound",
+                B2WeakWatchPatternContext {
+                    price_bucket: "extended_or_unknown",
+                    midline_state: "above_hold",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "normal",
+                    kdj_bucket: "repair_from_low",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "mixed",
+                    daily_macd_hist_state: "green_or_zero",
+                },
+            ),
+            3.27
+        );
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                4.12,
+                "weak",
+                "PASS",
+                Some("B3"),
+                "rebound",
+                B2WeakWatchPatternContext {
+                    price_bucket: "extended_or_unknown",
+                    midline_state: "above_hold",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "normal",
+                    kdj_bucket: "repair_from_low",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "mixed",
+                    daily_macd_hist_state: "green_or_zero",
+                },
+            ),
+            4.12
+        );
+    }
+
+    #[test]
+    fn b2_weak_final_selection_score_penalizes_reclaim_volume_group() {
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B2"),
+                "trend_start",
+                B2WeakWatchPatternContext {
+                    price_bucket: "upper",
+                    midline_state: "reclaim_volume",
+                    support_stack_type: "bull_stack",
+                    compression_bucket: "tight",
+                    volume_bucket: "expanding",
+                    kdj_bucket: "rising",
+                    macd_risk_key: None,
+                    macd_bad: false,
+                    price_turnover_state: "price_turnover_rise",
+                    daily_macd_hist_state: "red_expanding",
+                },
+            ),
+            3.56
+        );
+    }
+
+    #[test]
+    fn b2_weak_watch_small_repair_uses_daily_range_compression() {
+        let mut history = Vec::new();
+        for day in 1..=25 {
+            history.push(PreparedRow {
+                ts_code: "TEST.SZ".to_string(),
+                trade_date: NaiveDate::from_ymd_opt(2026, 1, day).unwrap(),
+                open: 10.0,
+                high: if day == 10 { 12.0 } else { 10.4 },
+                low: if day == 11 { 8.0 } else { 10.0 },
+                close: 10.2,
+                volume: 100.0,
+                turnover_n: day as f64,
+                k: 50.0,
+                d: 60.0,
+                j: 40.0,
+                zxdq: None,
+                zxdkx: None,
+                dif: 0.0,
+                dea: 0.0,
+                macd_hist: 0.0,
+                ma25: Some(9.5),
+                ma60: Some(9.0),
+                ma144: None,
+                chg_d: None,
+                weekly_ma_bull: false,
+                max_vol_not_bearish: false,
+                v_shrink: false,
+                safe_mode: false,
+                lt_filter: false,
+                yellow_b1: false,
+            });
+        }
+        let latest = history.last_mut().unwrap();
+        latest.high = 11.5;
+        latest.low = 11.4;
+        latest.close = 11.45;
+        latest.volume = 100.0;
+
+        let macd_trend = empty_macd_trend_state();
+        let context = b2_weak_watch_pattern_context(&history, &macd_trend, &macd_trend);
+        assert_eq!(context.price_bucket, "near_high");
+        assert_eq!(context.midline_state, "above_hold");
+        assert_eq!(context.support_stack_type, "bull_stack");
+        assert_eq!(context.compression_bucket, "tight");
+        assert_eq!(context.volume_bucket, "normal");
+        assert_eq!(context.kdj_bucket, "neutral");
+        assert_eq!(
+            adjust_b2_weak_watch_selection_score(
+                3.72,
+                "weak",
+                "WATCH",
+                Some("B2"),
+                "trend_start",
+                context,
+            ),
+            3.72
+        );
+    }
+
+    #[test]
+    fn b2_midline_state_matches_diagnostic_reclaim_and_pullback_buckets() {
+        let mut reclaim_history = Vec::new();
+        let start_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        for day in 1..=90 {
+            let close = if day == 89 { 9.9 } else { 10.0 };
+            reclaim_history.push(PreparedRow {
+                ts_code: "TEST.SZ".to_string(),
+                trade_date: start_date + chrono::Days::new((day - 1) as u64),
+                open: close,
+                high: if day == 1 { 12.0 } else { 10.2 },
+                low: if day == 2 { 8.0 } else { 9.8 },
+                close,
+                volume: if day == 90 { 140.0 } else { 100.0 },
+                turnover_n: 0.0,
+                k: 0.0,
+                d: 0.0,
+                j: 0.0,
+                zxdq: None,
+                zxdkx: None,
+                dif: 0.0,
+                dea: 0.0,
+                macd_hist: 0.0,
+                ma25: None,
+                ma60: None,
+                ma144: None,
+                chg_d: None,
+                weekly_ma_bull: false,
+                max_vol_not_bearish: false,
+                v_shrink: false,
+                safe_mode: false,
+                lt_filter: false,
+                yellow_b1: false,
+            });
+        }
+        let latest = reclaim_history.last_mut().unwrap();
+        latest.low = 10.05;
+        latest.close = 10.1;
+        assert_eq!(b2_midline_state(&reclaim_history), "reclaim_volume");
+
+        let mut pullback_history = reclaim_history.clone();
+        pullback_history[88].close = 10.1;
+        pullback_history.last_mut().unwrap().volume = 100.0;
+        assert_eq!(b2_midline_state(&pullback_history), "pullback_confirm");
+    }
+
     fn b2_bottom_repair_history(
         left_top: f64,
         left_bottom: f64,
@@ -2561,6 +3587,23 @@ mod tests {
             day += 1;
         }
         rows
+    }
+
+    fn empty_macd_trend_state() -> crate::macd_trends::MacdTrendState {
+        crate::macd_trends::MacdTrendState {
+            phase: "idle".to_string(),
+            direction: "idle".to_string(),
+            is_rising_initial: false,
+            is_top_divergence: false,
+            bars_in_phase: 0,
+            phase_index: 0,
+            reason: String::new(),
+            metrics: crate::macd_trends::Metrics::default(),
+            wave_label: "等待启动".to_string(),
+            wave_direction: "idle".to_string(),
+            wave_stage: "0".to_string(),
+            transition_warnings: Vec::new(),
+        }
     }
 
     fn prepared_row(

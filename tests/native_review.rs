@@ -125,6 +125,26 @@ fn native_review_overwrites_baseline_without_merging_existing_llm_results() {
     assert!(review.get("llm_review").is_none_or(Value::is_null));
     assert!(review.get("llm_score").is_none());
     assert_ne!(review["comment"], "stale llm result");
+    let baseline = review["baseline_review"].as_object().unwrap();
+    for key in [
+        "daily_macd_phase_type",
+        "daily_macd_wave_index",
+        "daily_macd_wave_stage",
+        "daily_macd_rising_or_falling",
+        "daily_macd_bottom_divergence",
+        "daily_macd_top_divergence",
+        "weekly_macd_phase_type",
+        "weekly_macd_wave_index",
+        "weekly_macd_wave_stage",
+        "weekly_macd_bottom_divergence",
+        "weekly_macd_top_divergence",
+        "weekly_daily_combo_type",
+    ] {
+        assert!(
+            baseline.contains_key(key),
+            "missing b2 MACD diagnostic field {key}"
+        );
+    }
 }
 
 #[test]
