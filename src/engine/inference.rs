@@ -49,13 +49,6 @@ pub fn default_model_dir(method: Method) -> Option<&'static str> {
     }
 }
 
-fn legacy_model_dirs(method: Method) -> &'static [&'static str] {
-    match method {
-        Method::B2 => &["models/b2_rank_layer/lgbm_manifest_top_numeric"],
-        Method::B1 | Method::Dribull => &[],
-    }
-}
-
 pub fn resolve_method_model_artifacts(
     method: Method,
     runtime_root: &Path,
@@ -94,25 +87,6 @@ pub fn resolve_method_model_artifacts_with_overrides(
             metadata_path: Some(metadata_path),
         }),
         (false, false) => {
-            for legacy_dir in legacy_model_dirs(method) {
-                let legacy_model_dir = runtime_root.join(legacy_dir);
-                let legacy_model_path = legacy_model_dir.join("model.txt");
-                let legacy_metadata_path = legacy_model_dir.join("model_metadata.json");
-                match (legacy_model_path.exists(), legacy_metadata_path.exists()) {
-                    (true, true) => {
-                        return Ok(ResolvedMethodModelArtifacts {
-                            model_path: Some(legacy_model_path),
-                            metadata_path: Some(legacy_metadata_path),
-                        });
-                    }
-                    (false, false) => {}
-                    _ => anyhow::bail!(
-                        "incomplete default {} model artifacts under {}: expected model.txt and model_metadata.json",
-                        method.as_str(),
-                        legacy_model_dir.display()
-                    ),
-                }
-            }
             anyhow::bail!(
                 "missing default {} model artifacts under {}: expected model.txt and model_metadata.json",
                 method.as_str(),

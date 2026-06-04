@@ -49,7 +49,7 @@ fn b2_model_resolution_accepts_cli_artifact_overrides() {
 }
 
 #[test]
-fn b2_model_resolution_falls_back_to_legacy_default_artifacts() {
+fn b2_model_resolution_does_not_use_legacy_default_artifacts() {
     let temp = tempfile::tempdir().unwrap();
     let model_dir = temp
         .path()
@@ -58,11 +58,10 @@ fn b2_model_resolution_falls_back_to_legacy_default_artifacts() {
     std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
     std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
 
-    let resolved = resolve_method_model_artifacts(Method::B2, temp.path()).unwrap();
-    assert_eq!(resolved.model_path, Some(model_dir.join("model.txt")));
-    assert_eq!(
-        resolved.metadata_path,
-        Some(model_dir.join("model_metadata.json"))
+    let err = resolve_method_model_artifacts(Method::B2, temp.path()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("missing default b2 model artifacts")
     );
 }
 
@@ -117,10 +116,8 @@ fn feature_vector_follows_metadata_order_and_defaults_missing_numeric_to_zero() 
 
 #[test]
 fn lightgbm_runtime_loads_exported_b2_rank_model() {
-    let model = LightGbmRuntimeModel::from_file(
-        "/home/tiger/Documents/agents/stock-select/diagnostics/ml/b2_rank_layer/lgbm_manifest_top_numeric/model.txt",
-    )
-    .unwrap();
+    let model_path = std::path::Path::new("tests/fixtures/b2_model/model.txt");
+    let model = LightGbmRuntimeModel::from_file(model_path.to_str().unwrap()).unwrap();
     let score = model
         .predict(&vec![0.0; model.num_features() as usize])
         .unwrap();

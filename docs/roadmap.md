@@ -49,6 +49,7 @@ stock-select-rs completions
 25. `review --method b2` 已接受 `--environment-state`、`--environment-reason`、`--model-path`、`--model-feature-metadata-path`、`--record` 和 `--record-window-trading-days`，并把这些兼容参数写入 `llm_tasks.json` 顶层 metadata；未手动传环境时与 `run` 一样执行 EOD 指数环境评估并写完整 environment metadata；不恢复旧 baseline review，不改变 `model_rank`。
 26. 为对齐旧 CLI 命名，selection run artifact 目录已从 `selection_runs/` 收敛为 `select/`；模型流水线模块已从 `src/selection_engine/` 更名为 `src/engine/`；b2 筛选策略核心已拆到 `src/strategies/b2.rs`，`src/screening.rs` 保留数据源、pool 和写候选产物 orchestration。
 27. 已新增 `src/environment.rs`，保持旧 CLI runtime 环境产物结构：`environment/history.jsonl`、`environment/latest.json`、`environment/daily/<date>.<state>.json` 和 `.environment.lock`。已迁入旧 Rust CLI 的 `score_index_environment`、`score_based_state`、`rule_based_state`、`vote_based_state`、`reason` 和 `total_score` 口径。EOD `run/review` 会持久化 resolved environment；`--intraday` 手动传环境时不落盘，未传时只读取上一交易日已持久化环境并在 stderr 提示可用 `--environment-state` 覆盖，找不到上一交易日环境时明确失败，盘中不做临时指数评估。
+28. LightGBM 维护脚本已迁入 `scripts/ml/`：`backfill_candidates.py` 可按数据库交易日并发补齐指定 method 的历史 EOD candidates，当前默认 `--method b2`；`build_rank_dataset.py` 默认从当前 `candidates/<date>.<method>.json` 读取，重新计算训练特征和 ret labels；`--source select` 可回放线上 run 特征快照。训练/score diagnostics 默认写 `diagnostics/ml/<method>/`，发布脚本从当前 `.env` 的 `STOCK_SELECT_RUNTIME_ROOT` 解析 runtime，并发布到 `<runtime>/models/<method>/`；Rust 默认模型解析已移除旧长目录回退，只认当前主目录或显式 override。
 
 当前 b2 `screen` 已接入 EOD 数据源首版：
 
@@ -91,6 +92,43 @@ $HOME/.agents/skills/stock-select/runtime
 <runtime>/select/2026-05-25.b2/ranked.json
 <runtime>/select/2026-05-25.b2/display.json
 ```
+
+当前 LightGBM 训练和维护脚本（以 b2 为例）：
+
+```bash
+METHOD=b2
+
+uv run scripts/ml/backfill_candidates.py \
+  --method "$METHOD" \
+  --start-date "$TRAIN_START_DATE" \
+  --end-date "$TRAIN_END_DATE" \
+  --workers 4
+
+uv run scripts/ml/build_rank_dataset.py \
+  --method "$METHOD" \
+  --runtime-root "$STOCK_SELECT_RUNTIME_ROOT" \
+  --source candidates \
+  --start-date "$TRAIN_START_DATE" \
+  --end-date "$TRAIN_END_DATE"
+
+uv run scripts/ml/train_rank_lgbm.py \
+  --method "$METHOD" \
+  --dataset "diagnostics/ml/$METHOD/rank_dataset.csv" \
+  --output-dir "diagnostics/ml/$METHOD/model" \
+  --feature-set raw_numeric
+
+uv run scripts/ml/export_lgbm_scores.py \
+  --method "$METHOD" \
+  --model-output-dir "diagnostics/ml/$METHOD/model"
+
+uv run scripts/ml/promote_lgbm_model.py \
+  --method "$METHOD" \
+  --candidate-dir "diagnostics/ml/$METHOD/model" \
+  --dry-run \
+  --require-report
+```
+
+补候选脚本默认跳过已有 `<runtime>/candidates/<date>.<method>.json`，不会把 `.intraday.<method>.json` 当作 EOD 训练样本；命令行不携带 DSN/token。发布脚本默认读取当前目录 `.env` 中的 `STOCK_SELECT_RUNTIME_ROOT`，目标为 `<runtime>/models/<method>/`；未传 `--runtime-root` 且 `.env` 没有 runtime 时会失败，避免误发布到旧默认目录。`diagnostics/ml/<method>/` 下的 score CSV、report 和候选模型只用于研究/维护，不进入 Rust 生产 predict 路径。
 
 ## 当前能力边界
 
@@ -137,7 +175,7 @@ $HOME/.agents/skills/stock-select/runtime
 
 完成后进度约到 **50%**。
 
-当前状态：首版已完成。`run --method b2` 要求 runtime 默认目录 `models/b2/` 存在完整 `model.txt` 和 `model_metadata.json`，会通过 `lightgbm3::Booster::from_file` 加载 LightGBM runtime、按 metadata 构建 feature vector、写出 `feature_vectors.json`，并用真实 runtime 预测分数生成 `ranked.json` 的 `model_score/model_rank`。解析逻辑优先读取扁平目录 `models/b2/`，缺失时兼容回退旧长目录 `models/b2_rank_layer/lgbm_manifest_top_numeric/`；两个模型文件都不存在时报 `missing default b2 model artifacts`；只存在其中一个文件继续报 `incomplete default b2 model artifacts`。旧自实现 LightGBM text parser 已从生产路径移除。
+当前状态：首版已完成。`run --method b2` 要求 runtime 默认目录 `models/b2/` 存在完整 `model.txt` 和 `model_metadata.json`，会通过 `lightgbm3::Booster::from_file` 加载 LightGBM runtime、按 metadata 构建 feature vector、写出 `feature_vectors.json`，并用真实 runtime 预测分数生成 `ranked.json` 的 `model_score/model_rank`。解析逻辑只读取当前主目录 `models/b2/`，也支持成对显式传入 `--model-path` 和 `--model-feature-metadata-path`；两个模型文件都不存在时报 `missing default b2 model artifacts`；只存在其中一个文件继续报 `incomplete default b2 model artifacts`。旧自实现 LightGBM text parser 已从生产路径移除。
 
 ### P1: 接入 b2 candidate screening
 
@@ -248,7 +286,15 @@ screen
 
 当前状态：`completions --shell <shell>` 已通过 `clap_complete` 输出 completion；`run` 已补齐 `--environment-state`、`--environment-reason`、`--model-path`、`--model-feature-metadata-path`、`--record`、`--record-window-trading-days` 和 `--recompute`；`review` 已补齐对应 metadata 参数但不恢复 baseline review。CLI 参数兼容仍需继续对齐旧项目脚本，包括 `--no-progress`、`review-merge --codes` 和 `analyze-symbol` 等剩余缺口。
 
-### P7: parity、性能和迁移收尾
+### P7: LightGBM 训练/维护脚本（当前验证 b2，已完成首版）
+
+目标：保留 Python 训练和维护脚本作为研究/发布工具，但不进入 Rust 生产 predict 路径。
+
+当前状态：已完成。`scripts/ml/backfill_candidates.py` 可从 `daily_market` 查询交易日，并发执行 `screen --method <method> --pick-date <date>` 补齐历史 EOD candidates，当前默认 b2，默认跳过已有 candidate，支持 dry-run 和失败汇总。`scripts/ml/build_rank_dataset.py` 默认读取当前 `candidates/<date>.<method>.json`，用数据库行情重算 context/raw factors 并合并前向收益 label 后输出 `diagnostics/ml/<method>/rank_dataset.csv`；显式 `--source select` 时可读取 `select/<date>.<method>/` 的 `run.json`、`display.json` 和 `factors.json`，用于回放线上实际 run 的特征快照。`train_rank_lgbm.py` 支持 `--method`、feature set、rolling validation、report 输出和 metadata 构建。`model-maintenance` skill 已补充受限自迭代调参约定：训练/重训默认先跑 baseline，再最多比较 12 组小网格 trial，按 rolling 指标选择候选，只做 export 和 promote dry-run，不自动发布；训练结束必须汇报 dataset 覆盖、最佳 trial、rolling 指标、baseline 对比、top features、dry-run 状态、发布建议和剩余风险。`export_lgbm_scores.py` 输出 score CSV、summary，并写候选 `model.txt` 和 `model_metadata.json`。`promote_lgbm_model.py` 支持 metadata/report 校验、dry-run、发布、归档、回滚和 `model_card.json`，默认从当前 `.env` 读取 `STOCK_SELECT_RUNTIME_ROOT` 并发布到 `<runtime>/models/<method>/`。新增 `model-maintenance` skill 和 references 记录 operator 流程；当前章节已验证 b2，后续可继续扩展 b1。
+
+剩余边界：真实数据库 dataset 构建、完整训练和发布仍需 operator 在有 DSN 和数据的环境中执行；score CSV、baseline evaluator、rolling diagnostics 只作为研究材料，不参与 `stock-select-rs run/review` 排序。
+
+### P8: parity、性能和迁移收尾
 
 目标：证明新 CLI 可替代旧 CLI，并安全切换。
 
@@ -259,7 +305,7 @@ screen
 3. intraday snapshot fixture。（首版已覆盖 `rt_k` 字段归一化、市场通配符批量拉取、API 错误、空 token 和同日快照替换。）
 4. 性能基准：screen/factors/inference/run。
 5. 文档和 operator workflow 更新。
-6. 明确旧路径 deprecation plan。
+6. 维护脚本在真实 runtime 上做一次 dry-run、发布和回滚演练。
 
 完成后进度约到 **100%**。
 
@@ -268,7 +314,7 @@ screen
 优先顺序：
 
 1. P1/P3：补 intraday 生产数据跑通、run_id/fetched_at 细节和旧 CLI 参数细节。
-2. P2/P7：补 b2 raw factor 与旧仓库逐字段 parity fixture，并做 2026-06-03 等真实样本回归。
+2. P2/P8：补 b2 raw factor 与旧仓库逐字段 parity fixture，并做 2026-06-03 等真实样本回归。
 3. P5：补 chart existence checks 和与旧图表产物的尺寸/文件集合 smoke check。
 4. P4：再接外部 LLM annotation、raw response 保存和 final action audit。
 

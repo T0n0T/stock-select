@@ -26,6 +26,11 @@ environment/history.jsonl
 environment/latest.json
 environment/daily/<pick_date>.<state>.json
 custom-pool.txt
+models/b2/model.txt
+models/b2/model_metadata.json
+models/b2/model_card.json
+models/archive/<version>/
+models/archive/rollback-current-<version>/
 ```
 
 Intraday b2：
@@ -47,4 +52,3 @@ charts/<pick_date>.intraday.b2/<code>_day.png
 ```
 
 盘中 artifact key 是 `<pick_date>.intraday.b2`。重复盘中运行会刷新同一日期组，不按时间戳创建新组。
-

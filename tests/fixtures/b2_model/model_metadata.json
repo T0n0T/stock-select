@@ -1,0 +1,19 @@
+{
+  "feature_manifest": "tests/fixtures/b2_model/feature_manifest.json",
+  "train_start": "2026-01-01",
+  "train_end": "2026-01-02",
+  "score_start": "2026-01-03",
+  "score_end": "2026-01-03",
+  "model_params": {
+    "num_leaves": 2,
+    "min_data_in_leaf": 1,
+    "num_boost_round": 1,
+    "learning_rate": 1.0
+  },
+  "numeric_columns": ["close_to_ma25_pct"],
+  "categorical_columns": [],
+  "categorical_levels": {},
+  "feature_names": ["close_to_ma25_pct"],
+  "lightgbm_feature_names": ["close_to_ma25_pct"],
+  "label_column": "rank_label_3d"
+}

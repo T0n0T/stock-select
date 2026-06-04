@@ -3,25 +3,25 @@ use chrono::{Datelike, NaiveDate};
 use predicates::prelude::*;
 use serde_json::{Value, json};
 
-const REAL_B2_MODEL_DIR: &str = "/home/tiger/Documents/agents/stock-select/diagnostics/ml/b2_rank_layer/lgbm_manifest_top_numeric";
+const B2_MODEL_FIXTURE_DIR: &str = "tests/fixtures/b2_model";
 
-fn copy_real_b2_model_artifacts(root: &std::path::Path) {
+fn copy_fixture_b2_model_artifacts(root: &std::path::Path) {
     let model_dir = root.join("models/b2");
     std::fs::create_dir_all(&model_dir).unwrap();
     std::fs::copy(
-        std::path::Path::new(REAL_B2_MODEL_DIR).join("model.txt"),
+        std::path::Path::new(B2_MODEL_FIXTURE_DIR).join("model.txt"),
         model_dir.join("model.txt"),
     )
     .unwrap();
     std::fs::copy(
-        std::path::Path::new(REAL_B2_MODEL_DIR).join("model_metadata.json"),
+        std::path::Path::new(B2_MODEL_FIXTURE_DIR).join("model_metadata.json"),
         model_dir.join("model_metadata.json"),
     )
     .unwrap();
 }
 
 fn write_default_b2_model(root: &std::path::Path) {
-    copy_real_b2_model_artifacts(root);
+    copy_fixture_b2_model_artifacts(root);
 }
 
 fn write_candidates(root: &std::path::Path) -> std::path::PathBuf {
@@ -41,11 +41,11 @@ fn write_candidates(root: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn write_lightgbm_model_artifacts(root: &std::path::Path) {
-    copy_real_b2_model_artifacts(root);
+    copy_fixture_b2_model_artifacts(root);
 }
 
 fn write_close_to_ma25_model(root: &std::path::Path) {
-    copy_real_b2_model_artifacts(root);
+    copy_fixture_b2_model_artifacts(root);
 }
 
 fn write_fake_chart_renderer(temp: &std::path::Path) -> std::path::PathBuf {
@@ -783,14 +783,14 @@ fn b2_run_uses_default_lightgbm_model_instead_of_input_model_score() {
             .as_array()
             .unwrap()
             .len(),
-        91
+        1
     );
     assert_eq!(
         feature_vectors["rows"][0]["values"]
             .as_array()
             .unwrap()
             .len(),
-        91
+        1
     );
 }
 

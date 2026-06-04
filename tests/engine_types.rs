@@ -49,7 +49,7 @@ fn ranked_candidate_and_llm_annotation_have_distinct_roles() {
         code: "000001.SZ".to_string(),
         model_score: 0.75,
         model_rank: 1,
-        feature_vector_path: Some("reviews/2026-05-25.b2/model_feature_vectors.json".to_string()),
+        feature_vector_path: Some("feature_vectors.json".to_string()),
     };
     let annotation = LlmAnnotation {
         code: ranked.code.clone(),

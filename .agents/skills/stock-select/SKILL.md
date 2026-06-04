@@ -169,6 +169,10 @@ cargo fmt --check
 cargo test --quiet
 ```
 
+## 模型维护
+
+需要重训、导出、发布或回滚模型产物时，使用同仓库的 `model-maintenance` skill。当前已落地的是 b2 LightGBM；生产 `run/review` 仍只读取对应 runtime model artifact，不要把 Python predict 接入 Rust 主路径。
+
 ## References
 
 按需读取：

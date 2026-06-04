@@ -1,0 +1,5 @@
+{
+  "numeric_features": ["close_to_ma25_pct"],
+  "categorical_features": [],
+  "excluded_features": []
+}
