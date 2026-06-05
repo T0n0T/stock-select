@@ -1,6 +1,6 @@
 ---
 name: stock-select
-description: Use when screening, ranking, reviewing, listing, or merging A-share stock selection artifacts with the local Rust stock-select-rs CLI in the stock-select-new repository.
+description: Use when screening, ranking, reviewing, listing, or merging A-share stock selection artifacts with the local Rust stock-select-rs CLI in the stock-select repository.
 ---
 
 # Stock Select New CLI
@@ -8,7 +8,7 @@ description: Use when screening, ranking, reviewing, listing, or merging A-share
 本 skill 用于新 Rust CLI 仓库：
 
 ```text
-/home/tiger/Documents/agents/stock-select-new
+/home/tiger/Documents/agents/stock-select
 ```
 
 二进制名是 `stock-select-rs`。不要从本 skill 调用旧 Python CLI 或旧项目生产路径；旧仓库只用于迁移参考。

@@ -1,6 +1,6 @@
 ---
 name: model-maintenance
-description: Use when retraining, validating, exporting, promoting, rolling back, or inspecting stock-select-new model artifacts.
+description: Use when retraining, validating, exporting, promoting, rolling back, or inspecting stock-select model artifacts.
 ---
 
 # Model Maintenance
