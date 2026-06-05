@@ -716,6 +716,7 @@ fn run_chart_renderers(payload_paths: &[PathBuf]) -> anyhow::Result<()> {
             let mut child = spawn_chart_renderer(path)?;
             wait_chart_renderer(path, &mut child)?;
         }
+        remove_chart_payloads(payload_paths);
         return Ok(());
     }
 
@@ -732,7 +733,16 @@ fn run_chart_renderers(payload_paths: &[PathBuf]) -> anyhow::Result<()> {
     if !failures.is_empty() {
         anyhow::bail!("local chart renderer failed: {}", failures.join("; "));
     }
+    remove_chart_payloads(payload_paths);
     Ok(())
+}
+
+fn remove_chart_payloads(payload_paths: &[PathBuf]) {
+    for path in payload_paths {
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 fn spawn_chart_renderer(payload_path: &Path) -> anyhow::Result<Child> {
