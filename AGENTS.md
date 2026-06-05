@@ -4,6 +4,7 @@
 
 - 项目文档、roadmap、计划、状态说明和交接记录默认使用中文。
 - 除非用户明确要求，避免新增英文文档。
+- 所有结构图和流程图优先使用 Mermaid 语法（````mermaid` 代码块），禁止使用 ASCII 手工绘图。
 
 ## 运行环境
 
@@ -23,5 +24,7 @@
 
 ## 指针
 
-- 详细进度与阶段状态见 `docs/roadmap.md`。
+- CLI 架构说明见 `docs/architecture.md`。
+- 模型训练、推理和评分规则见 `docs/model.md`。
+- 常见工作流程见 `docs/workflow.md`。
 - 模型训练、发布、回滚和归档切换见 `scripts/model_maintenance.sh` 与 `.agents/skills/model-maintenance/references/model-maintenance.md`。

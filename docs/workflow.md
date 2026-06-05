@@ -1,0 +1,277 @@
+# 工作流程
+
+## 场景一：每日常规 EOD 生产 run
+
+收盘后运行一次完整流程。
+
+```bash
+# 1. 完整 run（含图表和 LLM 复盘任务）
+stock-select-rs run \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --llm-review-limit 5
+
+# 2. 查看排序结果
+stock-select-rs review-list \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --limit 20
+
+# 3. 多模态复盘（分配子代理读图并写 annotation）
+
+# 4. 合并复盘结果
+stock-select-rs review-merge \
+  --method b2 \
+  --pick-date 2026-06-05
+```
+
+命令输出路径：
+
+```text
+runtime/
+├── candidates/2026-06-05.b2.json
+├── select/2026-06-05.b2/
+│   ├── display.json        ← review-list 读取
+│   ├── llm_tasks.json      ← review 生成
+│   ├── llm_annotations.json ← review-merge 写入
+│   └── ...
+├── charts/2026-06-05.b2/   ← K 线图 PNG
+└── factors/2026-06-05.b2/
+```
+
+## 场景二：盘中运行
+
+```bash
+# 不带 --pick-date，自动按本地日期推断
+stock-select-rs run \
+  --method b2 \
+  --intraday
+
+# 带参数
+stock-select-rs run \
+  --method b2 \
+  --intraday \
+  --llm-review-limit 3
+
+# 查看盘中结果（也要带 --intraday）
+stock-select-rs review-list \
+  --method b2 \
+  --intraday \
+  --limit 10
+```
+
+盘中 artifact key 为 `<date>.intraday.b2`，与 EOD 隔离。
+
+## 场景三：模型更新
+
+当需要重新训练或更新模型时：
+
+```bash
+# 1. 确定训练窗口
+TRAIN_START=2025-06-01
+TRAIN_END=2026-06-04
+
+# 2. 补齐历史候选（如果缺失）
+uv run scripts/ml/backfill_candidates.py \
+  --method b2 \
+  --start-date "$TRAIN_START" \
+  --end-date "$TRAIN_END" \
+  --workers 4
+
+# 3. 补齐 factor artifact（如果缺失）
+# 对缺失日期的候选执行 screen --export-factors
+
+# 4. 构建训练集
+uv run scripts/ml/build_rank_dataset.py \
+  --method b2 \
+  --runtime-root runtime \
+  --source candidates \
+  --start-date "$TRAIN_START" \
+  --end-date "$TRAIN_END"
+
+# 5. 训练
+uv run scripts/ml/train_rank_lgbm.py \
+  --method b2 \
+  --dataset diagnostics/ml/b2/rank_dataset.csv \
+  --output-dir diagnostics/ml/b2/model \
+  --feature-set raw_numeric \
+  --num-leaves 9 \
+  --min-data-in-leaf 120 \
+  --num-boost-round 60 \
+  --learning-rate 0.05
+
+# 6. 查看训练 report 评估效果
+
+# 7. 导出并发布
+uv run scripts/ml/export_lgbm_scores.py \
+  --method b2 \
+  --model-output-dir diagnostics/ml/b2/model
+
+uv run scripts/ml/promote_lgbm_model.py \
+  --method b2 \
+  --candidate-dir diagnostics/ml/b2/model \
+  --dry-run
+
+# 确认无误后正式发布
+uv run scripts/ml/promote_lgbm_model.py \
+  --method b2 \
+  --candidate-dir diagnostics/ml/b2/model
+```
+
+## 场景四：历史数据补跑
+
+```bash
+# 全量补跑（自动跳过已有）
+scripts/backfill_run.py \
+  --start-date 2026-01-01 \
+  --end-date 2026-06-04 \
+  --jobs 4
+
+# 覆盖重跑
+scripts/backfill_run.py \
+  --start-date 2026-01-01 \
+  --end-date 2026-06-04 \
+  --force
+
+# 只补某个月
+scripts/backfill_run.py \
+  --start-date 2026-05-01 \
+  --end-date 2026-05-31
+```
+
+## 场景五：仅筛选候选
+
+```bash
+# 只生成候选（不跑模型）
+stock-select-rs screen --method b2 --pick-date 2026-06-05
+
+# 生成候选并导出因子
+stock-select-rs screen \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --export-factors
+
+# 自定义股票池
+stock-select-rs run \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --pool-source custom \
+  --pool-file /tmp/custom-pool.txt
+
+# 仅生成 K 线图（需要先有 run artifact）
+stock-select-rs chart \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --chart-workers 4
+```
+
+## 场景六：复盘
+
+```bash
+# 查看当天排序
+stock-select-rs review-list \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --limit 10
+
+# 生成本日 LLM 复盘任务
+stock-select-rs review \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --limit 5
+
+# 查看生成的 task
+cat runtime/select/2026-06-05.b2/llm_tasks.json
+
+# 填写 annotation 后合并
+stock-select-rs review-merge \
+  --method b2 \
+  --pick-date 2026-06-05
+```
+
+## 环境评分
+
+EOD run 自动评分：
+
+- 读取 `daily_market` 获取上证指数和国证 2000 数据
+- 评估市场状态：`weak` / `neutral` / `strong`
+- 写入 `runtime/environment/daily/<date>.json`
+
+盘中模式：
+
+```bash
+# 手动指定环境（不落盘）
+stock-select-rs run \
+  --method b2 \
+  --intraday \
+  --environment-state weak \
+  --environment-reason "最近连续缩量调整"
+```
+
+## 安装
+
+首次使用安装脚本：
+
+```bash
+bash scripts/install.sh
+```
+
+等价于：
+```bash
+# 编译安装二进制
+cargo install --path .
+
+# 同步技能到 ~/.agents/skills/
+cp -r .agents/skills/* ~/.agents/skills/
+
+# 手动配置环境变量
+cp .env.example .env
+# 编辑 .env 填入 POSTGRES_DSN 和 TUSHARE_TOKEN
+```
+
+## 高级：分段执行
+
+如果想手动分段执行 run 中的各步骤：
+
+```bash
+# 步骤 1: screen（仅生成候选）
+stock-select-rs screen --method b2 --pick-date 2026-06-05
+
+# 步骤 2: screen --export-factors（导出因子）
+stock-select-rs screen --method b2 --pick-date 2026-06-05 --export-factors
+
+# 步骤 3: run 指定候选文件（跳过 auto-screen）
+stock-select-rs run \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --candidates-path runtime/candidates/2026-06-05.b2.json
+
+# 步骤 4: 单独生成图表
+stock-select-rs chart \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --chart-workers 4
+
+# 步骤 5: 单独生成 LLM 复盘任务
+stock-select-rs review \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --limit 5
+```
+
+## 验证
+
+```bash
+# Rust 代码检查
+cargo fmt --check
+cargo test --quiet
+
+# Python 脚本检查
+python3 -m py_compile scripts/ml/*.py
+
+# 模型训练测试
+uv run python3 -m unittest \
+  tests/test_candidate_backfill.py \
+  tests/test_rank_dataset.py \
+  tests/test_rank_lgbm.py
+```

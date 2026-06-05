@@ -54,6 +54,27 @@ scripts/model_maintenance.sh switch <archive_version>
 
 这个入口会封装当前模型查看、归档浏览、发布和切换旧归档模型。
 
+## 历史补跑
+
+批量补跑历史日期的 run 数据：
+
+```bash
+# 补跑 2026-01-01 ~ 2026-06-04 的数据
+scripts/backfill_run.py --start-date 2026-01-01 --end-date 2026-06-04
+
+# 覆盖已有的重新跑
+scripts/backfill_run.py --start-date 2026-05-01 --end-date 2026-05-31 --force
+
+# 先预览要跑的日期
+scripts/backfill_run.py --start-date 2026-05-01 --end-date 2026-05-31 --dry-run
+
+# 并发补跑（4 个 worker 同时跑，加快历史回填）
+scripts/backfill_run.py --start-date 2026-01-01 --end-date 2026-05-31 --jobs 4
+```
+
+Python 版本直接从 DB 查询交易日历（`daily_market` 表），精确跳过非交易日；
+无 DB 连接时兜底跳过周末。支持 `--jobs N` 并发补跑（默认 2，设为 1 则串行）。
+
 ## 参考
 
 - 项目进度：`docs/roadmap.md`
