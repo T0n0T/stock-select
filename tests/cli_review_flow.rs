@@ -120,6 +120,7 @@ fn prepared_row(code: &str, day: u32, close: f64) -> PreparedRow {
         close,
         volume: 1000.0 + close,
         turnover_n: 12.0,
+        turnover_rate: Some(1.5),
         k: 50.0,
         d: 40.0,
         j: 60.0,

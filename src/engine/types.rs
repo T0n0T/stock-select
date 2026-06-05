@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
-
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::factors::types::{FactorRow, FactorValue};
 use crate::model::Method;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,34 +15,6 @@ pub struct SelectionCandidate {
     pub turnover_n: Option<f64>,
     pub signal: Option<String>,
     pub raw_payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum FactorValue {
-    Number(f64),
-    Category(String),
-    Bool(bool),
-    Missing,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FactorRow {
-    pub code: String,
-    pub method: Method,
-    pub factors: BTreeMap<String, FactorValue>,
-    pub diagnostics: BTreeMap<String, Value>,
-}
-
-impl FactorRow {
-    pub fn new(code: impl Into<String>, method: Method) -> Self {
-        Self {
-            code: code.into(),
-            method,
-            factors: BTreeMap::new(),
-            diagnostics: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

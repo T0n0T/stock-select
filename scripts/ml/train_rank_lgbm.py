@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.ml.evaluate_rank_baseline import POLICIES, merge_topn_metrics
+from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 
 DEFAULT_METHOD = "b2"
@@ -38,20 +38,11 @@ LABEL_COLUMNS = {
     "rank_label_3d",
     "rank_label_5d",
 }
-BASELINE_ONLY_COLUMNS = {
+NON_FEATURE_COLUMNS = {
     "model_score",
     "model_rank",
     "llm_action",
     "risk_flags",
-    "current_score",
-    "baseline_score",
-    "trend_structure",
-    "price_position",
-    "volume_behavior",
-    "previous_abnormal_move",
-    "macd_phase",
-    "current_verdict",
-    "baseline_verdict",
 }
 CATEGORICAL_COLUMNS = {
     "env",
@@ -62,6 +53,7 @@ CATEGORICAL_COLUMNS = {
     "weekly_macd_phase_type",
     "weekly_macd_wave_stage",
     "weekly_daily_combo_type",
+    "midline_state",
 }
 SIGNAL_CATEGORICAL_COLUMNS = {"env", "signal", "signal_type"}
 MACD_CATEGORICAL_COLUMNS = {
@@ -70,6 +62,13 @@ MACD_CATEGORICAL_COLUMNS = {
     "weekly_macd_phase_type",
     "weekly_macd_wave_stage",
     "weekly_daily_combo_type",
+}
+CONTEXT_CATEGORICAL_COLUMNS = {"midline_state"}
+RAW_NUMERIC_COLUMNS = set(rank_dataset_schema.RAW_FACTOR_COLUMNS)
+LEGACY_CONTEXT_NUMERIC_COLUMNS = {
+    "price_vs_90d_high",
+    "price_vs_90d_low",
+    "price_vs_90d_mid",
 }
 FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 TRAIN_MODES = {"overall", "by_env"}
@@ -156,42 +155,86 @@ def select_feature_columns(columns: Sequence[str], *, feature_set: str = "all") 
     elif feature_set == "raw_plus_signal":
         allowed_categorical = SIGNAL_CATEGORICAL_COLUMNS
     elif feature_set == "raw_plus_signal_macd":
-        allowed_categorical = SIGNAL_CATEGORICAL_COLUMNS | MACD_CATEGORICAL_COLUMNS
+        allowed_categorical = (
+            SIGNAL_CATEGORICAL_COLUMNS | MACD_CATEGORICAL_COLUMNS | CONTEXT_CATEGORICAL_COLUMNS
+        )
     else:
         allowed_categorical = CATEGORICAL_COLUMNS
-    excluded = IDENTITY_COLUMNS | LABEL_COLUMNS | BASELINE_ONLY_COLUMNS
+    excluded = IDENTITY_COLUMNS | LABEL_COLUMNS | NON_FEATURE_COLUMNS
     for column in columns:
         if column in excluded:
             continue
         if column in allowed_categorical:
             categorical.append(column)
-        elif column.endswith(("_pct", "_ratio", "_flag", "_days_ago")):
+        elif column in RAW_NUMERIC_COLUMNS or column in LEGACY_CONTEXT_NUMERIC_COLUMNS:
             numeric.append(column)
     return numeric, categorical
 
 
-def load_feature_manifest(path: Path, *, available_columns: set[str]) -> tuple[list[str], list[str]]:
+def load_feature_manifest_with_levels(
+    path: Path,
+    *,
+    available_columns: set[str],
+) -> tuple[list[str], list[str], dict[str, list[str]]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("feature manifest must be a JSON object")
-    excluded = set(payload.get("excluded_features") or []) | IDENTITY_COLUMNS | LABEL_COLUMNS | BASELINE_ONLY_COLUMNS
+    excluded = set(payload.get("excluded_features") or []) | IDENTITY_COLUMNS | LABEL_COLUMNS | NON_FEATURE_COLUMNS
 
-    def clean(values: Any) -> list[str]:
+    def clean(values: Any, *, allowed_columns: set[str]) -> list[str]:
         if not isinstance(values, list):
             return []
         result = []
         for value in values:
             column = str(value)
-            if column in available_columns and column not in excluded and column not in result:
+            if (
+                column in allowed_columns
+                and column in available_columns
+                and column not in excluded
+                and column not in result
+            ):
                 result.append(column)
         return result
 
-    return clean(payload.get("numeric_features")), clean(payload.get("categorical_features"))
+    numeric = clean(payload.get("numeric_features"), allowed_columns=RAW_NUMERIC_COLUMNS)
+    categorical = clean(payload.get("categorical_features"), allowed_columns=CATEGORICAL_COLUMNS)
+    fixed_levels: dict[str, list[str]] = {}
+    raw_levels = payload.get("categorical_levels")
+    if isinstance(raw_levels, dict):
+        for column in categorical:
+            values = raw_levels.get(column)
+            if not isinstance(values, list):
+                continue
+            cleaned_values = []
+            for value in values:
+                level = str(value)
+                if level not in cleaned_values:
+                    cleaned_values.append(level)
+            if cleaned_values:
+                fixed_levels[column] = cleaned_values
+    return numeric, categorical, fixed_levels
 
 
-def category_levels(rows: Sequence[dict[str, Any]], categorical_columns: Sequence[str], *, max_levels: int = 32) -> dict[str, list[str]]:
+def load_feature_manifest(path: Path, *, available_columns: set[str]) -> tuple[list[str], list[str]]:
+    numeric, categorical, _fixed_levels = load_feature_manifest_with_levels(
+        path,
+        available_columns=available_columns,
+    )
+    return numeric, categorical
+
+
+def category_levels(
+    rows: Sequence[dict[str, Any]],
+    categorical_columns: Sequence[str],
+    *,
+    max_levels: int = 32,
+    fixed_categorical_levels: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
     levels: dict[str, list[str]] = {}
     for column in categorical_columns:
+        if fixed_categorical_levels and column in fixed_categorical_levels:
+            levels[column] = list(fixed_categorical_levels[column])
+            continue
         counts = Counter(str(row.get(column) or "unknown") for row in rows)
         levels[column] = [value for value, _count in counts.most_common(max_levels)]
     return levels
@@ -279,6 +322,25 @@ def write_model_artifacts(model: Any, metadata: dict[str, Any], output_dir: Path
     return {"model": str(model_path), "metadata": str(metadata_path)}
 
 
+def write_feature_manifest(
+    output_dir: Path,
+    *,
+    numeric_columns: Sequence[str],
+    categorical_columns: Sequence[str],
+    fixed_categorical_levels: dict[str, list[str]],
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "feature_manifest.json"
+    payload = {
+        "numeric_features": list(numeric_columns),
+        "categorical_features": list(categorical_columns),
+        "categorical_levels": {column: list(values) for column, values in fixed_categorical_levels.items()},
+        "excluded_features": [],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 def safe_feature_names(feature_names: Sequence[str]) -> list[str]:
     result = []
     seen: dict[str, int] = defaultdict(int)
@@ -297,10 +359,6 @@ def rows_for_dates(rows: Sequence[dict[str, Any]], dates: set[str], *, label_col
     return sorted(filtered, key=lambda row: (str(row.get("date")), str(row.get("code"))))
 
 
-def baseline_metrics_for_rows(rows: Sequence[dict[str, Any]], *, top_ns: Sequence[int] = (3, 5)) -> dict[str, Any]:
-    return {policy: merge_topn_metrics(rows, policy=policy, top_ns=top_ns) for policy in POLICIES}
-
-
 def average_metric_dicts(metrics: Sequence[dict[str, Any]]) -> dict[str, Any]:
     keys = sorted({key for item in metrics for key in item.keys()})
     result: dict[str, Any] = {}
@@ -308,14 +366,6 @@ def average_metric_dicts(metrics: Sequence[dict[str, Any]]) -> dict[str, Any]:
         values = [as_float(item.get(key)) for item in metrics]
         valid = [value for value in values if value is not None]
         result[key] = round(sum(valid) / len(valid), 4) if valid else None
-    return result
-
-
-def average_baseline_metrics(baselines: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for policy in POLICIES:
-        policy_metrics = [baseline.get(policy, {}) for baseline in baselines]
-        result[policy] = average_metric_dicts(policy_metrics)
     return result
 
 
@@ -352,7 +402,6 @@ def partition_diagnostics(rows: Sequence[dict[str, Any]], *, partition: str) -> 
         key: {
             "row_count": len(partition_rows),
             "metrics": evaluate_model(partition_rows, top_n=3),
-            "baseline_test_window": baseline_metrics_for_rows(partition_rows),
         }
         for key, partition_rows in sorted(partitions.items())
         if partition_rows
@@ -468,36 +517,11 @@ def markdown_report(report: dict[str, Any]) -> str:
                 ic_ret5=metrics.get("rank_ic_ret5"),
             )
         )
-    baseline = report.get("baseline_test_window") or {}
-    if baseline:
-        lines.extend(
-            [
-                "",
-                "## same-window baseline",
-                "",
-                "| policy | top3 positive | top3 >=5 | top3 <=0 | top3 >=5 capture | top3 ret5 >=5 | rank ic ret3 | rank ic ret5 |",
-                "|---|---:|---:|---:|---:|---:|---:|---:|",
-            ]
-        )
-        for policy, metrics in baseline.items():
-            lines.append(
-                "| {policy} | {pos} | {ge5} | {le0} | {capture_ret3} | {ge5_ret5} | {ic_ret3} | {ic_ret5} |".format(
-                    policy=policy,
-                    pos=metrics.get("top3_ret3_positive_rate"),
-                    ge5=metrics.get("top3_ret3_ge_5_rate"),
-                    le0=metrics.get("top3_ret3_le_0_rate"),
-                    capture_ret3=metrics.get("top3_ret3_ge_5_capture_rate"),
-                    ge5_ret5=metrics.get("top3_ret5_ge_5_rate"),
-                    ic_ret3=metrics.get("rank_ic_ret3"),
-                    ic_ret5=metrics.get("rank_ic_ret5"),
-                )
-            )
     lines.extend(["", "## top features", ""])
     lines.extend(f"- {item['feature']}: {item['importance']}" for item in report.get("top_features", [])[:20])
     if report.get("rolling_folds"):
         summary = report.get("rolling_summary") or {}
         test_avg = summary.get("test_avg") or {}
-        baseline_avg = (summary.get("baseline_test_avg") or {}).get("pass_watch_then_current_score_desc", {})
         if test_avg:
             lines.extend(
                 [
@@ -515,29 +539,19 @@ def markdown_report(report: dict[str, Any]) -> str:
                         ge5_ret5=test_avg.get("top3_ret5_ge_5_rate"),
                         ic_ret5=test_avg.get("rank_ic_ret5"),
                     ),
-                    "| pass_watch baseline avg | {pos} | {ge5} | {le0} | {capture} | {ic_ret3} | {ge5_ret5} | {ic_ret5} |".format(
-                        pos=baseline_avg.get("top3_ret3_positive_rate"),
-                        ge5=baseline_avg.get("top3_ret3_ge_5_rate"),
-                        le0=baseline_avg.get("top3_ret3_le_0_rate"),
-                        capture=baseline_avg.get("top3_ret3_ge_5_capture_rate"),
-                        ic_ret3=baseline_avg.get("rank_ic_ret3"),
-                        ge5_ret5=baseline_avg.get("top3_ret5_ge_5_rate"),
-                        ic_ret5=baseline_avg.get("rank_ic_ret5"),
-                    ),
                 ]
                 )
         lines.extend(["", "## rolling folds", ""])
         lines.extend(
             [
-                "| fold | train dates | test dates | top3 positive | top3 >=5 | top3 <=0 | top3 >=5 capture | rank ic ret3 | top3 ret5 >=5 | rank ic ret5 | baseline top3 >=5 |",
-                "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+                "| fold | train dates | test dates | top3 positive | top3 >=5 | top3 <=0 | top3 >=5 capture | rank ic ret3 | top3 ret5 >=5 | rank ic ret5 |",
+                "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for fold in report["rolling_folds"]:
             metrics = fold["metrics"]["test"]
-            baseline = fold.get("baseline_test_window", {}).get("pass_watch_then_current_score_desc", {})
             lines.append(
-                "| {fold} | {train_start}..{train_end} | {test_start}..{test_end} | {pos} | {ge5} | {le0} | {capture} | {ic_ret3} | {ge5_ret5} | {ic_ret5} | {b_ge5} |".format(
+                "| {fold} | {train_start}..{train_end} | {test_start}..{test_end} | {pos} | {ge5} | {le0} | {capture} | {ic_ret3} | {ge5_ret5} | {ic_ret5} |".format(
                     fold=fold["fold"],
                     train_start=fold["train_start_date"],
                     train_end=fold["train_end_date"],
@@ -550,7 +564,6 @@ def markdown_report(report: dict[str, Any]) -> str:
                     ic_ret3=metrics.get("rank_ic_ret3"),
                     ge5_ret5=metrics.get("top3_ret5_ge_5_rate"),
                     ic_ret5=metrics.get("rank_ic_ret5"),
-                    b_ge5=baseline.get("top3_ret3_ge_5_rate"),
                 )
             )
         if any(fold.get("by_env") for fold in report["rolling_folds"]):
@@ -622,6 +635,7 @@ def train_model(
     learning_rate: float,
     label_column: str,
     num_threads: int,
+    fixed_categorical_levels: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], int]:
     result = train_model_result(
         train_rows,
@@ -634,6 +648,7 @@ def train_model(
         learning_rate=learning_rate,
         label_column=label_column,
         num_threads=num_threads,
+        fixed_categorical_levels=fixed_categorical_levels,
     )
     return result.train_scored, result.test_scored, result.top_features, result.feature_count
 
@@ -650,13 +665,18 @@ def train_model_result(
     learning_rate: float,
     label_column: str,
     num_threads: int,
+    fixed_categorical_levels: dict[str, list[str]] | None = None,
 ) -> TrainedModelResult:
     import lightgbm as lgb
     import numpy as np
 
     if not train_rows or not test_rows:
         return TrainedModelResult([], [], [], 0, None, [], [], {})
-    levels = category_levels(train_rows, categorical_columns)
+    levels = category_levels(
+        train_rows,
+        categorical_columns,
+        fixed_categorical_levels=fixed_categorical_levels,
+    )
     train_matrix, feature_names = build_feature_matrix(train_rows, numeric_columns=numeric_columns, categorical_columns=categorical_columns, levels=levels)
     test_matrix, _feature_names = build_feature_matrix(test_rows, numeric_columns=numeric_columns, categorical_columns=categorical_columns, levels=levels)
     lightgbm_feature_names = safe_feature_names(feature_names)
@@ -734,15 +754,16 @@ def train_and_report(
         raise ValueError(f"dataset must contain both train and test rows with {label_column}")
 
     if feature_manifest is not None:
-        numeric_columns, categorical_columns = load_feature_manifest(
+        numeric_columns, categorical_columns, fixed_categorical_levels = load_feature_manifest_with_levels(
             feature_manifest,
             available_columns=set(rows[0].keys()),
         )
     else:
         numeric_columns, categorical_columns = select_feature_columns(rows[0].keys(), feature_set=feature_set)
+        fixed_categorical_levels = {}
 
     if train_mode == "overall":
-        train_scored, test_scored, top_features, feature_count = train_model(
+        model_result = train_model_result(
             train_rows,
             test_rows,
             numeric_columns=numeric_columns,
@@ -753,7 +774,12 @@ def train_and_report(
             learning_rate=learning_rate,
             label_column=label_column,
             num_threads=num_threads,
+            fixed_categorical_levels=fixed_categorical_levels,
         )
+        train_scored = model_result.train_scored
+        test_scored = model_result.test_scored
+        top_features = model_result.top_features
+        feature_count = model_result.feature_count
         env_metrics = {}
     else:
         train_scored = []
@@ -761,6 +787,7 @@ def train_and_report(
         top_features = []
         feature_count = 0
         env_metrics = {}
+        model_result = None
         train_by_env = env_partitions(train_rows)
         test_by_env = env_partitions(test_rows)
         for env in sorted(set(train_by_env) | set(test_by_env)):
@@ -779,6 +806,7 @@ def train_and_report(
                 learning_rate=learning_rate,
                 label_column=label_column,
                 num_threads=num_threads,
+                fixed_categorical_levels=fixed_categorical_levels,
             )
             train_scored.extend(env_train_scored)
             test_scored.extend(env_test_scored)
@@ -792,6 +820,34 @@ def train_and_report(
             if not top_features:
                 top_features = env_top_features
 
+    model_artifacts = None
+    feature_manifest_output = write_feature_manifest(
+        output_dir,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        fixed_categorical_levels=fixed_categorical_levels,
+    )
+    if model_result is not None and model_result.model is not None:
+        metadata = build_model_metadata(
+            feature_manifest=str(feature_manifest_output),
+            train_rows=train_rows,
+            score_rows=test_rows,
+            numeric_columns=numeric_columns,
+            categorical_columns=categorical_columns,
+            levels=model_result.category_levels,
+            feature_names=model_result.feature_names,
+            lightgbm_feature_names=model_result.lightgbm_feature_names,
+            label_column=label_column,
+            model_params={
+                "num_leaves": num_leaves,
+                "min_data_in_leaf": min_data_in_leaf,
+                "num_boost_round": num_boost_round,
+                "learning_rate": learning_rate,
+                "num_threads": num_threads,
+            },
+        )
+        model_artifacts = write_model_artifacts(model_result.model, metadata, output_dir)
+
     report = {
         "method": method,
         "dataset": str(dataset),
@@ -803,7 +859,7 @@ def train_and_report(
         "feature_set": feature_set,
         "train_mode": train_mode,
         "label_column": label_column,
-        "feature_manifest": str(feature_manifest) if feature_manifest else None,
+        "feature_manifest": str(feature_manifest_output),
         "model_params": {
             "num_leaves": num_leaves,
             "min_data_in_leaf": min_data_in_leaf,
@@ -813,14 +869,16 @@ def train_and_report(
         },
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
+        "fixed_categorical_levels": fixed_categorical_levels,
         "metrics": {
             "train": evaluate_model(train_scored, top_n=3),
             "test": evaluate_model(test_scored, top_n=3),
         },
-        "baseline_test_window": baseline_metrics_for_rows(test_rows),
         "env_metrics": env_metrics,
         "top_features": top_features,
     }
+    if model_artifacts is not None:
+        report["model_artifacts"] = model_artifacts
     if rolling_folds:
         if train_mode != "overall":
             raise ValueError("rolling validation currently supports train_mode=overall only")
@@ -847,6 +905,7 @@ def train_and_report(
                 learning_rate=learning_rate,
                 label_column=label_column,
                 num_threads=num_threads,
+                fixed_categorical_levels=fixed_categorical_levels,
             )
             fold_report = {
                 "fold": fold_index,
@@ -862,7 +921,6 @@ def train_and_report(
                     "train": evaluate_model(fold_train_scored, top_n=3),
                     "test": evaluate_model(fold_test_scored, top_n=3),
                 },
-                "baseline_test_window": baseline_metrics_for_rows(fold_test_rows),
                 "by_env": partition_diagnostics(fold_test_scored, partition="env"),
                 "by_month": partition_diagnostics(fold_test_scored, partition="month"),
             }
@@ -873,7 +931,6 @@ def train_and_report(
             "train_date_count": rolling_train_dates,
             "test_date_count": rolling_test_dates,
             "test_avg": average_metric_dicts([fold["metrics"]["test"] for fold in fold_reports]),
-            "baseline_test_avg": average_baseline_metrics([fold["baseline_test_window"] for fold in fold_reports]),
         }
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path, markdown_path = report_paths(output_dir, feature_set, train_mode, label_column)

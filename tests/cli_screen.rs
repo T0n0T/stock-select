@@ -164,6 +164,7 @@ fn prepared_row(code: &str, day: u32, close: f64, volume: f64, j: f64) -> Prepar
         close,
         volume,
         turnover_n: volume * close,
+        turnover_rate: Some(volume / 100.0),
         k: 50.0,
         d: 40.0,
         j,

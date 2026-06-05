@@ -22,7 +22,7 @@ from scripts.ml.train_rank_lgbm import (
     as_float,
     build_model_metadata,
     grouped_by_date,
-    load_feature_manifest,
+    load_feature_manifest_with_levels,
     read_dataset,
     rows_for_dates,
     train_model_result,
@@ -113,7 +113,10 @@ def export_scores(
     if not score_rows:
         raise ValueError("no score rows after applying score date filter")
 
-    numeric_columns, categorical_columns = load_feature_manifest(feature_manifest, available_columns=set(rows[0].keys()))
+    numeric_columns, categorical_columns, fixed_categorical_levels = load_feature_manifest_with_levels(
+        feature_manifest,
+        available_columns=set(rows[0].keys()),
+    )
     model_result = train_model_result(
         train_rows,
         score_rows,
@@ -125,6 +128,7 @@ def export_scores(
         learning_rate=learning_rate,
         label_column=label_column,
         num_threads=num_threads,
+        fixed_categorical_levels=fixed_categorical_levels,
     )
     score_scored = model_result.test_scored
 

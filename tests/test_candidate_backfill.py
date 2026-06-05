@@ -35,6 +35,27 @@ class CandidateBackfillTest(unittest.TestCase):
 
         self.assertEqual(missing, ["2026-06-04"])
 
+    def test_select_missing_dates_requires_factor_artifacts_when_exporting_factors(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime_root = Path(temp_dir)
+            candidate_dir = runtime_root / "candidates"
+            factor_dir = runtime_root / "factors" / "2026-06-03.b2"
+            candidate_dir.mkdir()
+            factor_dir.mkdir(parents=True)
+            (candidate_dir / "2026-06-03.b2.json").write_text("{}", encoding="utf-8")
+            (candidate_dir / "2026-06-04.b2.json").write_text("{}", encoding="utf-8")
+            (factor_dir / "factors.json").write_text("{}", encoding="utf-8")
+
+            missing = select_missing_dates(
+                ["2026-06-03", "2026-06-04"],
+                runtime_root=runtime_root,
+                method="b2",
+                skip_existing=True,
+                require_factor_artifact=True,
+            )
+
+        self.assertEqual(missing, ["2026-06-04"])
+
     def test_build_screen_command_does_not_put_credentials_on_command_line(self):
         command = build_screen_command(
             binary=Path("target/debug/stock-select-rs"),
@@ -43,6 +64,7 @@ class CandidateBackfillTest(unittest.TestCase):
             method="b2",
             recompute=True,
             pool_source="turnover-top",
+            export_factors=False,
         )
 
         command_text = " ".join(command)
@@ -54,6 +76,19 @@ class CandidateBackfillTest(unittest.TestCase):
         self.assertIn("--recompute", command)
         self.assertNotIn("--dsn", command)
         self.assertNotIn("--tushare-token", command_text)
+
+    def test_build_screen_command_can_request_runtime_factor_export(self):
+        command = build_screen_command(
+            binary=Path("target/debug/stock-select-rs"),
+            pick_date="2026-06-03",
+            runtime_root=Path("/tmp/runtime"),
+            method="b2",
+            recompute=False,
+            pool_source="turnover-top",
+            export_factors=True,
+        )
+
+        self.assertIn("--export-factors", command)
 
     def test_run_backfill_dry_run_does_not_call_runner(self):
         calls = []

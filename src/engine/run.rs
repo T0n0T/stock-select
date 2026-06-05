@@ -19,6 +19,7 @@ use crate::engine::types::{
     DisplayRow, FactorRow, FactorValue, RankedCandidate, SelectionCandidate,
 };
 use crate::environment::ResolvedEnvironment;
+use crate::factors::registry::write_factor_artifact;
 use crate::model::Method;
 
 const FEATURE_VECTORS_ARTIFACT: &str = "feature_vectors.json";
@@ -90,6 +91,13 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         .map(|candidate| factor_provider.factor_row(candidate))
         .collect::<anyhow::Result<Vec<_>>>()?;
     eprintln!("[selection] computed factors rows={}", factors.len());
+    write_factor_artifact(
+        &request.runtime_root,
+        request.method,
+        &artifact_key,
+        &factors,
+        Some(&request.candidates_path),
+    )?;
     let (ranked, feature_vectors) = rank_candidates(&candidates, &factors, model.as_ref())?;
     eprintln!(
         "[selection] ranked rows={} feature_vectors={}",

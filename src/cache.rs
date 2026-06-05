@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 2;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedCachePaths {
@@ -151,10 +151,11 @@ fn encode_prepared_cache_rows(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
             row.close,
             row.volume,
             row.turnover_n,
-            row.k,
-            row.d,
-            row.j,
         ] {
+            write_f64(&mut out, value);
+        }
+        write_option_f64(&mut out, row.turnover_rate);
+        for value in [row.k, row.d, row.j] {
             write_f64(&mut out, value);
         }
         write_option_f64(&mut out, row.zxdq);
@@ -203,6 +204,7 @@ pub fn decode_prepared_cache_rows(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRo
             close: read_f64(&mut cursor)?,
             volume: read_f64(&mut cursor)?,
             turnover_n: read_f64(&mut cursor)?,
+            turnover_rate: read_option_f64(&mut cursor)?,
             k: read_f64(&mut cursor)?,
             d: read_f64(&mut cursor)?,
             j: read_f64(&mut cursor)?,
@@ -299,6 +301,7 @@ pub fn history_payload_for_code(rows: &[PreparedRow], code: &str) -> Vec<Value> 
                 "close": row.close,
                 "volume": row.volume,
                 "turnover_n": row.turnover_n,
+                "turnover_rate": row.turnover_rate,
                 "k": row.k,
                 "d": row.d,
                 "j": row.j,

@@ -19,7 +19,8 @@ pub fn fetch_daily_window(
             high::double precision AS high,
             low::double precision AS low,
             close::double precision AS close,
-            vol::double precision AS vol
+            vol::double precision AS vol,
+            turnover_rate::double precision AS turnover_rate
         FROM daily_market
         WHERE trade_date BETWEEN $1 AND $2
         ORDER BY ts_code ASC, trade_date ASC
@@ -36,6 +37,7 @@ pub fn fetch_daily_window(
                 low: optional_f64(&row, "low")?,
                 close: optional_f64(&row, "close")?,
                 vol: optional_f64(&row, "vol")?,
+                turnover_rate: optional_option_f64(&row, "turnover_rate")?,
             })
         })
         .collect()
@@ -75,6 +77,7 @@ pub fn fetch_index_history(
                 low: optional_f64(&row, "low")?,
                 close: optional_f64(&row, "close")?,
                 vol: optional_f64(&row, "vol")?,
+                turnover_rate: None,
             })
         })
         .collect()
@@ -136,4 +139,8 @@ fn clean_optional_text(value: Option<String>) -> Option<String> {
 
 fn optional_f64(row: &postgres::Row, column: &str) -> anyhow::Result<f64> {
     Ok(row.try_get::<_, Option<f64>>(column)?.unwrap_or(f64::NAN))
+}
+
+fn optional_option_f64(row: &postgres::Row, column: &str) -> anyhow::Result<Option<f64>> {
+    Ok(row.try_get::<_, Option<f64>>(column)?)
 }

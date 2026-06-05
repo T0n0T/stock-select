@@ -51,6 +51,7 @@ pub struct PreparedRow {
     pub close: f64,
     pub volume: f64,
     pub turnover_n: f64,
+    pub turnover_rate: Option<f64>,
     pub k: f64,
     pub d: f64,
     pub j: f64,
@@ -80,6 +81,7 @@ pub struct MarketRow {
     pub low: f64,
     pub close: f64,
     pub vol: f64,
+    pub turnover_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

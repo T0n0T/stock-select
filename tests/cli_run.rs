@@ -112,7 +112,7 @@ fn write_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 2,
+            "schema_version": 3,
             "row_count": 25,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -155,7 +155,7 @@ fn write_intraday_prepared_cache_metadata(root: &std::path::Path, pick_date: Nai
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 2,
+            "schema_version": 3,
             "row_count": 25,
             "symbol_count": 1,
             "source_table": "daily_market",
@@ -205,7 +205,7 @@ fn write_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) 
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 2,
+            "schema_version": 3,
             "row_count": 3,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -255,7 +255,7 @@ fn write_two_code_selecting_prepared_cache(root: &std::path::Path, pick_date: Na
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 2,
+            "schema_version": 3,
             "row_count": 6,
             "symbol_count": 2,
             "source_table": "daily_market"
@@ -282,10 +282,11 @@ fn write_selecting_prepared_row(
         close,
         volume,
         volume * close,
-        50.0,
-        40.0,
-        j,
     ] {
+        write_f64(bytes, value);
+    }
+    write_option_f64(bytes, Some(volume / 1000.0));
+    for value in [50.0, 40.0, j] {
         write_f64(bytes, value);
     }
     write_option_f64(bytes, Some(close));
@@ -311,17 +312,11 @@ fn write_prepared_row(
 ) {
     write_string(bytes, code);
     write_i32(bytes, trade_date.num_days_from_ce());
-    for value in [
-        close - 0.5,
-        close + 1.0,
-        close - 1.0,
-        close,
-        1000.0,
-        12.0,
-        50.0,
-        40.0,
-        60.0,
-    ] {
+    for value in [close - 0.5, close + 1.0, close - 1.0, close, 1000.0, 12.0] {
+        write_f64(bytes, value);
+    }
+    write_option_f64(bytes, Some(1.5));
+    for value in [50.0, 40.0, 60.0] {
         write_f64(bytes, value);
     }
     write_option_f64(bytes, Some(close - 1.0));
@@ -792,6 +787,14 @@ fn b2_run_uses_default_lightgbm_model_instead_of_input_model_score() {
             .len(),
         1
     );
+
+    let runtime_factors: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("factors/2026-05-25.b2/factors.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(runtime_factors["method"], "b2");
+    assert_eq!(runtime_factors["artifact_key"], "2026-05-25");
+    assert_eq!(runtime_factors["rows"].as_array().unwrap().len(), 2);
 }
 
 #[test]

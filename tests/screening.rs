@@ -22,6 +22,8 @@ fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
         recompute: false,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
+        export_factors: false,
+        environment_state: None,
     };
 
     let output_path = run_screen_with_loader(request, |dsn, start_date, end_date| {
@@ -73,6 +75,8 @@ fn screen_prepare_matches_old_indicator_basics() {
         recompute: false,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
+        export_factors: false,
+        environment_state: None,
     };
 
     run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
@@ -94,6 +98,8 @@ fn screen_prepare_matches_old_indicator_basics() {
 
     assert_eq!(prepared[0].turnover_n, 97.5);
     assert_eq!(prepared[1].turnover_n, 97.5 + 215.0);
+    assert_eq!(prepared[0].turnover_rate, Some(0.1));
+    assert_eq!(prepared[1].turnover_rate, Some(0.2));
     assert_eq!(prepared[0].j, 50.0);
     assert!(prepared[1].dif > prepared[0].dif);
 }
@@ -131,6 +137,8 @@ fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
             recompute: false,
             pool_source: PoolSource::Custom,
             pool_file: Some(pool_file.clone()),
+            export_factors: false,
+            environment_state: None,
         },
         |_dsn, _start_date, _end_date| panic!("custom pool test should reuse prepared cache"),
     )
@@ -174,6 +182,8 @@ fn screen_b2_does_not_repeat_signal_in_same_j_turn_up_cycle() {
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
+            export_factors: false,
+            environment_state: None,
         },
         |_dsn, _start_date, _end_date| panic!("b2 repeat test should reuse prepared cache"),
     )
@@ -241,6 +251,8 @@ fn screen_b2_requires_close_above_long_term_reference_after_new_stock_window() {
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
+            export_factors: false,
+            environment_state: None,
         },
         |_dsn, _start_date, _end_date| panic!("above_lt test should reuse prepared cache"),
     )
@@ -308,6 +320,8 @@ fn screen_b2_golden_fixture_selects_mature_trend_start() {
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
+            export_factors: false,
+            environment_state: None,
         },
         |_dsn, _start_date, _end_date| panic!("golden fixture should reuse prepared cache"),
     )
@@ -324,6 +338,87 @@ fn screen_b2_golden_fixture_selects_mature_trend_start() {
     assert_eq!(payload["stats"]["selected"], 1);
     assert_eq!(payload["stats"]["selected_b2"], 1);
     assert_eq!(payload["stats"]["fail_no_signal"], 0);
+}
+
+#[test]
+fn screen_can_export_runtime_factor_artifact_before_selection() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(114);
+    let start_date = pick_date - Duration::days(366);
+    let mut rows = Vec::new();
+    for offset in 0..112 {
+        rows.push(prepared_row_at_date(
+            "000001.SZ",
+            first_date + Duration::days(offset),
+            10.0 + offset as f64 * 0.03,
+            1000.0,
+            30.0,
+        ));
+    }
+    rows.push(prepared_row_at_date(
+        "000001.SZ",
+        first_date + Duration::days(112),
+        13.36,
+        1000.0,
+        30.0,
+    ));
+    rows.push(prepared_row_at_date(
+        "000001.SZ",
+        first_date + Duration::days(113),
+        13.46,
+        1000.0,
+        35.0,
+    ));
+    rows.push(prepared_row_at_date(
+        "000001.SZ",
+        pick_date,
+        14.00,
+        1300.0,
+        45.0,
+    ));
+    write_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        &rows,
+    )
+    .unwrap();
+
+    run_screen_with_loader(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: true,
+            environment_state: Some("strong".to_string()),
+        },
+        |_dsn, _start_date, _end_date| panic!("factor export test should reuse prepared cache"),
+    )
+    .unwrap();
+
+    let factor_dir = temp.path().join("factors/2026-04-25.b2");
+    let factors: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(factor_dir.join("factors.json")).unwrap()).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(factor_dir.join("manifest.json")).unwrap()).unwrap();
+
+    assert_eq!(factors["method"], "b2");
+    assert_eq!(factors["artifact_key"], "2026-04-25");
+    assert_eq!(factors["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(factors["rows"][0]["code"], "000001.SZ");
+    assert_eq!(factors["rows"][0]["factors"]["signal"], "B2");
+    assert_eq!(factors["rows"][0]["factors"]["env"], "strong");
+    assert!(factors["rows"][0]["factors"]["close_to_zxdkx_pct"].is_number());
+    assert_eq!(manifest["method"], "b2");
+    assert_eq!(manifest["row_count"], 1);
+    assert_eq!(manifest["factor_source"], "rust_factor_library");
 }
 
 #[test]
@@ -360,6 +455,8 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
+            export_factors: false,
+            environment_state: None,
         },
         &provider,
         "15:00:00",
@@ -375,6 +472,7 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
                 low: 9.9,
                 close: 10.1,
                 vol: 1000.0,
+                turnover_rate: Some(1.0),
             }])
         },
     )
@@ -443,6 +541,8 @@ fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
+            export_factors: false,
+            environment_state: None,
         },
         &provider,
         "15:00:00",
@@ -463,6 +563,7 @@ fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
                 low: 9.9,
                 close: 10.1,
                 vol: 1000.0,
+                turnover_rate: Some(1.0),
             }])
         },
     )
@@ -482,6 +583,7 @@ fn market_row_with_open_delta(day: u32, close: f64, vol: f64, open_delta: f64) -
         low: close - 1.0,
         close,
         vol,
+        turnover_rate: Some(vol / 100.0),
     }
 }
 
@@ -511,6 +613,7 @@ fn prepared_row_at_date(
         close,
         volume,
         turnover_n: volume * close,
+        turnover_rate: Some(volume / 100.0),
         k: 50.0,
         d: 40.0,
         j,

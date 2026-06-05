@@ -9,15 +9,16 @@ from pathlib import Path
 from scripts.ml.build_rank_dataset import (
     add_day_relative_labels,
     build_dataset_rows,
-    context_features,
     compute_forward_labels,
     format_csv_value,
     load_candidate_rows,
+    load_factor_artifact_rows,
     load_selection_rows,
     normalize_env,
     normalize_verdict,
     parse_args,
     resolve_output_dir,
+    resolve_runtime_root,
 )
 
 
@@ -38,11 +39,28 @@ class RankDatasetTest(unittest.TestCase):
     def test_output_dir_defaults_to_method_scoped_diagnostics(self):
         self.assertEqual(resolve_output_dir(None, method="b1").as_posix().split("/")[-3:], ["diagnostics", "ml", "b1"])
 
+    def test_runtime_root_resolves_from_shell_env_then_dotenv_without_legacy_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dotenv = Path(temp_dir) / ".env"
+            dotenv.write_text("STOCK_SELECT_RUNTIME_ROOT=dotenv-runtime\n", encoding="utf-8")
+
+            self.assertEqual(
+                resolve_runtime_root(None, env_runtime_root="shell-runtime", dotenv_path=dotenv),
+                Path("shell-runtime"),
+            )
+            self.assertEqual(resolve_runtime_root(None, env_runtime_root=None, dotenv_path=dotenv), Path("dotenv-runtime"))
+            self.assertEqual(
+                resolve_runtime_root(Path("cli-runtime"), env_runtime_root="shell-runtime", dotenv_path=dotenv),
+                Path("cli-runtime"),
+            )
+
     def test_load_candidate_rows_reads_current_candidates_artifacts_without_select(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             candidate_dir = root / "candidates"
+            factor_dir = root / "factors" / "2026-05-25.b2"
             candidate_dir.mkdir(parents=True)
+            factor_dir.mkdir(parents=True)
             (candidate_dir / "2026-05-25.b2.json").write_text(
                 json.dumps(
                     {
@@ -53,11 +71,25 @@ class RankDatasetTest(unittest.TestCase):
                                 "code": "000001.SZ",
                                 "name": "平安银行",
                                 "signal": "B2",
-                                "signal_type": "trend_start",
-                                "env": "neutral",
-                                "factors": {"close_to_zxdkx_pct": 1.25},
                             }
                         ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (factor_dir / "factors.json").write_text(
+                json.dumps(
+                    {
+                        "rows": [
+                            {
+                                "code": "000001.SZ",
+                                "factors": {
+                                    "env": "neutral",
+                                    "signal_type": "trend_start",
+                                    "close_to_zxdkx_pct": 1.25,
+                                },
+                            }
+                        ]
                     }
                 ),
                 encoding="utf-8",
@@ -79,14 +111,69 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(row["method"], "b2")
         self.assertEqual(row["env"], "neutral")
         self.assertEqual(row["signal"], "B2")
-        self.assertEqual(row["signal_type"], "trend_start")
         self.assertEqual(row["close_to_zxdkx_pct"], 1.25)
+        self.assertEqual(row["signal_type"], "trend_start")
+
+    def test_load_candidate_rows_merges_runtime_factor_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate_dir = root / "candidates"
+            factor_dir = root / "factors" / "2026-05-25.b2"
+            candidate_dir.mkdir(parents=True)
+            factor_dir.mkdir(parents=True)
+            (candidate_dir / "2026-05-25.b2.json").write_text(
+                json.dumps(
+                    {
+                        "method": "b2",
+                        "pick_date": "2026-05-25",
+                        "candidates": [{"code": "000001.SZ", "name": "平安银行", "signal": "B2"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (factor_dir / "factors.json").write_text(
+                json.dumps(
+                    {
+                        "method": "b2",
+                        "artifact_key": "2026-05-25",
+                        "rows": [
+                            {
+                                "code": "000001.SZ",
+                                "factors": {
+                                    "env": "strong",
+                                    "close_to_zxdkx_pct": 1.5,
+                                    "macd_hist_to_close_pct": 0.25,
+                                    "macd_hist_positive_flag": 1,
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            rows, warnings = load_candidate_rows(root, method="b2", start_date="2026-05-25", end_date="2026-05-25")
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(rows[0]["env"], "strong")
+        self.assertEqual(rows[0]["close_to_zxdkx_pct"], 1.5)
+        self.assertEqual(rows[0]["macd_hist_to_close_pct"], 0.25)
+        self.assertEqual(rows[0]["macd_hist_positive_flag"], 1)
+
+    def test_load_factor_artifact_rows_reports_missing_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rows, warnings = load_factor_artifact_rows(Path(temp_dir), method="b2", artifact_key="2026-05-25")
+
+        self.assertEqual(rows, {})
+        self.assertEqual(warnings, ["missing_factor_artifact:2026-05-25.b2"])
 
     def test_load_selection_rows_reads_current_select_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             select_dir = root / "select" / "2026-05-25.b2"
+            factor_dir = root / "factors" / "2026-05-25.b2"
             select_dir.mkdir(parents=True)
+            factor_dir.mkdir(parents=True)
             (select_dir / "run.json").write_text(
                 json.dumps(
                     {
@@ -114,7 +201,7 @@ class RankDatasetTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (select_dir / "factors.json").write_text(
+            (factor_dir / "factors.json").write_text(
                 json.dumps(
                     {
                         "rows": [
@@ -153,8 +240,8 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(row["llm_action"], "watch")
         self.assertEqual(row["risk_flags"], "volume")
         self.assertEqual(row["signal"], "B2")
-        self.assertEqual(row["signal_type"], "trend_start")
         self.assertEqual(row["close_to_zxdkx_pct"], 1.25)
+        self.assertEqual(row["signal_type"], "trend_start")
         self.assertEqual(row["near_ma25_support_flag"], 1)
 
     def test_forward_labels_use_future_trade_bars(self):
@@ -179,7 +266,7 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(labels["ret10"], 70.0)
         self.assertEqual(labels["max_drawdown_5d"], -24.0)
 
-    def test_build_dataset_rows_merges_labels_context_and_select_factors(self):
+    def test_build_dataset_rows_merges_labels_and_runtime_factors(self):
         selection_rows = [
             {
                 "date": "2026-05-25",
@@ -224,37 +311,39 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(by_code["000002.SZ"]["rank_label_3d"], 0)
         self.assertEqual(by_code["000001.SZ"]["close_to_zxdkx_pct"], 1.25)
 
-    def test_context_features_compute_raw_ratio_factors(self):
-        price_rows = []
-        start = date(2026, 1, 1)
-        for day in range(1, 131):
-            close = 100.0 + day
-            price_rows.append(
+    def test_build_dataset_rows_preserves_semantic_classifier_fields(self):
+        selection_rows = [
+            {
+                "date": "2026-05-25",
+                "code": "000001.SZ",
+                "env": "neutral",
+                "method": "b2",
+                "signal_type": "manual_signal",
+                "daily_macd_phase_type": "manual_daily",
+                "weekly_daily_combo_type": "manual_combo",
+                "midline_state": "pullback_confirm",
+                "price_vs_90d_mid": -1.5,
+            }
+        ]
+        prices = {
+            "000001.SZ": [
                 {
-                    "trade_date": (start + timedelta(days=day - 1)).isoformat(),
-                    "open": close - 0.5,
-                    "close": close,
-                    "high": close + 1.0,
-                    "low": close - 2.0,
-                    "vol": 1000.0 + day * 10.0,
-                    "turnover_rate": 2.0 + day / 100.0,
-                    "pct_chg": 1.0,
+                    "trade_date": (date(2026, 1, 1) + timedelta(days=offset)).isoformat(),
+                    "close": 100.0 + offset,
+                    "high": 101.0 + offset,
+                    "low": 99.0 + offset,
                 }
-            )
+                for offset in range(150)
+            ]
+        }
 
-        features = context_features(price_rows, (start + timedelta(days=129)).isoformat())
+        rows = build_dataset_rows(selection_rows, prices)
 
-        self.assertEqual(features["close_to_ma25_pct"], 5.5046)
-        self.assertEqual(features["close_to_zxdkx_pct"], 12.8142)
-        self.assertEqual(features["ma25_to_zxdkx_pct"], 6.9283)
-        self.assertEqual(features["near_ma25_support_flag"], 0)
-        self.assertEqual(features["ma_aligned_flag"], 1)
-        self.assertEqual(features["zxdkx_up_1d_flag"], 1)
-        self.assertEqual(features["box_position_120d_pct"], 99.1803)
-        self.assertEqual(features["latest_bar_position_pct"], 66.6667)
-        self.assertEqual(features["volume_to_ma5_ratio"], 1.0088)
-        self.assertEqual(features["abnormal_volume_event_days_ago"], 0)
-        self.assertIn("macd_hist_to_close_pct", features)
+        self.assertEqual(rows[0]["signal_type"], "manual_signal")
+        self.assertEqual(rows[0]["daily_macd_phase_type"], "manual_daily")
+        self.assertEqual(rows[0]["weekly_daily_combo_type"], "manual_combo")
+        self.assertEqual(rows[0]["midline_state"], "pullback_confirm")
+        self.assertEqual(rows[0]["price_vs_90d_mid"], -1.5)
 
     def test_normalizers_and_csv_values_are_stable(self):
         self.assertEqual(normalize_env("Strong"), "strong")

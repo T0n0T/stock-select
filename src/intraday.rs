@@ -230,6 +230,7 @@ pub fn build_intraday_market_rows(
         low: row.low,
         close: row.close,
         vol: row.vol,
+        turnover_rate: None,
     }));
     rows.sort_by(|left, right| {
         left.ts_code

@@ -34,6 +34,7 @@ class BackfillConfig:
     method: str = DEFAULT_METHOD
     workers: int = 4
     recompute: bool = False
+    export_factors: bool = False
     pool_source: str = DEFAULT_POOL_SOURCE
     dry_run: bool = False
     quiet: bool = True
@@ -123,17 +124,27 @@ def candidate_path(runtime_root: Path, pick_date: str, method: str) -> Path:
     return runtime_root / "candidates" / f"{pick_date}.{method}.json"
 
 
+def factor_artifact_path(runtime_root: Path, pick_date: str, method: str) -> Path:
+    return runtime_root / "factors" / f"{pick_date}.{method}" / "factors.json"
+
+
 def select_missing_dates(
     trade_dates: Sequence[str],
     *,
     runtime_root: Path,
     method: str,
     skip_existing: bool = True,
+    require_factor_artifact: bool = False,
 ) -> list[str]:
     dates = sorted(dict.fromkeys(validate_date(item) for item in trade_dates))
     if not skip_existing:
         return dates
-    return [pick_date for pick_date in dates if not candidate_path(runtime_root, pick_date, method).exists()]
+    return [
+        pick_date
+        for pick_date in dates
+        if not candidate_path(runtime_root, pick_date, method).exists()
+        or (require_factor_artifact and not factor_artifact_path(runtime_root, pick_date, method).exists())
+    ]
 
 
 def build_screen_command(
@@ -144,6 +155,7 @@ def build_screen_command(
     method: str,
     recompute: bool,
     pool_source: str,
+    export_factors: bool,
 ) -> list[str]:
     command = [
         str(binary),
@@ -159,6 +171,8 @@ def build_screen_command(
     ]
     if recompute:
         command.append("--recompute")
+    if export_factors:
+        command.append("--export-factors")
     return command
 
 
@@ -175,6 +189,7 @@ def _run_one(
         method=config.method,
         recompute=config.recompute,
         pool_source=config.pool_source,
+        export_factors=config.export_factors,
     )
     completed = runner(
         command,
@@ -216,6 +231,7 @@ def run_backfill(
                 method=config.method,
                 recompute=config.recompute,
                 pool_source=config.pool_source,
+                export_factors=config.export_factors,
             )
             completed_count += 1
             try:
@@ -271,6 +287,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pool-source", default=DEFAULT_POOL_SOURCE)
     parser.add_argument("--dates-file", type=Path)
     parser.add_argument("--recompute", action="store_true")
+    parser.add_argument("--export-factors", action="store_true")
     parser.add_argument("--no-skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--quiet", action="store_true")
@@ -302,6 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         runtime_root=runtime_root,
         method=args.method,
         skip_existing=not args.no_skip_existing,
+        require_factor_artifact=args.export_factors,
     )
     skipped_count = len(trade_dates) - len(selected_dates)
     print(
@@ -315,6 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         method=args.method,
         workers=args.workers,
         recompute=args.recompute,
+        export_factors=args.export_factors,
         pool_source=args.pool_source,
         dry_run=args.dry_run,
         quiet=args.quiet,
@@ -328,6 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 method=config.method,
                 recompute=config.recompute,
                 pool_source=config.pool_source,
+                export_factors=config.export_factors,
             )
             print(shlex.join(command))
 

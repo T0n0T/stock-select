@@ -1,4 +1,9 @@
+import csv
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from scripts.ml.train_rank_lgbm import (
     average_metric_dicts,
@@ -12,6 +17,7 @@ from scripts.ml.train_rank_lgbm import (
     rolling_walk_forward_splits,
     rows_for_dates,
     select_feature_columns,
+    train_and_report,
     walk_forward_split_dates,
 )
 
@@ -48,19 +54,50 @@ class RankLgbmTest(unittest.TestCase):
             "model_rank",
             "llm_action",
             "risk_flags",
-            "current_score",
-            "baseline_score",
             "close_to_zxdkx_pct",
             "daily_macd_phase_type",
             "signal_type",
+            "price_up_1d_flag",
             "ret3",
             "rank_label_3d",
         ]
 
         numeric, categorical = select_feature_columns(columns, feature_set="all")
 
-        self.assertEqual(numeric, ["close_to_zxdkx_pct"])
+        self.assertEqual(numeric, ["close_to_zxdkx_pct", "price_up_1d_flag"])
         self.assertEqual(categorical, ["env", "daily_macd_phase_type", "signal_type"])
+
+    def test_select_feature_columns_supports_legacy_semantic_feature_sets(self):
+        columns = [
+            "env",
+            "signal",
+            "signal_type",
+            "daily_macd_phase_type",
+            "weekly_daily_combo_type",
+            "midline_state",
+            "price_vs_90d_mid",
+            "close_to_zxdkx_pct",
+        ]
+
+        numeric, categorical = select_feature_columns(columns, feature_set="raw_numeric")
+        self.assertEqual(numeric, ["price_vs_90d_mid", "close_to_zxdkx_pct"])
+        self.assertEqual(categorical, [])
+
+        _numeric, categorical = select_feature_columns(columns, feature_set="raw_plus_signal")
+        self.assertEqual(categorical, ["env", "signal", "signal_type"])
+
+        _numeric, categorical = select_feature_columns(columns, feature_set="raw_plus_signal_macd")
+        self.assertEqual(
+            categorical,
+            [
+                "env",
+                "signal",
+                "signal_type",
+                "daily_macd_phase_type",
+                "weekly_daily_combo_type",
+                "midline_state",
+            ],
+        )
 
     def test_build_feature_matrix_one_hot_encodes_categoricals(self):
         rows = [
@@ -151,8 +188,8 @@ class RankLgbmTest(unittest.TestCase):
                 json.dumps(
                     {
                         "numeric_features": ["close_to_zxdkx_pct", "missing_factor", "ret3"],
-                        "categorical_features": ["env", "signal_type", "baseline_verdict"],
-                        "excluded_features": ["ret3", "baseline_verdict"],
+                        "categorical_features": ["env", "signal_type", "model_rank"],
+                        "excluded_features": ["ret3", "model_rank"],
                     }
                 ),
                 encoding="utf-8",
@@ -160,11 +197,87 @@ class RankLgbmTest(unittest.TestCase):
 
             numeric, categorical = load_feature_manifest(
                 path,
-                available_columns={"close_to_zxdkx_pct", "env", "signal_type", "ret3", "baseline_verdict"},
+                available_columns={"close_to_zxdkx_pct", "env", "signal_type", "ret3", "model_rank"},
             )
 
         self.assertEqual(numeric, ["close_to_zxdkx_pct"])
         self.assertEqual(categorical, ["env", "signal_type"])
+
+    def test_train_report_uses_fixed_categorical_levels_from_feature_manifest(self):
+        class DummyModel:
+            def save_model(self, path: str) -> None:
+                Path(path).write_text("dummy model", encoding="utf-8")
+
+        def fake_train_model_result(train_rows, test_rows, **kwargs):
+            self.assertEqual(kwargs["fixed_categorical_levels"], {"env": ["weak", "strong", "neutral"]})
+
+            def scored(rows):
+                return [
+                    {
+                        **row,
+                        "model_score": float(row.get("rank_label_3d") or 0),
+                    }
+                    for row in rows
+                ]
+
+            from scripts.ml.train_rank_lgbm import TrainedModelResult
+
+            return TrainedModelResult(
+                train_scored=scored(train_rows),
+                test_scored=scored(test_rows),
+                top_features=[{"feature": "env=neutral", "importance": 1}],
+                feature_count=4,
+                model=DummyModel(),
+                feature_names=["close_to_zxdkx_pct", "env=weak", "env=strong", "env=neutral"],
+                lightgbm_feature_names=["close_to_zxdkx_pct", "env_weak", "env_strong", "env_neutral"],
+                category_levels={"env": ["weak", "strong", "neutral"]},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "close_to_zxdkx_pct", "env"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "close_to_zxdkx_pct": "1", "env": "weak"},
+                        {"date": "2026-01-01", "code": "b", "rank_label_3d": "1", "ret3": "-1", "ret5": "0", "close_to_zxdkx_pct": "2", "env": "strong"},
+                        {"date": "2026-01-02", "code": "a", "rank_label_3d": "2", "ret3": "3", "ret5": "4", "close_to_zxdkx_pct": "3", "env": "weak"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "close_to_zxdkx_pct": "4", "env": "strong"},
+                    ]
+                )
+            manifest = root / "feature_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "numeric_features": ["close_to_zxdkx_pct"],
+                        "categorical_features": ["env"],
+                        "categorical_levels": {"env": ["weak", "strong", "neutral"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+                report = train_and_report(
+                    dataset,
+                    root / "model",
+                    test_ratio=0.5,
+                    feature_manifest=manifest,
+                    feature_set="raw_numeric",
+                    num_leaves=5,
+                    min_data_in_leaf=120,
+                    num_boost_round=10,
+                    learning_rate=0.05,
+                    label_column="rank_label_3d",
+                    method="b2",
+                )
+
+        self.assertEqual(report["feature_count"], 4)
 
     def test_average_metric_dicts_skip_missing_values(self):
         average = average_metric_dicts(
@@ -176,6 +289,157 @@ class RankLgbmTest(unittest.TestCase):
 
         self.assertEqual(average["rank_ic_ret3"], 0.1)
         self.assertEqual(average["top3_ret3_ge_5_rate"], 30.0)
+
+    def test_train_report_does_not_include_baseline_comparisons(self):
+        class DummyModel:
+            def save_model(self, path: str) -> None:
+                Path(path).write_text("dummy model", encoding="utf-8")
+
+        def fake_train_model_result(train_rows, test_rows, **_kwargs):
+            def scored(rows):
+                return [
+                    {
+                        **row,
+                        "model_score": float(row.get("rank_label_3d") or 0),
+                    }
+                    for row in rows
+                ]
+
+            from scripts.ml.train_rank_lgbm import TrainedModelResult
+
+            return TrainedModelResult(
+                train_scored=scored(train_rows),
+                test_scored=scored(test_rows),
+                top_features=[{"feature": "close_to_zxdkx_pct", "importance": 1}],
+                feature_count=1,
+                model=DummyModel(),
+                feature_names=["close_to_zxdkx_pct"],
+                lightgbm_feature_names=["close_to_zxdkx_pct"],
+                category_levels={},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "close_to_zxdkx_pct"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "close_to_zxdkx_pct": "1"},
+                        {"date": "2026-01-01", "code": "b", "rank_label_3d": "1", "ret3": "-1", "ret5": "0", "close_to_zxdkx_pct": "2"},
+                        {"date": "2026-01-02", "code": "a", "rank_label_3d": "2", "ret3": "3", "ret5": "4", "close_to_zxdkx_pct": "3"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "close_to_zxdkx_pct": "4"},
+                        {"date": "2026-01-03", "code": "a", "rank_label_3d": "3", "ret3": "8", "ret5": "9", "close_to_zxdkx_pct": "5"},
+                        {"date": "2026-01-03", "code": "b", "rank_label_3d": "1", "ret3": "1", "ret5": "2", "close_to_zxdkx_pct": "6"},
+                    ]
+                )
+            output_dir = root / "model"
+
+            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+                report = train_and_report(
+                    dataset,
+                    output_dir,
+                    test_ratio=0.34,
+                    feature_set="raw_numeric",
+                    num_leaves=5,
+                    min_data_in_leaf=120,
+                    num_boost_round=10,
+                    learning_rate=0.05,
+                    rolling_folds=1,
+                    rolling_train_dates=2,
+                    rolling_test_dates=1,
+                    label_column="rank_label_3d",
+                    method="b2",
+                )
+
+            persisted = json.loads((output_dir / "lgbm_rank_report_raw_numeric.json").read_text(encoding="utf-8"))
+            markdown = (output_dir / "lgbm_rank_report_raw_numeric.md").read_text(encoding="utf-8").lower()
+
+        self.assertNotIn("baseline_test_window", report)
+        self.assertNotIn("baseline_test_avg", report["rolling_summary"])
+        self.assertNotIn("baseline_test_window", report["rolling_folds"][0])
+        self.assertNotIn("baseline", markdown)
+        self.assertNotIn("baseline_test_window", persisted)
+        self.assertNotIn("baseline_test_avg", persisted["rolling_summary"])
+
+    def test_train_and_report_writes_model_artifacts_when_rolling_is_enabled(self):
+        class DummyModel:
+            def save_model(self, path: str) -> None:
+                Path(path).write_text("dummy model", encoding="utf-8")
+
+        def fake_train_model_result(train_rows, test_rows, **_kwargs):
+            def scored(rows):
+                return [
+                    {
+                        **row,
+                        "model_score": float(row.get("rank_label_3d") or 0),
+                    }
+                    for row in rows
+                ]
+
+            from scripts.ml.train_rank_lgbm import TrainedModelResult
+
+            return TrainedModelResult(
+                train_scored=scored(train_rows),
+                test_scored=scored(test_rows),
+                top_features=[{"feature": "close_to_zxdkx_pct", "importance": 1}],
+                feature_count=1,
+                model=DummyModel(),
+                feature_names=["close_to_zxdkx_pct"],
+                lightgbm_feature_names=["close_to_zxdkx_pct"],
+                category_levels={"env": ["weak", "strong"]},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "code", "env", "rank_label_3d", "ret3", "ret5", "close_to_zxdkx_pct"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "env": "weak", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "close_to_zxdkx_pct": "1"},
+                        {"date": "2026-01-01", "code": "b", "env": "strong", "rank_label_3d": "1", "ret3": "-1", "ret5": "0", "close_to_zxdkx_pct": "2"},
+                        {"date": "2026-01-02", "code": "a", "env": "weak", "rank_label_3d": "2", "ret3": "3", "ret5": "4", "close_to_zxdkx_pct": "3"},
+                        {"date": "2026-01-02", "code": "b", "env": "strong", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "close_to_zxdkx_pct": "4"},
+                        {"date": "2026-01-03", "code": "a", "env": "weak", "rank_label_3d": "3", "ret3": "8", "ret5": "9", "close_to_zxdkx_pct": "5"},
+                        {"date": "2026-01-03", "code": "b", "env": "strong", "rank_label_3d": "1", "ret3": "1", "ret5": "2", "close_to_zxdkx_pct": "6"},
+                    ]
+                )
+            output_dir = root / "model"
+
+            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+                report = train_and_report(
+                    dataset,
+                    output_dir,
+                    test_ratio=0.34,
+                    feature_set="raw_numeric",
+                    num_leaves=5,
+                    min_data_in_leaf=120,
+                    num_boost_round=10,
+                    learning_rate=0.05,
+                    rolling_folds=1,
+                    rolling_train_dates=2,
+                    rolling_test_dates=1,
+                    label_column="rank_label_3d",
+                    method="b2",
+                )
+
+            self.assertEqual(report["feature_count"], 1)
+            self.assertTrue((output_dir / "feature_manifest.json").exists())
+            self.assertTrue((output_dir / "model.txt").exists())
+            metadata = json.loads((output_dir / "model_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["feature_names"], ["close_to_zxdkx_pct"])
+            self.assertEqual(metadata["numeric_columns"], ["close_to_zxdkx_pct"])
+            self.assertEqual(metadata["categorical_columns"], [])
+            self.assertEqual(metadata["label_column"], "rank_label_3d")
 
 
 if __name__ == "__main__":

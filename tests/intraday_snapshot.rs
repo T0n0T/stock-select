@@ -233,6 +233,7 @@ fn build_intraday_market_rows_replaces_existing_same_day_snapshot_rows() {
             low: 9.9,
             close: 10.1,
             vol: 100.0,
+            turnover_rate: Some(1.0),
         },
         MarketRow {
             ts_code: "000001.SZ".to_string(),
@@ -242,6 +243,7 @@ fn build_intraday_market_rows_replaces_existing_same_day_snapshot_rows() {
             low: 10.0,
             close: 10.2,
             vol: 200.0,
+            turnover_rate: Some(2.0),
         },
     ];
     let snapshot = normalize_rt_k_rows(

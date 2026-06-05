@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from scripts.ml.promote_lgbm_model import (
+    describe_current_model,
+    list_archived_models,
     promote_model,
     resolve_default_target_dir,
     rollback_model,
@@ -139,6 +141,33 @@ class LgbmModelPromotionTest(unittest.TestCase):
             self.assertEqual((target / "model.txt").read_text(encoding="utf-8"), "previous\n")
             self.assertTrue((target.parent / "archive" / "rollback-current-20260603T010203Z" / "model.txt").exists())
             self.assertEqual(summary["rollback_version"], "20260601T000000Z")
+
+    def test_describe_current_model_reads_active_target_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "runtime" / "models" / "b2"
+            write_candidate_model(target, report=passing_report())
+
+            summary = describe_current_model(target)
+
+            self.assertEqual(summary["mode"], "describe-current")
+            self.assertEqual(summary["validation"]["feature_count"], 3)
+            self.assertEqual(summary["validation"]["label_column"], "rank_label_3d")
+            self.assertEqual(summary["target"], str(target))
+
+    def test_list_archived_models_returns_newest_first_with_validation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "runtime" / "models" / "b2"
+            archive_root = target.parent / "archive"
+            old_a = archive_root / "20260601T000000Z"
+            old_b = archive_root / "20260602T000000Z"
+            write_candidate_model(old_a, report=passing_report())
+            write_candidate_model(old_b, report=passing_report())
+
+            rows = list_archived_models(target)
+
+            self.assertEqual([row["version"] for row in rows], ["20260602T000000Z", "20260601T000000Z"])
+            self.assertEqual(rows[0]["validation"]["feature_count"], 3)
+            self.assertEqual(rows[0]["validation"]["label_column"], "rank_label_3d")
 
 
 if __name__ == "__main__":

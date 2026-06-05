@@ -8,6 +8,9 @@ use serde_json::json;
 use crate::cache::{
     candidate_output_path, load_prepared_cache, write_prepared_cache, write_prepared_cache_for_mode,
 };
+use crate::factors::registry::{build_candidate_factor_rows, write_factor_artifact};
+use crate::factors::series::rolling_mean_series;
+use crate::factors::zx::zx_lines;
 use crate::intraday::{IntradaySnapshotProvider, build_intraday_market_rows, fetch_rt_k_snapshot};
 use crate::model::{MarketRow, Method, PreparedRow, ScreenResult};
 use crate::strategies::b2::run_b2_strategy;
@@ -48,6 +51,8 @@ pub struct ScreenRequest {
     pub recompute: bool,
     pub pool_source: PoolSource,
     pub pool_file: Option<PathBuf>,
+    pub export_factors: bool,
+    pub environment_state: Option<String>,
 }
 
 pub fn screen_window(pick_date: NaiveDate) -> (NaiveDate, NaiveDate) {
@@ -112,27 +117,29 @@ where
         }
     };
     let (candidates, stats) = run_b2_strategy(&pool, request.pick_date);
-    write_screen_result(
-        &request.runtime_root,
-        &ScreenResult {
-            mode: None,
-            method: request.method,
-            pick_date: request.pick_date,
-            trade_date: None,
-            fetched_at: None,
-            run_id: None,
-            source: None,
-            pool_source: request.pool_source.as_str().to_string(),
-            pool_file: resolved_pool_file
-                .as_ref()
-                .map(|path| path.to_string_lossy().to_string()),
-            screen_version: None,
-            candidates,
-            generated_at: Some("0".to_string()),
-            count: Some(stats.get("selected").copied().unwrap_or(0)),
-            stats,
-        },
-    )
+    let result = ScreenResult {
+        mode: None,
+        method: request.method,
+        pick_date: request.pick_date,
+        trade_date: None,
+        fetched_at: None,
+        run_id: None,
+        source: None,
+        pool_source: request.pool_source.as_str().to_string(),
+        pool_file: resolved_pool_file
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+        screen_version: None,
+        candidates,
+        generated_at: Some("0".to_string()),
+        count: Some(stats.get("selected").copied().unwrap_or(0)),
+        stats,
+    };
+    let output_path = write_screen_result(&request.runtime_root, &result)?;
+    if request.export_factors {
+        write_screen_factor_artifact(&request, &result.candidates, &pool, &output_path, false)?;
+    }
+    Ok(output_path)
 }
 
 pub fn run_intraday_screen_with_provider<P, F>(
@@ -225,7 +232,41 @@ where
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&output_path, serde_json::to_vec_pretty(&result)?)?;
+    if request.export_factors {
+        write_screen_factor_artifact(&request, &result.candidates, &pool, &output_path, true)?;
+    }
     Ok(output_path)
+}
+
+fn write_screen_factor_artifact(
+    request: &ScreenRequest,
+    candidates: &[crate::model::Candidate],
+    prepared_rows: &[PreparedRow],
+    candidate_artifact: &Path,
+    intraday: bool,
+) -> anyhow::Result<PathBuf> {
+    let artifact_key = screen_artifact_key(request.pick_date, intraday);
+    let rows = build_candidate_factor_rows(
+        candidates,
+        prepared_rows,
+        request.method,
+        request.environment_state.as_deref(),
+    );
+    write_factor_artifact(
+        &request.runtime_root,
+        request.method,
+        &artifact_key,
+        &rows,
+        Some(candidate_artifact),
+    )
+}
+
+fn screen_artifact_key(pick_date: NaiveDate, intraday: bool) -> String {
+    if intraday {
+        format!("{}.intraday", pick_date.format("%Y-%m-%d"))
+    } else {
+        pick_date.format("%Y-%m-%d").to_string()
+    }
 }
 
 fn load_and_prepare<F>(
@@ -269,6 +310,10 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
         let close = rows.iter().map(|row| row.close).collect::<Vec<_>>();
         let (k, d, j) = kdj(&high, &low, &close, 9);
         let (dif, dea, macd_hist) = macd(&close, 12, 26, 9);
+        let ma25 = rolling_mean_series(&close, 25, 25);
+        let ma60 = rolling_mean_series(&close, 60, 60);
+        let ma144 = rolling_mean_series(&close, 144, 144);
+        let (zxdq, zxdkx) = zx_lines(&close);
         for (idx, row) in rows.iter().enumerate() {
             prepared.push(PreparedRow {
                 ts_code: row.ts_code.clone(),
@@ -284,17 +329,18 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
                     .take(43)
                     .map(|row| ((row.open + row.close) / 2.0) * row.vol)
                     .sum(),
+                turnover_rate: row.turnover_rate,
                 k: k[idx],
                 d: d[idx],
                 j: j[idx],
-                zxdq: Some(row.close),
-                zxdkx: None,
+                zxdq: Some(zxdq[idx]),
+                zxdkx: zxdkx[idx],
                 dif: dif[idx],
                 dea: dea[idx],
                 macd_hist: macd_hist[idx],
-                ma25: Some(row.close),
-                ma60: Some(row.close - 1.0),
-                ma144: None,
+                ma25: ma25[idx],
+                ma60: ma60[idx],
+                ma144: ma144[idx],
                 chg_d: (idx > 0).then(|| (row.close - close[idx - 1]) / close[idx - 1] * 100.0),
                 weekly_ma_bull: false,
                 max_vol_not_bearish: true,

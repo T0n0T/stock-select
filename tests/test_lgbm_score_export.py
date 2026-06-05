@@ -71,7 +71,13 @@ class LgbmScoreExportTest(unittest.TestCase):
                 )
             feature_manifest = root / "feature_manifest.json"
             feature_manifest.write_text(
-                json.dumps({"numeric_features": ["close_to_zxdkx_pct"], "categorical_features": ["env"]}),
+                json.dumps(
+                    {
+                        "numeric_features": ["close_to_zxdkx_pct"],
+                        "categorical_features": ["env"],
+                        "categorical_levels": {"env": ["weak", "strong", "neutral"]},
+                    }
+                ),
                 encoding="utf-8",
             )
             artifact_dir = root / "model"
@@ -86,9 +92,9 @@ class LgbmScoreExportTest(unittest.TestCase):
                         "top_features": [{"feature": "close_to_zxdkx_pct", "importance": 1}],
                         "feature_count": 3,
                         "model": FakeModel(),
-                        "feature_names": ["close_to_zxdkx_pct", "env=weak", "env=strong"],
-                        "lightgbm_feature_names": ["close_to_zxdkx_pct", "env_weak", "env_strong"],
-                        "category_levels": {"env": ["weak", "strong"]},
+                        "feature_names": ["close_to_zxdkx_pct", "env=weak", "env=strong", "env=neutral"],
+                        "lightgbm_feature_names": ["close_to_zxdkx_pct", "env_weak", "env_strong", "env_neutral"],
+                        "category_levels": {"env": ["weak", "strong", "neutral"]},
                     },
                 )()
 
@@ -111,8 +117,12 @@ class LgbmScoreExportTest(unittest.TestCase):
 
             metadata = json.loads((artifact_dir / "model_metadata.json").read_text(encoding="utf-8"))
             self.assertTrue((artifact_dir / "model.txt").exists())
-            self.assertEqual(metadata["feature_names"], ["close_to_zxdkx_pct", "env=weak", "env=strong"])
-            self.assertEqual(metadata["categorical_levels"], {"env": ["weak", "strong"]})
+            self.assertEqual(
+                train_model_result.call_args.kwargs["fixed_categorical_levels"],
+                {"env": ["weak", "strong", "neutral"]},
+            )
+            self.assertEqual(metadata["feature_names"], ["close_to_zxdkx_pct", "env=weak", "env=strong", "env=neutral"])
+            self.assertEqual(metadata["categorical_levels"], {"env": ["weak", "strong", "neutral"]})
             self.assertEqual(metadata["label_column"], "rank_label_3d")
             self.assertEqual(summary["model_artifacts"]["model"], str(artifact_dir / "model.txt"))
 

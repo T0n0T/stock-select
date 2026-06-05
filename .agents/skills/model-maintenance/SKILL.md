@@ -5,12 +5,12 @@ description: Use when retraining, validating, exporting, promoting, rolling back
 
 # Model Maintenance
 
-本 skill 用于新 Rust CLI 仓库的模型维护。当前已落地的是 b2 LightGBM；训练维护脚本按 `--method` 组织，后续如接入 b1 模型或筛选维护流程，复用同一批脚本并按 method 增加配置章节。生产 `run/review` 仍只走 Rust，不接入 Python predict。
+本 skill 用于新 Rust CLI 仓库的模型维护。当前已落地的是 b2 LightGBM；训练维护脚本按 `--method` 组织，后续如接入其他方法或筛选维护流程，复用同一批脚本并按 method 增加配置章节。生产 `run/review` 仍只走 Rust，不接入 Python predict。
 
 ## 边界
 
 - 默认发布目标来自当前仓库 `.env` 的 `STOCK_SELECT_RUNTIME_ROOT`，发布到 `<runtime>/models/<method>/`。
-- dataset 默认从当前 `candidates/<date>.<method>.json` 构建，`--source select` 只用于回放线上 run 特征快照。
+- dataset 默认从当前 `candidates/<date>.<method>.json` 构建样本集合，但训练因子必须来自 Rust 生成的 `<runtime>/factors/<artifact_key>.<method>/factors.json`；`--source select` 只用于回放线上 run/display 样本上下文。
 - `diagnostics/ml/<method>/` 下的 dataset、score CSV、report 只用于训练、回测和维护，不进入 Rust 生产推理。
 - 不打印 `.env`、DSN、token 的具体值。
 
@@ -32,6 +32,15 @@ uv run scripts/ml/backfill_candidates.py \
   --start-date "$TRAIN_START_DATE" \
   --end-date "$TRAIN_END_DATE" \
   --workers 4
+```
+
+缺少 factor artifact 时，先为对应日期运行：
+
+```bash
+stock-select-rs screen \
+  --method "$METHOD" \
+  --pick-date <YYYY-MM-DD> \
+  --export-factors
 ```
 
 如需先确认会执行哪些日期：
@@ -74,9 +83,9 @@ uv run scripts/ml/train_rank_lgbm.py \
   --rolling-test-dates 40
 ```
 
-用户要求训练、重训或调参且没有明确要求“只跑一次”时，默认执行受限自迭代调参：先跑 baseline，再在小网格内最多 12 组 trial，逐个读取 report 比较 rolling 指标。样本不足、label 覆盖不足、关键指标明显劣化或连续多组没有改善时停止；选择候选后只做 export 和 promote dry-run，不自动发布。
+用户要求训练、重训或调参且没有明确要求“只跑一次”时，默认执行受限自迭代调参：在小网格内最多 12 组 trial，逐个读取 report 比较 rolling 指标。样本不足、label 覆盖不足、关键指标明显劣化或连续多组没有改善时停止；选择候选后只做 export 和 promote dry-run，不自动发布。
 
-训练结束必须向用户汇报模型效果，不只说“训练成功”。汇报至少包含 dataset 覆盖质量、最佳 trial 参数、rolling 平均指标、same-window baseline 对比、top features、是否建议发布、promote dry-run 结果和剩余风险；字段清单见 reference。
+训练结束必须向用户汇报模型效果，不只说“训练成功”。汇报至少包含 dataset 覆盖质量、每个 trial 的 rolling 指标、最佳 trial 参数、top features、是否建议发布、promote dry-run 结果和剩余风险；字段清单见 reference。
 
 导出 score CSV 和候选模型产物：
 
@@ -115,7 +124,7 @@ uv run scripts/ml/promote_lgbm_model.py \
 
 ```bash
 python -m unittest tests/test_candidate_backfill.py tests/test_rank_dataset.py tests/test_rank_lgbm.py tests/test_lgbm_score_export.py tests/test_lgbm_model_promotion.py
-python -m py_compile scripts/ml/backfill_candidates.py scripts/ml/build_rank_dataset.py scripts/ml/evaluate_rank_baseline.py scripts/ml/train_rank_lgbm.py scripts/ml/export_lgbm_scores.py scripts/ml/promote_lgbm_model.py
+python -m py_compile scripts/ml/backfill_candidates.py scripts/ml/build_rank_dataset.py scripts/ml/train_rank_lgbm.py scripts/ml/export_lgbm_scores.py scripts/ml/promote_lgbm_model.py
 cargo fmt --check
 cargo test --quiet
 ```

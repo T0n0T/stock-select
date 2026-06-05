@@ -86,6 +86,15 @@ struct ScreenArgs {
 
     #[arg(long, default_value = "turnover-top")]
     pool_source: PoolSource,
+
+    #[arg(long)]
+    export_factors: bool,
+
+    #[arg(long)]
+    environment_state: Option<String>,
+
+    #[arg(long)]
+    environment_reason: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -284,6 +293,21 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
     let pick_date = resolve_pick_date(args.pick_date, args.method.intraday, "screen")?;
     let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
     let dsn = resolve_config_value(args.dsn.as_deref(), "POSTGRES_DSN").unwrap_or_default();
+    let export_environment_state = if args.export_factors {
+        Some(
+            resolve_command_environment(
+                &runtime_root,
+                pick_date,
+                args.method.intraday,
+                dsn.as_str(),
+                args.environment_state.clone(),
+                args.environment_reason.clone(),
+            )?
+            .state,
+        )
+    } else {
+        None
+    };
     let request = ScreenRequest {
         method: args.method.method,
         pick_date,
@@ -296,6 +320,8 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
             args.pool_source
         },
         pool_file: args.pool_file,
+        export_factors: args.export_factors,
+        environment_state: export_environment_state,
     };
     let path = if args.method.intraday {
         let token = resolve_config_value(args.tushare_token.as_deref(), "TUSHARE_TOKEN")
@@ -348,6 +374,8 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
                     args.pool_source
                 },
                 pool_file: args.pool_file,
+                export_factors: false,
+                environment_state: None,
             };
             let path = if args.method.intraday {
                 let token = resolve_config_value(args.tushare_token.as_deref(), "TUSHARE_TOKEN")

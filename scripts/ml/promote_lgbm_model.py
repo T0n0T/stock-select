@@ -256,6 +256,36 @@ def write_model_card(target_dir: Path, summary: dict[str, Any]) -> None:
     card_path.write_text(json.dumps(build_model_card(summary), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def describe_current_model(target_dir: Path | None = None) -> dict[str, Any]:
+    target_dir = target_dir or resolve_default_target_dir()
+    validation = validate_model_artifacts(target_dir)
+    return {
+        "mode": "describe-current",
+        "source": str(target_dir),
+        "target": str(target_dir),
+        "validation": validation,
+    }
+
+
+def list_archived_models(target_dir: Path | None = None) -> list[dict[str, Any]]:
+    target_dir = target_dir or resolve_default_target_dir()
+    archive_root = target_dir.parent / "archive"
+    if not archive_root.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted((item for item in archive_root.iterdir() if item.is_dir()), key=lambda item: item.name, reverse=True):
+        rows.append(
+            {
+                "mode": "list-archives",
+                "version": path.name,
+                "source": str(path),
+                "target": str(target_dir),
+                "validation": validate_model_artifacts(path),
+            }
+        )
+    return rows
+
+
 def promote_model(
     candidate_dir: Path,
     target_dir: Path | None = None,
@@ -364,6 +394,23 @@ def print_chinese_summary(summary: dict[str, Any]) -> None:
             print(f"rolling: {key}={rolling_summary[key]}")
 
 
+def print_archive_list(rows: Sequence[dict[str, Any]]) -> None:
+    print("LightGBM 归档模型列表")
+    if not rows:
+        print("无归档模型")
+        return
+    for row in rows:
+        validation = row.get("validation") or {}
+        print(f"version: {row.get('version')}")
+        print(f"source: {row.get('source')}")
+        print(f"label: {validation.get('label_column')}")
+        print(f"feature_count: {validation.get('feature_count')}")
+        print(f"train_window: {validation.get('train_window')}")
+        print(f"score_window: {validation.get('score_window')}")
+        print(f"decision: {validation.get('decision')}")
+        print("")
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Promote or rollback LightGBM model artifacts for the Rust default runtime.")
     parser.add_argument("--method", default=DEFAULT_METHOD)
@@ -373,6 +420,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--report", type=Path, help="训练/rolling report JSON；未传时从候选目录自动查找")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--require-report", action="store_true", help="要求发布前必须有 rolling report")
+    parser.add_argument("--describe-current", action="store_true", help="打印当前激活模型摘要")
+    parser.add_argument("--list-archives", action="store_true", help="列出可切换的归档模型")
     parser.add_argument("--rollback", help="回滚到 runtime archive 下的指定版本")
     return parser.parse_args(argv)
 
@@ -381,11 +430,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         target_dir = args.target_dir or resolve_default_target_dir(args.runtime_root, method=args.method)
-        if args.rollback:
+        actions = int(bool(args.describe_current)) + int(bool(args.list_archives)) + int(bool(args.rollback)) + int(bool(args.candidate_dir))
+        if actions != 1:
+            raise ValueError("必须且只能选择一种动作：--describe-current、--list-archives、--rollback 或 --candidate-dir")
+        if args.describe_current:
+            summary = describe_current_model(target_dir)
+            print_chinese_summary(summary)
+        elif args.list_archives:
+            rows = list_archived_models(target_dir)
+            print_archive_list(rows)
+        elif args.rollback:
             summary = rollback_model(target_dir, args.rollback, dry_run=args.dry_run)
+            print_chinese_summary(summary)
         else:
-            if args.candidate_dir is None:
-                raise ValueError("发布模型必须传 --candidate-dir")
             summary = promote_model(
                 args.candidate_dir,
                 target_dir,
@@ -393,7 +450,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 require_report=args.require_report,
             )
-        print_chinese_summary(summary)
+            print_chinese_summary(summary)
         return 0
     except ValueError as exc:
         print(f"错误: {exc}", file=sys.stderr)

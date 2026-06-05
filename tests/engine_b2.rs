@@ -83,11 +83,11 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
     let value = json!({
         "code": "000001.SZ",
         "history": [
-            {"open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0, "volume": 100.0, "turnover_n": 10.0, "ma25": 96.0, "zxdkx": 90.0, "macd_hist": 0.5, "dif": 1.0, "dea": 0.5},
-            {"open": 101.0, "high": 103.0, "low": 100.0, "close": 102.0, "volume": 110.0, "turnover_n": 11.0, "ma25": 97.0, "zxdkx": 91.0, "macd_hist": 0.8, "dif": 1.2, "dea": 0.6},
-            {"open": 103.0, "high": 105.0, "low": 102.0, "close": 104.0, "volume": 120.0, "turnover_n": 12.0, "ma25": 98.0, "zxdkx": 92.0, "macd_hist": 1.0, "dif": 1.5, "dea": 0.7},
-            {"open": 107.0, "high": 109.0, "low": 106.0, "close": 108.0, "volume": 130.0, "turnover_n": 13.0, "ma25": 99.0, "zxdkx": 94.0, "macd_hist": 1.0, "dif": 2.0, "dea": 1.0},
-            {"open": 109.0, "high": 115.0, "low": 105.0, "close": 110.0, "volume": 150.0, "turnover_n": 15.0, "ma25": 100.0, "zxdkx": 95.0, "macd_hist": 2.0, "dif": 3.0, "dea": 1.0}
+            {"open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0, "volume": 100.0, "turnover_n": 10.0, "turnover_rate": 1.0, "ma25": 96.0, "zxdkx": 90.0, "macd_hist": 0.5, "dif": 1.0, "dea": 0.5},
+            {"open": 101.0, "high": 103.0, "low": 100.0, "close": 102.0, "volume": 110.0, "turnover_n": 11.0, "turnover_rate": 2.0, "ma25": 97.0, "zxdkx": 91.0, "macd_hist": 0.8, "dif": 1.2, "dea": 0.6},
+            {"open": 103.0, "high": 105.0, "low": 102.0, "close": 104.0, "volume": 120.0, "turnover_n": 12.0, "turnover_rate": 3.0, "ma25": 98.0, "zxdkx": 92.0, "macd_hist": 1.0, "dif": 1.5, "dea": 0.7},
+            {"open": 107.0, "high": 109.0, "low": 106.0, "close": 108.0, "volume": 130.0, "turnover_n": 13.0, "turnover_rate": 4.0, "ma25": 99.0, "zxdkx": 94.0, "macd_hist": 1.0, "dif": 2.0, "dea": 1.0},
+            {"open": 109.0, "high": 115.0, "low": 105.0, "close": 110.0, "volume": 150.0, "turnover_n": 15.0, "turnover_rate": 10.0, "ma25": 100.0, "zxdkx": 95.0, "macd_hist": 2.0, "dif": 3.0, "dea": 1.0}
         ]
     });
     let candidate =
@@ -111,7 +111,7 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
     );
     assert_eq!(
         row.factors.get("turnover_to_ma5_ratio"),
-        Some(&FactorValue::Number(1.2295))
+        Some(&FactorValue::Number(2.5))
     );
     assert_eq!(
         row.factors.get("latest_bar_position_pct"),
@@ -120,14 +120,6 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
     assert_eq!(
         row.factors.get("pct_chg_1d"),
         Some(&FactorValue::Number(1.8519))
-    );
-    assert_eq!(
-        row.factors.get("price_up_1d_flag"),
-        Some(&FactorValue::Number(1.0))
-    );
-    assert_eq!(
-        row.factors.get("volume_up_1d_flag"),
-        Some(&FactorValue::Number(1.0))
     );
     assert_eq!(
         row.factors.get("macd_hist_to_close_pct"),
@@ -141,8 +133,104 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
         row.diagnostics
             .get("history_factor_count")
             .and_then(|value| value.as_u64()),
-        Some(40)
+        Some(54)
     );
+}
+
+#[test]
+fn candidate_payload_factor_provider_includes_legacy_semantic_factors() {
+    let history = (0..130)
+        .map(|offset| {
+            let close = 100.0 + offset as f64 * 0.3;
+            let trade_date =
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Duration::days(offset);
+            json!({
+                "trade_date": trade_date.format("%Y-%m-%d").to_string(),
+                "open": close - 0.2,
+                "high": close + 0.5,
+                "low": close - 0.5,
+                "close": close,
+                "volume": 1000.0 + offset as f64 * 5.0,
+                "turnover_n": 2.0
+            })
+        })
+        .collect::<Vec<_>>();
+    let value = json!({"code": "000001.SZ", "env": "strong", "signal": "B2", "history": history});
+    let candidate =
+        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+
+    let row = CandidatePayloadFactorProvider
+        .factor_row(&candidate)
+        .unwrap();
+
+    assert_eq!(
+        row.factors.get("signal_type"),
+        Some(&FactorValue::Category("trend_start".to_string()))
+    );
+    assert_eq!(
+        row.factors.get("daily_macd_phase_type"),
+        Some(&FactorValue::Category("rising".to_string()))
+    );
+    assert_eq!(
+        row.factors.get("weekly_macd_phase_type"),
+        Some(&FactorValue::Category("rising".to_string()))
+    );
+    assert_eq!(
+        row.factors.get("midline_state"),
+        Some(&FactorValue::Category("above_hold".to_string()))
+    );
+    assert!(matches!(
+        row.factors.get("daily_macd_wave_index"),
+        Some(FactorValue::Number(value)) if *value >= 0.0
+    ));
+    assert!(matches!(
+        row.factors.get("daily_macd_wave_stage"),
+        Some(FactorValue::Category(value)) if !value.is_empty()
+    ));
+    assert!(matches!(
+        row.factors.get("weekly_macd_wave_index"),
+        Some(FactorValue::Number(value)) if *value >= 0.0
+    ));
+    assert!(matches!(
+        row.factors.get("weekly_macd_wave_stage"),
+        Some(FactorValue::Category(value)) if !value.is_empty()
+    ));
+    assert!(matches!(
+        row.factors.get("weekly_daily_combo_type"),
+        Some(FactorValue::Category(value)) if value.contains('|')
+    ));
+    assert!(matches!(
+        row.factors.get("daily_rising_initial_flag"),
+        Some(FactorValue::Bool(_)) | Some(FactorValue::Number(_))
+    ));
+    assert!(matches!(
+        row.factors.get("macd_top_divergence_flag"),
+        Some(FactorValue::Bool(_)) | Some(FactorValue::Number(_))
+    ));
+    assert!(matches!(
+        row.factors.get("trend_structure"),
+        Some(FactorValue::Number(value)) if *value >= 1.0
+    ));
+    assert!(matches!(
+        row.factors.get("price_position"),
+        Some(FactorValue::Number(value)) if *value >= 1.0
+    ));
+    assert!(matches!(
+        row.factors.get("volume_behavior"),
+        Some(FactorValue::Number(value)) if *value >= 1.0
+    ));
+    assert!(matches!(
+        row.factors.get("previous_abnormal_move"),
+        Some(FactorValue::Number(value)) if *value >= 1.0
+    ));
+    assert!(matches!(
+        row.factors.get("macd_phase"),
+        Some(FactorValue::Number(value)) if *value >= 1.0
+    ));
+    assert!(matches!(
+        row.factors.get("price_vs_90d_mid"),
+        Some(FactorValue::Number(_))
+    ));
 }
 
 #[test]
@@ -276,7 +364,7 @@ fn candidate_payload_factor_provider_derives_ma_and_zx_lines_from_history_close(
     );
     assert_eq!(
         row.factors.get("macd_hist_positive_flag"),
-        Some(&FactorValue::Number(1.0))
+        Some(&FactorValue::Bool(true))
     );
 }
 

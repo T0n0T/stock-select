@@ -34,6 +34,22 @@ STOCK_SELECT_RUNTIME_ROOT=<runtime>
 
 未传 `--target-dir` 时发布到 `<runtime>/models/<method>/`。没有 `.env` runtime 且未传 `--runtime-root` 时应失败，避免误发布到旧默认目录。
 
+统一入口 shell 脚本：
+
+```bash
+scripts/model_maintenance.sh status
+scripts/model_maintenance.sh archives
+scripts/model_maintenance.sh promote <candidate_dir>
+scripts/model_maintenance.sh dry-run-promote <candidate_dir>
+scripts/model_maintenance.sh switch <archive_version>
+```
+
+其中：
+
+- `status` 读取当前激活模型摘要
+- `archives` 列出 `<runtime>/models/archive/` 下可切换的历史模型
+- `switch` 是 `promote_lgbm_model.py --rollback <version>` 的用户友好封装
+
 ## 历史 Candidate 补齐
 
 重训默认入口是 EOD candidate artifact。训练窗口必须在本次训练开始时显式确定；默认取截至 `TRAIN_END_DATE` 的近一年 EOD 数据，得到 `TRAIN_START_DATE`，不要依赖脚本内置日期。若训练窗口缺少 `<runtime>/candidates/<date>.<method>.json`，先运行：
@@ -69,17 +85,23 @@ stock-select-rs screen --method <method> --pick-date <date> --runtime-root <runt
 <runtime>/candidates/<date>.<method>.json
 ```
 
-脚本用候选代码作为训练样本，用数据库行情重算 context/raw factors，并补前向收益 label。候选 JSON 中已有的 `factors`、`signal`、`signal_type`、`env` 等非空字段会保留并覆盖研究侧重算字段。
+脚本用候选代码作为训练样本，用数据库行情只补前向收益 label；训练因子统一读取 Rust 生成的 runtime factor artifact：
+
+```text
+<runtime>/factors/<artifact_key>.<method>/factors.json
+<runtime>/factors/<artifact_key>.<method>/manifest.json
+```
+
+`candidate` 和 `select` source 都从这个目录装载因子，避免 Python 重复实现 MA、ZX、MACD、异常放量等自实现因子。缺少 factor artifact 时不要硬训，先运行 `stock-select-rs screen --method <method> --pick-date <date> --export-factors` 补齐；`run` 也会在 select 前写同一份 runtime factor artifact。
 
 如果要回放线上实际 `run` 时的特征快照，可显式传 `--source select`，读取：
 
 ```text
 <runtime>/select/<date>.<method>/run.json
 <runtime>/select/<date>.<method>/display.json
-<runtime>/select/<date>.<method>/factors.json
 ```
 
-`select` 模式用于 diagnostics，不是重训默认入口。`model_score/model_rank` 不会作为训练特征。
+`select` 模式用于 diagnostics，不是重训默认入口。`model_score/model_rank` 不会作为训练特征；`select/<key>/factors.json` 只保留为兼容副本，不是 dataset 的主因子来源。
 
 大区间重训示例：
 
@@ -103,14 +125,7 @@ uv run scripts/ml/build_rank_dataset.py \
 
 默认规则：用户要求训练、重训或调参时，若没有明确说“只跑一次”，就执行受限自迭代调参。不要做无上限搜索，不要自动发布。
 
-首轮 baseline 使用：
-
-```text
-feature_set=raw_numeric
-label_column=rank_label_3d
-```
-
-再小网格比较：
+小网格比较：
 
 ```text
 feature_set: raw_numeric, raw_plus_signal, raw_plus_signal_macd
@@ -151,6 +166,18 @@ uv run scripts/ml/train_rank_lgbm.py \
   --rolling-test-dates 40
 ```
 
+`train_rank_lgbm.py` 主训练路径应直接在 `output_dir` 写出：
+
+```text
+feature_manifest.json
+model.txt
+model_metadata.json
+lgbm_rank_report*.json
+lgbm_rank_report*.md
+```
+
+这样 rolling trial 目录可以直接拿去做 `promote_lgbm_model.py --dry-run`；`export_lgbm_scores.py` 只在需要补特定 score window 或额外 score CSV 时再跑。
+
 训练 report 至少检查：
 
 - `rank_ic_ret3`
@@ -172,7 +199,7 @@ uv run scripts/ml/train_rank_lgbm.py \
 - `missing_price_row_count` 异常，说明候选与行情数据不一致。
 - rolling fold 数不足，或 walk-forward split 无法构建。
 - 连续 4 组 trial 没有改善。
-- top3 非正收益比例明显偏高，或模型平均表现不优于 same-window baseline。
+- top3 非正收益比例明显偏高，或 rolling 指标整体不可接受。
 
 短窗口试训、样本日期少或 `top3_ret3_le_0_rate` 明显偏高时，不发布；只把 report、score CSV 和模型候选保留在 `diagnostics/ml/<method>/` 用于定位。
 
@@ -188,6 +215,15 @@ uv run scripts/ml/promote_lgbm_model.py \
   --candidate-dir "diagnostics/ml/$METHOD/tuning/<winning-trial>" \
   --dry-run \
   --require-report
+```
+
+也可以直接走 shell 入口：
+
+```bash
+scripts/model_maintenance.sh dry-run-promote "diagnostics/ml/$METHOD/tuning/<winning-trial>"
+scripts/model_maintenance.sh promote "diagnostics/ml/$METHOD/tuning/<winning-trial>"
+scripts/model_maintenance.sh archives
+scripts/model_maintenance.sh switch <archive-version>
 ```
 
 只有用户明确确认发布时，才去掉 `--dry-run`。
@@ -229,10 +265,6 @@ rolling_summary:
   test_avg.top3_ret5_ge_5_rate
   test_avg.rank_ic_ret5
 
-baseline_compare:
-  baseline_test_avg.pass_watch_then_current_score_desc
-  model_vs_baseline_delta for top3_ret3_ge_5_rate, top3_ret3_le_0_rate, rank_ic_ret3
-
 diagnostics:
   top_features
   by_env weak/neutral/strong if present
@@ -266,10 +298,6 @@ Rolling 平均：
 - rank_ic_ret3=...
 - top3_ret5_ge_5_rate=...
 - rank_ic_ret5=...
-
-Baseline 对比：
-- same-window baseline=...
-- delta=...
 
 解释与风险：
 - top_features=...

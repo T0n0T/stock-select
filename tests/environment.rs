@@ -174,6 +174,7 @@ fn index_history(
                 low: close,
                 close,
                 vol: 1_000_000.0,
+                turnover_rate: None,
             }
         })
         .collect()

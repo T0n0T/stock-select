@@ -57,7 +57,11 @@ fn decodes_old_prepared_cache_binary_row() {
             .unwrap()
             .num_days_from_ce(),
     );
-    for value in [10.0, 11.0, 9.0, 10.5, 1000.0, 12.0, 50.0, 40.0, 60.0] {
+    for value in [10.0, 11.0, 9.0, 10.5, 1000.0, 12.0] {
+        write_f64(&mut bytes, value);
+    }
+    write_option_f64(&mut bytes, Some(1.5));
+    for value in [50.0, 40.0, 60.0] {
         write_f64(&mut bytes, value);
     }
     write_option_f64(&mut bytes, Some(10.2));
@@ -82,6 +86,7 @@ fn decodes_old_prepared_cache_binary_row() {
         NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()
     );
     assert_eq!(rows[0].close, 10.5);
+    assert_eq!(rows[0].turnover_rate, Some(1.5));
     assert_eq!(rows[0].zxdq, Some(10.2));
     assert_eq!(rows[0].zxdkx, Some(10.1));
     assert_eq!(rows[0].ma25, Some(10.0));
@@ -113,7 +118,7 @@ fn load_prepared_cache_requires_matching_metadata() {
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 2,
+            "schema_version": 3,
             "row_count": 1,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -230,6 +235,7 @@ fn builds_history_payload_for_candidate_code_from_prepared_rows() {
     assert_eq!(history[1]["close"], 10.5);
     assert_eq!(history[1]["volume"], 1000.0);
     assert_eq!(history[1]["turnover_n"], 12.0);
+    assert_eq!(history[1]["turnover_rate"], 1.5);
     assert_eq!(history[1]["ma25"], 10.0);
     assert_eq!(history[1]["zxdq"], 10.2);
     assert_eq!(history[1]["zxdkx"], 10.1);
@@ -246,6 +252,7 @@ fn prepared_row(code: &str, trade_date: NaiveDate, close: f64) -> PreparedRow {
         close,
         volume: 1000.0,
         turnover_n: 12.0,
+        turnover_rate: Some(1.5),
         k: 50.0,
         d: 40.0,
         j: 60.0,
@@ -278,7 +285,11 @@ fn prepared_cache_bytes() -> Vec<u8> {
             .unwrap()
             .num_days_from_ce(),
     );
-    for value in [10.0, 11.0, 9.0, 10.5, 1000.0, 12.0, 50.0, 40.0, 60.0] {
+    for value in [10.0, 11.0, 9.0, 10.5, 1000.0, 12.0] {
+        write_f64(&mut bytes, value);
+    }
+    write_option_f64(&mut bytes, Some(1.5));
+    for value in [50.0, 40.0, 60.0] {
         write_f64(&mut bytes, value);
     }
     write_option_f64(&mut bytes, Some(10.2));
