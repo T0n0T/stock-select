@@ -5,7 +5,6 @@
 # 功能：
 #   1. cargo install 构建并安装二进制 stock-select-rs
 #   2. 将 .agents/skills 下的技能同步到 ~/.agents/skills
-#   3. 将项目 .env 复制到 runtime/ 目录供生产使用
 #
 set -euo pipefail
 
