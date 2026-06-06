@@ -219,6 +219,28 @@ fn load_intraday_prepared_cache_accepts_previous_trade_date_window() {
 }
 
 #[test]
+fn b3_can_read_shared_prepared_cache_written_for_b2() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 3).unwrap();
+    write_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        &[prepared_row("000001.SZ", pick_date, 12.0)],
+    )
+    .unwrap();
+
+    let rows = load_prepared_cache(root.path(), Method::B3, pick_date, start_date, pick_date)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(rows[0].close, 12.0);
+}
+
+#[test]
 fn builds_history_payload_for_candidate_code_from_prepared_rows() {
     let date1 = NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
     let date2 = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();

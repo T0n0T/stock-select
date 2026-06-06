@@ -1,8 +1,8 @@
 use chrono::{Duration, NaiveDate};
 use stock_select::cache::load_prepared_cache;
-use stock_select::factors::registry::build_candidate_factor_rows;
+use stock_select::factors::registry::{build_candidate_factor_rows, factor_profile_for_method};
 use stock_select::factors::types::FactorValue;
-use stock_select::model::{Candidate, MarketRow, Method};
+use stock_select::model::{Candidate, MarketRow, Method, PreparedRow};
 use stock_select::screening::{PoolSource, ScreenRequest, run_screen_with_loader};
 
 #[test]
@@ -94,6 +94,37 @@ fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
 }
 
 #[test]
+fn b3_uses_method_registered_factor_profile_matching_b2_for_now() {
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let prepared = vec![prepared_row("000001.SZ", pick_date, 10.0, 1000.0)];
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date,
+        close: 10.0,
+        turnover_n: prepared[0].turnover_n,
+        signal: Some("B3".to_string()),
+        yellow_b1: None,
+    };
+
+    let b2_profile = factor_profile_for_method(Method::B2);
+    let b3_profile = factor_profile_for_method(Method::B3);
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B3, None);
+
+    assert_ne!(b2_profile.bundles, b3_profile.bundles);
+    assert_eq!(rows[0].method, Method::B3);
+    assert_eq!(rows[0].diagnostics["factor_profile"], "b3");
+    assert_eq!(
+        rows[0].diagnostics["factor_bundles"],
+        serde_json::json!(["raw_common", "b3_semantic"])
+    );
+    assert!(rows[0].factors.contains_key("trend_structure"));
+    assert_eq!(
+        rows[0].factors.get("signal"),
+        Some(&FactorValue::Category("B3".to_string()))
+    );
+}
+
+#[test]
 fn turnover_top_pool_uses_real_ma25_ma60_trend_filter() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
@@ -145,5 +176,37 @@ fn market_row(ts_code: &str, trade_date: NaiveDate, close: f64, vol: f64) -> Mar
         close,
         vol,
         turnover_rate: Some(vol / 100.0),
+    }
+}
+
+fn prepared_row(ts_code: &str, trade_date: NaiveDate, close: f64, volume: f64) -> PreparedRow {
+    PreparedRow {
+        ts_code: ts_code.to_string(),
+        trade_date,
+        open: close - 0.5,
+        high: close + 1.0,
+        low: close - 2.0,
+        close,
+        volume,
+        turnover_n: 12.0,
+        turnover_rate: Some(volume / 100.0),
+        k: 50.0,
+        d: 40.0,
+        j: 60.0,
+        zxdq: Some(close - 1.0),
+        zxdkx: Some(close - 1.5),
+        dif: 0.3,
+        dea: 0.2,
+        macd_hist: 0.1,
+        ma25: Some(close - 2.0),
+        ma60: Some(close - 3.0),
+        ma144: Some(close - 4.0),
+        chg_d: Some(1.0),
+        weekly_ma_bull: true,
+        max_vol_not_bearish: true,
+        v_shrink: true,
+        safe_mode: true,
+        lt_filter: true,
+        yellow_b1: false,
     }
 }

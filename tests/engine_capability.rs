@@ -34,6 +34,23 @@ fn b1_does_not_support_model_run_until_model_exists() {
 }
 
 #[test]
+fn b3_supports_screen_without_model_run() {
+    let capability = method_capability(Method::B3);
+    assert_eq!(capability.method, Method::B3);
+    assert!(capability.screen);
+    assert!(capability.chart);
+    assert!(capability.factor_extraction);
+    assert!(!capability.model_inference);
+    assert!(!capability.llm_review);
+    assert!(!capability.review_list);
+    assert!(!capability.run);
+    assert!(capability.model_family.is_none());
+
+    let err = ensure_model_run_supported(Method::B3).unwrap_err();
+    assert!(err.to_string().contains("b3 model review is not available"));
+}
+
+#[test]
 fn capability_struct_is_copyable_for_cli_checks() {
     let capability: SelectionCapability = method_capability(Method::B2);
     let copy = capability;

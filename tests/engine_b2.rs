@@ -4,7 +4,7 @@ use stock_select::engine::b2::{
     B2FactorProvider, CandidatePayloadFactorProvider, artifact_key_for_run,
     candidate_from_legacy_json,
 };
-use stock_select::engine::types::FactorValue;
+use stock_select::engine::types::{FactorValue, SelectionCandidate};
 use stock_select::model::Method;
 
 #[test]
@@ -76,6 +76,31 @@ fn candidate_payload_factor_provider_extracts_screen_and_raw_factor_fields() {
     );
     assert!(!row.factors.contains_key("model_score"));
     assert_eq!(row.diagnostics["factor_source"], "candidate_payload");
+}
+
+#[test]
+fn candidate_payload_factor_provider_uses_candidate_method_factor_profile() {
+    let candidate = SelectionCandidate {
+        code: "000001.SZ".to_string(),
+        name: None,
+        method: Method::B3,
+        pick_date: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        close: Some(10.5),
+        turnover_n: Some(1200.0),
+        signal: Some("B3".to_string()),
+        raw_payload: json!({"code": "000001.SZ", "signal": "B3"}),
+    };
+
+    let row = CandidatePayloadFactorProvider
+        .factor_row(&candidate)
+        .unwrap();
+
+    assert_eq!(row.method, Method::B3);
+    assert_eq!(row.diagnostics["factor_profile"], "b3");
+    assert_eq!(
+        row.diagnostics["factor_bundles"],
+        serde_json::json!(["raw_common", "b3_semantic"])
+    );
 }
 
 #[test]

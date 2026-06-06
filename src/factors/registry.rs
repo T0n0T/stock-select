@@ -7,7 +7,7 @@ use crate::factors::abnormal_volume::push_abnormal_volume_event_factors;
 use crate::factors::ma::push_ma_support_factors;
 use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
 use crate::factors::price_position::{push_price_position_factors, push_range_compression};
-use crate::factors::semantic::push_b2_semantic_factors;
+use crate::factors::semantic::{push_b2_semantic_factors, push_b3_semantic_factors};
 use crate::factors::series::{FactorList, mean_tail, rolling_mean_series};
 use crate::factors::types::{FactorInputRow, FactorRow, FactorValue};
 use crate::factors::volume::push_volume_turnover_factors;
@@ -17,11 +17,88 @@ use crate::model::{Candidate, Method, PreparedRow};
 pub const FACTOR_ARTIFACT_VERSION: u32 = 1;
 pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v2";
 
+const B2_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B2Semantic];
+const B3_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B3Semantic];
+const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactorBundle {
+    RawCommon,
+    B2Semantic,
+    B3Semantic,
+}
+
+impl FactorBundle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RawCommon => "raw_common",
+            Self::B2Semantic => "b2_semantic",
+            Self::B3Semantic => "b3_semantic",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactorProfile {
+    pub method: Method,
+    pub name: &'static str,
+    pub bundles: &'static [FactorBundle],
+}
+
+impl FactorProfile {
+    pub fn bundle_names(self) -> Vec<&'static str> {
+        self.bundles.iter().map(|bundle| bundle.as_str()).collect()
+    }
+}
+
+pub fn factor_profile_for_method(method: Method) -> FactorProfile {
+    match method {
+        Method::B2 => FactorProfile {
+            method,
+            name: "b2",
+            bundles: B2_FACTOR_BUNDLES,
+        },
+        Method::B3 => FactorProfile {
+            method,
+            name: "b3",
+            bundles: B3_FACTOR_BUNDLES,
+        },
+        _ => FactorProfile {
+            method,
+            name: method.as_str(),
+            bundles: RAW_FACTOR_BUNDLES,
+        },
+    }
+}
+
 pub fn history_raw_factors(history: &[FactorInputRow]) -> FactorList {
     history_factor_fields(history, None, None)
 }
 
 pub fn history_factor_fields(
+    history: &[FactorInputRow],
+    signal: Option<&str>,
+    environment_state: Option<&str>,
+) -> FactorList {
+    history_factor_fields_for_method(Method::B2, history, signal, environment_state)
+}
+
+pub fn history_factor_fields_for_method(
+    method: Method,
+    history: &[FactorInputRow],
+    signal: Option<&str>,
+    environment_state: Option<&str>,
+) -> FactorList {
+    history_factor_fields_for_profile(
+        factor_profile_for_method(method),
+        history,
+        signal,
+        environment_state,
+    )
+}
+
+fn history_factor_fields_for_profile(
+    profile: FactorProfile,
     history: &[FactorInputRow],
     signal: Option<&str>,
     environment_state: Option<&str>,
@@ -90,58 +167,84 @@ pub fn history_factor_fields(
     };
 
     let mut factors = Vec::new();
-    push_ma_support_factors(
-        &mut factors,
-        latest_close,
-        latest_low,
-        latest_ma25,
-        latest_zxdkx,
-        &ma25_values,
-    );
-    push_zx_pullback_factors(
-        &mut factors,
-        latest_close,
-        latest_ma25,
-        latest_zxdkx,
-        previous_zxdkx,
-        &zxdkx_values,
-        &zxdq_values,
-    );
-    push_price_position_factors(
-        &mut factors,
-        &close,
-        &high,
-        &low,
-        latest_close,
-        latest_low,
-        latest_high,
-        previous.map(|row| row.close),
-        avg_close5,
-    );
-    push_volume_turnover_factors(
-        &mut factors,
-        latest_volume,
-        previous_volume,
-        avg_volume5,
-        avg_volume20,
-        latest_turnover_rate,
-        avg_turnover5,
-    );
-    push_macd_numeric_factors(
-        &mut factors,
-        &dif,
-        &dea,
-        &macd_hist,
-        &derived_dif,
-        &derived_dea,
-        &derived_macd_hist,
-        latest_close,
-    );
-    push_range_compression(&mut factors, &high, &low, latest_close, 20);
-    push_range_compression(&mut factors, &high, &low, latest_close, 40);
-    push_abnormal_volume_event_factors(&mut factors, &open, &close, &volume, latest_close);
-    push_b2_semantic_factors(&mut factors, history, signal, environment_state);
+    for bundle in profile.bundles {
+        match bundle {
+            FactorBundle::RawCommon => {
+                push_ma_support_factors(
+                    &mut factors,
+                    latest_close,
+                    latest_low,
+                    latest_ma25,
+                    latest_zxdkx,
+                    &ma25_values,
+                );
+                push_zx_pullback_factors(
+                    &mut factors,
+                    latest_close,
+                    latest_ma25,
+                    latest_zxdkx,
+                    previous_zxdkx,
+                    &zxdkx_values,
+                    &zxdq_values,
+                );
+                push_price_position_factors(
+                    &mut factors,
+                    &close,
+                    &high,
+                    &low,
+                    latest_close,
+                    latest_low,
+                    latest_high,
+                    previous.map(|row| row.close),
+                    avg_close5,
+                );
+                push_volume_turnover_factors(
+                    &mut factors,
+                    latest_volume,
+                    previous_volume,
+                    avg_volume5,
+                    avg_volume20,
+                    latest_turnover_rate,
+                    avg_turnover5,
+                );
+                push_macd_numeric_factors(
+                    &mut factors,
+                    &dif,
+                    &dea,
+                    &macd_hist,
+                    &derived_dif,
+                    &derived_dea,
+                    &derived_macd_hist,
+                    latest_close,
+                );
+                push_range_compression(&mut factors, &high, &low, latest_close, 20);
+                push_range_compression(&mut factors, &high, &low, latest_close, 40);
+                push_abnormal_volume_event_factors(
+                    &mut factors,
+                    &open,
+                    &close,
+                    &volume,
+                    latest_close,
+                );
+            }
+            FactorBundle::B2Semantic => {
+                push_b2_semantic_factors(&mut factors, history, signal, environment_state);
+            }
+            FactorBundle::B3Semantic => {
+                push_b3_semantic_factors(&mut factors, history, signal, environment_state);
+            }
+        }
+    }
     factors
+}
+
+pub fn record_factor_profile_diagnostics(row: &mut FactorRow, profile: FactorProfile) {
+    row.diagnostics.insert(
+        "factor_profile".to_string(),
+        Value::String(profile.name.to_string()),
+    );
+    row.diagnostics
+        .insert("factor_bundles".to_string(), json!(profile.bundle_names()));
 }
 
 pub fn factor_artifact_dir(runtime_root: &Path, method: Method, artifact_key: &str) -> PathBuf {
@@ -182,6 +285,7 @@ pub fn build_candidate_factor_rows(
     candidates
         .iter()
         .map(|candidate| {
+            let profile = factor_profile_for_method(method);
             let mut row = FactorRow::new(candidate.code.clone(), method);
             row.factors
                 .insert("close".to_string(), FactorValue::Number(candidate.close));
@@ -201,12 +305,17 @@ pub fn build_candidate_factor_rows(
                 .get(candidate.code.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let history_factors =
-                history_factor_fields(&history, candidate.signal.as_deref(), environment_state);
+            let history_factors = history_factor_fields_for_profile(
+                profile,
+                &history,
+                candidate.signal.as_deref(),
+                environment_state,
+            );
             let history_factor_count = history_factors.len();
             for (key, value) in history_factors {
                 row.factors.insert(key, value);
             }
+            record_factor_profile_diagnostics(&mut row, profile);
             row.diagnostics.insert(
                 "factor_source".to_string(),
                 Value::String("rust_factor_library".to_string()),

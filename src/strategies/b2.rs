@@ -2,16 +2,21 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 
+use crate::indicators::{barslast, count_dynamic, ema, rolling_mean, rolling_sum};
 use crate::model::{Candidate, PreparedRow};
+use crate::strategies::{StrategyOutput, group_by_symbol, sort_candidates};
 
-pub fn run_b2_strategy(
-    rows: &[PreparedRow],
-    pick_date: NaiveDate,
-) -> (Vec<Candidate>, BTreeMap<String, usize>) {
-    let mut grouped = BTreeMap::<&str, Vec<&PreparedRow>>::new();
-    for row in rows {
-        grouped.entry(row.ts_code.as_str()).or_default().push(row);
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct B2SignalSeries {
+    pub(crate) raw_b2: Vec<bool>,
+    pub(crate) raw_b2_count: Vec<f64>,
+    pub(crate) cur_b2: Vec<bool>,
+    pub(crate) tr_ok: Vec<bool>,
+    pub(crate) above_lt: Vec<bool>,
+}
+
+pub fn run_b2_strategy(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
+    let grouped = group_by_symbol(rows);
     let mut stats = BTreeMap::from([
         ("total_symbols".to_string(), grouped.len()),
         ("eligible".to_string(), 0),
@@ -22,8 +27,8 @@ pub fn run_b2_strategy(
         ("selected_b2".to_string(), 0),
     ]);
     let mut candidates = Vec::new();
-    for (code, mut history) in grouped {
-        history.sort_by_key(|row| row.trade_date);
+
+    for (code, history) in grouped {
         let Some((idx, row)) = history
             .iter()
             .enumerate()
@@ -39,9 +44,9 @@ pub fn run_b2_strategy(
                 .or_default() += 1;
             continue;
         }
-        let selected = raw_b2_basic_condition(&history, idx)
-            && raw_b2_count_in_current_j_up_cycle(&history, idx) == 1;
-        if selected {
+        let active_history = &history[..=idx];
+        let signals = build_b2_signal_series(active_history);
+        if signals.cur_b2[idx] {
             candidates.push(Candidate {
                 code: code.to_string(),
                 pick_date,
@@ -56,81 +61,127 @@ pub fn run_b2_strategy(
             *stats.entry("fail_no_signal".to_string()).or_default() += 1;
         }
     }
-    candidates.sort_by(|left, right| left.code.cmp(&right.code));
-    (candidates, stats)
+    sort_candidates(&mut candidates);
+    StrategyOutput { candidates, stats }
 }
 
-fn raw_b2_basic_condition(history: &[&PreparedRow], idx: usize) -> bool {
-    if idx < 2 {
-        return false;
-    }
-    let row = history[idx];
-    let prev = history[idx - 1];
-    let prev2 = history[idx - 2];
-    let pct = (row.close - prev.close) / prev.close * 100.0;
-    let prev_pct = (prev.close - prev2.close) / prev2.close * 100.0;
-    let up_shadow = row.high - row.close;
-    let ef_body = row.close - row.open.min(prev.close);
-    pct >= 3.7
-        && row.volume > prev.volume
-        && up_shadow <= ef_body
-        && row.close > row.open
-        && prev_pct < 3.7
-        && prev.j < 39.0
-        && row.j > prev.j
-        && above_long_term_reference(history, idx)
-        && b2_trend_ok(history, idx)
-}
-
-fn above_long_term_reference(history: &[&PreparedRow], idx: usize) -> bool {
-    if idx < 114 {
-        return true;
-    }
-    let Some(ma14) = rolling_close_mean_at(history, idx, 14) else {
-        return false;
-    };
-    let Some(ma28) = rolling_close_mean_at(history, idx, 28) else {
-        return false;
-    };
-    let Some(ma57) = rolling_close_mean_at(history, idx, 57) else {
-        return false;
-    };
-    let Some(ma114) = rolling_close_mean_at(history, idx, 114) else {
-        return false;
-    };
-    let lt_r = (ma14 + ma28 + ma57 + ma114) / 4.0;
-    history[idx].close > lt_r
-}
-
-fn rolling_close_mean_at(history: &[&PreparedRow], idx: usize, window: usize) -> Option<f64> {
-    let start = idx.checked_add(1)?.checked_sub(window)?;
-    let sum = history[start..=idx]
-        .iter()
-        .map(|row| row.close)
-        .sum::<f64>();
-    Some(sum / window as f64)
-}
-
-fn b2_trend_ok(history: &[&PreparedRow], idx: usize) -> bool {
-    if idx < 114 {
-        return true;
-    }
+pub(crate) fn build_b2_signal_series(history: &[&PreparedRow]) -> B2SignalSeries {
+    let len = history.len();
     let close = history.iter().map(|row| row.close).collect::<Vec<_>>();
-    let st_l = ema_values(&ema_values(&close, 10), 10);
-    let lt_r = long_term_reference_series(history);
-    let flip_count_30 = long_term_direction_flip_count(&lt_r, idx, 30);
-    let cross_days = days_since_st_crossed_above_lt(&st_l, &lt_r, idx);
-    let Some(lt) = lt_r[idx] else {
-        return false;
-    };
-    b2_trend_ok_decision(
-        cross_days.is_some_and(|days| days <= 30.0),
-        cross_days.unwrap_or(f64::INFINITY),
-        st_l[idx],
-        lt,
-        flip_count_30,
-        history[idx].close,
-    )
+    let st_l = ema(&ema(&close, 10), 10);
+    let ma14 = rolling_mean(&close, 14, 14);
+    let ma28 = rolling_mean(&close, 28, 28);
+    let ma57 = rolling_mean(&close, 57, 57);
+    let ma114 = rolling_mean(&close, 114, 114);
+    let lt_r = (0..len)
+        .map(|idx| match (ma14[idx], ma28[idx], ma57[idx], ma114[idx]) {
+            (Some(a), Some(b), Some(c), Some(d)) if idx + 1 > 114 => Some((a + b + c + d) / 4.0),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let cross_up = (0..len)
+        .map(|idx| {
+            idx > 0
+                && matches!(
+                    (lt_r[idx], lt_r[idx - 1]),
+                    (Some(cur), Some(prev)) if st_l[idx] > cur && st_l[idx - 1] <= prev
+                )
+        })
+        .collect::<Vec<_>>();
+    let c_days = barslast(&cross_up);
+    let mut lt_dir = vec![1.0; len];
+    for idx in 0..len {
+        let is_new = idx < 114;
+        if !is_new {
+            lt_dir[idx] = if idx > 0
+                && lt_r[idx].is_some()
+                && lt_r[idx - 1].is_some()
+                && lt_r[idx].unwrap() >= lt_r[idx - 1].unwrap() * 0.9999
+            {
+                1.0
+            } else {
+                -1.0
+            };
+        }
+    }
+    let flip_values = (0..len)
+        .map(|idx| {
+            if idx > 0 && lt_dir[idx] != lt_dir[idx - 1] {
+                1.0
+            } else {
+                0.0
+            }
+        })
+        .collect::<Vec<_>>();
+    let flip_c = rolling_sum(&flip_values, 30, 1);
+    let tr_ok = (0..len)
+        .map(|idx| {
+            let is_new = idx < 114;
+            if is_new {
+                return true;
+            }
+            let Some(lt) = lt_r[idx] else {
+                return false;
+            };
+            b2_trend_ok_decision(
+                c_days[idx] >= 0.0 && c_days[idx] <= 30.0,
+                c_days[idx],
+                st_l[idx],
+                lt,
+                flip_c[idx].unwrap_or(0.0),
+                history[idx].close,
+            )
+        })
+        .collect::<Vec<_>>();
+    let above_lt = (0..len)
+        .map(|idx| {
+            let is_new = idx < 114;
+            is_new || lt_r[idx].is_some_and(|lt| history[idx].close > lt)
+        })
+        .collect::<Vec<_>>();
+    let mut raw_b2 = vec![false; len];
+    for idx in 2..len {
+        let row = history[idx];
+        let prev = history[idx - 1];
+        let prev2 = history[idx - 2];
+        let pct = (row.close - prev.close) / prev.close * 100.0;
+        let prev_pct = (prev.close - prev2.close) / prev2.close * 100.0;
+        let pre_ok = prev_pct < 3.7 && prev.j < 39.0;
+        let up_shadow = row.high - row.close;
+        let ef_body = row.close - row.open.min(prev.close);
+        let k_shape = up_shadow <= ef_body && row.close > row.open;
+        let j_up = row.j > prev.j;
+        raw_b2[idx] = pct >= 3.7
+            && row.volume > prev.volume
+            && k_shape
+            && pre_ok
+            && j_up
+            && tr_ok[idx]
+            && above_lt[idx];
+    }
+    let j_up = (0..len)
+        .map(|idx| idx > 0 && history[idx].j > history[idx - 1].j)
+        .collect::<Vec<_>>();
+    let j_turn_up = (0..len)
+        .map(|idx| idx > 1 && j_up[idx] && !j_up[idx - 1])
+        .collect::<Vec<_>>();
+    let up_days = barslast(&j_turn_up);
+    let raw_b2_count = count_dynamic(
+        &raw_b2,
+        &up_days.iter().map(|value| value + 1.0).collect::<Vec<_>>(),
+    );
+    let cur_b2 = raw_b2
+        .iter()
+        .zip(raw_b2_count.iter())
+        .map(|(raw, count)| *raw && *count == 1.0)
+        .collect::<Vec<_>>();
+    B2SignalSeries {
+        raw_b2,
+        raw_b2_count,
+        cur_b2,
+        tr_ok,
+        above_lt,
+    }
 }
 
 fn b2_trend_ok_decision(
@@ -148,105 +199,41 @@ fn b2_trend_ok_decision(
     honeymoon || breakaway || (st_l > lt_r && close > lt_r && lt_stable && support)
 }
 
-fn long_term_reference_series(history: &[&PreparedRow]) -> Vec<Option<f64>> {
-    (0..history.len())
-        .map(|idx| {
-            if idx + 1 <= 114 {
-                return None;
-            }
-            Some(
-                [14, 28, 57, 114]
-                    .into_iter()
-                    .map(|window| rolling_close_mean_at(history, idx, window))
-                    .collect::<Option<Vec<_>>>()?
-                    .into_iter()
-                    .sum::<f64>()
-                    / 4.0,
-            )
-        })
-        .collect()
-}
-
-fn long_term_direction_flip_count(lt_r: &[Option<f64>], idx: usize, window: usize) -> f64 {
-    let start = idx.saturating_add(1).saturating_sub(window);
-    (start..=idx)
-        .filter(|current| {
-            *current > 0
-                && long_term_direction(lt_r, *current)
-                    != long_term_direction(lt_r, current.saturating_sub(1))
-        })
-        .count() as f64
-}
-
-fn long_term_direction(lt_r: &[Option<f64>], idx: usize) -> f64 {
-    if idx < 114 {
-        return 1.0;
-    }
-    match (
-        lt_r.get(idx).copied().flatten(),
-        lt_r.get(idx - 1).copied().flatten(),
-    ) {
-        (Some(current), Some(previous)) if current >= previous * 0.9999 => 1.0,
-        _ => -1.0,
-    }
-}
-
-fn days_since_st_crossed_above_lt(st_l: &[f64], lt_r: &[Option<f64>], idx: usize) -> Option<f64> {
-    (1..=idx)
-        .rev()
-        .find(|current| {
-            matches!(
-                (lt_r[*current], lt_r[current - 1]),
-                (Some(current_lt), Some(previous_lt))
-                    if st_l[*current] > current_lt && st_l[current - 1] <= previous_lt
-            )
-        })
-        .map(|last_cross| (idx - last_cross) as f64)
-}
-
-fn ema_values(values: &[f64], span: usize) -> Vec<f64> {
-    let alpha = 2.0 / (span as f64 + 1.0);
-    let beta = 1.0 - alpha;
-    let mut out = Vec::with_capacity(values.len());
-    let mut prev = f64::NAN;
-    let mut missing_after_valid = 0_i32;
-    for value in values {
-        if value.is_nan() {
-            out.push(prev);
-            if !prev.is_nan() {
-                missing_after_valid += 1;
-            }
-        } else if prev.is_nan() {
-            prev = *value;
-            missing_after_valid = 0;
-            out.push(prev);
-        } else {
-            let effective_alpha = alpha / (alpha + beta.powi(missing_after_valid + 1));
-            let current = effective_alpha * *value + (1.0 - effective_alpha) * prev;
-            out.push(current);
-            prev = current;
-            missing_after_valid = 0;
-        }
-    }
-    out
-}
-
-fn raw_b2_count_in_current_j_up_cycle(history: &[&PreparedRow], idx: usize) -> usize {
-    let start = (2..=idx)
-        .rev()
-        .find(|candidate_idx| {
-            history[*candidate_idx].j > history[*candidate_idx - 1].j
-                && history[*candidate_idx - 1].j <= history[*candidate_idx - 2].j
-        })
-        .unwrap_or(0);
-    (start..=idx)
-        .filter(|candidate_idx| raw_b2_basic_condition(history, *candidate_idx))
-        .count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(day: u32, close: f64, volume: f64, j: f64) -> PreparedRow {
+        PreparedRow {
+            ts_code: "000001.SZ".to_string(),
+            trade_date: NaiveDate::from_ymd_opt(2026, 5, day).unwrap(),
+            open: close - 0.8,
+            high: close,
+            low: close - 1.0,
+            close,
+            volume,
+            turnover_n: 1000.0 + day as f64,
+            turnover_rate: None,
+            k: 20.0,
+            d: 20.0,
+            j,
+            zxdq: Some(10.5),
+            zxdkx: Some(10.0),
+            dif: 0.1,
+            dea: 0.0,
+            macd_hist: 0.1,
+            ma25: Some(10.0),
+            ma60: Some(9.0),
+            ma144: Some(8.0),
+            chg_d: Some(1.0),
+            weekly_ma_bull: true,
+            max_vol_not_bearish: true,
+            v_shrink: true,
+            safe_mode: true,
+            lt_filter: true,
+            yellow_b1: false,
+        }
+    }
 
     #[test]
     fn b2_trend_decision_rejects_unstable_non_breakaway_trend() {
@@ -258,5 +245,42 @@ mod tests {
         assert!(b2_trend_ok_decision(true, 10.0, 101.0, 100.0, 9.0, 101.0,));
         assert!(b2_trend_ok_decision(false, 40.0, 104.0, 100.0, 9.0, 90.0,));
         assert!(b2_trend_ok_decision(false, 40.0, 101.0, 100.0, 2.0, 101.0,));
+    }
+
+    #[test]
+    fn b2_strategy_returns_structured_output_with_b2_only_stats() {
+        let pick = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
+        let rows = vec![
+            row(1, 10.0, 100.0, 30.0),
+            row(2, 10.1, 90.0, 35.0),
+            row(3, 10.6, 120.0, 45.0),
+        ];
+
+        let output = run_b2_strategy(&rows, pick);
+
+        assert_eq!(output.candidates.len(), 1);
+        assert_eq!(output.candidates[0].signal.as_deref(), Some("B2"));
+        assert_eq!(output.stats["selected"], 1);
+        assert_eq!(output.stats["selected_b2"], 1);
+        assert!(!output.stats.contains_key("selected_b3"));
+        assert!(!output.stats.contains_key("selected_b3_plus"));
+    }
+
+    #[test]
+    fn b2_signal_series_keeps_only_first_raw_b2_in_j_up_cycle() {
+        let rows = vec![
+            row(1, 10.0, 1000.0, 30.0),
+            row(2, 10.1, 1000.0, 32.0),
+            row(3, 10.5, 1300.0, 35.0),
+            row(4, 10.6, 1100.0, 36.0),
+            row(5, 11.0, 1400.0, 38.0),
+        ];
+        let history = rows.iter().collect::<Vec<_>>();
+
+        let signals = build_b2_signal_series(&history);
+
+        assert_eq!(signals.raw_b2, vec![false, false, true, false, true]);
+        assert_eq!(signals.raw_b2_count[4], 2.0);
+        assert_eq!(signals.cur_b2, vec![false, false, true, false, false]);
     }
 }

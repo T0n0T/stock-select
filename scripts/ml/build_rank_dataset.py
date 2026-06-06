@@ -46,6 +46,7 @@ B2_REVIEW_COLUMNS = [
     "weekly_macd_wave_stage",
     "weekly_daily_combo_type",
 ]
+B3_REVIEW_COLUMNS = list(B2_REVIEW_COLUMNS)
 CONTEXT_COLUMNS = [
     "price_vs_90d_high",
     "price_vs_90d_low",
@@ -98,6 +99,7 @@ RAW_FACTOR_COLUMNS = [
     "macd_hist_slope_3d_to_close_pct",
     "macd_hist_positive_flag",
 ]
+B3_RAW_FACTOR_COLUMNS = list(RAW_FACTOR_COLUMNS)
 LABEL_COLUMNS = [
     "ret3",
     "ret5",
@@ -108,7 +110,40 @@ LABEL_COLUMNS = [
     "rank_label_3d",
     "rank_label_5d",
 ]
-DATASET_COLUMNS = IDENTITY_COLUMNS + REVIEW_COLUMNS + B2_REVIEW_COLUMNS + CONTEXT_COLUMNS + RAW_FACTOR_COLUMNS + LABEL_COLUMNS
+METHOD_REVIEW_COLUMNS = {
+    "b2": B2_REVIEW_COLUMNS,
+    "b3": B3_REVIEW_COLUMNS,
+}
+METHOD_RAW_FACTOR_COLUMNS = {
+    "b2": RAW_FACTOR_COLUMNS,
+    "b3": B3_RAW_FACTOR_COLUMNS,
+}
+
+
+def review_columns_for_method(method: str) -> list[str]:
+    return list(METHOD_REVIEW_COLUMNS.get(method, B2_REVIEW_COLUMNS))
+
+
+def raw_factor_columns_for_method(method: str) -> list[str]:
+    return list(METHOD_RAW_FACTOR_COLUMNS.get(method, RAW_FACTOR_COLUMNS))
+
+
+def dataset_columns_for_method(method: str) -> list[str]:
+    return (
+        IDENTITY_COLUMNS
+        + REVIEW_COLUMNS
+        + review_columns_for_method(method)
+        + CONTEXT_COLUMNS
+        + raw_factor_columns_for_method(method)
+        + LABEL_COLUMNS
+    )
+
+
+def dataset_column_set_for_method(method: str) -> set[str]:
+    return set(dataset_columns_for_method(method))
+
+
+DATASET_COLUMNS = dataset_columns_for_method(DEFAULT_METHOD)
 DATASET_COLUMN_SET = set(DATASET_COLUMNS)
 
 
@@ -295,9 +330,10 @@ def load_factor_artifact_rows(runtime_root: Path, *, method: str, artifact_key: 
     return factors_by_code, warnings
 
 
-def merge_factor_artifact_values(row: dict[str, Any], factors: dict[str, Any]) -> None:
+def merge_factor_artifact_values(row: dict[str, Any], factors: dict[str, Any], *, method: str = DEFAULT_METHOD) -> None:
+    dataset_column_set = dataset_column_set_for_method(method)
     for key, value in factors.items():
-        if key in LABEL_COLUMNS or key not in DATASET_COLUMN_SET:
+        if key in LABEL_COLUMNS or key not in dataset_column_set:
             continue
         row[key] = json_factor_value(value)
     if normalize_env(row.get("env")) == "unknown" and normalize_env(factors.get("env")) != "unknown":
@@ -312,7 +348,9 @@ def extract_selection_row(
     env: str,
     factors: dict[str, Any],
 ) -> dict[str, Any]:
-    row = {column: "" for column in DATASET_COLUMNS}
+    dataset_columns = dataset_columns_for_method(method)
+    dataset_column_set = set(dataset_columns)
+    row = {column: "" for column in dataset_columns}
     risk_flags = display.get("llm_risk_flags")
     if isinstance(risk_flags, list):
         risk_flags_text = ",".join(str(value) for value in risk_flags)
@@ -332,7 +370,7 @@ def extract_selection_row(
         }
     )
     for key, value in factors.items():
-        if key in DATASET_COLUMN_SET:
+        if key in dataset_column_set:
             row[key] = json_factor_value(value)
     return row
 
@@ -399,7 +437,9 @@ def candidate_files(runtime_root: Path, method: str, start_date: str, end_date: 
 
 
 def extract_candidate_row(candidate: dict[str, Any], *, pick_date: str, method: str, env: str = "unknown") -> dict[str, Any]:
-    row = {column: "" for column in DATASET_COLUMNS}
+    dataset_columns = dataset_columns_for_method(method)
+    dataset_column_set = set(dataset_columns)
+    row = {column: "" for column in dataset_columns}
     row.update(
         {
             "date": str(candidate.get("pick_date") or pick_date),
@@ -413,10 +453,10 @@ def extract_candidate_row(candidate: dict[str, Any], *, pick_date: str, method: 
     factors = candidate.get("factors")
     if isinstance(factors, dict):
         for key, value in factors.items():
-            if key in DATASET_COLUMN_SET:
+            if key in dataset_column_set:
                 row[key] = json_factor_value(value)
     for key, value in candidate.items():
-        if key in DATASET_COLUMN_SET and format_csv_value(value) != "":
+        if key in dataset_column_set and format_csv_value(value) != "":
             row[key] = json_factor_value(value)
     return row
 
@@ -449,7 +489,11 @@ def load_candidate_rows(runtime_root: Path, *, method: str, start_date: str, end
             if not isinstance(candidate, dict):
                 continue
             row = extract_candidate_row(candidate, pick_date=pick_date, method=method, env=env)
-            merge_factor_artifact_values(row, factor_by_code.get(str(row.get("code") or ""), {}))
+            merge_factor_artifact_values(
+                row,
+                factor_by_code.get(str(row.get("code") or ""), {}),
+                method=method,
+            )
             if row["code"]:
                 rows.append(row)
     return rows, warnings
@@ -550,14 +594,18 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
 def build_dataset_rows(
     selection_rows: Sequence[dict[str, Any]],
     price_rows_by_symbol: dict[str, list[dict[str, Any]]],
+    *,
+    method: str = DEFAULT_METHOD,
 ) -> list[dict[str, Any]]:
+    dataset_columns = dataset_columns_for_method(method)
+    dataset_column_set = set(dataset_columns)
     rows: list[dict[str, Any]] = []
     for selection_row in selection_rows:
-        row = {column: "" for column in DATASET_COLUMNS}
-        row.update({key: value for key, value in selection_row.items() if key in DATASET_COLUMN_SET})
+        row = {column: "" for column in dataset_columns}
+        row.update({key: value for key, value in selection_row.items() if key in dataset_column_set})
         symbol_rows = price_rows_by_symbol.get(str(row.get("code")), [])
         for key, value in selection_row.items():
-            if key in DATASET_COLUMN_SET and key not in LABEL_COLUMNS and format_csv_value(value) != "":
+            if key in dataset_column_set and key not in LABEL_COLUMNS and format_csv_value(value) != "":
                 row[key] = value
         row.update(compute_forward_labels(symbol_rows, str(row.get("date"))))
         rows.append(row)
@@ -611,12 +659,13 @@ def write_dataset(
     warnings: Sequence[str],
     source: str,
 ) -> None:
+    dataset_columns = dataset_columns_for_method(method)
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "rank_dataset.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS, extrasaction="ignore")
+        writer = csv.DictWriter(handle, fieldnames=dataset_columns, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            writer.writerow({column: format_csv_value(row.get(column)) for column in DATASET_COLUMNS})
+            writer.writerow({column: format_csv_value(row.get(column)) for column in dataset_columns})
     (output_dir / "rank_dataset_summary.json").write_text(
         json.dumps(
             dataset_summary(
@@ -676,7 +725,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()
     prices = fetch_price_rows(dsn, symbols, query_start, query_end)
-    rows = build_dataset_rows(training_input_rows, prices)
+    rows = build_dataset_rows(training_input_rows, prices, method=args.method)
     write_dataset(
         rows,
         output_dir,

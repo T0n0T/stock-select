@@ -122,7 +122,12 @@ fn build_metadata(
     PreparedCacheMetadata {
         artifact_version: PREPARED_CACHE_ARTIFACT_VERSION,
         method: method.as_str().to_string(),
-        shared_methods: vec!["b1".to_string(), "b2".to_string(), "dribull".to_string()],
+        shared_methods: vec![
+            "b1".to_string(),
+            "b2".to_string(),
+            "b3".to_string(),
+            "dribull".to_string(),
+        ],
         pick_date,
         start_date,
         end_date,

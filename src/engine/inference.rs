@@ -45,7 +45,7 @@ pub struct ResolvedMethodModelArtifacts {
 pub fn default_model_dir(method: Method) -> Option<&'static str> {
     match method {
         Method::B2 => Some("models/b2"),
-        Method::B1 | Method::Dribull => None,
+        Method::B1 | Method::B3 | Method::Dribull => None,
     }
 }
 

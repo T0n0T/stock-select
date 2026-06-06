@@ -145,11 +145,21 @@ def rolling_walk_forward_splits(
     return result
 
 
-def select_feature_columns(columns: Sequence[str], *, feature_set: str = "all") -> tuple[list[str], list[str]]:
+def raw_numeric_columns_for_method(method: str = DEFAULT_METHOD) -> set[str]:
+    return set(rank_dataset_schema.raw_factor_columns_for_method(method))
+
+
+def select_feature_columns(
+    columns: Sequence[str],
+    *,
+    feature_set: str = "all",
+    method: str = DEFAULT_METHOD,
+) -> tuple[list[str], list[str]]:
     if feature_set not in FEATURE_SETS:
         raise ValueError(f"unsupported feature_set: {feature_set}")
     numeric: list[str] = []
     categorical: list[str] = []
+    raw_numeric_columns = raw_numeric_columns_for_method(method)
     if feature_set == "raw_numeric":
         allowed_categorical: set[str] = set()
     elif feature_set == "raw_plus_signal":
@@ -166,7 +176,7 @@ def select_feature_columns(columns: Sequence[str], *, feature_set: str = "all") 
             continue
         if column in allowed_categorical:
             categorical.append(column)
-        elif column in RAW_NUMERIC_COLUMNS or column in LEGACY_CONTEXT_NUMERIC_COLUMNS:
+        elif column in raw_numeric_columns or column in LEGACY_CONTEXT_NUMERIC_COLUMNS:
             numeric.append(column)
     return numeric, categorical
 
@@ -175,11 +185,13 @@ def load_feature_manifest_with_levels(
     path: Path,
     *,
     available_columns: set[str],
+    method: str = DEFAULT_METHOD,
 ) -> tuple[list[str], list[str], dict[str, list[str]]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("feature manifest must be a JSON object")
     excluded = set(payload.get("excluded_features") or []) | IDENTITY_COLUMNS | LABEL_COLUMNS | NON_FEATURE_COLUMNS
+    raw_numeric_columns = raw_numeric_columns_for_method(method)
 
     def clean(values: Any, *, allowed_columns: set[str]) -> list[str]:
         if not isinstance(values, list):
@@ -196,7 +208,7 @@ def load_feature_manifest_with_levels(
                 result.append(column)
         return result
 
-    numeric = clean(payload.get("numeric_features"), allowed_columns=RAW_NUMERIC_COLUMNS)
+    numeric = clean(payload.get("numeric_features"), allowed_columns=raw_numeric_columns)
     categorical = clean(payload.get("categorical_features"), allowed_columns=CATEGORICAL_COLUMNS)
     fixed_levels: dict[str, list[str]] = {}
     raw_levels = payload.get("categorical_levels")
@@ -215,10 +227,16 @@ def load_feature_manifest_with_levels(
     return numeric, categorical, fixed_levels
 
 
-def load_feature_manifest(path: Path, *, available_columns: set[str]) -> tuple[list[str], list[str]]:
+def load_feature_manifest(
+    path: Path,
+    *,
+    available_columns: set[str],
+    method: str = DEFAULT_METHOD,
+) -> tuple[list[str], list[str]]:
     numeric, categorical, _fixed_levels = load_feature_manifest_with_levels(
         path,
         available_columns=available_columns,
+        method=method,
     )
     return numeric, categorical
 
@@ -757,9 +775,14 @@ def train_and_report(
         numeric_columns, categorical_columns, fixed_categorical_levels = load_feature_manifest_with_levels(
             feature_manifest,
             available_columns=set(rows[0].keys()),
+            method=method,
         )
     else:
-        numeric_columns, categorical_columns = select_feature_columns(rows[0].keys(), feature_set=feature_set)
+        numeric_columns, categorical_columns = select_feature_columns(
+            rows[0].keys(),
+            feature_set=feature_set,
+            method=method,
+        )
         fixed_categorical_levels = {}
 
     if train_mode == "overall":

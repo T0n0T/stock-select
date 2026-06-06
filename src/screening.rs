@@ -9,11 +9,12 @@ use crate::cache::{
     candidate_output_path, load_prepared_cache, write_prepared_cache, write_prepared_cache_for_mode,
 };
 use crate::factors::registry::{build_candidate_factor_rows, write_factor_artifact};
-use crate::factors::series::rolling_mean_series;
-use crate::factors::zx::zx_lines;
+use crate::indicators::{kdj, macd, rolling_mean, rolling_sum, zx_lines};
 use crate::intraday::{IntradaySnapshotProvider, build_intraday_market_rows, fetch_rt_k_snapshot};
 use crate::model::{MarketRow, Method, PreparedRow, ScreenResult};
+use crate::strategies::StrategyOutput;
 use crate::strategies::b2::run_b2_strategy;
+use crate::strategies::b3::run_b3_strategy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolSource {
@@ -75,9 +76,7 @@ pub fn run_screen_with_loader<F>(request: ScreenRequest, loader: F) -> anyhow::R
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
-    if request.method != Method::B2 {
-        anyhow::bail!("{} screen is not implemented", request.method.as_str());
-    }
+    ensure_screen_supported(request.method)?;
     let (start_date, end_date) = screen_window(request.pick_date);
     let prepared = if request.recompute {
         load_and_prepare(&request, start_date, end_date, loader)?
@@ -116,7 +115,8 @@ where
             )
         }
     };
-    let (candidates, stats) = run_b2_strategy(&pool, request.pick_date);
+    let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
+    let count = strategy_output.stats.get("selected").copied().unwrap_or(0);
     let result = ScreenResult {
         mode: None,
         method: request.method,
@@ -130,10 +130,10 @@ where
             .as_ref()
             .map(|path| path.to_string_lossy().to_string()),
         screen_version: None,
-        candidates,
+        candidates: strategy_output.candidates,
         generated_at: Some("0".to_string()),
-        count: Some(stats.get("selected").copied().unwrap_or(0)),
-        stats,
+        count: Some(count),
+        stats: strategy_output.stats,
     };
     let output_path = write_screen_result(&request.runtime_root, &result)?;
     if request.export_factors {
@@ -173,9 +173,7 @@ where
     Prev: FnOnce(&str, NaiveDate) -> anyhow::Result<NaiveDate>,
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
-    if request.method != Method::B2 {
-        anyhow::bail!("{} screen is not implemented", request.method.as_str());
-    }
+    ensure_screen_supported(request.method)?;
     let previous_trade_date = previous_trade_date_loader(&request.dsn, request.pick_date)?;
     let start_date = previous_trade_date - Duration::days(366);
     let snapshot = fetch_rt_k_snapshot(provider, request.pick_date, fallback_trade_time)?;
@@ -207,7 +205,8 @@ where
             )
         }
     };
-    let (candidates, stats) = run_b2_strategy(&pool, request.pick_date);
+    let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
+    let count = strategy_output.stats.get("selected").copied().unwrap_or(0);
     let result = ScreenResult {
         mode: Some("intraday_snapshot".to_string()),
         method: request.method,
@@ -221,10 +220,10 @@ where
             .as_ref()
             .map(|path| path.to_string_lossy().to_string()),
         screen_version: None,
-        candidates,
+        candidates: strategy_output.candidates,
         generated_at: Some("0".to_string()),
-        count: Some(stats.get("selected").copied().unwrap_or(0)),
-        stats,
+        count: Some(count),
+        stats: strategy_output.stats,
     };
     let output_path =
         intraday_candidate_output_path(&request.runtime_root, request.pick_date, request.method);
@@ -269,6 +268,25 @@ fn screen_artifact_key(pick_date: NaiveDate, intraday: bool) -> String {
     }
 }
 
+fn ensure_screen_supported(method: Method) -> anyhow::Result<()> {
+    match method {
+        Method::B2 | Method::B3 => Ok(()),
+        _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
+    }
+}
+
+fn run_screen_strategy(
+    method: Method,
+    rows: &[PreparedRow],
+    pick_date: NaiveDate,
+) -> anyhow::Result<StrategyOutput> {
+    match method {
+        Method::B2 => Ok(run_b2_strategy(rows, pick_date)),
+        Method::B3 => Ok(run_b3_strategy(rows, pick_date)),
+        _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
+    }
+}
+
 fn load_and_prepare<F>(
     request: &ScreenRequest,
     start_date: NaiveDate,
@@ -308,11 +326,19 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
         let high = rows.iter().map(|row| row.high).collect::<Vec<_>>();
         let low = rows.iter().map(|row| row.low).collect::<Vec<_>>();
         let close = rows.iter().map(|row| row.close).collect::<Vec<_>>();
+        let turnover_daily = rows
+            .iter()
+            .map(|row| ((row.open + row.close) / 2.0) * row.vol)
+            .collect::<Vec<_>>();
+        let turnover_n = rolling_sum(&turnover_daily, 43, 1)
+            .into_iter()
+            .map(|value| value.unwrap_or(0.0))
+            .collect::<Vec<_>>();
         let (k, d, j) = kdj(&high, &low, &close, 9);
         let (dif, dea, macd_hist) = macd(&close, 12, 26, 9);
-        let ma25 = rolling_mean_series(&close, 25, 25);
-        let ma60 = rolling_mean_series(&close, 60, 60);
-        let ma144 = rolling_mean_series(&close, 144, 144);
+        let ma25 = rolling_mean(&close, 25, 25);
+        let ma60 = rolling_mean(&close, 60, 60);
+        let ma144 = rolling_mean(&close, 144, 144);
         let (zxdq, zxdkx) = zx_lines(&close);
         for (idx, row) in rows.iter().enumerate() {
             prepared.push(PreparedRow {
@@ -323,12 +349,7 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
                 low: row.low,
                 close: row.close,
                 volume: row.vol,
-                turnover_n: rows[..=idx]
-                    .iter()
-                    .rev()
-                    .take(43)
-                    .map(|row| ((row.open + row.close) / 2.0) * row.vol)
-                    .sum(),
+                turnover_n: turnover_n[idx],
                 turnover_rate: row.turnover_rate,
                 k: k[idx],
                 d: d[idx],
@@ -357,89 +378,6 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
             .then(left.trade_date.cmp(&right.trade_date))
     });
     prepared
-}
-
-fn ema(values: &[f64], span: usize) -> Vec<f64> {
-    let alpha = 2.0 / (span as f64 + 1.0);
-    let beta = 1.0 - alpha;
-    let mut out = Vec::with_capacity(values.len());
-    let mut prev = f64::NAN;
-    let mut missing_after_valid = 0_i32;
-    for value in values {
-        if value.is_nan() {
-            out.push(prev);
-            if !prev.is_nan() {
-                missing_after_valid += 1;
-            }
-        } else if prev.is_nan() {
-            prev = *value;
-            missing_after_valid = 0;
-            out.push(prev);
-        } else {
-            let effective_alpha = alpha / (alpha + beta.powi(missing_after_valid + 1));
-            let current = effective_alpha * *value + (1.0 - effective_alpha) * prev;
-            out.push(current);
-            prev = current;
-            missing_after_valid = 0;
-        }
-    }
-    out
-}
-
-fn macd(close: &[f64], fast: usize, slow: usize, signal: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let fast_ema = ema(close, fast);
-    let slow_ema = ema(close, slow);
-    let dif = fast_ema
-        .iter()
-        .zip(slow_ema.iter())
-        .map(|(fast, slow)| fast - slow)
-        .collect::<Vec<_>>();
-    let dea = ema(&dif, signal);
-    let hist = dif
-        .iter()
-        .zip(dea.iter())
-        .map(|(dif, dea)| dif - dea)
-        .collect();
-    (dif, dea, hist)
-}
-
-fn kdj(high: &[f64], low: &[f64], close: &[f64], n: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let low_n = rolling_extreme(low, n, f64::min);
-    let high_n = rolling_extreme(high, n, f64::max);
-    let mut k = Vec::with_capacity(high.len());
-    let mut d = Vec::with_capacity(high.len());
-    let mut j = Vec::with_capacity(high.len());
-    let mut prev_k = 50.0;
-    let mut prev_d = 50.0;
-    for idx in 0..high.len() {
-        let rsv = (close[idx] - low_n[idx]) / (high_n[idx] - low_n[idx] + 1e-9) * 100.0;
-        let (current_k, current_d) = if idx == 0 {
-            (50.0, 50.0)
-        } else {
-            let current_k = (2.0 * prev_k + rsv) / 3.0;
-            let current_d = (2.0 * prev_d + current_k) / 3.0;
-            (current_k, current_d)
-        };
-        k.push(current_k);
-        d.push(current_d);
-        j.push(3.0 * current_k - 2.0 * current_d);
-        prev_k = current_k;
-        prev_d = current_d;
-    }
-    (k, d, j)
-}
-
-fn rolling_extreme(values: &[f64], window: usize, op: fn(f64, f64) -> f64) -> Vec<f64> {
-    (0..values.len())
-        .map(|idx| {
-            let start = idx.saturating_sub(window - 1);
-            values[start..=idx]
-                .iter()
-                .copied()
-                .reduce(op)
-                .unwrap_or(f64::NAN)
-        })
-        .collect()
 }
 
 fn filter_turnover_top_pool(
