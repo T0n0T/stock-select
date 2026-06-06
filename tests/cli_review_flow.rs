@@ -143,7 +143,7 @@ fn prepared_row(code: &str, day: u32, close: f64) -> PreparedRow {
 }
 
 #[test]
-fn chart_generates_svg_artifacts_from_display_rows() {
+fn chart_generates_png_artifacts_and_cleans_payloads_from_display_rows() {
     let temp = tempfile::tempdir().unwrap();
     write_display(temp.path());
     write_chart_prepared_cache(temp.path());
@@ -174,12 +174,14 @@ fn chart_generates_svg_artifacts_from_display_rows() {
     assert!(png.contains("close=12.25"));
     assert!(png.contains("2026-05-25"));
     assert!(
-        temp.path()
+        !temp
+            .path()
             .join("charts/2026-05-25.b2.payload.part-01-of-02.json")
             .exists()
     );
     assert!(
-        temp.path()
+        !temp
+            .path()
             .join("charts/2026-05-25.b2.payload.part-02-of-02.json")
             .exists()
     );

@@ -105,6 +105,51 @@ fn screen_prepare_matches_old_indicator_basics() {
 }
 
 #[test]
+fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(24);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+        Ok((0..25)
+            .map(|offset| {
+                let close = if offset == 7 {
+                    f64::NAN
+                } else {
+                    10.0 + offset as f64 * 0.1
+                };
+                market_row_at_date(first_date + Duration::days(offset), close, 100.0)
+            })
+            .collect())
+    })
+    .unwrap();
+
+    let prepared = load_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        pick_date - Duration::days(366),
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(prepared.len(), 25);
+    assert_eq!(prepared.last().unwrap().ma25, None);
+}
+
+#[test]
 fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -150,6 +195,57 @@ fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
     assert_eq!(payload["pool_file"], pool_file.to_string_lossy().as_ref());
     assert_eq!(payload["candidates"].as_array().unwrap().len(), 1);
     assert_eq!(payload["candidates"][0]["code"], "000002.SZ");
+}
+
+#[test]
+fn screen_b3_writes_b3_candidate_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 5, 3).unwrap();
+    write_prepared_cache(
+        temp.path(),
+        Method::B3,
+        pick_date,
+        start_date,
+        pick_date,
+        &[
+            prepared_row("000001.SZ", 1, 10.0, 1000.0, 30.0),
+            prepared_row("000001.SZ", 2, 10.1, 900.0, 35.0),
+            prepared_row("000001.SZ", 3, 10.6, 1200.0, 45.0),
+            prepared_row("000001.SZ", 4, 10.7, 600.0, 46.0),
+        ],
+    )
+    .unwrap();
+
+    let output_path = run_screen_with_loader(
+        ScreenRequest {
+            method: Method::B3,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_dsn, _start_date, _end_date| panic!("b3 screen test should reuse prepared cache"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output_path,
+        temp.path().join("candidates/2026-05-04.b3.json")
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
+    assert_eq!(payload["method"], "b3");
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
+    assert_eq!(payload["candidates"][0]["signal"], "B3+");
+    assert_eq!(payload["stats"]["selected_b2"], 0);
+    assert_eq!(payload["stats"]["selected_b3"], 0);
+    assert_eq!(payload["stats"]["selected_b3_plus"], 1);
 }
 
 #[test]
@@ -579,6 +675,19 @@ fn market_row_with_open_delta(day: u32, close: f64, vol: f64, open_delta: f64) -
         ts_code: "000001.SZ".to_string(),
         trade_date: NaiveDate::from_ymd_opt(2026, 5, day).unwrap(),
         open: close - open_delta,
+        high: close,
+        low: close - 1.0,
+        close,
+        vol,
+        turnover_rate: Some(vol / 100.0),
+    }
+}
+
+fn market_row_at_date(trade_date: NaiveDate, close: f64, vol: f64) -> MarketRow {
+    MarketRow {
+        ts_code: "000001.SZ".to_string(),
+        trade_date,
+        open: close - 0.8,
         high: close,
         low: close - 1.0,
         close,

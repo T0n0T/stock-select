@@ -20,6 +20,7 @@ from scripts.ml.train_rank_lgbm import (
     train_and_report,
     walk_forward_split_dates,
 )
+from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 
 class RankLgbmTest(unittest.TestCase):
@@ -98,6 +99,20 @@ class RankLgbmTest(unittest.TestCase):
                 "midline_state",
             ],
         )
+
+    def test_select_feature_columns_uses_method_registered_raw_factors(self):
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        try:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
+            columns = ["close_to_zxdkx_pct", "b3_only_raw_factor"]
+
+            b2_numeric, _b2_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="b2")
+            b3_numeric, _b3_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="b3")
+
+            self.assertEqual(b2_numeric, ["close_to_zxdkx_pct"])
+            self.assertEqual(b3_numeric, ["close_to_zxdkx_pct", "b3_only_raw_factor"])
+        finally:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
     def test_build_feature_matrix_one_hot_encodes_categoricals(self):
         rows = [
@@ -202,6 +217,38 @@ class RankLgbmTest(unittest.TestCase):
 
         self.assertEqual(numeric, ["close_to_zxdkx_pct"])
         self.assertEqual(categorical, ["env", "signal_type"])
+
+    def test_load_feature_manifest_uses_method_registered_raw_factors(self):
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        try:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
+            with tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "feature_manifest.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "numeric_features": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                            "categorical_features": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                b2_numeric, _b2_categorical = load_feature_manifest(
+                    path,
+                    available_columns={"close_to_zxdkx_pct", "b3_only_raw_factor"},
+                    method="b2",
+                )
+                b3_numeric, _b3_categorical = load_feature_manifest(
+                    path,
+                    available_columns={"close_to_zxdkx_pct", "b3_only_raw_factor"},
+                    method="b3",
+                )
+
+            self.assertEqual(b2_numeric, ["close_to_zxdkx_pct"])
+            self.assertEqual(b3_numeric, ["close_to_zxdkx_pct", "b3_only_raw_factor"])
+        finally:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
     def test_train_report_uses_fixed_categorical_levels_from_feature_manifest(self):
         class DummyModel:

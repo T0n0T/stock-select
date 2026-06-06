@@ -10,6 +10,7 @@ use stock_select::model::Method;
 fn b2_default_model_dir_matches_runtime_contract() {
     assert_eq!(default_model_dir(Method::B2).unwrap(), "models/b2");
     assert!(default_model_dir(Method::B1).is_none());
+    assert!(default_model_dir(Method::B3).is_none());
 }
 
 #[test]
@@ -84,6 +85,13 @@ fn b1_model_resolution_is_unsupported() {
     let temp = tempfile::tempdir().unwrap();
     let err = resolve_method_model_artifacts(Method::B1, temp.path()).unwrap_err();
     assert!(err.to_string().contains("b1 model review is not available"));
+}
+
+#[test]
+fn b3_model_resolution_is_unsupported() {
+    let temp = tempfile::tempdir().unwrap();
+    let err = resolve_method_model_artifacts(Method::B3, temp.path()).unwrap_err();
+    assert!(err.to_string().contains("b3 model review is not available"));
 }
 
 #[test]

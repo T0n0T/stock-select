@@ -8,6 +8,7 @@ from scripts.ml.export_lgbm_scores import (
     export_scores,
     resolve_default_paths,
 )
+from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 
 class FakeModel:
@@ -125,6 +126,93 @@ class LgbmScoreExportTest(unittest.TestCase):
             self.assertEqual(metadata["categorical_levels"], {"env": ["weak", "strong", "neutral"]})
             self.assertEqual(metadata["label_column"], "rank_label_3d")
             self.assertEqual(summary["model_artifacts"]["model"], str(artifact_dir / "model.txt"))
+
+    def test_export_scores_uses_method_registered_feature_manifest_columns(self):
+        import csv
+        import json
+        import tempfile
+
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        try:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                dataset = root / "dataset.csv"
+                with dataset.open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(
+                        handle,
+                        fieldnames=["date", "code", "rank_label_3d", "close_to_zxdkx_pct", "b3_only_raw_factor"],
+                    )
+                    writer.writeheader()
+                    writer.writerows(
+                        [
+                            {
+                                "date": "2026-01-01",
+                                "code": "a",
+                                "rank_label_3d": "1",
+                                "close_to_zxdkx_pct": "1",
+                                "b3_only_raw_factor": "11",
+                            },
+                            {
+                                "date": "2026-03-01",
+                                "code": "b",
+                                "rank_label_3d": "2",
+                                "close_to_zxdkx_pct": "2",
+                                "b3_only_raw_factor": "12",
+                            },
+                        ]
+                    )
+                feature_manifest = root / "feature_manifest.json"
+                feature_manifest.write_text(
+                    json.dumps(
+                        {
+                            "numeric_features": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                            "categorical_features": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                with patch("scripts.ml.export_lgbm_scores.train_model_result") as train_model_result:
+                    train_model_result.return_value = type(
+                        "Result",
+                        (),
+                        {
+                            "train_scored": [],
+                            "test_scored": [{"date": "2026-03-01", "code": "b", "model_score": 0.5}],
+                            "top_features": [],
+                            "feature_count": 2,
+                            "model": FakeModel(),
+                            "feature_names": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                            "lightgbm_feature_names": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                            "category_levels": {},
+                        },
+                    )()
+
+                    export_scores(
+                        dataset=dataset,
+                        feature_manifest=feature_manifest,
+                        output=root / "scores.csv",
+                        summary_output=root / "summary.json",
+                        model_output_dir=root / "model",
+                        train_end_exclusive="2026-03-01",
+                        score_start="2026-03-01",
+                        score_end="2026-03-31",
+                        num_leaves=9,
+                        min_data_in_leaf=120,
+                        num_boost_round=60,
+                        learning_rate=0.05,
+                        num_threads=1,
+                        label_column="rank_label_3d",
+                        method="b3",
+                    )
+
+            self.assertEqual(
+                train_model_result.call_args.kwargs["numeric_columns"],
+                ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+            )
+        finally:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
 
 if __name__ == "__main__":

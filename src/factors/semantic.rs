@@ -21,6 +21,24 @@ pub fn push_b2_semantic_factors(
     signal: Option<&str>,
     environment_state: Option<&str>,
 ) {
+    push_b2_family_semantic_factors(factors, history, signal, environment_state);
+}
+
+pub fn push_b3_semantic_factors(
+    factors: &mut FactorList,
+    history: &[FactorInputRow],
+    signal: Option<&str>,
+    environment_state: Option<&str>,
+) {
+    push_b2_family_semantic_factors(factors, history, signal, environment_state);
+}
+
+fn push_b2_family_semantic_factors(
+    factors: &mut FactorList,
+    history: &[FactorInputRow],
+    signal: Option<&str>,
+    environment_state: Option<&str>,
+) {
     if history.is_empty() {
         return;
     }

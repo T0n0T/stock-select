@@ -2,7 +2,9 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use crate::engine::types::{FactorRow, FactorValue, SelectionCandidate};
-use crate::factors::registry::history_factor_fields;
+use crate::factors::registry::{
+    factor_profile_for_method, history_factor_fields_for_method, record_factor_profile_diagnostics,
+};
 use crate::factors::types::FactorInputRow;
 use crate::model::Method;
 
@@ -53,6 +55,7 @@ impl B2FactorProvider for CandidatePayloadFactorProvider {
                 .insert("env".to_string(), FactorValue::Category(env.to_string()));
         }
 
+        let profile = factor_profile_for_method(candidate.method);
         let history_factor_count = if let Some(history) = candidate.raw_payload.get("history") {
             let history = parse_history_rows(history)?;
             let signal = candidate.signal.as_deref();
@@ -66,7 +69,7 @@ impl B2FactorProvider for CandidatePayloadFactorProvider {
                         _ => None,
                     })
                 });
-            let factors = history_factor_fields(&history, signal, env);
+            let factors = history_factor_fields_for_method(candidate.method, &history, signal, env);
             let count = factors.len();
             for (key, value) in factors {
                 row.factors.insert(key, value);
@@ -80,6 +83,7 @@ impl B2FactorProvider for CandidatePayloadFactorProvider {
             "factor_source".to_string(),
             Value::String("candidate_payload".to_string()),
         );
+        record_factor_profile_diagnostics(&mut row, profile);
         if let Some(history_source) = candidate
             .raw_payload
             .get("history_source")

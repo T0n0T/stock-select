@@ -10,6 +10,7 @@ from scripts.ml.build_rank_dataset import (
     add_day_relative_labels,
     build_dataset_rows,
     compute_forward_labels,
+    dataset_columns_for_method,
     format_csv_value,
     load_candidate_rows,
     load_factor_artifact_rows,
@@ -17,9 +18,11 @@ from scripts.ml.build_rank_dataset import (
     normalize_env,
     normalize_verdict,
     parse_args,
+    raw_factor_columns_for_method,
     resolve_output_dir,
     resolve_runtime_root,
 )
+from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 
 class RankDatasetTest(unittest.TestCase):
@@ -53,6 +56,19 @@ class RankDatasetTest(unittest.TestCase):
                 resolve_runtime_root(Path("cli-runtime"), env_runtime_root="shell-runtime", dotenv_path=dotenv),
                 Path("cli-runtime"),
             )
+
+    def test_b3_dataset_schema_has_independent_method_entry_matching_b2_for_now(self):
+        self.assertEqual(dataset_columns_for_method("b3"), dataset_columns_for_method("b2"))
+        self.assertEqual(raw_factor_columns_for_method("b3"), raw_factor_columns_for_method("b2"))
+
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        try:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
+
+            self.assertIn("b3_only_raw_factor", dataset_columns_for_method("b3"))
+            self.assertNotIn("b3_only_raw_factor", dataset_columns_for_method("b2"))
+        finally:
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
     def test_load_candidate_rows_reads_current_candidates_artifacts_without_select(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -113,6 +129,57 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(row["signal"], "B2")
         self.assertEqual(row["close_to_zxdkx_pct"], 1.25)
         self.assertEqual(row["signal_type"], "trend_start")
+
+    def test_load_candidate_rows_reads_b3_factor_artifact_with_b3_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate_dir = root / "candidates"
+            factor_dir = root / "factors" / "2026-05-25.b3"
+            candidate_dir.mkdir(parents=True)
+            factor_dir.mkdir(parents=True)
+            (candidate_dir / "2026-05-25.b3.json").write_text(
+                json.dumps(
+                    {
+                        "method": "b3",
+                        "pick_date": "2026-05-25",
+                        "candidates": [{"code": "000001.SZ", "name": "平安银行", "signal": "B3"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (factor_dir / "factors.json").write_text(
+                json.dumps(
+                    {
+                        "method": "b3",
+                        "artifact_key": "2026-05-25",
+                        "rows": [
+                            {
+                                "code": "000001.SZ",
+                                "factors": {
+                                    "env": "neutral",
+                                    "signal_type": "trend_start",
+                                    "close_to_zxdkx_pct": 1.25,
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            rows, warnings = load_candidate_rows(
+                root,
+                method="b3",
+                start_date="2026-05-25",
+                end_date="2026-05-25",
+            )
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["method"], "b3")
+        self.assertEqual(rows[0]["signal"], "B3")
+        self.assertEqual(rows[0]["env"], "neutral")
+        self.assertEqual(rows[0]["close_to_zxdkx_pct"], 1.25)
 
     def test_load_candidate_rows_merges_runtime_factor_artifact(self):
         with tempfile.TemporaryDirectory() as temp_dir:

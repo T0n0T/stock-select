@@ -99,6 +99,7 @@ def export_scores(
     learning_rate: float,
     num_threads: int,
     label_column: str = "rank_label_3d",
+    method: str = DEFAULT_METHOD,
 ) -> dict[str, Any]:
     rows = read_dataset(dataset)
     if not rows:
@@ -116,6 +117,7 @@ def export_scores(
     numeric_columns, categorical_columns, fixed_categorical_levels = load_feature_manifest_with_levels(
         feature_manifest,
         available_columns=set(rows[0].keys()),
+        method=method,
     )
     model_result = train_model_result(
         train_rows,
@@ -216,6 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         learning_rate=args.learning_rate,
         num_threads=args.num_threads,
         label_column=args.label_column,
+        method=args.method,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

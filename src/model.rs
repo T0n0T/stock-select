@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum Method {
     B1,
     B2,
+    B3,
     Dribull,
 }
 
@@ -17,6 +18,7 @@ impl Method {
         match self {
             Method::B1 => "b1",
             Method::B2 => "b2",
+            Method::B3 => "b3",
             Method::Dribull => "dribull",
         }
     }
@@ -35,6 +37,7 @@ impl FromStr for Method {
         match value {
             "b1" => Ok(Method::B1),
             "b2" => Ok(Method::B2),
+            "b3" => Ok(Method::B3),
             "dribull" => Ok(Method::Dribull),
             _ => anyhow::bail!("unsupported method: {value}"),
         }
