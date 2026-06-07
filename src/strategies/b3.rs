@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 
 use crate::model::{Candidate, PreparedRow};
 use crate::strategies::b2::build_b2_signal_series;
-use crate::strategies::{StrategyOutput, group_by_symbol, sort_candidates};
+use crate::strategies::{StrategyOutput, group_refs_by_symbol, sort_candidates};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct B3SignalSeries {
@@ -13,7 +13,12 @@ pub(crate) struct B3SignalSeries {
 }
 
 pub fn run_b3_strategy(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
-    let grouped = group_by_symbol(rows);
+    let refs = rows.iter().collect::<Vec<_>>();
+    run_b3_strategy_from_refs(&refs, pick_date)
+}
+
+pub fn run_b3_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
+    let grouped = group_refs_by_symbol(rows);
     let mut stats = BTreeMap::from([
         ("total_symbols".to_string(), grouped.len()),
         ("eligible".to_string(), 0),
@@ -144,6 +149,7 @@ mod tests {
             safe_mode: true,
             lt_filter: true,
             yellow_b1: false,
+            db_factors: Default::default(),
         }
     }
 
@@ -163,5 +169,22 @@ mod tests {
         assert_eq!(output.candidates[0].signal.as_deref(), Some("B3+"));
         assert_eq!(output.stats["selected_b3"], 0);
         assert_eq!(output.stats["selected_b3_plus"], 1);
+    }
+
+    #[test]
+    fn b3_ref_strategy_matches_owned_slice_strategy() {
+        let pick = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        let rows = vec![
+            row(1, 10.0, 1000.0, 30.0),
+            row(2, 10.1, 900.0, 35.0),
+            row(3, 10.6, 1200.0, 45.0),
+            row(4, 10.7, 600.0, 46.0),
+        ];
+        let refs = rows.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            run_b3_strategy_from_refs(&refs, pick),
+            run_b3_strategy(&rows, pick)
+        );
     }
 }

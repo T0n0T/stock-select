@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use crate::cache::{history_payload_for_code, load_prepared_cache_for_mode};
 use crate::engine::artifacts::{SelectionRunPaths, write_selection_json};
 use crate::engine::b2::{
-    B2FactorProvider, CandidatePayloadFactorProvider, artifact_key_for_run,
-    candidate_from_legacy_json,
+    B2FactorProvider, CandidatePayloadFactorProvider, adjust_b2_cyq_post_rerank_score,
+    artifact_key_for_run, candidate_from_legacy_json,
 };
 use crate::engine::capability::ensure_model_run_supported;
 use crate::engine::inference::{
@@ -236,10 +236,7 @@ fn inject_prepared_history_if_available(
     pick_date: NaiveDate,
     intraday: bool,
 ) -> anyhow::Result<()> {
-    if candidates
-        .iter()
-        .all(|candidate| candidate.raw_payload.get("history").is_some())
-    {
+    if candidates.iter().all(candidate_has_complete_history) {
         return Ok(());
     }
 
@@ -257,7 +254,7 @@ fn inject_prepared_history_if_available(
     };
 
     for candidate in candidates {
-        if candidate.raw_payload.get("history").is_some() {
+        if candidate_has_complete_history(candidate) {
             continue;
         }
         let history = history_payload_for_code(&rows, &candidate.code);
@@ -275,6 +272,33 @@ fn inject_prepared_history_if_available(
     }
 
     Ok(())
+}
+
+fn candidate_has_complete_history(candidate: &SelectionCandidate) -> bool {
+    candidate
+        .raw_payload
+        .get("history")
+        .is_some_and(history_payload_is_complete)
+}
+
+fn history_payload_is_complete(value: &Value) -> bool {
+    let Some(rows) = value.as_array() else {
+        return false;
+    };
+    !rows.is_empty() && rows.iter().all(history_row_is_complete)
+}
+
+fn history_row_is_complete(row: &Value) -> bool {
+    has_number(row, "open")
+        && has_number(row, "high")
+        && has_number(row, "low")
+        && has_number(row, "close")
+        && (has_number(row, "volume") || has_number(row, "vol"))
+        && (has_number(row, "turnover_n") || has_number(row, "turnover_rate"))
+}
+
+fn has_number(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_f64).is_some()
 }
 
 struct LoadedModel {
@@ -331,20 +355,46 @@ fn rank_candidates(
         if let Some(diagnostic) = diagnostic {
             feature_vectors.push(diagnostic);
         }
-        scored.push((candidate.code.clone(), score));
+        scored.push((candidate.code.clone(), score, row));
     }
+
+    let mut normalized_scores = vec![0.0; scored.len()];
+    let mut raw_order = (0..scored.len()).collect::<Vec<_>>();
+    raw_order.sort_by(|left, right| {
+        scored[*right]
+            .1
+            .total_cmp(&scored[*left].1)
+            .then_with(|| scored[*left].0.cmp(&scored[*right].0))
+    });
+    let denominator = scored.len().saturating_sub(1).max(1) as f64;
+    for (rank_index, scored_index) in raw_order.into_iter().enumerate() {
+        let normalized_score = if scored.len() > 1 {
+            (denominator - rank_index as f64) / denominator
+        } else {
+            1.0
+        };
+        normalized_scores[scored_index] =
+            adjust_b2_cyq_post_rerank_score(normalized_score, scored[scored_index].2);
+    }
+
+    let mut scored = scored
+        .into_iter()
+        .enumerate()
+        .map(|(index, (code, raw_score, _row))| (code, normalized_scores[index], raw_score))
+        .collect::<Vec<_>>();
 
     scored.sort_by(|left, right| {
         right
             .1
             .total_cmp(&left.1)
+            .then_with(|| right.2.total_cmp(&left.2))
             .then_with(|| left.0.cmp(&right.0))
     });
 
     let ranked = scored
         .into_iter()
         .enumerate()
-        .map(|(index, (code, model_score))| RankedCandidate {
+        .map(|(index, (code, model_score, _raw_score))| RankedCandidate {
             code,
             model_score,
             model_rank: index + 1,
@@ -399,4 +449,66 @@ fn display_rows(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+    use serde_json::json;
+
+    fn factor_row(code: &str, env: &str, base_score: f64) -> FactorRow {
+        let mut row = FactorRow::new(code, Method::B2);
+        row.factors
+            .insert("env".to_string(), FactorValue::Category(env.to_string()));
+        row.factors
+            .insert("model_score".to_string(), FactorValue::Number(base_score));
+        row
+    }
+
+    fn candidate(code: &str) -> SelectionCandidate {
+        SelectionCandidate {
+            code: code.to_string(),
+            name: None,
+            method: Method::B2,
+            pick_date: NaiveDate::from_ymd_opt(2026, 6, 5).unwrap(),
+            close: None,
+            turnover_n: None,
+            signal: None,
+            raw_payload: json!({}),
+        }
+    }
+
+    #[test]
+    fn rank_candidates_applies_cyq_post_rerank_before_sorting() {
+        let candidates = (1..=10)
+            .map(|index| candidate(&format!("{index:06}.SZ")))
+            .collect::<Vec<_>>();
+        let mut high_raw = factor_row("000001.SZ", "neutral", 1.0);
+        high_raw
+            .factors
+            .insert("cyq_winner_rate".to_string(), FactorValue::Number(100.0));
+        let mut lower_raw = factor_row("000002.SZ", "neutral", 0.95);
+        lower_raw
+            .factors
+            .insert("cyq_winner_rate".to_string(), FactorValue::Number(50.0));
+        let mut factors = vec![high_raw, lower_raw];
+        for index in 3..=10 {
+            let mut row = factor_row(
+                &format!("{index:06}.SZ"),
+                "neutral",
+                0.95 - index as f64 * 0.01,
+            );
+            row.factors
+                .insert("cyq_winner_rate".to_string(), FactorValue::Number(50.0));
+            factors.push(row);
+        }
+
+        let (ranked, feature_vectors) = rank_candidates(&candidates, &factors, None).unwrap();
+
+        assert!(feature_vectors.is_empty());
+        assert_eq!(ranked[0].code, "000002.SZ");
+        assert_eq!(ranked[0].model_rank, 1);
+        assert!((ranked[1].model_score - 0.86).abs() < 1e-9);
+    }
 }

@@ -12,8 +12,15 @@ pub struct StrategyOutput {
 }
 
 pub(crate) fn group_by_symbol(rows: &[PreparedRow]) -> BTreeMap<&str, Vec<&PreparedRow>> {
+    let refs = rows.iter().collect::<Vec<_>>();
+    group_refs_by_symbol(&refs)
+}
+
+pub(crate) fn group_refs_by_symbol<'a>(
+    rows: &[&'a PreparedRow],
+) -> BTreeMap<&'a str, Vec<&'a PreparedRow>> {
     let mut grouped = BTreeMap::<&str, Vec<&PreparedRow>>::new();
-    for row in rows {
+    for row in rows.iter().copied() {
         grouped.entry(row.ts_code.as_str()).or_default().push(row);
     }
     for history in grouped.values_mut() {

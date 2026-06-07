@@ -112,7 +112,7 @@ fn write_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 3,
+            "schema_version": 4,
             "row_count": 25,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -155,7 +155,7 @@ fn write_intraday_prepared_cache_metadata(root: &std::path::Path, pick_date: Nai
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 3,
+            "schema_version": 4,
             "row_count": 25,
             "symbol_count": 1,
             "source_table": "daily_market",
@@ -205,7 +205,7 @@ fn write_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) 
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 3,
+            "schema_version": 4,
             "row_count": 3,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -255,7 +255,7 @@ fn write_two_code_selecting_prepared_cache(root: &std::path::Path, pick_date: Na
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 3,
+            "schema_version": 4,
             "row_count": 6,
             "symbol_count": 2,
             "source_table": "daily_market"
@@ -301,6 +301,7 @@ fn write_selecting_prepared_row(
     for value in [false, true, false, true, true, false] {
         write_bool(bytes, value);
     }
+    write_u64(bytes, 0);
 }
 
 fn write_prepared_row(
@@ -331,6 +332,7 @@ fn write_prepared_row(
     for value in [true, false, true, false, true, false] {
         write_bool(bytes, value);
     }
+    write_u64(bytes, 0);
 }
 
 fn write_string(out: &mut Vec<u8>, value: &str) {
@@ -592,10 +594,13 @@ fn b2_run_persists_environment_and_injects_env_factor() {
 }
 
 #[test]
-fn b2_eod_run_without_manual_environment_or_dsn_fails_clearly() {
+fn b2_eod_run_without_manual_environment_or_dsn_uses_prepared_market_state() {
     let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let candidates_path = write_candidates(temp.path());
     write_lightgbm_model_artifacts(temp.path());
+    write_prepared_cache_fixture(temp.path(), pick_date);
+    write_prepared_cache_metadata(temp.path(), pick_date);
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
@@ -612,10 +617,14 @@ fn b2_eod_run_without_manual_environment_or_dsn_fails_clearly() {
             candidates_path.to_str().unwrap(),
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "A database DSN is required for market environment evaluation.",
-        ));
+        .success();
+
+    let run: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("select/2026-05-25.b2/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(run["environment"]["source"], "prepared_market_state");
+    assert_eq!(run["environment"]["state"], "neutral");
 }
 
 #[test]
@@ -1151,6 +1160,59 @@ fn b2_run_injects_history_from_prepared_cache_when_candidate_has_no_history() {
             .as_f64()
             .unwrap()
             .is_finite()
+    );
+}
+
+#[test]
+fn b2_run_replaces_incomplete_candidate_history_from_prepared_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    write_close_to_ma25_model(temp.path());
+    write_prepared_cache_fixture(temp.path(), pick_date);
+    write_prepared_cache_metadata(temp.path(), pick_date);
+    let candidates_path = temp.path().join("candidates.json");
+    std::fs::write(
+        &candidates_path,
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {
+                    "code": "000001.SZ",
+                    "name": "测试一",
+                    "history": [
+                        {"close": 100.0, "volume": 100.0, "turnover_n": 10.0}
+                    ]
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "run",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+        "--environment-state",
+        "neutral",
+        "--candidates-path",
+        candidates_path.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+    let run_dir = temp.path().join("select/2026-05-25.b2");
+    let factors: Value =
+        serde_json::from_slice(&std::fs::read(run_dir.join("factors.json")).unwrap()).unwrap();
+    assert_eq!(factors["rows"][0]["code"], "000001.SZ");
+    assert_eq!(factors["rows"][0]["factors"]["close_to_ma25_pct"], 25.0);
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["history_source"],
+        "prepared_cache"
     );
 }
 

@@ -183,5 +183,6 @@ fn prepared_row(code: &str, day: u32, close: f64, volume: f64, j: f64) -> Prepar
         safe_mode: true,
         lt_filter: true,
         yellow_b1: false,
+        db_factors: Default::default(),
     }
 }

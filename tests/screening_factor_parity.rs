@@ -36,6 +36,7 @@ fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
                     close,
                     vol: 1000.0 + day as f64 * 10.0,
                     turnover_rate: Some(1.0 + day as f64 / 100.0),
+                    db_factors: Default::default(),
                 }
             })
             .collect())
@@ -94,6 +95,233 @@ fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
 }
 
 #[test]
+fn db_factor_extras_flow_from_screen_loader_into_candidate_factors() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(129);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+        Ok((1..=130)
+            .map(|day| {
+                let close = 100.0 + day as f64;
+                let mut row = MarketRow {
+                    ts_code: "000001.SZ".to_string(),
+                    trade_date: first_date + Duration::days(day as i64 - 1),
+                    open: close - 0.5,
+                    high: close + 1.0,
+                    low: close - 2.0,
+                    close,
+                    vol: 1000.0 + day as f64 * 10.0,
+                    turnover_rate: Some(1.0 + day as f64 / 100.0),
+                    db_factors: Default::default(),
+                };
+                if row.trade_date == pick_date {
+                    row.db_factors.insert("boll_width_pct".to_string(), 8.25);
+                    row.db_factors.insert("dmi_adx_qfq".to_string(), 24.0);
+                    row.db_factors.insert("dmi_pdi_qfq".to_string(), 31.0);
+                    row.db_factors.insert("dmi_mdi_qfq".to_string(), 19.0);
+                    row.db_factors
+                        .insert("dmi_pdi_mdi_spread_qfq".to_string(), 12.0);
+                    row.db_factors
+                        .insert("dmi_adx_adxr_gap_qfq".to_string(), 9.0);
+                    row.db_factors.insert("wr_qfq".to_string(), -12.5);
+                    row.db_factors.insert("mtm_qfq".to_string(), 1.8);
+                    row.db_factors.insert("roc_qfq".to_string(), 4.2);
+                    row.db_factors.insert("trix_qfq".to_string(), 0.35);
+                    row.db_factors.insert("obv_qfq".to_string(), 123456.0);
+                    row.db_factors.insert("vr_qfq".to_string(), 135.0);
+                    row.db_factors.insert("psy_qfq".to_string(), 66.7);
+                    row.db_factors.insert("bias1_qfq".to_string(), 2.4);
+                    row.db_factors.insert("turnover_rate_f".to_string(), 3.75);
+                    row.db_factors.insert("cyq_winner_rate".to_string(), 64.5);
+                    row.db_factors
+                        .insert("cyq_cost_50_to_close_pct".to_string(), -3.2);
+                    row.db_factors
+                        .insert("cyq_cost_85_to_close_pct".to_string(), 4.8);
+                    row.db_factors
+                        .insert("cyq_weight_avg_to_close_pct".to_string(), -1.5);
+                    row.db_factors
+                        .insert("cyq_cost_70_width_pct".to_string(), 12.4);
+                    row.db_factors
+                        .insert("cyq_cost_90_width_pct".to_string(), 20.6);
+                }
+                row
+            })
+            .collect())
+    })
+    .unwrap();
+
+    let start_date = pick_date - Duration::days(366);
+    let prepared = load_prepared_cache(temp.path(), Method::B2, pick_date, start_date, pick_date)
+        .unwrap()
+        .unwrap();
+    let latest = prepared
+        .iter()
+        .find(|row| row.ts_code == "000001.SZ" && row.trade_date == pick_date)
+        .unwrap();
+    assert_eq!(latest.db_factors["boll_width_pct"], 8.25);
+
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date,
+        close: latest.close,
+        turnover_n: latest.turnover_n,
+        signal: Some("B2".to_string()),
+        yellow_b1: None,
+    };
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+    let factors = &rows[0].factors;
+
+    assert_eq!(
+        factors.get("boll_width_pct"),
+        Some(&FactorValue::Number(8.25))
+    );
+    assert_eq!(factors.get("wr_qfq"), Some(&FactorValue::Number(-12.5)));
+    assert_eq!(factors.get("dmi_adx_qfq"), Some(&FactorValue::Number(24.0)));
+    assert_eq!(factors.get("dmi_pdi_qfq"), Some(&FactorValue::Number(31.0)));
+    assert_eq!(factors.get("dmi_mdi_qfq"), Some(&FactorValue::Number(19.0)));
+    assert_eq!(
+        factors.get("dmi_pdi_mdi_spread_qfq"),
+        Some(&FactorValue::Number(12.0))
+    );
+    assert_eq!(
+        factors.get("dmi_adx_adxr_gap_qfq"),
+        Some(&FactorValue::Number(9.0))
+    );
+    assert_eq!(factors.get("mtm_qfq"), Some(&FactorValue::Number(1.8)));
+    assert_eq!(factors.get("roc_qfq"), Some(&FactorValue::Number(4.2)));
+    assert_eq!(factors.get("trix_qfq"), Some(&FactorValue::Number(0.35)));
+    assert_eq!(factors.get("obv_qfq"), Some(&FactorValue::Number(123456.0)));
+    assert_eq!(factors.get("vr_qfq"), Some(&FactorValue::Number(135.0)));
+    assert_eq!(factors.get("psy_qfq"), Some(&FactorValue::Number(66.7)));
+    assert_eq!(factors.get("bias1_qfq"), Some(&FactorValue::Number(2.4)));
+    assert_eq!(
+        factors.get("turnover_rate_f"),
+        Some(&FactorValue::Number(3.75))
+    );
+    assert_eq!(
+        factors.get("cyq_winner_rate"),
+        Some(&FactorValue::Number(64.5))
+    );
+    assert_eq!(
+        factors.get("cyq_cost_50_to_close_pct"),
+        Some(&FactorValue::Number(-3.2))
+    );
+    assert_eq!(
+        factors.get("cyq_cost_85_to_close_pct"),
+        Some(&FactorValue::Number(4.8))
+    );
+    assert_eq!(
+        factors.get("cyq_weight_avg_to_close_pct"),
+        Some(&FactorValue::Number(-1.5))
+    );
+    assert_eq!(
+        factors.get("cyq_cost_70_width_pct"),
+        Some(&FactorValue::Number(12.4))
+    );
+    assert_eq!(
+        factors.get("cyq_cost_90_width_pct"),
+        Some(&FactorValue::Number(20.6))
+    );
+}
+
+#[test]
+fn candidate_factor_rows_include_market_state_from_prepared_cross_section() {
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let previous_date = pick_date - Duration::days(1);
+    let mut prepared = vec![
+        prepared_row("000001.SZ", previous_date, 10.0, 1000.0),
+        prepared_row("000002.SZ", previous_date, 20.0, 1000.0),
+        prepared_row("000003.SZ", previous_date, 30.0, 1000.0),
+        prepared_row("000001.SZ", pick_date, 11.0, 1100.0),
+        prepared_row("000002.SZ", pick_date, 21.0, 1200.0),
+        prepared_row("000003.SZ", pick_date, 27.0, 1300.0),
+    ];
+    prepared[3].chg_d = Some(10.0);
+    prepared[4].chg_d = Some(5.0);
+    prepared[5].chg_d = Some(-10.0);
+    prepared[3]
+        .db_factors
+        .insert("dist_to_up_limit_pct".to_string(), 0.0);
+    prepared[5]
+        .db_factors
+        .insert("dist_to_down_limit_pct".to_string(), 0.0);
+    for row in prepared
+        .iter_mut()
+        .filter(|row| row.trade_date == pick_date)
+    {
+        row.db_factors
+            .insert("net_mf_amount_to_amount_pct".to_string(), 3.0);
+    }
+    let candidates = vec![
+        Candidate {
+            code: "000001.SZ".to_string(),
+            pick_date,
+            close: 11.0,
+            turnover_n: 1.0,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        },
+        Candidate {
+            code: "000002.SZ".to_string(),
+            pick_date,
+            close: 21.0,
+            turnover_n: 1.0,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        },
+    ];
+
+    let rows = build_candidate_factor_rows(&candidates, &prepared, Method::B2, None);
+
+    for row in &rows {
+        assert_eq!(
+            row.factors.get("market_up_ratio"),
+            Some(&FactorValue::Number(0.6667))
+        );
+        assert_eq!(
+            row.factors.get("market_ge5_ratio"),
+            Some(&FactorValue::Number(0.6667))
+        );
+        assert_eq!(
+            row.factors.get("market_le_minus5_ratio"),
+            Some(&FactorValue::Number(0.3333))
+        );
+        assert_eq!(
+            row.factors.get("market_median_pct_chg"),
+            Some(&FactorValue::Number(5.0))
+        );
+        assert_eq!(
+            row.factors.get("market_net_mf_to_amount_pct"),
+            Some(&FactorValue::Number(3.0))
+        );
+        assert_eq!(
+            row.factors.get("market_approx_limit_up_count"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert_eq!(
+            row.factors.get("market_approx_limit_down_count"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert!(matches!(
+            row.factors.get("market_amount_ma5_ratio"),
+            Some(FactorValue::Number(value)) if *value > 1.0
+        ));
+    }
+}
+
+#[test]
 fn b3_uses_method_registered_factor_profile_matching_b2_for_now() {
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let prepared = vec![prepared_row("000001.SZ", pick_date, 10.0, 1000.0)];
@@ -122,6 +350,90 @@ fn b3_uses_method_registered_factor_profile_matching_b2_for_now() {
         rows[0].factors.get("signal"),
         Some(&FactorValue::Category("B3".to_string()))
     );
+}
+
+#[test]
+fn b3_factor_profile_adds_b3_specific_raw_factors_only_for_b3() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
+    let pick_date = first_date + Duration::days(3);
+    let prepared = vec![
+        PreparedRow {
+            high: 10.0,
+            low: 9.5,
+            open: 10.0,
+            j: 30.0,
+            ..prepared_row("000001.SZ", first_date, 10.0, 1000.0)
+        },
+        PreparedRow {
+            high: 10.1,
+            low: 9.6,
+            open: 9.8,
+            j: 35.0,
+            ..prepared_row("000001.SZ", first_date + Duration::days(1), 10.1, 900.0)
+        },
+        PreparedRow {
+            high: 10.6,
+            low: 10.0,
+            open: 9.8,
+            j: 45.0,
+            ..prepared_row("000001.SZ", first_date + Duration::days(2), 10.6, 1200.0)
+        },
+        PreparedRow {
+            high: 10.9,
+            low: 10.1,
+            open: 10.2,
+            j: 46.0,
+            ..prepared_row("000001.SZ", pick_date, 10.7, 600.0)
+        },
+    ];
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date,
+        close: 10.7,
+        turnover_n: prepared[3].turnover_n,
+        signal: Some("B3+".to_string()),
+        yellow_b1: None,
+    };
+
+    let b3_rows = build_candidate_factor_rows(&[candidate.clone()], &prepared, Method::B3, None);
+    let b2_rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+    let b3_factors = &b3_rows[0].factors;
+    let b2_factors = &b2_rows[0].factors;
+
+    assert_eq!(
+        b3_factors.get("b3_volume_shrink_ratio"),
+        Some(&FactorValue::Number(0.5))
+    );
+    assert_eq!(
+        b3_factors.get("b3_amplitude_pct"),
+        Some(&FactorValue::Number(7.5472))
+    );
+    assert_eq!(
+        b3_factors.get("b3_body_pct"),
+        Some(&FactorValue::Number(4.717))
+    );
+    assert_eq!(
+        b3_factors.get("b3_upper_shadow_pct"),
+        Some(&FactorValue::Number(1.8868))
+    );
+    assert_eq!(
+        b3_factors.get("b3_lower_shadow_pct"),
+        Some(&FactorValue::Number(0.9434))
+    );
+    assert_eq!(
+        b3_factors.get("b3_j_delta"),
+        Some(&FactorValue::Number(1.0))
+    );
+    assert_eq!(
+        b3_factors.get("b3_prev_b2_flag"),
+        Some(&FactorValue::Bool(true))
+    );
+    assert_eq!(
+        b3_factors.get("b3_plus_flag"),
+        Some(&FactorValue::Bool(true))
+    );
+    assert!(!b2_factors.contains_key("b3_volume_shrink_ratio"));
+    assert!(!b2_factors.contains_key("b3_prev_b2_flag"));
 }
 
 #[test]
@@ -176,6 +488,7 @@ fn market_row(ts_code: &str, trade_date: NaiveDate, close: f64, vol: f64) -> Mar
         close,
         vol,
         turnover_rate: Some(vol / 100.0),
+        db_factors: Default::default(),
     }
 }
 
@@ -208,5 +521,6 @@ fn prepared_row(ts_code: &str, trade_date: NaiveDate, close: f64, volume: f64) -
         safe_mode: true,
         lt_filter: true,
         yellow_b1: false,
+        db_factors: Default::default(),
     }
 }

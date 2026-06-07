@@ -38,6 +38,7 @@ def write_candidate_model(path: Path, *, report: dict | None = None) -> None:
 
 def passing_report() -> dict:
     return {
+        "method": "b2",
         "dataset": "diagnostics/ml/b2/rank_dataset.csv",
         "feature_manifest": "diagnostics/ml/b2/model/feature_manifest.json",
         "model_params": {"num_leaves": 9},
@@ -100,7 +101,7 @@ class LgbmModelPromotionTest(unittest.TestCase):
             archive_path = Path(summary["archive_path"])
             self.assertTrue((archive_path / "model.txt").exists())
             self.assertEqual((archive_path / "model.txt").read_text(encoding="utf-8"), "old\n")
-            self.assertEqual(archive_path, target.parent / "archive" / "20260603T010203Z")
+            self.assertEqual(archive_path, target.parent / "archive" / "b2" / "20260603T010203Z")
 
     def test_promote_dry_run_does_not_modify_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -130,7 +131,7 @@ class LgbmModelPromotionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             target = root / "runtime" / "models" / "b2"
-            archive = target.parent / "archive" / "20260601T000000Z"
+            archive = target.parent / "archive" / "b2" / "20260601T000000Z"
             write_candidate_model(target)
             write_candidate_model(archive)
             (target / "model.txt").write_text("current\n", encoding="utf-8")
@@ -139,7 +140,15 @@ class LgbmModelPromotionTest(unittest.TestCase):
             summary = rollback_model(target, "20260601T000000Z", now="20260603T010203Z")
 
             self.assertEqual((target / "model.txt").read_text(encoding="utf-8"), "previous\n")
-            self.assertTrue((target.parent / "archive" / "rollback-current-20260603T010203Z" / "model.txt").exists())
+            self.assertTrue(
+                (
+                    target.parent
+                    / "archive"
+                    / "b2"
+                    / "rollback-current-20260603T010203Z"
+                    / "model.txt"
+                ).exists()
+            )
             self.assertEqual(summary["rollback_version"], "20260601T000000Z")
 
     def test_describe_current_model_reads_active_target_summary(self):
@@ -157,7 +166,7 @@ class LgbmModelPromotionTest(unittest.TestCase):
     def test_list_archived_models_returns_newest_first_with_validation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "runtime" / "models" / "b2"
-            archive_root = target.parent / "archive"
+            archive_root = target.parent / "archive" / "b2"
             old_a = archive_root / "20260601T000000Z"
             old_b = archive_root / "20260602T000000Z"
             write_candidate_model(old_a, report=passing_report())
@@ -168,6 +177,48 @@ class LgbmModelPromotionTest(unittest.TestCase):
             self.assertEqual([row["version"] for row in rows], ["20260602T000000Z", "20260601T000000Z"])
             self.assertEqual(rows[0]["validation"]["feature_count"], 3)
             self.assertEqual(rows[0]["validation"]["label_column"], "rank_label_3d")
+
+    def test_archives_are_scoped_by_method_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            b2_target = root / "runtime" / "models" / "b2"
+            b3_target = root / "runtime" / "models" / "b3"
+            b2_archive = b2_target.parent / "archive" / "b2" / "20260601T000000Z"
+            b3_archive = b3_target.parent / "archive" / "b3" / "20260602T000000Z"
+            write_candidate_model(b2_archive, report=passing_report())
+            write_candidate_model(b3_archive, report={**passing_report(), "method": "b3"})
+
+            b2_rows = list_archived_models(b2_target)
+            b3_rows = list_archived_models(b3_target)
+
+        self.assertEqual([row["version"] for row in b2_rows], ["20260601T000000Z"])
+        self.assertEqual([row["version"] for row in b3_rows], ["20260602T000000Z"])
+
+    def test_legacy_archive_is_listed_only_when_model_card_target_matches_method(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            b2_target = root / "runtime" / "models" / "b2"
+            b3_target = root / "runtime" / "models" / "b3"
+            legacy_archive = b2_target.parent / "archive" / "20260601T000000Z"
+            write_candidate_model(legacy_archive, report=passing_report())
+            (legacy_archive / "model_card.json").write_text(
+                json.dumps({"target": str(b2_target)}),
+                encoding="utf-8",
+            )
+
+            b2_rows = list_archived_models(b2_target)
+            b3_rows = list_archived_models(b3_target)
+
+        self.assertEqual([row["version"] for row in b2_rows], ["20260601T000000Z"])
+        self.assertEqual(b3_rows, [])
+
+    def test_validate_model_artifacts_rejects_report_method_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = Path(temp_dir) / "candidate"
+            write_candidate_model(candidate, report={**passing_report(), "method": "b3"})
+
+            with self.assertRaisesRegex(ValueError, "method"):
+                validate_model_artifacts(candidate, expected_method="b2")
 
 
 if __name__ == "__main__":

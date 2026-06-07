@@ -26,6 +26,7 @@ from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 
 DEFAULT_METHOD = "b2"
+DEFAULT_LABEL_GAIN = [0, 1, 3, 7]
 
 IDENTITY_COLUMNS = {"date", "code", "name", "method"}
 LABEL_COLUMNS = {
@@ -72,7 +73,7 @@ LEGACY_CONTEXT_NUMERIC_COLUMNS = {
 }
 FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 TRAIN_MODES = {"overall", "by_env"}
-TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d"}
+TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "ret3_ge5_label"}
 
 
 @dataclass
@@ -159,7 +160,7 @@ def select_feature_columns(
         raise ValueError(f"unsupported feature_set: {feature_set}")
     numeric: list[str] = []
     categorical: list[str] = []
-    raw_numeric_columns = raw_numeric_columns_for_method(method)
+    raw_numeric_columns = raw_numeric_columns_for_method(method) | LEGACY_CONTEXT_NUMERIC_COLUMNS
     if feature_set == "raw_numeric":
         allowed_categorical: set[str] = set()
     elif feature_set == "raw_plus_signal":
@@ -191,7 +192,7 @@ def load_feature_manifest_with_levels(
     if not isinstance(payload, dict):
         raise ValueError("feature manifest must be a JSON object")
     excluded = set(payload.get("excluded_features") or []) | IDENTITY_COLUMNS | LABEL_COLUMNS | NON_FEATURE_COLUMNS
-    raw_numeric_columns = raw_numeric_columns_for_method(method)
+    raw_numeric_columns = raw_numeric_columns_for_method(method) | LEGACY_CONTEXT_NUMERIC_COLUMNS
 
     def clean(values: Any, *, allowed_columns: set[str]) -> list[str]:
         if not isinstance(values, list):
@@ -372,8 +373,18 @@ def safe_feature_names(feature_names: Sequence[str]) -> list[str]:
     return result
 
 
+def label_value(row: dict[str, Any], *, label_column: str) -> int | None:
+    if label_column == "ret3_ge5_label":
+        ret3 = as_float(row.get("ret3"))
+        if ret3 is None:
+            return None
+        return 3 if ret3 >= 5.0 else 0
+    value = as_float(row.get(label_column))
+    return None if value is None else int(value)
+
+
 def rows_for_dates(rows: Sequence[dict[str, Any]], dates: set[str], *, label_column: str = "rank_label_3d") -> list[dict[str, Any]]:
-    filtered = [row for row in rows if str(row.get("date")) in dates and as_float(row.get(label_column)) is not None]
+    filtered = [row for row in rows if str(row.get("date")) in dates and label_value(row, label_column=label_column) is not None]
     return sorted(filtered, key=lambda row: (str(row.get("date")), str(row.get("code"))))
 
 
@@ -427,7 +438,7 @@ def partition_diagnostics(rows: Sequence[dict[str, Any]], *, partition: str) -> 
 
 
 def labels(rows: Sequence[dict[str, Any]], *, label_column: str) -> list[int]:
-    return [int(as_float(row.get(label_column)) or 0) for row in rows]
+    return [int(label_value(row, label_column=label_column) or 0) for row in rows]
 
 
 def assign_scores(rows: Sequence[dict[str, Any]], scores: Sequence[float]) -> list[dict[str, Any]]:
@@ -633,6 +644,16 @@ def report_paths(
     return output_dir / f"lgbm_rank_report{suffix}.json", output_dir / f"lgbm_rank_report{suffix}.md"
 
 
+def parse_label_gain(value: str) -> list[int]:
+    try:
+        gains = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("label gain must be comma-separated integers") from exc
+    if not gains:
+        raise argparse.ArgumentTypeError("label gain must contain at least one integer")
+    return gains
+
+
 def resolve_dataset_path(dataset: Path | None, *, method: str) -> Path:
     return dataset or PROJECT_ROOT / "diagnostics" / "ml" / method / "rank_dataset.csv"
 
@@ -653,6 +674,8 @@ def train_model(
     learning_rate: float,
     label_column: str,
     num_threads: int,
+    label_gain: Sequence[int] | None = None,
+    lambdarank_truncation_level: int = 0,
     fixed_categorical_levels: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], int]:
     result = train_model_result(
@@ -666,6 +689,8 @@ def train_model(
         learning_rate=learning_rate,
         label_column=label_column,
         num_threads=num_threads,
+        label_gain=label_gain,
+        lambdarank_truncation_level=lambdarank_truncation_level,
         fixed_categorical_levels=fixed_categorical_levels,
     )
     return result.train_scored, result.test_scored, result.top_features, result.feature_count
@@ -683,6 +708,8 @@ def train_model_result(
     learning_rate: float,
     label_column: str,
     num_threads: int,
+    label_gain: Sequence[int] | None = None,
+    lambdarank_truncation_level: int = 0,
     fixed_categorical_levels: dict[str, list[str]] | None = None,
 ) -> TrainedModelResult:
     import lightgbm as lgb
@@ -690,6 +717,7 @@ def train_model_result(
 
     if not train_rows or not test_rows:
         return TrainedModelResult([], [], [], 0, None, [], [], {})
+    resolved_label_gain = list(label_gain or DEFAULT_LABEL_GAIN)
     levels = category_levels(
         train_rows,
         categorical_columns,
@@ -708,18 +736,21 @@ def train_model_result(
         feature_name=lightgbm_feature_names,
         free_raw_data=False,
     )
-    model = lgb.train(
-        {
+    params = {
             "objective": "lambdarank",
             "metric": "ndcg",
             "learning_rate": learning_rate,
             "num_leaves": num_leaves,
             "min_data_in_leaf": min_data_in_leaf,
-            "label_gain": [0, 1, 3, 7],
+            "label_gain": resolved_label_gain,
             "seed": 17,
             "verbosity": -1,
             **({"num_threads": num_threads} if num_threads > 0 else {}),
-        },
+    }
+    if lambdarank_truncation_level > 0:
+        params["lambdarank_truncation_level"] = lambdarank_truncation_level
+    model = lgb.train(
+        params,
         train_dataset,
         num_boost_round=num_boost_round,
     )
@@ -757,12 +788,15 @@ def train_and_report(
     rolling_test_dates: int = 0,
     label_column: str = "rank_label_3d",
     num_threads: int = 0,
+    label_gain: Sequence[int] | None = None,
+    lambdarank_truncation_level: int = 0,
     method: str = DEFAULT_METHOD,
 ) -> dict[str, Any]:
     if train_mode not in TRAIN_MODES:
         raise ValueError(f"unsupported train_mode: {train_mode}")
     if label_column not in TRAIN_LABEL_COLUMNS:
         raise ValueError(f"unsupported label_column: {label_column}")
+    resolved_label_gain = list(label_gain or DEFAULT_LABEL_GAIN)
 
     rows = read_dataset(dataset)
     train_dates, test_dates = walk_forward_split_dates([str(row.get("date")) for row in rows], test_ratio=test_ratio)
@@ -797,6 +831,8 @@ def train_and_report(
             learning_rate=learning_rate,
             label_column=label_column,
             num_threads=num_threads,
+            label_gain=resolved_label_gain,
+            lambdarank_truncation_level=lambdarank_truncation_level,
             fixed_categorical_levels=fixed_categorical_levels,
         )
         train_scored = model_result.train_scored
@@ -829,6 +865,8 @@ def train_and_report(
                 learning_rate=learning_rate,
                 label_column=label_column,
                 num_threads=num_threads,
+                label_gain=resolved_label_gain,
+                lambdarank_truncation_level=lambdarank_truncation_level,
                 fixed_categorical_levels=fixed_categorical_levels,
             )
             train_scored.extend(env_train_scored)
@@ -867,6 +905,8 @@ def train_and_report(
                 "num_boost_round": num_boost_round,
                 "learning_rate": learning_rate,
                 "num_threads": num_threads,
+                "label_gain": resolved_label_gain,
+                "lambdarank_truncation_level": lambdarank_truncation_level,
             },
         )
         model_artifacts = write_model_artifacts(model_result.model, metadata, output_dir)
@@ -889,6 +929,8 @@ def train_and_report(
             "num_boost_round": num_boost_round,
             "learning_rate": learning_rate,
             "num_threads": num_threads,
+            "label_gain": resolved_label_gain,
+            "lambdarank_truncation_level": lambdarank_truncation_level,
         },
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
@@ -928,6 +970,8 @@ def train_and_report(
                 learning_rate=learning_rate,
                 label_column=label_column,
                 num_threads=num_threads,
+                label_gain=resolved_label_gain,
+                lambdarank_truncation_level=lambdarank_truncation_level,
                 fixed_categorical_levels=fixed_categorical_levels,
             )
             fold_report = {
@@ -977,6 +1021,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=0.05)
     parser.add_argument("--num-threads", type=int, default=0)
     parser.add_argument("--label-column", choices=sorted(TRAIN_LABEL_COLUMNS), default="rank_label_3d")
+    parser.add_argument("--label-gain", type=parse_label_gain, default=DEFAULT_LABEL_GAIN)
+    parser.add_argument("--lambdarank-truncation-level", type=int, default=0)
     parser.add_argument("--rolling-folds", type=int, default=0)
     parser.add_argument("--rolling-train-dates", type=int, default=240)
     parser.add_argument("--rolling-test-dates", type=int, default=40)
@@ -1000,6 +1046,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         learning_rate=args.learning_rate,
         num_threads=args.num_threads,
         label_column=args.label_column,
+        label_gain=args.label_gain,
+        lambdarank_truncation_level=args.lambdarank_truncation_level,
         rolling_folds=args.rolling_folds,
         rolling_train_dates=args.rolling_train_dates,
         rolling_test_dates=args.rolling_test_dates,

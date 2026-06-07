@@ -231,6 +231,7 @@ pub fn build_intraday_market_rows(
         close: row.close,
         vol: row.vol,
         turnover_rate: None,
+        db_factors: BTreeMap::new(),
     }));
     rows.sort_by(|left, right| {
         left.ts_code

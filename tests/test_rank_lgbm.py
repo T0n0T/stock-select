@@ -1,6 +1,8 @@
 import csv
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,13 +13,16 @@ from scripts.ml.train_rank_lgbm import (
     build_feature_matrix_from_metadata,
     build_model_metadata,
     evaluate_model,
+    labels,
     load_feature_manifest,
+    parse_args,
     resolve_dataset_path,
     resolve_output_dir,
     rolling_walk_forward_splits,
     rows_for_dates,
     select_feature_columns,
     train_and_report,
+    train_model_result,
     walk_forward_split_dates,
 )
 from scripts.ml import build_rank_dataset as rank_dataset_schema
@@ -27,6 +32,11 @@ class RankLgbmTest(unittest.TestCase):
     def test_default_paths_are_method_scoped(self):
         self.assertTrue(resolve_dataset_path(None, method="b1").as_posix().endswith("diagnostics/ml/b1/rank_dataset.csv"))
         self.assertTrue(resolve_output_dir(None, method="b1").as_posix().endswith("diagnostics/ml/b1/model"))
+
+    def test_parse_args_accepts_comma_separated_label_gain(self):
+        args = parse_args(["--label-gain", "0,1,5,15"])
+
+        self.assertEqual(args.label_gain, [0, 1, 5, 15])
 
     def test_walk_forward_split_dates_keeps_date_groups_ordered(self):
         train_dates, test_dates = walk_forward_split_dates(
@@ -177,6 +187,64 @@ class RankLgbmTest(unittest.TestCase):
 
         self.assertEqual([row["code"] for row in selected], ["b"])
 
+    def test_ret3_ge5_label_is_derived_from_forward_return(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "ret3": "6.2"},
+            {"date": "2026-01-01", "code": "b", "ret3": "4.9"},
+            {"date": "2026-01-01", "code": "c", "ret3": ""},
+        ]
+
+        selected = rows_for_dates(rows, {"2026-01-01"}, label_column="ret3_ge5_label")
+
+        self.assertEqual([row["code"] for row in selected], ["a", "b"])
+        self.assertEqual(labels(selected, label_column="ret3_ge5_label"), [3, 0])
+
+    def test_train_model_result_accepts_custom_label_gain(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "ret3": "6", "ret5": "6", "x": "1"},
+            {"date": "2026-01-01", "code": "b", "ret3": "-1", "ret5": "-1", "x": "0"},
+            {"date": "2026-01-02", "code": "a", "ret3": "7", "ret5": "7", "x": "1"},
+            {"date": "2026-01-02", "code": "b", "ret3": "0", "ret5": "0", "x": "0"},
+        ]
+        captured = {}
+
+        class DummyDataset:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        class DummyModel:
+            def predict(self, matrix):
+                return [float(row[0]) for row in matrix]
+
+            def feature_importance(self):
+                return [1]
+
+        def fake_train(params, *_args, **_kwargs):
+            captured["label_gain"] = params["label_gain"]
+            captured["lambdarank_truncation_level"] = params["lambdarank_truncation_level"]
+            return DummyModel()
+
+        fake_lightgbm = types.SimpleNamespace(Dataset=DummyDataset, train=fake_train)
+        fake_numpy = types.SimpleNamespace(array=lambda values, dtype=None: values)
+        with patch.dict(sys.modules, {"lightgbm": fake_lightgbm, "numpy": fake_numpy}):
+            train_model_result(
+                rows,
+                rows,
+                numeric_columns=["x"],
+                categorical_columns=[],
+                num_leaves=5,
+                min_data_in_leaf=1,
+                num_boost_round=1,
+                learning_rate=0.1,
+                label_column="ret3_ge5_label",
+                num_threads=1,
+                label_gain=[0, 1, 4, 12],
+                lambdarank_truncation_level=8,
+            )
+
+        self.assertEqual(captured["label_gain"], [0, 1, 4, 12])
+        self.assertEqual(captured["lambdarank_truncation_level"], 8)
+
     def test_evaluate_model_reports_ret3_and_ret5_metrics(self):
         rows = [
             {"date": "2026-01-01", "code": "a", "model_score": 3, "ret3": "6", "ret5": "-1"},
@@ -217,6 +285,27 @@ class RankLgbmTest(unittest.TestCase):
 
         self.assertEqual(numeric, ["close_to_zxdkx_pct"])
         self.assertEqual(categorical, ["env", "signal_type"])
+
+    def test_load_feature_manifest_keeps_legacy_context_numeric_columns(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "feature_manifest.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "numeric_features": ["close_to_zxdkx_pct", "price_vs_90d_mid"],
+                        "categorical_features": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            numeric, categorical = load_feature_manifest(
+                path,
+                available_columns={"close_to_zxdkx_pct", "price_vs_90d_mid"},
+            )
+
+        self.assertEqual(numeric, ["close_to_zxdkx_pct", "price_vs_90d_mid"])
+        self.assertEqual(categorical, [])
 
     def test_load_feature_manifest_uses_method_registered_raw_factors(self):
         original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
@@ -325,6 +414,79 @@ class RankLgbmTest(unittest.TestCase):
                 )
 
         self.assertEqual(report["feature_count"], 4)
+
+    def test_train_report_persists_custom_label_gain(self):
+        class DummyModel:
+            def save_model(self, path: str) -> None:
+                Path(path).write_text("dummy model", encoding="utf-8")
+
+        def fake_train_model_result(train_rows, test_rows, **kwargs):
+            self.assertEqual(kwargs["label_gain"], [0, 1, 5, 15])
+            self.assertEqual(kwargs["lambdarank_truncation_level"], 8)
+
+            def scored(rows):
+                return [
+                    {
+                        **row,
+                        "model_score": float(row.get("ret3") or 0),
+                    }
+                    for row in rows
+                ]
+
+            from scripts.ml.train_rank_lgbm import TrainedModelResult
+
+            return TrainedModelResult(
+                train_scored=scored(train_rows),
+                test_scored=scored(test_rows),
+                top_features=[{"feature": "close_to_zxdkx_pct", "importance": 1}],
+                feature_count=1,
+                model=DummyModel(),
+                feature_names=["close_to_zxdkx_pct"],
+                lightgbm_feature_names=["close_to_zxdkx_pct"],
+                category_levels={},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "close_to_zxdkx_pct"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "close_to_zxdkx_pct": "1"},
+                        {"date": "2026-01-01", "code": "b", "rank_label_3d": "1", "ret3": "-1", "ret5": "0", "close_to_zxdkx_pct": "2"},
+                        {"date": "2026-01-02", "code": "a", "rank_label_3d": "2", "ret3": "7", "ret5": "4", "close_to_zxdkx_pct": "3"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "close_to_zxdkx_pct": "4"},
+                    ]
+                )
+            output_dir = root / "model"
+
+            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+                report = train_and_report(
+                    dataset,
+                    output_dir,
+                    test_ratio=0.5,
+                    feature_set="raw_numeric",
+                    num_leaves=5,
+                    min_data_in_leaf=120,
+                    num_boost_round=10,
+                    learning_rate=0.05,
+                    label_column="ret3_ge5_label",
+                    label_gain=[0, 1, 5, 15],
+                    lambdarank_truncation_level=8,
+                    method="b2",
+                )
+
+            metadata = json.loads((output_dir / "model_metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(report["model_params"]["label_gain"], [0, 1, 5, 15])
+        self.assertEqual(report["model_params"]["lambdarank_truncation_level"], 8)
+        self.assertEqual(metadata["model_params"]["label_gain"], [0, 1, 5, 15])
+        self.assertEqual(metadata["model_params"]["lambdarank_truncation_level"], 8)
 
     def test_average_metric_dicts_skip_missing_values(self):
         average = average_metric_dicts(

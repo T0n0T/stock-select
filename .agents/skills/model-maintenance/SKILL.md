@@ -5,11 +5,12 @@ description: Use when retraining, validating, exporting, promoting, rolling back
 
 # Model Maintenance
 
-本 skill 用于新 Rust CLI 仓库的模型维护。当前已落地的是 b2 LightGBM；训练维护脚本按 `--method` 组织，后续如接入其他方法或筛选维护流程，复用同一批脚本并按 method 增加配置章节。生产 `run/review` 仍只走 Rust，不接入 Python predict。
+本 skill 用于新 Rust CLI 仓库的模型维护。LightGBM 训练维护脚本按 `--method` 组织，可维护 b2/b3 等 method 的候选模型产物；生产 `run/review` 仍只走 Rust capability，不接入 Python predict。
 
 ## 边界
 
 - 默认发布目标来自当前仓库 `.env` 的 `STOCK_SELECT_RUNTIME_ROOT`，发布到 `<runtime>/models/<method>/`。
+- 归档目录按 method 隔离，写入 `<runtime>/models/archive/<method>/<version>/`；旧共享 archive 只在 `model_card.json.target` 匹配当前 method 时兼容读取。
 - dataset 默认从当前 `candidates/<date>.<method>.json` 构建样本集合，但训练因子必须来自 Rust 生成的 `<runtime>/factors/<artifact_key>.<method>/factors.json`；`--source select` 只用于回放线上 run/display 样本上下文。
 - `diagnostics/ml/<method>/` 下的 dataset、score CSV、report 只用于训练、回测和维护，不进入 Rust 生产推理。
 - 不打印 `.env`、DSN、token 的具体值。
@@ -31,7 +32,7 @@ uv run scripts/ml/backfill_candidates.py \
   --method "$METHOD" \
   --start-date "$TRAIN_START_DATE" \
   --end-date "$TRAIN_END_DATE" \
-  --workers 4
+  --workers 16
 ```
 
 缺少 factor artifact 时，先为对应日期运行：
@@ -50,7 +51,7 @@ uv run scripts/ml/backfill_candidates.py \
   --method "$METHOD" \
   --start-date "$TRAIN_START_DATE" \
   --end-date "$TRAIN_END_DATE" \
-  --workers 4 \
+  --workers 16 \
   --dry-run
 ```
 
@@ -77,7 +78,7 @@ uv run scripts/ml/train_rank_lgbm.py \
   --min-data-in-leaf 120 \
   --num-boost-round 60 \
   --learning-rate 0.05 \
-  --num-threads 4 \
+  --num-threads 16 \
   --rolling-folds 5 \
   --rolling-train-dates 240 \
   --rolling-test-dates 40
@@ -94,6 +95,8 @@ uv run scripts/ml/export_lgbm_scores.py \
   --method "$METHOD" \
   --model-output-dir "diagnostics/ml/$METHOD/model"
 ```
+
+若 `--model-output-dir` 指向 `diagnostics/ml/$METHOD/tuning/<trial>`，默认 feature manifest、score CSV 和 summary 都跟随该 trial 目录，dataset 仍来自 `diagnostics/ml/$METHOD/rank_dataset.csv`。
 
 发布前先看 dataset summary 和训练 report。短窗口试训即使能成功训练，只要样本日期少、label 覆盖不足，或 `top3_ret3_le_0_rate` 明显偏高，就只保留为 diagnostics，不发布。
 
@@ -118,6 +121,16 @@ uv run scripts/ml/promote_lgbm_model.py \
 uv run scripts/ml/promote_lgbm_model.py \
   --method "$METHOD" \
   --rollback <archive-version>
+```
+
+也可以走统一入口：
+
+```bash
+scripts/model_maintenance.sh --method "$METHOD" status
+scripts/model_maintenance.sh --method "$METHOD" archives
+scripts/model_maintenance.sh --method "$METHOD" dry-run-promote "diagnostics/ml/$METHOD/model"
+scripts/model_maintenance.sh --method "$METHOD" promote "diagnostics/ml/$METHOD/model"
+scripts/model_maintenance.sh --method "$METHOD" switch <archive-version>
 ```
 
 ## 验证
