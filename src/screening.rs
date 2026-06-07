@@ -15,6 +15,7 @@ use crate::model::{MarketRow, Method, PreparedRow, ScreenResult};
 use crate::strategies::StrategyOutput;
 use crate::strategies::b2::run_b2_strategy_from_refs;
 use crate::strategies::b3::run_b3_strategy_from_refs;
+use crate::strategies::lsh::run_lsh_strategy_from_refs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolSource {
@@ -104,7 +105,7 @@ where
 
     let (pool_codes, resolved_pool_file) = match request.pool_source {
         PoolSource::TurnoverTop => (
-            filter_turnover_top_pool_codes(&prepared, request.pick_date, 5000),
+            filter_turnover_top_pool_codes(&prepared, request.method, request.pick_date, 5000),
             None,
         ),
         PoolSource::Custom => {
@@ -202,7 +203,7 @@ where
     )?;
     let (pool_codes, resolved_pool_file) = match request.pool_source {
         PoolSource::TurnoverTop => (
-            filter_turnover_top_pool_codes(&prepared, request.pick_date, 5000),
+            filter_turnover_top_pool_codes(&prepared, request.method, request.pick_date, 5000),
             None,
         ),
         PoolSource::Custom => {
@@ -286,7 +287,7 @@ fn screen_artifact_key(pick_date: NaiveDate, intraday: bool) -> String {
 
 fn ensure_screen_supported(method: Method) -> anyhow::Result<()> {
     match method {
-        Method::B2 | Method::B3 => Ok(()),
+        Method::B2 | Method::B3 | Method::Lsh => Ok(()),
         _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
     }
 }
@@ -299,6 +300,7 @@ fn run_screen_strategy(
     match method {
         Method::B2 => Ok(run_b2_strategy_from_refs(rows, pick_date)),
         Method::B3 => Ok(run_b3_strategy_from_refs(rows, pick_date)),
+        Method::Lsh => Ok(run_lsh_strategy_from_refs(rows, pick_date)),
         _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
     }
 }
@@ -397,17 +399,14 @@ fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
 
 fn filter_turnover_top_pool_codes(
     prepared: &[PreparedRow],
+    method: Method,
     pick_date: NaiveDate,
     top_m: usize,
 ) -> BTreeSet<String> {
     let mut ranked = prepared
         .iter()
         .filter(|row| row.trade_date == pick_date)
-        .filter(|row| {
-            row.ma25
-                .zip(row.ma60)
-                .is_some_and(|(ma25, ma60)| ma25 > ma60)
-        })
+        .filter(|row| turnover_top_pool_row_allowed(row, method))
         .map(|row| (row.turnover_n, row.ts_code.as_str()))
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| right.0.total_cmp(&left.0).then(left.1.cmp(right.1)));
@@ -416,6 +415,17 @@ fn filter_turnover_top_pool_codes(
         .take(top_m)
         .map(|(_turnover, code)| code.to_string())
         .collect()
+}
+
+fn turnover_top_pool_row_allowed(row: &PreparedRow, method: Method) -> bool {
+    match method {
+        Method::B2 | Method::B3 => row
+            .ma25
+            .zip(row.ma60)
+            .is_some_and(|(ma25, ma60)| ma25 > ma60),
+        Method::Lsh => true,
+        _ => true,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

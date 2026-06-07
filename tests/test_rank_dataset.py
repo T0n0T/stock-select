@@ -84,6 +84,33 @@ class RankDatasetTest(unittest.TestCase):
         finally:
             rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
+    def test_lsh_dataset_schema_has_independent_method_entry_with_lsh_specific_factors(self):
+        lsh_specific = [
+            "lsh_daily_macd_wave_index",
+            "lsh_weekly_macd_wave_index",
+            "lsh_daily_macd_rising_initial_flag",
+            "lsh_weekly_macd_rising_initial_flag",
+            "lsh_daily_macd_top_divergence_flag",
+            "lsh_weekly_macd_top_divergence_flag",
+            "lsh_weekly_daily_constructive_combo_flag",
+            "lsh_bullish_engulf_prev_bearish_flag",
+            "lsh_volume_bullish_engulf_prev_bearish_flag",
+            "lsh_bullish_engulf_volume_ratio",
+        ]
+
+        for column in lsh_specific:
+            self.assertIn(column, dataset_columns_for_method("lsh"))
+            self.assertIn(column, raw_factor_columns_for_method("lsh"))
+            self.assertNotIn(column, dataset_columns_for_method("b2"))
+            self.assertNotIn(column, raw_factor_columns_for_method("b2"))
+
+        lsh_excluded_after_ablation = ["vr_qfq", "cyq_cost_85_to_close_pct"]
+        for column in lsh_excluded_after_ablation:
+            self.assertNotIn(column, dataset_columns_for_method("lsh"))
+            self.assertNotIn(column, raw_factor_columns_for_method("lsh"))
+            self.assertIn(column, dataset_columns_for_method("b2"))
+            self.assertIn(column, raw_factor_columns_for_method("b2"))
+
     def test_b2_dataset_schema_includes_db_and_market_state_factors(self):
         expected = [
             "boll_width_pct",

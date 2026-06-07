@@ -47,12 +47,6 @@ pub struct SelectionRunResult {
 
 pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRunResult> {
     ensure_model_run_supported(request.method)?;
-    if request.method != Method::B2 {
-        anyhow::bail!(
-            "{} selection run is not implemented",
-            request.method.as_str()
-        );
-    }
 
     let artifact_key = artifact_key_for_run(request.pick_date, request.intraday);
     let paths = SelectionRunPaths::new(&request.runtime_root, request.method, &artifact_key);
@@ -71,7 +65,8 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         model_artifacts.model_path.as_deref(),
         model_artifacts.metadata_path.as_deref(),
     )?;
-    let mut candidates = read_candidates(&request.candidates_path, request.pick_date)?;
+    let mut candidates =
+        read_candidates(&request.candidates_path, request.pick_date, request.method)?;
     inject_environment_factor(&mut candidates, request.environment.as_ref());
     eprintln!(
         "[selection] loaded candidates rows={} source={}",
@@ -81,6 +76,7 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
     inject_prepared_history_if_available(
         &mut candidates,
         &request.runtime_root,
+        request.method,
         request.pick_date,
         request.intraday,
     )?;
@@ -198,7 +194,11 @@ fn inject_environment_factor(
     }
 }
 
-fn read_candidates(path: &Path, pick_date: NaiveDate) -> anyhow::Result<Vec<SelectionCandidate>> {
+fn read_candidates(
+    path: &Path,
+    pick_date: NaiveDate,
+    method: Method,
+) -> anyhow::Result<Vec<SelectionCandidate>> {
     let payload: Value = serde_json::from_slice(&std::fs::read(path)?)?;
     let rows = payload
         .get("rows")
@@ -210,7 +210,11 @@ fn read_candidates(path: &Path, pick_date: NaiveDate) -> anyhow::Result<Vec<Sele
         })?;
 
     rows.iter()
-        .map(|row| candidate_from_legacy_json(row, pick_date))
+        .map(|row| {
+            let mut candidate = candidate_from_legacy_json(row, pick_date)?;
+            candidate.method = method;
+            Ok(candidate)
+        })
         .collect()
 }
 
@@ -233,6 +237,7 @@ fn read_model_metadata(path: Option<&Path>) -> anyhow::Result<Option<ModelFeatur
 fn inject_prepared_history_if_available(
     candidates: &mut [SelectionCandidate],
     runtime_root: &Path,
+    method: Method,
     pick_date: NaiveDate,
     intraday: bool,
 ) -> anyhow::Result<()> {
@@ -243,7 +248,7 @@ fn inject_prepared_history_if_available(
     let start_date = pick_date - Duration::days(366);
     let Some(rows) = load_prepared_cache_for_mode(
         runtime_root,
-        Method::B2,
+        method,
         pick_date,
         start_date,
         pick_date,

@@ -6,7 +6,8 @@ use crate::factors::series::{FactorList, push_category, push_number, rolling_mea
 use crate::factors::types::{FactorInputRow, FactorValue};
 use crate::factors::zx::zx_lines;
 use crate::macd_trends::{
-    classify_daily_macd_trend, classify_weekly_macd_trend, map_b2_macd_phase_score,
+    classify_daily_macd_trend, classify_weekly_macd_trend, is_constructive_macd_trend_combo,
+    map_b2_macd_phase_score,
 };
 use crate::model::PreparedRow;
 use crate::review_protocol::infer_signal_type;
@@ -33,6 +34,80 @@ pub fn push_b3_semantic_factors(
 ) {
     push_b2_family_semantic_factors(factors, history, signal, environment_state);
     push_b3_signal_context_factors(factors, history, signal);
+}
+
+pub fn push_lsh_semantic_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
+    if history.is_empty() {
+        return;
+    }
+
+    let prepared = prepared_rows(history);
+    let daily_trend = classify_daily_macd_trend(&prepared);
+    let weekly_trend = classify_weekly_macd_trend(&prepared);
+
+    push_number(
+        factors,
+        "lsh_daily_macd_wave_index",
+        Some(daily_trend.metrics.state_machine_wave_index as f64),
+    );
+    push_number(
+        factors,
+        "lsh_weekly_macd_wave_index",
+        Some(weekly_trend.metrics.state_machine_wave_index as f64),
+    );
+    push_bool(
+        factors,
+        "lsh_daily_macd_rising_initial_flag",
+        daily_trend.is_rising_initial,
+    );
+    push_bool(
+        factors,
+        "lsh_weekly_macd_rising_initial_flag",
+        weekly_trend.is_rising_initial,
+    );
+    push_bool(
+        factors,
+        "lsh_daily_macd_top_divergence_flag",
+        daily_trend.is_top_divergence,
+    );
+    push_bool(
+        factors,
+        "lsh_weekly_macd_top_divergence_flag",
+        weekly_trend.is_top_divergence,
+    );
+    push_bool(
+        factors,
+        "lsh_weekly_daily_constructive_combo_flag",
+        is_constructive_macd_trend_combo(&weekly_trend, &daily_trend),
+    );
+    push_lsh_bullish_engulfing_factors(factors, history);
+}
+
+fn push_lsh_bullish_engulfing_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
+    let latest = history.last();
+    let previous = history.iter().rev().nth(1);
+    let bullish_engulf = latest.zip(previous).is_some_and(|(latest, previous)| {
+        previous.close < previous.open
+            && latest.close > latest.open
+            && latest.open <= previous.close
+            && latest.close >= previous.open
+    });
+    let volume_ratio = latest.zip(previous).and_then(|(latest, previous)| {
+        (previous.volume > 0.0).then_some(latest.volume / previous.volume)
+    });
+    let volume_bullish_engulf = bullish_engulf && volume_ratio.is_some_and(|ratio| ratio > 1.0);
+
+    push_bool(
+        factors,
+        "lsh_bullish_engulf_prev_bearish_flag",
+        bullish_engulf,
+    );
+    push_bool(
+        factors,
+        "lsh_volume_bullish_engulf_prev_bearish_flag",
+        volume_bullish_engulf,
+    );
+    push_number(factors, "lsh_bullish_engulf_volume_ratio", volume_ratio);
 }
 
 pub fn push_b3_signal_context_factors(

@@ -243,6 +243,8 @@ fn review_writes_llm_tasks_without_changing_display_rank() {
         "b2",
         "--limit",
         "1",
+        "--environment-state",
+        "strong",
     ])
     .assert()
     .success()
