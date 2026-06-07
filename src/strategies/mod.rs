@@ -4,6 +4,7 @@ use crate::model::{Candidate, PreparedRow};
 
 pub mod b2;
 pub mod b3;
+pub mod lsh;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrategyOutput {

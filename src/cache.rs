@@ -126,6 +126,7 @@ fn build_metadata(
             "b1".to_string(),
             "b2".to_string(),
             "b3".to_string(),
+            "lsh".to_string(),
             "dribull".to_string(),
         ],
         pick_date,
@@ -280,15 +281,27 @@ fn metadata_matches(
 ) -> bool {
     metadata.artifact_version == PREPARED_CACHE_ARTIFACT_VERSION
         && metadata.schema_version == PREPARED_CACHE_SCHEMA_VERSION
-        && metadata
-            .shared_methods
-            .iter()
-            .any(|item| item == method.as_str())
+        && metadata_method_matches(metadata, method)
         && metadata.pick_date == pick_date
         && (metadata.start_date == start_date
             || metadata.mode.as_deref() == Some("intraday_snapshot"))
         && metadata.end_date == end_date
         && metadata.source_table == "daily_market"
+}
+
+fn metadata_method_matches(metadata: &PreparedCacheMetadata, method: Method) -> bool {
+    if metadata
+        .shared_methods
+        .iter()
+        .any(|item| item == method.as_str())
+    {
+        return true;
+    }
+    method == Method::Lsh
+        && metadata
+            .shared_methods
+            .iter()
+            .any(|item| item == "b2" || item == "b3")
 }
 
 pub fn history_payload_for_code(rows: &[PreparedRow], code: &str) -> Vec<Value> {

@@ -277,6 +277,39 @@ fn b3_can_read_shared_prepared_cache_written_for_b2() {
 }
 
 #[test]
+fn lsh_can_read_legacy_shared_prepared_cache_without_lsh_metadata_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 3).unwrap();
+    let data_path = prepared_cache_data_path(root.path(), pick_date);
+    std::fs::create_dir_all(data_path.parent().unwrap()).unwrap();
+    std::fs::write(&data_path, prepared_cache_bytes()).unwrap();
+    std::fs::write(
+        prepared_cache_meta_path(root.path(), pick_date),
+        serde_json::to_vec_pretty(&json!({
+            "artifact_version": 1,
+            "method": "b2",
+            "shared_methods": ["b1", "b2", "b3", "dribull"],
+            "pick_date": "2026-06-04",
+            "start_date": "2025-06-03",
+            "end_date": "2026-06-04",
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
+            "row_count": 1,
+            "symbol_count": 1,
+            "source_table": "daily_market"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let rows = load_prepared_cache(root.path(), Method::Lsh, pick_date, start_date, pick_date)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(rows[0].ts_code, "000001.SZ");
+}
+
+#[test]
 fn builds_history_payload_for_candidate_code_from_prepared_rows() {
     let date1 = NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
     let date2 = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();

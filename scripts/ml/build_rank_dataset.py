@@ -145,6 +145,25 @@ B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_plus_flag",
 ]
 B3_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + B3_SPECIFIC_RAW_FACTOR_COLUMNS
+LSH_SPECIFIC_RAW_FACTOR_COLUMNS = [
+    "lsh_daily_macd_wave_index",
+    "lsh_weekly_macd_wave_index",
+    "lsh_daily_macd_rising_initial_flag",
+    "lsh_weekly_macd_rising_initial_flag",
+    "lsh_daily_macd_top_divergence_flag",
+    "lsh_weekly_macd_top_divergence_flag",
+    "lsh_weekly_daily_constructive_combo_flag",
+    "lsh_bullish_engulf_prev_bearish_flag",
+    "lsh_volume_bullish_engulf_prev_bearish_flag",
+    "lsh_bullish_engulf_volume_ratio",
+]
+LSH_EXCLUDED_RAW_FACTOR_COLUMNS = {
+    "vr_qfq",
+    "cyq_cost_85_to_close_pct",
+}
+LSH_RAW_FACTOR_COLUMNS = [
+    column for column in RAW_FACTOR_COLUMNS if column not in LSH_EXCLUDED_RAW_FACTOR_COLUMNS
+] + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
 LABEL_COLUMNS = [
     "ret3",
     "ret5",
@@ -162,6 +181,7 @@ METHOD_REVIEW_COLUMNS = {
 METHOD_RAW_FACTOR_COLUMNS = {
     "b2": RAW_FACTOR_COLUMNS,
     "b3": B3_RAW_FACTOR_COLUMNS,
+    "lsh": LSH_RAW_FACTOR_COLUMNS,
 }
 
 

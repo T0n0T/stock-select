@@ -10,7 +10,9 @@ use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
 use crate::factors::price_position::{
     push_latest_bar_shape_factors, push_price_position_factors, push_range_compression,
 };
-use crate::factors::semantic::{push_b2_semantic_factors, push_b3_semantic_factors};
+use crate::factors::semantic::{
+    push_b2_semantic_factors, push_b3_semantic_factors, push_lsh_semantic_factors,
+};
 use crate::factors::series::{FactorList, mean_tail, push_number, rolling_mean_series};
 use crate::factors::types::{FactorInputRow, FactorRow, FactorValue};
 use crate::factors::volume::{push_latest_volume_shrink_factor, push_volume_turnover_factors};
@@ -22,6 +24,7 @@ pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v2";
 
 const B2_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B2Semantic];
 const B3_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B3Semantic];
+const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::LshSemantic];
 const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +32,7 @@ pub enum FactorBundle {
     RawCommon,
     B2Semantic,
     B3Semantic,
+    LshSemantic,
 }
 
 impl FactorBundle {
@@ -37,6 +41,7 @@ impl FactorBundle {
             Self::RawCommon => "raw_common",
             Self::B2Semantic => "b2_semantic",
             Self::B3Semantic => "b3_semantic",
+            Self::LshSemantic => "lsh_semantic",
         }
     }
 }
@@ -65,6 +70,11 @@ pub fn factor_profile_for_method(method: Method) -> FactorProfile {
             method,
             name: "b3",
             bundles: B3_FACTOR_BUNDLES,
+        },
+        Method::Lsh => FactorProfile {
+            method,
+            name: "lsh",
+            bundles: LSH_FACTOR_BUNDLES,
         },
         _ => FactorProfile {
             method,
@@ -245,6 +255,9 @@ fn history_factor_fields_for_profile(
                     previous.map(|row| row.close),
                 );
                 push_b3_semantic_factors(&mut factors, history, signal, environment_state);
+            }
+            FactorBundle::LshSemantic => {
+                push_lsh_semantic_factors(&mut factors, history);
             }
         }
     }

@@ -7,10 +7,11 @@ use stock_select::engine::types::{FactorRow, FactorValue};
 use stock_select::model::Method;
 
 #[test]
-fn b2_default_model_dir_matches_runtime_contract() {
+fn lightgbm_default_model_dirs_match_runtime_contract() {
     assert_eq!(default_model_dir(Method::B2).unwrap(), "models/b2");
+    assert_eq!(default_model_dir(Method::B3).unwrap(), "models/b3");
+    assert_eq!(default_model_dir(Method::Lsh).unwrap(), "models/lsh");
     assert!(default_model_dir(Method::B1).is_none());
-    assert!(default_model_dir(Method::B3).is_none());
 }
 
 #[test]
@@ -88,10 +89,35 @@ fn b1_model_resolution_is_unsupported() {
 }
 
 #[test]
-fn b3_model_resolution_is_unsupported() {
+fn b3_model_resolution_accepts_complete_default_artifacts() {
     let temp = tempfile::tempdir().unwrap();
-    let err = resolve_method_model_artifacts(Method::B3, temp.path()).unwrap_err();
-    assert!(err.to_string().contains("b3 model review is not available"));
+    let model_dir = temp.path().join(default_model_dir(Method::B3).unwrap());
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
+
+    let resolved = resolve_method_model_artifacts(Method::B3, temp.path()).unwrap();
+    assert_eq!(resolved.model_path, Some(model_dir.join("model.txt")));
+    assert_eq!(
+        resolved.metadata_path,
+        Some(model_dir.join("model_metadata.json"))
+    );
+}
+
+#[test]
+fn lsh_model_resolution_accepts_complete_default_artifacts() {
+    let temp = tempfile::tempdir().unwrap();
+    let model_dir = temp.path().join(default_model_dir(Method::Lsh).unwrap());
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
+
+    let resolved = resolve_method_model_artifacts(Method::Lsh, temp.path()).unwrap();
+    assert_eq!(resolved.model_path, Some(model_dir.join("model.txt")));
+    assert_eq!(
+        resolved.metadata_path,
+        Some(model_dir.join("model_metadata.json"))
+    );
 }
 
 #[test]

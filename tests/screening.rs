@@ -249,6 +249,54 @@ fn screen_b3_writes_b3_candidate_artifact() {
 }
 
 #[test]
+fn screen_lsh_writes_lsh_candidate_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+    let start_date = pick_date - Duration::days(366);
+    let mut rows = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let latest = rows.last_mut().unwrap();
+    latest.ma60 = latest.ma25.map(|ma25| ma25 + 1.0);
+    write_prepared_cache(
+        temp.path(),
+        Method::Lsh,
+        pick_date,
+        start_date,
+        pick_date,
+        &rows,
+    )
+    .unwrap();
+
+    let output_path = run_screen_with_loader(
+        ScreenRequest {
+            method: Method::Lsh,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_dsn, _start_date, _end_date| panic!("lsh screen test should reuse prepared cache"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output_path,
+        temp.path().join("candidates/2026-03-06.lsh.json")
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
+    assert_eq!(payload["method"], "lsh");
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
+    assert_eq!(payload["candidates"][0]["signal"], "LSH");
+    assert_eq!(payload["stats"]["selected_lsh"], 1);
+}
+
+#[test]
 fn screen_b2_does_not_repeat_signal_in_same_j_turn_up_cycle() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
@@ -747,4 +795,58 @@ fn prepared_row_at_date(
         yellow_b1: false,
         db_factors: Default::default(),
     }
+}
+
+fn lsh_prepared_rows(
+    code: &str,
+    first_date: NaiveDate,
+    len: usize,
+    constructive_weekly_monthly: bool,
+) -> Vec<PreparedRow> {
+    (0..len)
+        .map(|offset| {
+            let trade_date = first_date + Duration::days(offset as i64);
+            let base_close = if constructive_weekly_monthly {
+                10.0 + offset as f64 * 0.03 + (offset as f64 * offset as f64) * 0.0001
+            } else {
+                50.0 - offset as f64 * 0.03
+            };
+            let is_latest = offset + 1 == len;
+            let close = if is_latest {
+                base_close + 1.0
+            } else {
+                base_close
+            };
+            PreparedRow {
+                ts_code: code.to_string(),
+                trade_date,
+                open: if is_latest { close - 0.5 } else { close - 0.1 },
+                high: close + 0.2,
+                low: if is_latest { close - 1.5 } else { close - 0.2 },
+                close,
+                volume: 1000.0,
+                turnover_n: 1000.0 * close,
+                turnover_rate: Some(1.0),
+                k: 50.0,
+                d: 40.0,
+                j: 45.0,
+                zxdq: Some(close),
+                zxdkx: Some(close - 0.5),
+                dif: 0.3,
+                dea: 0.2,
+                macd_hist: 0.1,
+                ma25: Some(if is_latest { close - 0.7 } else { close - 0.5 }),
+                ma60: Some(close - 1.0),
+                ma144: Some(close - 1.5),
+                chg_d: None,
+                weekly_ma_bull: true,
+                max_vol_not_bearish: true,
+                v_shrink: false,
+                safe_mode: true,
+                lt_filter: true,
+                yellow_b1: false,
+                db_factors: Default::default(),
+            }
+        })
+        .collect()
 }

@@ -48,13 +48,26 @@ pub fn method_capability(method: Method) -> SelectionCapability {
             screen: true,
             chart: true,
             factor_extraction: true,
-            model_inference: false,
-            llm_review: false,
-            review_merge: false,
-            review_list: false,
-            run: false,
+            model_inference: true,
+            llm_review: true,
+            review_merge: true,
+            review_list: true,
+            run: true,
             analyze_symbol: true,
-            model_family: None,
+            model_family: Some("lightgbm"),
+        },
+        Method::Lsh => SelectionCapability {
+            method,
+            screen: true,
+            chart: true,
+            factor_extraction: true,
+            model_inference: true,
+            llm_review: true,
+            review_merge: true,
+            review_list: true,
+            run: true,
+            analyze_symbol: true,
+            model_family: Some("lightgbm"),
         },
         Method::Dribull => SelectionCapability {
             method,
@@ -79,7 +92,7 @@ pub fn ensure_model_run_supported(method: Method) -> anyhow::Result<()> {
     }
 
     anyhow::bail!(
-        "{} model review is not available: only b2 has trained LightGBM model artifacts",
+        "{} model review is not available: no trained LightGBM model artifact is enabled for this method",
         method.as_str()
     )
 }

@@ -437,6 +437,85 @@ fn b3_factor_profile_adds_b3_specific_raw_factors_only_for_b3() {
 }
 
 #[test]
+fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only_for_lsh() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(120);
+    let mut prepared = Vec::new();
+    for offset in 0..119 {
+        prepared.push(PreparedRow {
+            open: 10.0 + offset as f64 * 0.03,
+            high: 10.4 + offset as f64 * 0.03,
+            low: 9.8 + offset as f64 * 0.03,
+            close: 10.2 + offset as f64 * 0.03,
+            volume: 1000.0,
+            ..prepared_row(
+                "000001.SZ",
+                first_date + Duration::days(offset),
+                10.2 + offset as f64 * 0.03,
+                1000.0,
+            )
+        });
+    }
+    prepared.push(PreparedRow {
+        open: 16.0,
+        high: 16.2,
+        low: 14.8,
+        close: 15.0,
+        volume: 1000.0,
+        ..prepared_row("000001.SZ", first_date + Duration::days(119), 15.0, 1000.0)
+    });
+    prepared.push(PreparedRow {
+        open: 14.9,
+        high: 16.8,
+        low: 14.7,
+        close: 16.2,
+        volume: 1500.0,
+        ..prepared_row("000001.SZ", pick_date, 16.2, 1500.0)
+    });
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date,
+        close: 16.2,
+        turnover_n: prepared.last().unwrap().turnover_n,
+        signal: Some("LSH".to_string()),
+        yellow_b1: None,
+    };
+
+    let lsh_profile = factor_profile_for_method(Method::Lsh);
+    let lsh_rows = build_candidate_factor_rows(&[candidate.clone()], &prepared, Method::Lsh, None);
+    let b2_rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+    let lsh_factors = &lsh_rows[0].factors;
+    let b2_factors = &b2_rows[0].factors;
+
+    assert_eq!(lsh_profile.name, "lsh");
+    assert_eq!(
+        lsh_profile.bundle_names(),
+        vec!["raw_common", "lsh_semantic"]
+    );
+    assert_eq!(
+        lsh_rows[0].diagnostics["factor_bundles"],
+        serde_json::json!(["raw_common", "lsh_semantic"])
+    );
+    assert!(lsh_factors.contains_key("lsh_daily_macd_wave_index"));
+    assert!(lsh_factors.contains_key("lsh_weekly_macd_wave_index"));
+    assert!(lsh_factors.contains_key("lsh_weekly_daily_constructive_combo_flag"));
+    assert_eq!(
+        lsh_factors.get("lsh_bullish_engulf_prev_bearish_flag"),
+        Some(&FactorValue::Bool(true))
+    );
+    assert_eq!(
+        lsh_factors.get("lsh_volume_bullish_engulf_prev_bearish_flag"),
+        Some(&FactorValue::Bool(true))
+    );
+    assert_eq!(
+        lsh_factors.get("lsh_bullish_engulf_volume_ratio"),
+        Some(&FactorValue::Number(1.5))
+    );
+    assert!(!b2_factors.contains_key("lsh_daily_macd_wave_index"));
+    assert!(!b2_factors.contains_key("lsh_volume_bullish_engulf_prev_bearish_flag"));
+}
+
+#[test]
 fn turnover_top_pool_uses_real_ma25_ma60_trend_filter() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();

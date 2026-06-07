@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 
 const B2_MODEL_FIXTURE_DIR: &str = "tests/fixtures/b2_model";
 
-fn copy_fixture_b2_model_artifacts(root: &std::path::Path) {
-    let model_dir = root.join("models/b2");
+fn copy_fixture_model_artifacts(root: &std::path::Path, method: &str) {
+    let model_dir = root.join("models").join(method);
     std::fs::create_dir_all(&model_dir).unwrap();
     std::fs::copy(
         std::path::Path::new(B2_MODEL_FIXTURE_DIR).join("model.txt"),
@@ -18,6 +18,10 @@ fn copy_fixture_b2_model_artifacts(root: &std::path::Path) {
         model_dir.join("model_metadata.json"),
     )
     .unwrap();
+}
+
+fn copy_fixture_b2_model_artifacts(root: &std::path::Path) {
+    copy_fixture_model_artifacts(root, "b2");
 }
 
 fn write_default_b2_model(root: &std::path::Path) {
@@ -383,6 +387,8 @@ fn b2_run_writes_model_first_selection_artifacts() {
         "b2",
         "--candidates-path",
         candidates_path.to_str().unwrap(),
+        "--environment-state",
+        "strong",
     ])
     .assert()
     .success()
@@ -423,6 +429,79 @@ fn b2_run_writes_model_first_selection_artifacts() {
     assert_eq!(
         factors["rows"][0]["diagnostics"]["factor_source"],
         "candidate_payload"
+    );
+}
+
+#[test]
+fn b3_run_uses_method_model_dir_and_factor_profile() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = temp.path().join("candidates.json");
+    std::fs::write(
+        &candidates_path,
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {
+                    "code": "000001.SZ",
+                    "name": "测试一",
+                    "close": 10.0,
+                    "turnover_n": 1000.0,
+                    "signal": "B3",
+                    "history": [
+                        {"open": 9.0, "high": 10.5, "low": 8.8, "close": 10.0, "volume": 100.0, "turnover_n": 10.0, "turnover_rate": 1.0, "ma25": 8.0, "zxdkx": 7.0, "macd_hist": 0.5, "dif": 1.0, "dea": 0.5}
+                    ]
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    copy_fixture_model_artifacts(temp.path(), "b3");
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "run",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b3",
+        "--environment-state",
+        "strong",
+        "--candidates-path",
+        candidates_path.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "selection run complete: select/2026-05-25.b3",
+    ));
+
+    let run_dir = temp.path().join("select/2026-05-25.b3");
+    let run: Value =
+        serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
+    assert_eq!(
+        run["model_path"].as_str(),
+        Some(temp.path().join("models/b3/model.txt").to_str().unwrap())
+    );
+    assert_eq!(
+        run["metadata_path"].as_str(),
+        Some(
+            temp.path()
+                .join("models/b3/model_metadata.json")
+                .to_str()
+                .unwrap()
+        )
+    );
+
+    let factors: Value =
+        serde_json::from_slice(&std::fs::read(run_dir.join("factors.json")).unwrap()).unwrap();
+    assert_eq!(factors["method"], "b3");
+    assert_eq!(factors["rows"][0]["method"], "b3");
+    assert_eq!(factors["rows"][0]["diagnostics"]["factor_profile"], "b3");
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["factor_bundles"],
+        serde_json::json!(["raw_common", "b3_semantic"])
     );
 }
 
@@ -751,6 +830,8 @@ fn b2_run_uses_default_lightgbm_model_instead_of_input_model_score() {
         "b2",
         "--candidates-path",
         candidates_path.to_str().unwrap(),
+        "--environment-state",
+        "strong",
     ])
     .assert()
     .success();
@@ -823,6 +904,8 @@ fn b2_run_uses_lightgbm_score_instead_of_candidate_model_score() {
         "b2",
         "--candidates-path",
         candidates_path.to_str().unwrap(),
+        "--environment-state",
+        "strong",
     ])
     .assert()
     .success();
@@ -1068,6 +1151,8 @@ fn b2_run_rejects_missing_default_model_artifacts() {
         "b2",
         "--candidates-path",
         candidates_path.to_str().unwrap(),
+        "--environment-state",
+        "strong",
     ])
     .assert()
     .failure()
@@ -1139,6 +1224,8 @@ fn b2_run_injects_history_from_prepared_cache_when_candidate_has_no_history() {
         "b2",
         "--candidates-path",
         candidates_path.to_str().unwrap(),
+        "--environment-state",
+        "strong",
     ])
     .assert()
     .success();
@@ -1293,6 +1380,8 @@ fn b2_run_skips_prepared_cache_when_metadata_is_missing() {
         "b2",
         "--candidates-path",
         candidates_path.to_str().unwrap(),
+        "--environment-state",
+        "strong",
     ])
     .assert()
     .success();
