@@ -22,8 +22,8 @@ diagnostics/ml/<method>/lgbm_scores_summary.json
 <runtime>/models/<method>/model.txt
 <runtime>/models/<method>/model_metadata.json
 <runtime>/models/<method>/model_card.json
-<runtime>/models/archive/<version>/
-<runtime>/models/archive/rollback-current-<version>/
+<runtime>/models/archive/<method>/<version>/
+<runtime>/models/archive/<method>/rollback-current-<version>/
 ```
 
 `promote_lgbm_model.py` 默认从当前目录 `.env` 读取：
@@ -37,17 +37,17 @@ STOCK_SELECT_RUNTIME_ROOT=<runtime>
 统一入口 shell 脚本：
 
 ```bash
-scripts/model_maintenance.sh status
-scripts/model_maintenance.sh archives
-scripts/model_maintenance.sh promote <candidate_dir>
-scripts/model_maintenance.sh dry-run-promote <candidate_dir>
-scripts/model_maintenance.sh switch <archive_version>
+scripts/model_maintenance.sh --method "$METHOD" status
+scripts/model_maintenance.sh --method "$METHOD" archives
+scripts/model_maintenance.sh --method "$METHOD" promote <candidate_dir>
+scripts/model_maintenance.sh --method "$METHOD" dry-run-promote <candidate_dir>
+scripts/model_maintenance.sh --method "$METHOD" switch <archive_version>
 ```
 
 其中：
 
 - `status` 读取当前激活模型摘要
-- `archives` 列出 `<runtime>/models/archive/` 下可切换的历史模型
+- `archives` 列出 `<runtime>/models/archive/<method>/` 下可切换的历史模型；旧版共享 archive 只有在 `model_card.json` 的 target method 匹配时才兼容列出
 - `switch` 是 `promote_lgbm_model.py --rollback <version>` 的用户友好封装
 
 ## 历史 Candidate 补齐
@@ -59,7 +59,7 @@ uv run scripts/ml/backfill_candidates.py \
   --method "$METHOD" \
   --start-date "$TRAIN_START_DATE" \
   --end-date "$TRAIN_END_DATE" \
-  --workers 4
+  --workers 16
 ```
 
 脚本从 PostgreSQL `daily_market` 查询交易日，并发执行：
@@ -73,7 +73,7 @@ stock-select-rs screen --method <method> --pick-date <date> --runtime-root <runt
 - 默认跳过已有 `<date>.<method>.json`；`<date>.intraday.<method>.json` 不算 EOD 训练样本。
 - `--dry-run` 只打印将执行的 screen 命令，不调用真实 CLI。
 - `--recompute` 会强制每个 screen 重新读取数据源，不复用已有 prepared cache。
-- `--workers` 控制并发 screen 数；如果数据库或本机压力过高，降到 2。
+- `--workers` 控制并发 screen 数；执行模型训练、候选补齐、因子补齐前先查看机器可用核心数，并至少使用最大可用核心数的 1/2，除非用户明确指定更低并发或机器负载不允许。
 - 脚本从 `.env`、shell 环境或 CLI 参数读取 `POSTGRES_DSN`，但不会把 DSN/token 放到 screen 命令行。
 - 脚本默认 `--method b2`；后续其他 method 接入 `screen` 后复用同一个 `backfill_candidates.py --method <method>`，不新增 method 专属补数据脚本。
 
@@ -160,7 +160,7 @@ uv run scripts/ml/train_rank_lgbm.py \
   --min-data-in-leaf 120 \
   --num-boost-round 60 \
   --learning-rate 0.05 \
-  --num-threads 4 \
+  --num-threads 16 \
   --rolling-folds 5 \
   --rolling-train-dates 240 \
   --rolling-test-dates 40
@@ -176,7 +176,7 @@ lgbm_rank_report*.json
 lgbm_rank_report*.md
 ```
 
-这样 rolling trial 目录可以直接拿去做 `promote_lgbm_model.py --dry-run`；`export_lgbm_scores.py` 只在需要补特定 score window 或额外 score CSV 时再跑。
+这样 rolling trial 目录可以直接拿去做 `promote_lgbm_model.py --dry-run`；`export_lgbm_scores.py` 只在需要补特定 score window 或额外 score CSV 时再跑。传入 `--model-output-dir diagnostics/ml/<method>/tuning/<trial>` 时，默认读取同一 trial 下的 `feature_manifest.json`，并把 `lgbm_scores.csv`、`lgbm_scores_summary.json` 写回该 trial 目录，dataset 仍来自 `diagnostics/ml/<method>/rank_dataset.csv`。
 
 训练 report 至少检查：
 
@@ -220,10 +220,10 @@ uv run scripts/ml/promote_lgbm_model.py \
 也可以直接走 shell 入口：
 
 ```bash
-scripts/model_maintenance.sh dry-run-promote "diagnostics/ml/$METHOD/tuning/<winning-trial>"
-scripts/model_maintenance.sh promote "diagnostics/ml/$METHOD/tuning/<winning-trial>"
-scripts/model_maintenance.sh archives
-scripts/model_maintenance.sh switch <archive-version>
+scripts/model_maintenance.sh --method "$METHOD" dry-run-promote "diagnostics/ml/$METHOD/tuning/<winning-trial>"
+scripts/model_maintenance.sh --method "$METHOD" promote "diagnostics/ml/$METHOD/tuning/<winning-trial>"
+scripts/model_maintenance.sh --method "$METHOD" archives
+scripts/model_maintenance.sh --method "$METHOD" switch <archive-version>
 ```
 
 只有用户明确确认发布时，才去掉 `--dry-run`。

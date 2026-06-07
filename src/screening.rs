@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -8,13 +8,13 @@ use serde_json::json;
 use crate::cache::{
     candidate_output_path, load_prepared_cache, write_prepared_cache, write_prepared_cache_for_mode,
 };
-use crate::factors::registry::{build_candidate_factor_rows, write_factor_artifact};
+use crate::factors::registry::{build_candidate_factor_rows_from_refs, write_factor_artifact};
 use crate::indicators::{kdj, macd, rolling_mean, rolling_sum, zx_lines};
 use crate::intraday::{IntradaySnapshotProvider, build_intraday_market_rows, fetch_rt_k_snapshot};
 use crate::model::{MarketRow, Method, PreparedRow, ScreenResult};
 use crate::strategies::StrategyOutput;
-use crate::strategies::b2::run_b2_strategy;
-use crate::strategies::b3::run_b3_strategy;
+use crate::strategies::b2::run_b2_strategy_from_refs;
+use crate::strategies::b3::run_b3_strategy_from_refs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolSource {
@@ -102,19 +102,20 @@ where
         );
     }
 
-    let (pool, resolved_pool_file) = match request.pool_source {
+    let (pool_codes, resolved_pool_file) = match request.pool_source {
         PoolSource::TurnoverTop => (
-            filter_turnover_top_pool(&prepared, request.pick_date, 5000),
+            filter_turnover_top_pool_codes(&prepared, request.pick_date, 5000),
             None,
         ),
         PoolSource::Custom => {
             let resolved = resolve_custom_pool(&request)?;
             (
-                filter_custom_pool(&prepared, request.pick_date, &resolved.codes)?,
+                filter_custom_pool_codes(&prepared, request.pick_date, &resolved.codes)?,
                 Some(resolved.path),
             )
         }
     };
+    let pool = pool_refs(&prepared, &pool_codes);
     let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
     let count = strategy_output.stats.get("selected").copied().unwrap_or(0);
     let result = ScreenResult {
@@ -137,7 +138,14 @@ where
     };
     let output_path = write_screen_result(&request.runtime_root, &result)?;
     if request.export_factors {
-        write_screen_factor_artifact(&request, &result.candidates, &pool, &output_path, false)?;
+        let prepared_refs = prepared.iter().collect::<Vec<_>>();
+        write_screen_factor_artifact(
+            &request,
+            &result.candidates,
+            &prepared_refs,
+            &output_path,
+            false,
+        )?;
     }
     Ok(output_path)
 }
@@ -182,7 +190,7 @@ where
         anyhow::bail!("No market rows found between {start_date} and {previous_trade_date}.");
     }
     let market_rows = build_intraday_market_rows(history, &snapshot, request.pick_date);
-    let prepared = prepare_rows(&market_rows);
+    let prepared = prepare_rows(market_rows);
     write_prepared_cache_for_mode(
         &request.runtime_root,
         request.method,
@@ -192,19 +200,20 @@ where
         true,
         &prepared,
     )?;
-    let (pool, resolved_pool_file) = match request.pool_source {
+    let (pool_codes, resolved_pool_file) = match request.pool_source {
         PoolSource::TurnoverTop => (
-            filter_turnover_top_pool(&prepared, request.pick_date, 5000),
+            filter_turnover_top_pool_codes(&prepared, request.pick_date, 5000),
             None,
         ),
         PoolSource::Custom => {
             let resolved = resolve_custom_pool(&request)?;
             (
-                filter_custom_pool(&prepared, request.pick_date, &resolved.codes)?,
+                filter_custom_pool_codes(&prepared, request.pick_date, &resolved.codes)?,
                 Some(resolved.path),
             )
         }
     };
+    let pool = pool_refs(&prepared, &pool_codes);
     let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
     let count = strategy_output.stats.get("selected").copied().unwrap_or(0);
     let result = ScreenResult {
@@ -232,7 +241,14 @@ where
     }
     std::fs::write(&output_path, serde_json::to_vec_pretty(&result)?)?;
     if request.export_factors {
-        write_screen_factor_artifact(&request, &result.candidates, &pool, &output_path, true)?;
+        let prepared_refs = prepared.iter().collect::<Vec<_>>();
+        write_screen_factor_artifact(
+            &request,
+            &result.candidates,
+            &prepared_refs,
+            &output_path,
+            true,
+        )?;
     }
     Ok(output_path)
 }
@@ -240,12 +256,12 @@ where
 fn write_screen_factor_artifact(
     request: &ScreenRequest,
     candidates: &[crate::model::Candidate],
-    prepared_rows: &[PreparedRow],
+    prepared_rows: &[&PreparedRow],
     candidate_artifact: &Path,
     intraday: bool,
 ) -> anyhow::Result<PathBuf> {
     let artifact_key = screen_artifact_key(request.pick_date, intraday);
-    let rows = build_candidate_factor_rows(
+    let rows = build_candidate_factor_rows_from_refs(
         candidates,
         prepared_rows,
         request.method,
@@ -277,12 +293,12 @@ fn ensure_screen_supported(method: Method) -> anyhow::Result<()> {
 
 fn run_screen_strategy(
     method: Method,
-    rows: &[PreparedRow],
+    rows: &[&PreparedRow],
     pick_date: NaiveDate,
 ) -> anyhow::Result<StrategyOutput> {
     match method {
-        Method::B2 => Ok(run_b2_strategy(rows, pick_date)),
-        Method::B3 => Ok(run_b3_strategy(rows, pick_date)),
+        Method::B2 => Ok(run_b2_strategy_from_refs(rows, pick_date)),
+        Method::B3 => Ok(run_b3_strategy_from_refs(rows, pick_date)),
         _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
     }
 }
@@ -300,7 +316,7 @@ where
     if rows.is_empty() {
         anyhow::bail!("No market rows found between {start_date} and {end_date}.");
     }
-    let prepared = prepare_rows(&rows);
+    let prepared = prepare_rows(rows);
     write_prepared_cache(
         &request.runtime_root,
         request.method,
@@ -312,15 +328,13 @@ where
     Ok(prepared)
 }
 
-fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
+fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
     let mut grouped = BTreeMap::<String, Vec<MarketRow>>::new();
     for row in rows {
-        grouped
-            .entry(row.ts_code.clone())
-            .or_default()
-            .push(row.clone());
+        let code = row.ts_code.clone();
+        grouped.entry(code).or_default().push(row);
     }
-    let mut prepared = Vec::new();
+    let mut prepared = Vec::with_capacity(grouped.values().map(Vec::len).sum());
     for (_code, mut rows) in grouped {
         rows.sort_by_key(|row| row.trade_date);
         let high = rows.iter().map(|row| row.high).collect::<Vec<_>>();
@@ -340,9 +354,9 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
         let ma60 = rolling_mean(&close, 60, 60);
         let ma144 = rolling_mean(&close, 144, 144);
         let (zxdq, zxdkx) = zx_lines(&close);
-        for (idx, row) in rows.iter().enumerate() {
+        for (idx, row) in rows.into_iter().enumerate() {
             prepared.push(PreparedRow {
-                ts_code: row.ts_code.clone(),
+                ts_code: row.ts_code,
                 trade_date: row.trade_date,
                 open: row.open,
                 high: row.high,
@@ -369,6 +383,7 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
                 safe_mode: true,
                 lt_filter: true,
                 yellow_b1: false,
+                db_factors: row.db_factors,
             });
         }
     }
@@ -380,11 +395,11 @@ fn prepare_rows(rows: &[MarketRow]) -> Vec<PreparedRow> {
     prepared
 }
 
-fn filter_turnover_top_pool(
+fn filter_turnover_top_pool_codes(
     prepared: &[PreparedRow],
     pick_date: NaiveDate,
     top_m: usize,
-) -> Vec<PreparedRow> {
+) -> BTreeSet<String> {
     let mut ranked = prepared
         .iter()
         .filter(|row| row.trade_date == pick_date)
@@ -396,15 +411,10 @@ fn filter_turnover_top_pool(
         .map(|row| (row.turnover_n, row.ts_code.as_str()))
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| right.0.total_cmp(&left.0).then(left.1.cmp(right.1)));
-    let pool = ranked
+    ranked
         .into_iter()
         .take(top_m)
-        .map(|(_turnover, code)| code)
-        .collect::<std::collections::BTreeSet<_>>();
-    prepared
-        .iter()
-        .filter(|row| pool.contains(row.ts_code.as_str()))
-        .cloned()
+        .map(|(_turnover, code)| code.to_string())
         .collect()
 }
 
@@ -440,11 +450,11 @@ fn resolve_custom_pool(request: &ScreenRequest) -> anyhow::Result<ResolvedCustom
     })
 }
 
-fn filter_custom_pool(
+fn filter_custom_pool_codes(
     prepared: &[PreparedRow],
     pick_date: NaiveDate,
     codes: &[String],
-) -> anyhow::Result<Vec<PreparedRow>> {
+) -> anyhow::Result<BTreeSet<String>> {
     let available = prepared
         .iter()
         .filter(|row| row.trade_date == pick_date)
@@ -458,11 +468,14 @@ fn filter_custom_pool(
     if effective.is_empty() {
         anyhow::bail!("Effective custom pool is empty after prepared-data intersection.");
     }
-    Ok(prepared
+    Ok(effective)
+}
+
+fn pool_refs<'a>(prepared: &'a [PreparedRow], pool: &BTreeSet<String>) -> Vec<&'a PreparedRow> {
+    prepared
         .iter()
-        .filter(|row| effective.contains(row.ts_code.as_str()))
-        .cloned()
-        .collect())
+        .filter(|row| pool.contains(row.ts_code.as_str()))
+        .collect()
 }
 
 fn normalize_stock_code_token(token: &str) -> Option<String> {

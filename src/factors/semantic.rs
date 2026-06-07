@@ -14,6 +14,7 @@ use crate::reviewers::b2_scoring::{
     previous_abnormal_move_mode, price_position_mode, score_b2_previous_abnormal_move,
     score_b2_price_position, score_b2_trend_structure, score_b2_volume_behavior,
 };
+use crate::strategies::b2::build_b2_signal_series;
 
 pub fn push_b2_semantic_factors(
     factors: &mut FactorList,
@@ -31,6 +32,34 @@ pub fn push_b3_semantic_factors(
     environment_state: Option<&str>,
 ) {
     push_b2_family_semantic_factors(factors, history, signal, environment_state);
+    push_b3_signal_context_factors(factors, history, signal);
+}
+
+pub fn push_b3_signal_context_factors(
+    factors: &mut FactorList,
+    history: &[FactorInputRow],
+    signal: Option<&str>,
+) {
+    let latest_j = history.last().and_then(|row| row.j);
+    let previous_j = history.iter().rev().nth(1).and_then(|row| row.j);
+    push_number(
+        factors,
+        "b3_j_delta",
+        latest_j
+            .zip(previous_j)
+            .map(|(latest, previous)| latest - previous),
+    );
+
+    let prepared = prepared_rows(history);
+    let previous_b2 = if prepared.len() >= 2 {
+        let refs = prepared.iter().collect::<Vec<_>>();
+        let signals = build_b2_signal_series(&refs);
+        signals.cur_b2[prepared.len() - 2]
+    } else {
+        false
+    };
+    push_bool(factors, "b3_prev_b2_flag", previous_b2);
+    push_bool(factors, "b3_plus_flag", matches!(signal, Some("B3+")));
 }
 
 fn push_b2_family_semantic_factors(
@@ -252,7 +281,7 @@ fn prepared_rows(history: &[FactorInputRow]) -> Vec<PreparedRow> {
             turnover_rate: row.turnover_rate,
             k: 0.0,
             d: 0.0,
-            j: 0.0,
+            j: row.j.unwrap_or(0.0),
             zxdq: Some(row.zxdq.unwrap_or(derived_zxdq[idx])),
             zxdkx: row.zxdkx.or(derived_zxdkx[idx]),
             dif: row.dif.unwrap_or(derived_dif[idx]),
@@ -268,6 +297,7 @@ fn prepared_rows(history: &[FactorInputRow]) -> Vec<PreparedRow> {
             safe_mode: false,
             lt_filter: false,
             yellow_b1: false,
+            db_factors: row.db_factors.clone(),
         })
         .collect()
 }

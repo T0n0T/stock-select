@@ -68,22 +68,26 @@ stock-select-rs review-list \
 
 ```bash
 # 1. 确定训练窗口
+METHOD=b2
 TRAIN_START=2025-06-01
 TRAIN_END=2026-06-04
 
+# 训练/补数据前查看核心数，workers 至少取可用核心数的 1/2，除非机器负载不允许
+nproc
+
 # 2. 补齐历史候选（如果缺失）
 uv run scripts/ml/backfill_candidates.py \
-  --method b2 \
+  --method "$METHOD" \
   --start-date "$TRAIN_START" \
   --end-date "$TRAIN_END" \
-  --workers 4
+  --workers 16
 
 # 3. 补齐 factor artifact（如果缺失）
 # 对缺失日期的候选执行 screen --export-factors
 
 # 4. 构建训练集
 uv run scripts/ml/build_rank_dataset.py \
-  --method b2 \
+  --method "$METHOD" \
   --runtime-root runtime \
   --source candidates \
   --start-date "$TRAIN_START" \
@@ -91,32 +95,30 @@ uv run scripts/ml/build_rank_dataset.py \
 
 # 5. 训练
 uv run scripts/ml/train_rank_lgbm.py \
-  --method b2 \
-  --dataset diagnostics/ml/b2/rank_dataset.csv \
-  --output-dir diagnostics/ml/b2/model \
+  --method "$METHOD" \
+  --dataset "diagnostics/ml/$METHOD/rank_dataset.csv" \
+  --output-dir "diagnostics/ml/$METHOD/model" \
   --feature-set raw_numeric \
   --num-leaves 9 \
   --min-data-in-leaf 120 \
   --num-boost-round 60 \
-  --learning-rate 0.05
+  --learning-rate 0.05 \
+  --num-threads 16
 
 # 6. 查看训练 report 评估效果
 
 # 7. 导出并发布
 uv run scripts/ml/export_lgbm_scores.py \
-  --method b2 \
-  --model-output-dir diagnostics/ml/b2/model
+  --method "$METHOD" \
+  --model-output-dir "diagnostics/ml/$METHOD/model"
 
-uv run scripts/ml/promote_lgbm_model.py \
-  --method b2 \
-  --candidate-dir diagnostics/ml/b2/model \
-  --dry-run
+scripts/model_maintenance.sh --method "$METHOD" dry-run-promote "diagnostics/ml/$METHOD/model"
 
 # 确认无误后正式发布
-uv run scripts/ml/promote_lgbm_model.py \
-  --method b2 \
-  --candidate-dir diagnostics/ml/b2/model
+scripts/model_maintenance.sh --method "$METHOD" promote "diagnostics/ml/$METHOD/model"
 ```
+
+`METHOD=b3` 可维护并发布到 `runtime/models/b3/`；生产 `run/review` 是否可直接使用 b3，仍取决于 Rust CLI 对 b3 的 capability。
 
 ## 场景四：历史数据补跑
 

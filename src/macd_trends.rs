@@ -2372,6 +2372,7 @@ mod tests {
             safe_mode: true,
             lt_filter: true,
             yellow_b1: false,
+            db_factors: Default::default(),
         }
     }
 }

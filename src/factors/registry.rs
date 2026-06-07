@@ -1,16 +1,19 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use crate::factors::abnormal_volume::push_abnormal_volume_event_factors;
 use crate::factors::ma::push_ma_support_factors;
 use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
-use crate::factors::price_position::{push_price_position_factors, push_range_compression};
+use crate::factors::price_position::{
+    push_latest_bar_shape_factors, push_price_position_factors, push_range_compression,
+};
 use crate::factors::semantic::{push_b2_semantic_factors, push_b3_semantic_factors};
-use crate::factors::series::{FactorList, mean_tail, rolling_mean_series};
+use crate::factors::series::{FactorList, mean_tail, push_number, rolling_mean_series};
 use crate::factors::types::{FactorInputRow, FactorRow, FactorValue};
-use crate::factors::volume::push_volume_turnover_factors;
+use crate::factors::volume::{push_latest_volume_shrink_factor, push_volume_turnover_factors};
 use crate::factors::zx::{push_zx_pullback_factors, zx_lines};
 use crate::model::{Candidate, Method, PreparedRow};
 
@@ -138,8 +141,9 @@ fn history_factor_fields_for_profile(
     let macd_hist = history.iter().map(|row| row.macd_hist).collect::<Vec<_>>();
     let (derived_dif, derived_dea, derived_macd_hist) = macd_lines(&close);
 
-    let latest = history.last().copied();
-    let previous = history.iter().rev().nth(1).copied();
+    let latest = history.last();
+    let previous = history.iter().rev().nth(1);
+    let latest_open = latest.map(|row| row.open);
     let latest_close = latest.map(|row| row.close);
     let latest_low = latest.map(|row| row.low);
     let latest_high = latest.map(|row| row.high);
@@ -231,11 +235,30 @@ fn history_factor_fields_for_profile(
                 push_b2_semantic_factors(&mut factors, history, signal, environment_state);
             }
             FactorBundle::B3Semantic => {
+                push_latest_volume_shrink_factor(&mut factors, latest_volume, previous_volume);
+                push_latest_bar_shape_factors(
+                    &mut factors,
+                    latest_open,
+                    latest_high,
+                    latest_low,
+                    latest_close,
+                    previous.map(|row| row.close),
+                );
                 push_b3_semantic_factors(&mut factors, history, signal, environment_state);
             }
         }
     }
+    push_latest_db_factor_extras(&mut factors, latest);
     factors
+}
+
+fn push_latest_db_factor_extras(factors: &mut FactorList, latest: Option<&FactorInputRow>) {
+    let Some(latest) = latest else {
+        return;
+    };
+    for (key, value) in &latest.db_factors {
+        push_number(factors, key, value.is_finite().then_some(*value));
+    }
 }
 
 pub fn record_factor_profile_diagnostics(row: &mut FactorRow, profile: FactorProfile) {
@@ -259,8 +282,26 @@ pub fn build_candidate_factor_rows(
     method: Method,
     environment_state: Option<&str>,
 ) -> Vec<FactorRow> {
+    let refs = prepared_rows.iter().collect::<Vec<_>>();
+    build_candidate_factor_rows_from_refs(candidates, &refs, method, environment_state)
+}
+
+pub fn build_candidate_factor_rows_from_refs(
+    candidates: &[Candidate],
+    prepared_rows: &[&PreparedRow],
+    method: Method,
+    environment_state: Option<&str>,
+) -> Vec<FactorRow> {
+    let candidate_codes = candidates
+        .iter()
+        .map(|candidate| candidate.code.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     let mut rows_by_code: BTreeMap<&str, Vec<FactorInputRow>> = BTreeMap::new();
-    for row in prepared_rows {
+    let market_state_by_date = market_state_factors_by_date(prepared_rows);
+    for row in prepared_rows.iter().copied() {
+        if !candidate_codes.contains(row.ts_code.as_str()) {
+            continue;
+        }
         rows_by_code
             .entry(row.ts_code.as_str())
             .or_default()
@@ -273,12 +314,14 @@ pub fn build_candidate_factor_rows(
                 volume: row.volume,
                 turnover_n: row.turnover_n,
                 turnover_rate: row.turnover_rate,
+                j: Some(row.j),
                 ma25: row.ma25,
                 zxdkx: row.zxdkx,
                 zxdq: row.zxdq,
                 dif: Some(row.dif),
                 dea: Some(row.dea),
                 macd_hist: Some(row.macd_hist),
+                db_factors: row.db_factors.clone(),
             });
     }
 
@@ -315,6 +358,11 @@ pub fn build_candidate_factor_rows(
             for (key, value) in history_factors {
                 row.factors.insert(key, value);
             }
+            if let Some(market_state_factors) = market_state_by_date.get(&candidate.pick_date) {
+                for (key, value) in market_state_factors {
+                    row.factors.insert(key.clone(), value.clone());
+                }
+            }
             record_factor_profile_diagnostics(&mut row, profile);
             row.diagnostics.insert(
                 "factor_source".to_string(),
@@ -335,6 +383,146 @@ pub fn build_candidate_factor_rows(
             row
         })
         .collect()
+}
+
+fn market_state_factors_by_date(rows: &[&PreparedRow]) -> BTreeMap<NaiveDate, FactorList> {
+    let mut rows_by_date: BTreeMap<NaiveDate, Vec<&PreparedRow>> = BTreeMap::new();
+    for row in rows.iter().copied() {
+        rows_by_date.entry(row.trade_date).or_default().push(row);
+    }
+    let amount_ma5_by_date = market_amount_ma5_ratio_by_date(&rows_by_date);
+    rows_by_date
+        .iter()
+        .map(|(trade_date, rows)| {
+            let mut factors = Vec::new();
+            let pct_changes = rows
+                .iter()
+                .filter_map(|row| row.chg_d.filter(|value| value.is_finite()))
+                .collect::<Vec<_>>();
+            let count = pct_changes.len() as f64;
+            push_number(
+                &mut factors,
+                "market_up_ratio",
+                ratio_count(
+                    pct_changes.iter().filter(|value| **value > 0.0).count(),
+                    count,
+                ),
+            );
+            push_number(
+                &mut factors,
+                "market_ge5_ratio",
+                ratio_count(
+                    pct_changes.iter().filter(|value| **value >= 5.0).count(),
+                    count,
+                ),
+            );
+            push_number(
+                &mut factors,
+                "market_le_minus5_ratio",
+                ratio_count(
+                    pct_changes.iter().filter(|value| **value <= -5.0).count(),
+                    count,
+                ),
+            );
+            push_number(&mut factors, "market_median_pct_chg", median(pct_changes));
+            push_number(
+                &mut factors,
+                "market_amount_ma5_ratio",
+                amount_ma5_by_date.get(trade_date).copied().flatten(),
+            );
+            push_number(
+                &mut factors,
+                "market_net_mf_to_amount_pct",
+                mean(rows.iter().filter_map(|row| {
+                    row.db_factors
+                        .get("net_mf_amount_to_amount_pct")
+                        .copied()
+                        .filter(|value| value.is_finite())
+                })),
+            );
+            push_number(
+                &mut factors,
+                "market_approx_limit_up_count",
+                Some(
+                    rows.iter()
+                        .filter(|row| near_limit_factor(row, "dist_to_up_limit_pct"))
+                        .count() as f64,
+                ),
+            );
+            push_number(
+                &mut factors,
+                "market_approx_limit_down_count",
+                Some(
+                    rows.iter()
+                        .filter(|row| near_limit_factor(row, "dist_to_down_limit_pct"))
+                        .count() as f64,
+                ),
+            );
+            (*trade_date, factors)
+        })
+        .collect()
+}
+
+fn market_amount_ma5_ratio_by_date(
+    rows_by_date: &BTreeMap<NaiveDate, Vec<&PreparedRow>>,
+) -> BTreeMap<NaiveDate, Option<f64>> {
+    let daily_amounts = rows_by_date
+        .iter()
+        .map(|(trade_date, rows)| {
+            (
+                *trade_date,
+                rows.iter()
+                    .map(|row| ((row.open + row.close) / 2.0) * row.volume)
+                    .filter(|value| value.is_finite())
+                    .sum::<f64>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut ratios = BTreeMap::new();
+    for idx in 0..daily_amounts.len() {
+        let (trade_date, amount) = daily_amounts[idx];
+        let start = idx.saturating_sub(4);
+        let window = &daily_amounts[start..=idx];
+        let base = window.iter().map(|(_date, amount)| *amount).sum::<f64>() / window.len() as f64;
+        ratios.insert(
+            trade_date,
+            (base != 0.0 && amount.is_finite() && base.is_finite()).then_some(amount / base),
+        );
+    }
+    ratios
+}
+
+fn ratio_count(numerator: usize, denominator: f64) -> Option<f64> {
+    (denominator > 0.0).then_some(numerator as f64 / denominator)
+}
+
+fn median(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        Some((values[mid - 1] + values[mid]) / 2.0)
+    } else {
+        Some(values[mid])
+    }
+}
+
+fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
+    let mut count = 0.0;
+    let mut total = 0.0;
+    for value in values {
+        total += value;
+        count += 1.0;
+    }
+    (count > 0.0).then_some(total / count)
+}
+
+fn near_limit_factor(row: &PreparedRow, key: &str) -> bool {
+    row.db_factors
+        .get(key)
+        .is_some_and(|value| value.is_finite() && *value <= 0.2)
 }
 
 pub fn write_factor_artifact(

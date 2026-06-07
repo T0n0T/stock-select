@@ -30,3 +30,15 @@ pub fn push_volume_turnover_factors(
         ratio(latest_turnover, avg_turnover5),
     );
 }
+
+pub fn push_latest_volume_shrink_factor(
+    factors: &mut FactorList,
+    latest_volume: Option<f64>,
+    previous_volume: Option<f64>,
+) {
+    push_number(
+        factors,
+        "b3_volume_shrink_ratio",
+        ratio(latest_volume, previous_volume),
+    );
+}

@@ -1,9 +1,10 @@
 use chrono::{Datelike, NaiveDate};
 use serde_json::json;
 use stock_select::cache::{
-    decode_prepared_cache_rows, history_payload_for_code, load_prepared_cache,
-    load_prepared_cache_for_mode, prepared_cache_data_path, prepared_cache_meta_path,
-    prepared_cache_paths, write_prepared_cache, write_prepared_cache_for_mode,
+    PREPARED_CACHE_SCHEMA_VERSION, decode_prepared_cache_rows, history_payload_for_code,
+    load_prepared_cache, load_prepared_cache_for_mode, prepared_cache_data_path,
+    prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
+    write_prepared_cache_for_mode,
 };
 use stock_select::model::{Method, PreparedRow};
 
@@ -46,7 +47,7 @@ fn prepared_cache_paths_support_intraday_layout_without_overwriting_eod() {
 }
 
 #[test]
-fn decodes_old_prepared_cache_binary_row() {
+fn decodes_current_prepared_cache_binary_row() {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"SSPRBIN1");
     write_u64(&mut bytes, 1);
@@ -76,6 +77,7 @@ fn decodes_old_prepared_cache_binary_row() {
     for value in [true, false, true, false, true, false] {
         write_bool(&mut bytes, value);
     }
+    write_u64(&mut bytes, 0);
 
     let rows = decode_prepared_cache_rows(&bytes).unwrap();
 
@@ -118,7 +120,7 @@ fn load_prepared_cache_requires_matching_metadata() {
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 3,
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 1,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -133,6 +135,40 @@ fn load_prepared_cache_requires_matching_metadata() {
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].ts_code, "000001.SZ");
+}
+
+#[test]
+fn prepared_cache_round_trips_db_factor_extras() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 5, 24).unwrap();
+    let mut row = prepared_row("000001.SZ", pick_date, 10.0);
+    row.db_factors.insert("boll_width_pct".to_string(), 12.3456);
+    row.db_factors.insert("wr_qfq".to_string(), -87.5);
+
+    write_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        &[row],
+    )
+    .unwrap();
+
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(root.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["schema_version"], PREPARED_CACHE_SCHEMA_VERSION);
+
+    let rows = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].db_factors["boll_width_pct"], 12.3456);
+    assert_eq!(rows[0].db_factors["wr_qfq"], -87.5);
 }
 
 #[test]
@@ -262,6 +298,22 @@ fn builds_history_payload_for_candidate_code_from_prepared_rows() {
     assert_eq!(history[1]["zxdq"], 10.2);
     assert_eq!(history[1]["zxdkx"], 10.1);
     assert_eq!(history[1]["macd_hist"], 0.1);
+    assert_eq!(history[1]["db_factors"]["boll_width_pct"], 11.0);
+}
+
+#[test]
+fn history_payload_skips_rows_with_non_finite_required_prices() {
+    let date1 = NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
+    let date2 = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let mut bad = prepared_row("000001.SZ", date1, 10.0);
+    bad.open = f64::NAN;
+    let rows = vec![bad, prepared_row("000001.SZ", date2, 10.5)];
+
+    let history = history_payload_for_code(&rows, "000001.SZ");
+
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["trade_date"], "2026-05-25");
+    assert_eq!(history[0]["open"], 10.0);
 }
 
 fn prepared_row(code: &str, trade_date: NaiveDate, close: f64) -> PreparedRow {
@@ -293,6 +345,7 @@ fn prepared_row(code: &str, trade_date: NaiveDate, close: f64) -> PreparedRow {
         safe_mode: false,
         lt_filter: true,
         yellow_b1: false,
+        db_factors: [("boll_width_pct".to_string(), 11.0)].into(),
     }
 }
 
@@ -326,6 +379,7 @@ fn prepared_cache_bytes() -> Vec<u8> {
     for value in [true, false, true, false, true, false] {
         write_bool(&mut bytes, value);
     }
+    write_u64(&mut bytes, 0);
     bytes
 }
 

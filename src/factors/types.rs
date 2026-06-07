@@ -34,7 +34,7 @@ impl FactorRow {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FactorInputRow {
     pub trade_date: Option<NaiveDate>,
     pub open: f64,
@@ -44,10 +44,12 @@ pub struct FactorInputRow {
     pub volume: f64,
     pub turnover_n: f64,
     pub turnover_rate: Option<f64>,
+    pub j: Option<f64>,
     pub ma25: Option<f64>,
     pub zxdkx: Option<f64>,
     pub zxdq: Option<f64>,
     pub dif: Option<f64>,
     pub dea: Option<f64>,
     pub macd_hist: Option<f64>,
+    pub db_factors: BTreeMap<String, f64>,
 }

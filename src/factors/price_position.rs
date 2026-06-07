@@ -129,3 +129,42 @@ pub fn push_range_compression(
     };
     push_number(factors, &format!("range_compression_{window}d"), value);
 }
+
+pub fn push_latest_bar_shape_factors(
+    factors: &mut FactorList,
+    latest_open: Option<f64>,
+    latest_high: Option<f64>,
+    latest_low: Option<f64>,
+    latest_close: Option<f64>,
+    previous_close: Option<f64>,
+) {
+    let amplitude = match (latest_high, latest_low, previous_close) {
+        (Some(high), Some(low), Some(previous_close)) if previous_close != 0.0 => {
+            Some((high - low) / previous_close * 100.0)
+        }
+        _ => None,
+    };
+    let body = match (latest_close, latest_open, previous_close) {
+        (Some(close), Some(open), Some(previous_close)) if previous_close != 0.0 => {
+            Some((close - open) / previous_close * 100.0)
+        }
+        _ => None,
+    };
+    let upper_shadow = match (latest_high, latest_open, latest_close, previous_close) {
+        (Some(high), Some(open), Some(close), Some(previous_close)) if previous_close != 0.0 => {
+            Some((high - open.max(close)) / previous_close * 100.0)
+        }
+        _ => None,
+    };
+    let lower_shadow = match (latest_low, latest_open, latest_close, previous_close) {
+        (Some(low), Some(open), Some(close), Some(previous_close)) if previous_close != 0.0 => {
+            Some((open.min(close) - low) / previous_close * 100.0)
+        }
+        _ => None,
+    };
+
+    push_number(factors, "b3_amplitude_pct", amplitude);
+    push_number(factors, "b3_body_pct", body);
+    push_number(factors, "b3_upper_shadow_pct", upper_shadow);
+    push_number(factors, "b3_lower_shadow_pct", lower_shadow);
+}

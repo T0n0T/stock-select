@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -73,6 +74,8 @@ pub struct PreparedRow {
     pub safe_mode: bool,
     pub lt_filter: bool,
     pub yellow_b1: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub db_factors: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,6 +88,8 @@ pub struct MarketRow {
     pub close: f64,
     pub vol: f64,
     pub turnover_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub db_factors: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

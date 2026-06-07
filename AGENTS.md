@@ -9,6 +9,7 @@
 ## 运行环境
 
 - 本仓库的 CLI、训练脚本和模型维护脚本统一以当前目录 `.env` 作为环境变量来源。
+- 执行模型训练、候选补齐、因子补齐等可并行任务前，先查看机器可用核心数（例如 `nproc` 或 `getconf _NPROCESSORS_ONLN`）；并发 worker 数应至少使用最大可用核心数的 1/2，除非用户明确指定更低并发或机器负载不允许。
 - 常用变量包括：
   - `STOCK_SELECT_RUNTIME_ROOT`
   - `POSTGRES_DSN`

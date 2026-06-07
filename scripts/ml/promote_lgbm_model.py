@@ -155,8 +155,11 @@ def find_report(candidate_dir: Path, explicit_report: Path | None = None) -> Pat
     return matches[0] if matches else None
 
 
-def validate_report(report_path: Path) -> dict[str, Any]:
+def validate_report(report_path: Path, *, expected_method: str | None = None) -> dict[str, Any]:
     report = read_json(report_path)
+    method = report.get("method")
+    if expected_method is not None and method is not None and method != expected_method:
+        raise ValueError(f"训练报告 method={method} 与目标 method={expected_method} 不一致: {report_path}")
     rolling_summary = report.get("rolling_summary")
     if not isinstance(rolling_summary, dict):
         raise ValueError(f"训练报告缺少 rolling_summary: {report_path}")
@@ -166,6 +169,7 @@ def validate_report(report_path: Path) -> dict[str, Any]:
 
     return {
         "report_path": str(report_path),
+        "method": method,
         "dataset": report.get("dataset"),
         "feature_manifest": report.get("feature_manifest"),
         "model_params": report.get("model_params"),
@@ -180,6 +184,7 @@ def validate_model_artifacts(
     *,
     report_path: Path | None = None,
     require_report: bool = False,
+    expected_method: str | None = None,
 ) -> dict[str, Any]:
     model_path = candidate_dir / "model.txt"
     metadata_path = candidate_dir / "model_metadata.json"
@@ -195,7 +200,7 @@ def validate_model_artifacts(
     if resolved_report is None and require_report:
         raise ValueError("发布前要求训练报告，但候选目录未找到 lgbm_rank_report*.json")
     if resolved_report is not None:
-        report_summary = validate_report(resolved_report)
+        report_summary = validate_report(resolved_report, expected_method=expected_method)
 
     decision = "allow"
     if report_summary is not None:
@@ -235,6 +240,7 @@ def build_model_card(summary: dict[str, Any]) -> dict[str, Any]:
         "mode": summary.get("mode"),
         "source": summary.get("source"),
         "target": summary.get("target"),
+        "method": summary.get("method"),
         "archive_path": summary.get("archive_path") or summary.get("current_archive_path"),
         "promotion_decision": validation.get("decision"),
         "feature_count": validation.get("feature_count"),
@@ -258,7 +264,7 @@ def write_model_card(target_dir: Path, summary: dict[str, Any]) -> None:
 
 def describe_current_model(target_dir: Path | None = None) -> dict[str, Any]:
     target_dir = target_dir or resolve_default_target_dir()
-    validation = validate_model_artifacts(target_dir)
+    validation = validate_model_artifacts(target_dir, expected_method=target_dir.name)
     return {
         "mode": "describe-current",
         "source": str(target_dir),
@@ -267,20 +273,58 @@ def describe_current_model(target_dir: Path | None = None) -> dict[str, Any]:
     }
 
 
+def method_archive_root(target_dir: Path) -> Path:
+    return target_dir.parent / "archive" / target_dir.name
+
+
+def archive_matches_target(path: Path, target_dir: Path) -> bool:
+    card_path = path / "model_card.json"
+    if not card_path.exists():
+        return False
+    try:
+        card = read_json(card_path)
+    except ValueError:
+        return False
+    target = card.get("target")
+    return bool(target) and Path(str(target)).name == target_dir.name
+
+
+def archive_source_for_version(target_dir: Path, version: str) -> Path:
+    scoped = method_archive_root(target_dir) / version
+    if scoped.exists():
+        return scoped
+    legacy = target_dir.parent / "archive" / version
+    if legacy.exists() and archive_matches_target(legacy, target_dir):
+        return legacy
+    return scoped
+
+
+def archive_dirs_for_target(target_dir: Path) -> list[Path]:
+    archive_parent = target_dir.parent / "archive"
+    scoped_root = method_archive_root(target_dir)
+    dirs: list[Path] = []
+    if scoped_root.exists():
+        dirs.extend(item for item in scoped_root.iterdir() if item.is_dir())
+    if archive_parent.exists():
+        for item in archive_parent.iterdir():
+            if item == scoped_root or not item.is_dir():
+                continue
+            if archive_matches_target(item, target_dir):
+                dirs.append(item)
+    return sorted(dirs, key=lambda item: item.name, reverse=True)
+
+
 def list_archived_models(target_dir: Path | None = None) -> list[dict[str, Any]]:
     target_dir = target_dir or resolve_default_target_dir()
-    archive_root = target_dir.parent / "archive"
-    if not archive_root.exists():
-        return []
     rows: list[dict[str, Any]] = []
-    for path in sorted((item for item in archive_root.iterdir() if item.is_dir()), key=lambda item: item.name, reverse=True):
+    for path in archive_dirs_for_target(target_dir):
         rows.append(
             {
                 "mode": "list-archives",
                 "version": path.name,
                 "source": str(path),
                 "target": str(target_dir),
-                "validation": validate_model_artifacts(path),
+                "validation": validate_model_artifacts(path, expected_method=target_dir.name),
             }
         )
     return rows
@@ -301,13 +345,15 @@ def promote_model(
         candidate_dir,
         report_path=report_path,
         require_report=require_report,
+        expected_method=target_dir.name,
     )
-    archive_root = target_dir.parent / "archive"
+    archive_root = method_archive_root(target_dir)
     archive_path = archive_root / timestamp
     temp_target = target_dir.parent / f".{target_dir.name}.tmp-{timestamp}"
 
     summary = {
         "mode": "dry-run" if dry_run else "promote",
+        "method": target_dir.name,
         "source": str(candidate_dir),
         "target": str(target_dir),
         "archive_path": str(archive_path) if target_dir.exists() else None,
@@ -339,15 +385,16 @@ def rollback_model(
     if not version:
         raise ValueError("rollback 必须指定 archive version")
     timestamp = now or utc_timestamp()
-    archive_root = target_dir.parent / "archive"
-    source = archive_root / version
+    archive_root = method_archive_root(target_dir)
+    source = archive_source_for_version(target_dir, version)
     if not source.exists():
         raise ValueError(f"找不到回滚版本: {source}")
-    validation = validate_model_artifacts(source)
+    validation = validate_model_artifacts(source, expected_method=target_dir.name)
     current_archive = archive_root / f"rollback-current-{timestamp}"
     temp_target = target_dir.parent / f".{target_dir.name}.rollback-tmp-{timestamp}"
     summary = {
         "mode": "dry-run" if dry_run else "rollback",
+        "method": target_dir.name,
         "rollback_version": version,
         "source": str(source),
         "target": str(target_dir),

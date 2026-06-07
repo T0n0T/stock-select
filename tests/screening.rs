@@ -569,6 +569,7 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
                 close: 10.1,
                 vol: 1000.0,
                 turnover_rate: Some(1.0),
+                db_factors: Default::default(),
             }])
         },
     )
@@ -660,6 +661,7 @@ fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
                 close: 10.1,
                 vol: 1000.0,
                 turnover_rate: Some(1.0),
+                db_factors: Default::default(),
             }])
         },
     )
@@ -680,6 +682,7 @@ fn market_row_with_open_delta(day: u32, close: f64, vol: f64, open_delta: f64) -
         close,
         vol,
         turnover_rate: Some(vol / 100.0),
+        db_factors: Default::default(),
     }
 }
 
@@ -693,6 +696,7 @@ fn market_row_at_date(trade_date: NaiveDate, close: f64, vol: f64) -> MarketRow 
         close,
         vol,
         turnover_rate: Some(vol / 100.0),
+        db_factors: Default::default(),
     }
 }
 
@@ -741,5 +745,6 @@ fn prepared_row_at_date(
         safe_mode: true,
         lt_filter: true,
         yellow_b1: false,
+        db_factors: Default::default(),
     }
 }

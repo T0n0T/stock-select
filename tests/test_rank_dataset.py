@@ -57,9 +57,23 @@ class RankDatasetTest(unittest.TestCase):
                 Path("cli-runtime"),
             )
 
-    def test_b3_dataset_schema_has_independent_method_entry_matching_b2_for_now(self):
-        self.assertEqual(dataset_columns_for_method("b3"), dataset_columns_for_method("b2"))
-        self.assertEqual(raw_factor_columns_for_method("b3"), raw_factor_columns_for_method("b2"))
+    def test_b3_dataset_schema_has_independent_method_entry_with_b3_specific_factors(self):
+        b3_specific = [
+            "b3_volume_shrink_ratio",
+            "b3_amplitude_pct",
+            "b3_body_pct",
+            "b3_upper_shadow_pct",
+            "b3_lower_shadow_pct",
+            "b3_j_delta",
+            "b3_prev_b2_flag",
+            "b3_plus_flag",
+        ]
+
+        for column in b3_specific:
+            self.assertIn(column, dataset_columns_for_method("b3"))
+            self.assertIn(column, raw_factor_columns_for_method("b3"))
+            self.assertNotIn(column, dataset_columns_for_method("b2"))
+            self.assertNotIn(column, raw_factor_columns_for_method("b2"))
 
         original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
         try:
@@ -69,6 +83,49 @@ class RankDatasetTest(unittest.TestCase):
             self.assertNotIn("b3_only_raw_factor", dataset_columns_for_method("b2"))
         finally:
             rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
+
+    def test_b2_dataset_schema_includes_db_and_market_state_factors(self):
+        expected = [
+            "boll_width_pct",
+            "dmi_adxr_qfq",
+            "dmi_adx_qfq",
+            "dmi_pdi_qfq",
+            "dmi_mdi_qfq",
+            "dmi_pdi_mdi_spread_qfq",
+            "dmi_adx_adxr_gap_qfq",
+            "wr_qfq",
+            "mtm_qfq",
+            "roc_qfq",
+            "trix_qfq",
+            "obv_qfq",
+            "vr_qfq",
+            "psy_qfq",
+            "bias1_qfq",
+            "turnover_rate_f",
+            "dist_to_up_limit_pct",
+            "dist_to_down_limit_pct",
+            "large_net_amount_to_amount_pct",
+            "small_net_amount_to_amount_pct",
+            "net_mf_amount_to_amount_pct",
+            "market_up_ratio",
+            "market_ge5_ratio",
+            "market_le_minus5_ratio",
+            "market_median_pct_chg",
+            "market_amount_ma5_ratio",
+            "market_net_mf_to_amount_pct",
+            "market_approx_limit_up_count",
+            "market_approx_limit_down_count",
+            "cyq_winner_rate",
+            "cyq_cost_50_to_close_pct",
+            "cyq_cost_85_to_close_pct",
+            "cyq_weight_avg_to_close_pct",
+            "cyq_cost_70_width_pct",
+            "cyq_cost_90_width_pct",
+        ]
+
+        for column in expected:
+            self.assertIn(column, dataset_columns_for_method("b2"))
+            self.assertIn(column, raw_factor_columns_for_method("b2"))
 
     def test_load_candidate_rows_reads_current_candidates_artifacts_without_select(self):
         with tempfile.TemporaryDirectory() as temp_dir:

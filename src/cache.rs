@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 3;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedCachePaths {
@@ -182,6 +182,7 @@ fn encode_prepared_cache_rows(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
         ] {
             write_bool(&mut out, value);
         }
+        write_factor_map(&mut out, &row.db_factors)?;
     }
     Ok(out)
 }
@@ -228,6 +229,7 @@ pub fn decode_prepared_cache_rows(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRo
             safe_mode: read_bool(&mut cursor)?,
             lt_filter: read_bool(&mut cursor)?,
             yellow_b1: read_bool(&mut cursor)?,
+            db_factors: read_factor_map(&mut cursor)?,
         });
     }
     Ok(rows)
@@ -297,6 +299,7 @@ pub fn history_payload_for_code(rows: &[PreparedRow], code: &str) -> Vec<Value> 
     rows.sort_by_key(|row| row.trade_date);
 
     rows.into_iter()
+        .filter(|row| prepared_history_row_has_required_values(row))
         .map(|row| {
             json!({
                 "trade_date": row.trade_date,
@@ -319,9 +322,23 @@ pub fn history_payload_for_code(rows: &[PreparedRow], code: &str) -> Vec<Value> 
                 "ma60": row.ma60,
                 "ma144": row.ma144,
                 "chg_d": row.chg_d,
+                "db_factors": row.db_factors,
             })
         })
         .collect()
+}
+
+fn prepared_history_row_has_required_values(row: &PreparedRow) -> bool {
+    [
+        row.open,
+        row.high,
+        row.low,
+        row.close,
+        row.volume,
+        row.turnover_n,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
 }
 
 fn read_string(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<String> {
@@ -367,6 +384,15 @@ fn read_f64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<f64> {
     let mut bytes = [0_u8; 8];
     cursor.read_exact(&mut bytes)?;
     Ok(f64::from_le_bytes(bytes))
+}
+
+fn read_factor_map(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<BTreeMap<String, f64>> {
+    let count = read_u64(cursor)? as usize;
+    let mut factors = BTreeMap::new();
+    for _ in 0..count {
+        factors.insert(read_string(cursor)?, read_f64(cursor)?);
+    }
+    Ok(factors)
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
@@ -416,4 +442,13 @@ fn write_i32(out: &mut Vec<u8>, value: i32) {
 
 fn write_f64(out: &mut Vec<u8>, value: f64) {
     out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_factor_map(out: &mut Vec<u8>, factors: &BTreeMap<String, f64>) -> anyhow::Result<()> {
+    write_u64(out, factors.len() as u64);
+    for (key, value) in factors {
+        write_string(out, key)?;
+        write_f64(out, *value);
+    }
+    Ok(())
 }

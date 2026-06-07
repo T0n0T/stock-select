@@ -21,8 +21,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.ml.train_rank_lgbm import (
     as_float,
     build_model_metadata,
+    DEFAULT_LABEL_GAIN,
     grouped_by_date,
     load_feature_manifest_with_levels,
+    parse_label_gain,
     read_dataset,
     rows_for_dates,
     train_model_result,
@@ -40,8 +42,18 @@ EXPORT_COLUMNS = [
 ]
 
 
-def resolve_default_paths(method: str) -> dict[str, Path]:
+def resolve_default_paths(method: str, *, model_output_dir: Path | None = None) -> dict[str, Path]:
     root = PROJECT_ROOT / "diagnostics" / "ml" / method
+    if model_output_dir is not None:
+        if not model_output_dir.is_absolute():
+            root = Path("diagnostics") / "ml" / method
+        return {
+            "dataset": root / "rank_dataset.csv",
+            "feature_manifest": model_output_dir / "feature_manifest.json",
+            "output": model_output_dir / "lgbm_scores.csv",
+            "summary_output": model_output_dir / "lgbm_scores_summary.json",
+            "model_output_dir": model_output_dir,
+        }
     return {
         "dataset": root / "rank_dataset.csv",
         "feature_manifest": root / "model" / "feature_manifest.json",
@@ -98,6 +110,8 @@ def export_scores(
     num_boost_round: int,
     learning_rate: float,
     num_threads: int,
+    label_gain: Sequence[int] | None = None,
+    lambdarank_truncation_level: int = 0,
     label_column: str = "rank_label_3d",
     method: str = DEFAULT_METHOD,
 ) -> dict[str, Any]:
@@ -113,6 +127,7 @@ def export_scores(
         raise ValueError("no train rows after applying train date filter")
     if not score_rows:
         raise ValueError("no score rows after applying score date filter")
+    resolved_label_gain = list(label_gain or DEFAULT_LABEL_GAIN)
 
     numeric_columns, categorical_columns, fixed_categorical_levels = load_feature_manifest_with_levels(
         feature_manifest,
@@ -130,6 +145,8 @@ def export_scores(
         learning_rate=learning_rate,
         label_column=label_column,
         num_threads=num_threads,
+        label_gain=resolved_label_gain,
+        lambdarank_truncation_level=lambdarank_truncation_level,
         fixed_categorical_levels=fixed_categorical_levels,
     )
     score_scored = model_result.test_scored
@@ -142,6 +159,8 @@ def export_scores(
         "num_boost_round": num_boost_round,
         "learning_rate": learning_rate,
         "num_threads": num_threads,
+        "label_gain": resolved_label_gain,
+        "lambdarank_truncation_level": lambdarank_truncation_level,
     }
     metadata = build_model_metadata(
         feature_manifest=str(feature_manifest),
@@ -180,6 +199,31 @@ def export_scores(
     return summary
 
 
+def load_trial_report_defaults(model_output_dir: Path | None) -> dict[str, Any]:
+    if model_output_dir is None:
+        return {}
+    reports = sorted(model_output_dir.glob("lgbm_rank_report*.json"))
+    if not reports:
+        return {}
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    params = payload.get("model_params") or {}
+    result: dict[str, Any] = {}
+    for key in [
+        "num_leaves",
+        "min_data_in_leaf",
+        "num_boost_round",
+        "learning_rate",
+        "num_threads",
+        "label_gain",
+        "lambdarank_truncation_level",
+    ]:
+        if key in params:
+            result[key] = params[key]
+    if payload.get("label_column"):
+        result["label_column"] = str(payload["label_column"])
+    return result
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export LightGBM model scores for Rust ranking layer consumption.")
     parser.add_argument("--method", default=DEFAULT_METHOD)
@@ -191,33 +235,38 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--train-end-exclusive", default="2026-03-01")
     parser.add_argument("--score-start", default="2026-03-01")
     parser.add_argument("--score-end", default="2026-06-02")
-    parser.add_argument("--num-leaves", type=int, default=9)
-    parser.add_argument("--min-data-in-leaf", type=int, default=120)
-    parser.add_argument("--num-boost-round", type=int, default=60)
-    parser.add_argument("--learning-rate", type=float, default=0.05)
-    parser.add_argument("--num-threads", type=int, default=4)
-    parser.add_argument("--label-column", default="rank_label_3d")
+    parser.add_argument("--num-leaves", type=int)
+    parser.add_argument("--min-data-in-leaf", type=int)
+    parser.add_argument("--num-boost-round", type=int)
+    parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--num-threads", type=int)
+    parser.add_argument("--label-column")
+    parser.add_argument("--label-gain", type=parse_label_gain)
+    parser.add_argument("--lambdarank-truncation-level", type=int)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    defaults = resolve_default_paths(args.method)
+    defaults = resolve_default_paths(args.method, model_output_dir=args.model_output_dir)
+    report_defaults = load_trial_report_defaults(args.model_output_dir)
     summary = export_scores(
         dataset=args.dataset or defaults["dataset"],
         feature_manifest=args.feature_manifest or defaults["feature_manifest"],
         output=args.output or defaults["output"],
         summary_output=args.summary_output or defaults["summary_output"],
-        model_output_dir=args.model_output_dir or defaults["model_output_dir"],
+        model_output_dir=defaults["model_output_dir"],
         train_end_exclusive=args.train_end_exclusive,
         score_start=args.score_start,
         score_end=args.score_end,
-        num_leaves=args.num_leaves,
-        min_data_in_leaf=args.min_data_in_leaf,
-        num_boost_round=args.num_boost_round,
-        learning_rate=args.learning_rate,
-        num_threads=args.num_threads,
-        label_column=args.label_column,
+        num_leaves=args.num_leaves if args.num_leaves is not None else int(report_defaults.get("num_leaves", 9)),
+        min_data_in_leaf=args.min_data_in_leaf if args.min_data_in_leaf is not None else int(report_defaults.get("min_data_in_leaf", 120)),
+        num_boost_round=args.num_boost_round if args.num_boost_round is not None else int(report_defaults.get("num_boost_round", 60)),
+        learning_rate=args.learning_rate if args.learning_rate is not None else float(report_defaults.get("learning_rate", 0.05)),
+        num_threads=args.num_threads if args.num_threads is not None else int(report_defaults.get("num_threads", 4)),
+        label_gain=args.label_gain if args.label_gain is not None else report_defaults.get("label_gain", DEFAULT_LABEL_GAIN),
+        lambdarank_truncation_level=args.lambdarank_truncation_level if args.lambdarank_truncation_level is not None else int(report_defaults.get("lambdarank_truncation_level", 0)),
+        label_column=args.label_column or str(report_defaults.get("label_column", "rank_label_3d")),
         method=args.method,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))

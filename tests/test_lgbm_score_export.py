@@ -6,6 +6,7 @@ from scripts.ml.export_lgbm_scores import (
     assign_model_ranks,
     export_rows,
     export_scores,
+    main,
     resolve_default_paths,
 )
 from scripts.ml import build_rank_dataset as rank_dataset_schema
@@ -23,6 +24,54 @@ class LgbmScoreExportTest(unittest.TestCase):
         self.assertIn("diagnostics/ml/b1", str(paths["output"]))
         self.assertEqual(paths["model_output_dir"].name, "model")
         self.assertEqual(paths["dataset"].name, "rank_dataset.csv")
+
+    def test_default_paths_follow_explicit_model_output_dir_for_trial_exports(self):
+        model_output_dir = Path("diagnostics/ml/b3/tuning/trial-001")
+
+        paths = resolve_default_paths("b3", model_output_dir=model_output_dir)
+
+        self.assertEqual(paths["dataset"], Path("diagnostics/ml/b3/rank_dataset.csv"))
+        self.assertEqual(paths["feature_manifest"], model_output_dir / "feature_manifest.json")
+        self.assertEqual(paths["output"], model_output_dir / "lgbm_scores.csv")
+        self.assertEqual(paths["summary_output"], model_output_dir / "lgbm_scores_summary.json")
+        self.assertEqual(paths["model_output_dir"], model_output_dir)
+
+    def test_main_uses_trial_report_training_params_for_model_output_dir(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_output_dir = Path(temp_dir) / "trial-001"
+            model_output_dir.mkdir()
+            (model_output_dir / "lgbm_rank_report_raw_plus_signal.json").write_text(
+                json.dumps(
+                    {
+                        "label_column": "ret3_ge5_label",
+                        "model_params": {
+                            "num_leaves": 5,
+                            "min_data_in_leaf": 240,
+                            "num_boost_round": 60,
+                            "learning_rate": 0.05,
+                            "num_threads": 16,
+                            "label_gain": [0, 1, 5, 15],
+                            "lambdarank_truncation_level": 8,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("scripts.ml.export_lgbm_scores.export_scores", return_value={"ok": True}) as export_scores:
+                rc = main(["--method", "b2", "--model-output-dir", str(model_output_dir)])
+
+        self.assertEqual(rc, 0)
+        kwargs = export_scores.call_args.kwargs
+        self.assertEqual(kwargs["num_leaves"], 5)
+        self.assertEqual(kwargs["min_data_in_leaf"], 240)
+        self.assertEqual(kwargs["num_threads"], 16)
+        self.assertEqual(kwargs["label_column"], "ret3_ge5_label")
+        self.assertEqual(kwargs["label_gain"], [0, 1, 5, 15])
+        self.assertEqual(kwargs["lambdarank_truncation_level"], 8)
 
     def test_assign_model_ranks_are_date_local_and_score_descending(self):
         rows = [
@@ -113,6 +162,8 @@ class LgbmScoreExportTest(unittest.TestCase):
                     num_boost_round=60,
                     learning_rate=0.05,
                     num_threads=1,
+                    label_gain=[0, 1, 5, 15],
+                    lambdarank_truncation_level=8,
                     label_column="rank_label_3d",
                 )
 
@@ -122,9 +173,13 @@ class LgbmScoreExportTest(unittest.TestCase):
                 train_model_result.call_args.kwargs["fixed_categorical_levels"],
                 {"env": ["weak", "strong", "neutral"]},
             )
+            self.assertEqual(train_model_result.call_args.kwargs["label_gain"], [0, 1, 5, 15])
+            self.assertEqual(train_model_result.call_args.kwargs["lambdarank_truncation_level"], 8)
             self.assertEqual(metadata["feature_names"], ["close_to_zxdkx_pct", "env=weak", "env=strong", "env=neutral"])
             self.assertEqual(metadata["categorical_levels"], {"env": ["weak", "strong", "neutral"]})
             self.assertEqual(metadata["label_column"], "rank_label_3d")
+            self.assertEqual(metadata["model_params"]["label_gain"], [0, 1, 5, 15])
+            self.assertEqual(metadata["model_params"]["lambdarank_truncation_level"], 8)
             self.assertEqual(summary["model_artifacts"]["model"], str(artifact_dir / "model.txt"))
 
     def test_export_scores_uses_method_registered_feature_manifest_columns(self):

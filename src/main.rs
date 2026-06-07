@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
-use anyhow::Context;
 use chrono::{Local, NaiveDate};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -10,9 +9,7 @@ use serde::Serialize;
 use serde_json::json;
 use stock_select::cache::load_prepared_cache_for_mode;
 use stock_select::config::{resolve_config_value, resolve_runtime_root};
-use stock_select::db::{
-    fetch_daily_window, fetch_index_history, fetch_instrument_info, resolve_previous_trade_date,
-};
+use stock_select::db::{fetch_daily_window, fetch_instrument_info, resolve_previous_trade_date};
 use stock_select::engine::artifacts::{
     SelectionRunPaths, read_selection_json, write_selection_json,
 };
@@ -24,8 +21,8 @@ use stock_select::engine::presentation::{
 use stock_select::engine::run::{SelectionRunRequest, run_selection};
 use stock_select::engine::types::{DisplayRow, LlmAnnotation};
 use stock_select::environment::{
-    ResolvedEnvironment, ensure_market_environment, evaluate_market_environment,
-    resolve_intraday_market_environment,
+    ResolvedEnvironment, ensure_market_environment, resolve_intraday_market_environment,
+    resolve_market_environment,
 };
 use stock_select::intraday::TushareRestProvider;
 use stock_select::model::{InstrumentInfo, MarketRow, Method, PreparedRow};
@@ -543,18 +540,15 @@ fn resolve_command_environment(
         );
     }
 
-    let resolved =
+    let resolved = if manual_state.is_some() {
         ensure_market_environment(runtime_root, pick_date, manual_state, manual_reason, || {
-            if dsn.trim().is_empty() {
-                anyhow::bail!("A database DSN is required for market environment evaluation.");
-            }
-            let start_date = pick_date - chrono::Duration::days(180);
-            let sse = fetch_index_history(dsn, "000001.SH", start_date, pick_date)
-                .context("fetch SSE index history for market environment")?;
-            let cn2000 = fetch_index_history(dsn, "399303.SZ", start_date, pick_date)
-                .context("fetch CN2000 index history for market environment")?;
-            evaluate_market_environment(pick_date, &sse, &cn2000)
-        })?;
+            unreachable!("manual environment state should not evaluate")
+        })?
+    } else if let Ok(resolved) = resolve_market_environment(runtime_root, pick_date) {
+        resolved
+    } else {
+        resolve_prepared_market_environment(runtime_root, pick_date)?
+    };
     eprintln!(
         "[environment] state={} source={} interval={}..{}",
         resolved.state,
@@ -569,6 +563,73 @@ fn resolve_command_environment(
             .unwrap_or_else(|| "-".to_string())
     );
     Ok(resolved)
+}
+
+fn resolve_prepared_market_environment(
+    runtime_root: &Path,
+    pick_date: NaiveDate,
+) -> anyhow::Result<ResolvedEnvironment> {
+    let start_date = pick_date - chrono::Duration::days(366);
+    let Some(rows) = load_prepared_cache_for_mode(
+        runtime_root,
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        false,
+    )?
+    else {
+        anyhow::bail!(
+            "No manual, persisted, or prepared market environment is available for {pick_date}."
+        );
+    };
+    let state = prepared_market_state(&rows, pick_date).ok_or_else(|| {
+        anyhow::anyhow!("Prepared cache has no usable market state for {pick_date}.")
+    })?;
+    Ok(ResolvedEnvironment {
+        state,
+        interval_start: Some(pick_date),
+        interval_end: Some(pick_date),
+        reason: Some("derived from prepared market breadth factors".to_string()),
+        source: "prepared_market_state".to_string(),
+    })
+}
+
+fn prepared_market_state(rows: &[PreparedRow], pick_date: NaiveDate) -> Option<String> {
+    let has_pick_date_rows = rows.iter().any(|row| row.trade_date == pick_date);
+    let pct_changes = rows
+        .iter()
+        .filter(|row| row.trade_date == pick_date)
+        .filter_map(|row| row.chg_d.filter(|value| value.is_finite()))
+        .collect::<Vec<_>>();
+    if pct_changes.is_empty() {
+        return has_pick_date_rows.then(|| "neutral".to_string());
+    }
+    let total = pct_changes.len() as f64;
+    let up_ratio = pct_changes.iter().filter(|value| **value > 0.0).count() as f64 / total;
+    let ge5_ratio = pct_changes.iter().filter(|value| **value >= 5.0).count() as f64 / total;
+    let le_minus5_ratio = pct_changes.iter().filter(|value| **value <= -5.0).count() as f64 / total;
+    let median = median_f64(pct_changes)?;
+    if up_ratio >= 0.62 || ge5_ratio >= 0.12 || median >= 1.2 {
+        Some("strong".to_string())
+    } else if up_ratio <= 0.38 || le_minus5_ratio >= 0.12 || median <= -1.2 {
+        Some("weak".to_string())
+    } else {
+        Some("neutral".to_string())
+    }
+}
+
+fn median_f64(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        Some((values[mid - 1] + values[mid]) / 2.0)
+    } else {
+        Some(values[mid])
+    }
 }
 
 fn run_chart_command(args: ArtifactCommandArgs) -> anyhow::Result<()> {
