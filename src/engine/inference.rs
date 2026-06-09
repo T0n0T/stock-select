@@ -42,6 +42,38 @@ pub struct ResolvedMethodModelArtifacts {
     pub metadata_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct ModelRoutingState {
+    #[serde(default)]
+    eod: ModelModeState,
+    #[serde(default)]
+    intraday: ModelModeState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct ModelModeState {
+    #[serde(default = "default_model_status")]
+    status: String,
+    #[serde(default)]
+    model_dir: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+impl Default for ModelModeState {
+    fn default() -> Self {
+        Self {
+            status: default_model_status(),
+            model_dir: None,
+            reason: None,
+        }
+    }
+}
+
+fn default_model_status() -> String {
+    "ready".to_string()
+}
+
 pub fn default_model_dir(method: Method) -> Option<&'static str> {
     match method {
         Method::B2 => Some("models/b2"),
@@ -55,12 +87,42 @@ pub fn resolve_method_model_artifacts(
     method: Method,
     runtime_root: &Path,
 ) -> anyhow::Result<ResolvedMethodModelArtifacts> {
-    resolve_method_model_artifacts_with_overrides(method, runtime_root, None, None)
+    resolve_method_model_artifacts_for_mode(method, runtime_root, false)
+}
+
+pub fn resolve_method_model_artifacts_for_mode(
+    method: Method,
+    runtime_root: &Path,
+    intraday: bool,
+) -> anyhow::Result<ResolvedMethodModelArtifacts> {
+    resolve_method_model_artifacts_for_mode_with_overrides(
+        method,
+        runtime_root,
+        intraday,
+        None,
+        None,
+    )
 }
 
 pub fn resolve_method_model_artifacts_with_overrides(
     method: Method,
     runtime_root: &Path,
+    override_model_path: Option<&Path>,
+    override_metadata_path: Option<&Path>,
+) -> anyhow::Result<ResolvedMethodModelArtifacts> {
+    resolve_method_model_artifacts_for_mode_with_overrides(
+        method,
+        runtime_root,
+        false,
+        override_model_path,
+        override_metadata_path,
+    )
+}
+
+pub fn resolve_method_model_artifacts_for_mode_with_overrides(
+    method: Method,
+    runtime_root: &Path,
+    intraday: bool,
     override_model_path: Option<&Path>,
     override_metadata_path: Option<&Path>,
 ) -> anyhow::Result<ResolvedMethodModelArtifacts> {
@@ -79,7 +141,57 @@ pub fn resolve_method_model_artifacts_with_overrides(
     }
     let default_model_dir = default_model_dir(method)
         .ok_or_else(|| anyhow::anyhow!("method has no default model dir"))?;
-    let model_dir = runtime_root.join(default_model_dir);
+    let model_dir = resolve_model_dir_for_mode(method, runtime_root, default_model_dir, intraday)?;
+    resolve_complete_model_dir(method, &model_dir)
+}
+
+fn resolve_model_dir_for_mode(
+    method: Method,
+    runtime_root: &Path,
+    default_model_dir: &str,
+    intraday: bool,
+) -> anyhow::Result<PathBuf> {
+    let default_dir = runtime_root.join(default_model_dir);
+    let state_path = default_dir.join("model_state.json");
+    if !state_path.exists() {
+        if intraday {
+            anyhow::bail!(
+                "WARNING: {} intraday model is not ready: intraday model state is missing under {}; publish an intraday model and update model_state.json before using --intraday",
+                method.as_str(),
+                state_path.display()
+            );
+        }
+        return Ok(default_dir);
+    }
+    let state: ModelRoutingState = serde_json::from_slice(&std::fs::read(&state_path)?)?;
+    let mode_state = if intraday {
+        &state.intraday
+    } else {
+        &state.eod
+    };
+    if mode_state.status != "ready" {
+        let reason = mode_state
+            .reason
+            .as_deref()
+            .unwrap_or("model mode is not ready");
+        anyhow::bail!(
+            "WARNING: {} {} model is not ready: {reason}",
+            method.as_str(),
+            if intraday { "intraday" } else { "eod" }
+        );
+    }
+    let dir = mode_state
+        .model_dir
+        .as_deref()
+        .map(|path| runtime_root.join(path))
+        .unwrap_or(default_dir);
+    Ok(dir)
+}
+
+fn resolve_complete_model_dir(
+    method: Method,
+    model_dir: &Path,
+) -> anyhow::Result<ResolvedMethodModelArtifacts> {
     let model_path = model_dir.join("model.txt");
     let metadata_path = model_dir.join("model_metadata.json");
 

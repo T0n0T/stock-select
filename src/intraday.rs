@@ -222,16 +222,22 @@ pub fn build_intraday_market_rows(
             !(row.trade_date == trade_date && snapshot_codes.contains(row.ts_code.as_str()))
         })
         .collect::<Vec<_>>();
-    rows.extend(snapshot.iter().map(|row| MarketRow {
-        ts_code: row.ts_code.clone(),
-        trade_date,
-        open: row.open,
-        high: row.high,
-        low: row.low,
-        close: row.close,
-        vol: row.vol,
-        turnover_rate: None,
-        db_factors: BTreeMap::new(),
+    rows.extend(snapshot.iter().map(|row| {
+        let mut db_factors = BTreeMap::new();
+        if row.vol != 0.0 {
+            db_factors.insert("chip_vwap".to_string(), row.amount * 10.0 / row.vol);
+        }
+        MarketRow {
+            ts_code: row.ts_code.clone(),
+            trade_date,
+            open: row.open,
+            high: row.high,
+            low: row.low,
+            close: row.close,
+            vol: row.vol,
+            turnover_rate: None,
+            db_factors,
+        }
     }));
     rows.sort_by(|left, right| {
         left.ts_code

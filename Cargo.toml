@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+chip-age-factor = { path = "../chip-age-factor" }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 lightgbm3 = "1.0.10"

@@ -70,6 +70,9 @@ stock-select-rs run --method b2 --llm-review-limit 5 --pick-date 2026-06-05
 - `display.json` — 展示行（含 model_rank, model_score, llm_action 等）
 - `feature_vectors.json` — 特征向量（用于调试）
 - `llm_tasks.json` — LLM 复盘任务
+- `llm_annotations.json` — 子代理/人工复盘 annotation
+- `llm_report.html` — `review-merge` 生成的图文复盘报告
+- `llm_raw/<code>.json` — 单票子代理原始复盘内容
 
 ### review-list
 
@@ -80,12 +83,13 @@ stock-select-rs review-list --method b2 --pick-date 2026-06-05 --limit 20
 输出格式（tab 分隔）：
 
 ```text
-rank  code    name    industry  score       action  flags
-1     000001  平安银行  银行       0.700000    KEEP    -
+rank  code    name    industry  score       bias  action  flags
+1     000001  平安银行  银行       0.700000    ↑     KEEP    -
 ```
 
 - `rank` — 模型排序位置（1-based）
 - `score` — LightGBM 原始预测分
+- `bias` — LLM 短线符号：`↑` 看多、`→` 谨慎、`↓` 看空、`-` 未复盘
 - `action` — LLM 复盘动作
 - `flags` — LLM 风险标记
 
@@ -96,8 +100,8 @@ stock-select-rs review --method b2 --pick-date 2026-06-05 --limit 5
 stock-select-rs review-merge --method b2 --pick-date 2026-06-05
 ```
 
-- `review` 从 `display.json` 生成 `llm_tasks.json`
-- `review-merge` 将填写的 `llm_annotations.json` 合并回 display
+- `review` 从 `display.json` 生成 `llm_tasks.json`，包含 `chart_path`、建议的 `raw_response_path`、`llm_report_path` 和游资/短线读图提示
+- `review-merge` 将填写的 `llm_annotations.json` 合并回 display，并生成 `llm_report.html`
 
 ### chart
 

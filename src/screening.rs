@@ -11,6 +11,7 @@ use crate::cache::{
 use crate::factors::registry::{build_candidate_factor_rows_from_refs, write_factor_artifact};
 use crate::indicators::{kdj, macd, rolling_mean, rolling_sum, zx_lines};
 use crate::intraday::{IntradaySnapshotProvider, build_intraday_market_rows, fetch_rt_k_snapshot};
+use crate::local_factors::enrich_local_market_factors;
 use crate::model::{MarketRow, Method, PreparedRow, ScreenResult};
 use crate::strategies::StrategyOutput;
 use crate::strategies::b2::run_b2_strategy_from_refs;
@@ -97,10 +98,12 @@ where
         .iter()
         .any(|row| row.trade_date == request.pick_date)
     {
-        anyhow::bail!(
-            "No prepared rows found for pick_date {}.",
-            request.pick_date
-        );
+        anyhow::bail!(missing_pick_date_rows_message(
+            request.pick_date,
+            &prepared,
+            &request.runtime_root,
+            request.method,
+        ));
     }
 
     let (pool_codes, resolved_pool_file) = match request.pool_source {
@@ -254,6 +257,32 @@ where
     Ok(output_path)
 }
 
+fn missing_pick_date_rows_message(
+    pick_date: NaiveDate,
+    prepared: &[PreparedRow],
+    runtime_root: &Path,
+    method: Method,
+) -> String {
+    let latest = prepared.iter().map(|row| row.trade_date).max();
+    let earliest = prepared.iter().map(|row| row.trade_date).min();
+    let intraday_candidates = intraday_candidate_output_path(runtime_root, pick_date, method);
+    let intraday_cache = crate::cache::prepared_cache_paths(runtime_root, pick_date, true);
+    let mut message = format!("No prepared rows found for pick_date {pick_date}.");
+    if let Some(latest) = latest {
+        message.push_str(&format!(" latest cached trade_date is {latest}"));
+        if let Some(earliest) = earliest {
+            message.push_str(&format!("; cached window is {earliest}..{latest}"));
+        }
+        message.push('.');
+    }
+    if intraday_candidates.exists() || intraday_cache.data_path.exists() {
+        message.push_str(" Intraday artifacts exist for this date; use --intraday for intraday selection, or refresh the post-market daily cache after daily_market is available.");
+    } else {
+        message.push_str(" Refresh the post-market daily cache after daily_market is available.");
+    }
+    message
+}
+
 fn write_screen_factor_artifact(
     request: &ScreenRequest,
     candidates: &[crate::model::Candidate],
@@ -319,6 +348,9 @@ where
         anyhow::bail!("No market rows found between {start_date} and {end_date}.");
     }
     let prepared = prepare_rows(rows);
+    if !prepared.iter().any(|row| row.trade_date == end_date) {
+        return Ok(prepared);
+    }
     write_prepared_cache(
         &request.runtime_root,
         request.method,
@@ -330,7 +362,8 @@ where
     Ok(prepared)
 }
 
-fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
+fn prepare_rows(mut rows: Vec<MarketRow>) -> Vec<PreparedRow> {
+    enrich_local_market_factors(&mut rows);
     let mut grouped = BTreeMap::<String, Vec<MarketRow>>::new();
     for row in rows {
         let code = row.ts_code.clone();

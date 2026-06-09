@@ -337,15 +337,17 @@ def promote_model(
     report_path: Path | None = None,
     dry_run: bool = False,
     require_report: bool = False,
+    expected_method: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     target_dir = target_dir or resolve_default_target_dir()
+    method = expected_method or target_dir.name
     timestamp = now or utc_timestamp()
     validation = validate_model_artifacts(
         candidate_dir,
         report_path=report_path,
         require_report=require_report,
-        expected_method=target_dir.name,
+        expected_method=method,
     )
     archive_root = method_archive_root(target_dir)
     archive_path = archive_root / timestamp
@@ -353,7 +355,7 @@ def promote_model(
 
     summary = {
         "mode": "dry-run" if dry_run else "promote",
-        "method": target_dir.name,
+        "method": method,
         "source": str(candidate_dir),
         "target": str(target_dir),
         "archive_path": str(archive_path) if target_dir.exists() else None,
@@ -496,6 +498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report_path=args.report,
                 dry_run=args.dry_run,
                 require_report=args.require_report,
+                expected_method=args.method,
             )
             print_chinese_summary(summary)
         return 0

@@ -7,6 +7,7 @@ pub mod environment_profiles;
 pub mod factors;
 pub mod indicators;
 pub mod intraday;
+pub mod local_factors;
 pub mod macd_trends;
 pub mod model;
 pub mod review_protocol;

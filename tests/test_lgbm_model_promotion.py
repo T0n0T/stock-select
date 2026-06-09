@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.ml.promote_lgbm_model import (
     describe_current_model,
     list_archived_models,
+    main,
     promote_model,
     resolve_default_target_dir,
     rollback_model,
@@ -219,6 +220,28 @@ class LgbmModelPromotionTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "method"):
                 validate_model_artifacts(candidate, expected_method="b2")
+
+    def test_cli_promote_accepts_mode_specific_target_dir_for_same_method(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = root / "candidate"
+            target = root / "runtime" / "models" / "b2_intraday"
+            write_candidate_model(candidate, report=passing_report())
+
+            exit_code = main(
+                [
+                    "--method",
+                    "b2",
+                    "--candidate-dir",
+                    str(candidate),
+                    "--target-dir",
+                    str(target),
+                    "--dry-run",
+                    "--require-report",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
 
 
 if __name__ == "__main__":

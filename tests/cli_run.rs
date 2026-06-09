@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use chrono::{Datelike, NaiveDate};
 use predicates::prelude::*;
 use serde_json::{Value, json};
+use stock_select::cache::PREPARED_CACHE_SCHEMA_VERSION;
 
 const B2_MODEL_FIXTURE_DIR: &str = "tests/fixtures/b2_model";
 
@@ -46,10 +47,20 @@ fn write_candidates(root: &std::path::Path) -> std::path::PathBuf {
 
 fn write_lightgbm_model_artifacts(root: &std::path::Path) {
     copy_fixture_b2_model_artifacts(root);
+    copy_fixture_model_artifacts(root, "b2_intraday");
+    std::fs::write(
+        root.join("models/b2/model_state.json"),
+        serde_json::to_vec_pretty(&json!({
+            "eod": {"status": "ready", "model_dir": "models/b2"},
+            "intraday": {"status": "ready", "model_dir": "models/b2_intraday"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 fn write_close_to_ma25_model(root: &std::path::Path) {
-    copy_fixture_b2_model_artifacts(root);
+    write_lightgbm_model_artifacts(root);
 }
 
 fn write_fake_chart_renderer(temp: &std::path::Path) -> std::path::PathBuf {
@@ -116,7 +127,7 @@ fn write_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 4,
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 25,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -159,7 +170,7 @@ fn write_intraday_prepared_cache_metadata(root: &std::path::Path, pick_date: Nai
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 4,
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 25,
             "symbol_count": 1,
             "source_table": "daily_market",
@@ -209,7 +220,7 @@ fn write_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) 
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 4,
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 3,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -259,7 +270,7 @@ fn write_two_code_selecting_prepared_cache(root: &std::path::Path, pick_date: Na
             "pick_date": "2026-05-25",
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
-            "schema_version": 4,
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 6,
             "symbol_count": 2,
             "source_table": "daily_market"
@@ -958,6 +969,55 @@ fn b2_intraday_run_writes_intraday_scoped_artifacts() {
 }
 
 #[test]
+fn b2_intraday_run_warns_and_stops_when_model_state_is_blocked() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+    std::fs::write(
+        temp.path().join("models/b2/model_state.json"),
+        serde_json::to_vec_pretty(&json!({
+            "eod": {"status": "ready", "model_dir": "models/b2"},
+            "intraday": {
+                "status": "blocked",
+                "reason": "intraday model is not published yet"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "run",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+        "--intraday",
+        "--environment-state",
+        "neutral",
+        "--candidates-path",
+        candidates_path.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(
+        predicate::str::contains("WARNING: b2 intraday model is not ready").and(
+            predicate::str::contains("intraday model is not published yet"),
+        ),
+    );
+
+    assert!(
+        !temp
+            .path()
+            .join("select/2026-05-25.intraday.b2/run.json")
+            .exists()
+    );
+}
+
+#[test]
 fn b2_intraday_run_infers_pick_date_when_omitted() {
     let temp = tempfile::tempdir().unwrap();
     let candidates_path = write_candidates(temp.path());
@@ -1248,6 +1308,54 @@ fn b2_run_injects_history_from_prepared_cache_when_candidate_has_no_history() {
             .unwrap()
             .is_finite()
     );
+}
+
+#[test]
+fn b2_run_uses_prepared_cache_factor_path_for_market_state_factors() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    write_lightgbm_model_artifacts(temp.path());
+    write_two_code_selecting_prepared_cache(temp.path(), pick_date);
+    let candidates_path = temp.path().join("candidates.json");
+    std::fs::write(
+        &candidates_path,
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {"code": "000001.SZ", "name": "测试一", "close": 10.6, "turnover_n": 1300.0, "signal": "B2"},
+                {"code": "000002.SZ", "name": "测试二", "close": 21.0, "turnover_n": 1300.0, "signal": "B2"}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "run",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+        "--candidates-path",
+        candidates_path.to_str().unwrap(),
+        "--environment-state",
+        "neutral",
+    ])
+    .assert()
+    .success();
+
+    let factors: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("select/2026-05-25.b2/factors.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["factor_source"],
+        "rust_factor_library"
+    );
+    assert!(factors["rows"][0]["factors"]["market_amount_ma5_ratio"].is_number());
+    assert!(factors["rows"][1]["factors"]["market_amount_ma5_ratio"].is_number());
 }
 
 #[test]

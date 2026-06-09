@@ -270,4 +270,6 @@ fn build_intraday_market_rows_replaces_existing_same_day_snapshot_rows() {
     assert_eq!(rows[1].trade_date, trade_date);
     assert_eq!(rows[1].close, 12.34);
     assert_eq!(rows[1].vol, 12345.67);
+    let expected_vwap = 152300.0 * 10.0 / 12345.67;
+    assert!((rows[1].db_factors["chip_vwap"] - expected_vwap).abs() < 1e-9);
 }

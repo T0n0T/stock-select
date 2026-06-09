@@ -29,18 +29,19 @@ pub fn format_display_lines(rows: &[DisplayRow]) -> Vec<String> {
                 .model_score
                 .map(|value| format!("{value:.6}"))
                 .unwrap_or_else(|| "-".to_string());
-            let action = row.llm_action.as_deref().unwrap_or("-");
-            let flags = if row.llm_risk_flags.is_empty() {
-                "-".to_string()
-            } else {
-                row.llm_risk_flags.join(",")
-            };
-            format!(
-                "{rank}\t{}\t{name}\t{industry}\t{score}\t{action}\t{flags}",
-                row.code
-            )
+            let bias = review_signal_symbol(row.llm_action.as_deref());
+            format!("{rank}\t{}\t{name}\t{industry}\t{score}\t{bias}", row.code)
         })
         .collect()
+}
+
+pub fn review_signal_symbol(action: Option<&str>) -> &'static str {
+    match action.map(str::to_ascii_uppercase).as_deref() {
+        Some("KEEP") => "↑",
+        Some("CAUTION") => "→",
+        Some("REJECT") => "↓",
+        _ => "-",
+    }
 }
 
 #[cfg(test)]
@@ -56,6 +57,7 @@ mod tests {
             model_score: Some(0.5),
             llm_action: None,
             llm_risk_flags: Vec::new(),
+            llm_comment: None,
         }
     }
 

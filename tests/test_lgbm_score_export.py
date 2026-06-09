@@ -182,6 +182,83 @@ class LgbmScoreExportTest(unittest.TestCase):
             self.assertEqual(metadata["model_params"]["lambdarank_truncation_level"], 8)
             self.assertEqual(summary["model_artifacts"]["model"], str(artifact_dir / "model.txt"))
 
+    def test_export_scores_keeps_unlabeled_score_rows(self):
+        import csv
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "code", "rank_label_5d", "ret5", "close_to_zxdkx_pct"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {
+                            "date": "2026-05-29",
+                            "code": "a",
+                            "rank_label_5d": "3",
+                            "ret5": "6",
+                            "close_to_zxdkx_pct": "1",
+                        },
+                        {
+                            "date": "2026-06-05",
+                            "code": "b",
+                            "rank_label_5d": "",
+                            "ret5": "",
+                            "close_to_zxdkx_pct": "2",
+                        },
+                    ]
+                )
+            feature_manifest = root / "feature_manifest.json"
+            feature_manifest.write_text(
+                json.dumps({"numeric_features": ["close_to_zxdkx_pct"], "categorical_features": []}),
+                encoding="utf-8",
+            )
+
+            with patch("scripts.ml.export_lgbm_scores.train_model_result") as train_model_result:
+                train_model_result.return_value = type(
+                    "Result",
+                    (),
+                    {
+                        "train_scored": [],
+                        "test_scored": [{"date": "2026-06-05", "code": "b", "model_score": 0.5}],
+                        "top_features": [],
+                        "feature_count": 1,
+                        "model": FakeModel(),
+                        "feature_names": ["close_to_zxdkx_pct"],
+                        "lightgbm_feature_names": ["close_to_zxdkx_pct"],
+                        "category_levels": {},
+                    },
+                )()
+
+                summary = export_scores(
+                    dataset=dataset,
+                    feature_manifest=feature_manifest,
+                    output=root / "scores.csv",
+                    summary_output=root / "summary.json",
+                    model_output_dir=root / "model",
+                    train_end_exclusive="2026-06-01",
+                    score_start="2026-06-05",
+                    score_end="2026-06-05",
+                    num_leaves=7,
+                    min_data_in_leaf=80,
+                    num_boost_round=100,
+                    learning_rate=0.05,
+                    num_threads=1,
+                    label_column="rank_label_5d",
+                )
+
+            score_rows = train_model_result.call_args.args[1]
+            self.assertEqual([row["code"] for row in score_rows], ["b"])
+            self.assertEqual(summary["score_row_count"], 1)
+            self.assertEqual(summary["score_start"], "2026-06-05")
+            self.assertEqual(summary["score_end"], "2026-06-05")
+
     def test_export_scores_uses_method_registered_feature_manifest_columns(self):
         import csv
         import json

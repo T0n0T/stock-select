@@ -158,7 +158,7 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
         row.diagnostics
             .get("history_factor_count")
             .and_then(|value| value.as_u64()),
-        Some(54)
+        Some(72)
     );
 }
 
@@ -310,6 +310,96 @@ fn candidate_payload_factor_provider_computes_120d_range_factors() {
         row.factors.get("close_to_20d_max_close_pct"),
         Some(&FactorValue::Number(0.0))
     );
+}
+
+#[test]
+fn candidate_payload_factor_provider_computes_b2_rdagent_rank_factors() {
+    let history = (1..=150)
+        .map(|day| {
+            let close = 100.0 + day as f64;
+            let open = if day == 149 {
+                close + 1.0
+            } else if day == 150 {
+                close - 5.0
+            } else {
+                close - 0.5
+            };
+            let volume = if day == 150 { 2600.0 } else { 1000.0 + day as f64 };
+            json!({
+                "trade_date": (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Duration::days(day - 1)).format("%Y-%m-%d").to_string(),
+                "open": open,
+                "high": close + 10.0,
+                "low": close - 5.0,
+                "close": close,
+                "volume": volume,
+                "turnover_n": 2.0 + day as f64 / 100.0,
+                "turnover_rate": 1.0 + day as f64 / 100.0,
+                "ma25": close - 10.0,
+                "dif": 2.0,
+                "dea": day as f64,
+                "macd_hist": day as f64 / 10.0,
+                "d": 45.0,
+                "j": 30.0 + day as f64 / 10.0
+            })
+        })
+        .collect::<Vec<_>>();
+    let value = json!({"code": "000001.SZ", "signal": "B2", "history": history});
+    let candidate =
+        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+
+    let row = CandidatePayloadFactorProvider
+        .factor_row(&candidate)
+        .unwrap();
+
+    for key in [
+        "D",
+        "close_to_lt_r_pct",
+        "lt_r_to_ma60_pct",
+        "hl90_position",
+        "hl90_range_pct",
+        "close_to_hl90_mid_pct",
+        "bar_close_position",
+        "upper_shadow_pct",
+        "weekly_dea_pctile",
+        "weekly_macd_hist",
+        "monthly_dea_pctile",
+        "monthly_macd_hist",
+        "b2_bullish_engulf_prev_bearish_flag",
+        "b2_volume_bullish_engulf_prev_bearish_flag",
+        "b2_bullish_engulf_volume_ratio",
+    ] {
+        assert!(row.factors.contains_key(key), "missing {key}");
+    }
+    assert_eq!(row.factors.get("D"), Some(&FactorValue::Number(45.0)));
+    assert_eq!(
+        row.factors.get("hl90_position"),
+        Some(&FactorValue::Number(0.9038))
+    );
+    assert_eq!(
+        row.factors.get("hl90_range_pct"),
+        Some(&FactorValue::Number(50.0))
+    );
+    assert_eq!(
+        row.factors.get("bar_close_position"),
+        Some(&FactorValue::Number(0.3333))
+    );
+    assert_eq!(
+        row.factors.get("upper_shadow_pct"),
+        Some(&FactorValue::Number(4.0))
+    );
+    assert_eq!(
+        row.factors.get("b2_bullish_engulf_prev_bearish_flag"),
+        Some(&FactorValue::Bool(true))
+    );
+    assert_eq!(
+        row.factors
+            .get("b2_volume_bullish_engulf_prev_bearish_flag"),
+        Some(&FactorValue::Bool(true))
+    );
+    assert!(matches!(
+        row.factors.get("b2_bullish_engulf_volume_ratio"),
+        Some(FactorValue::Number(value)) if *value > 2.0
+    ));
 }
 
 #[test]

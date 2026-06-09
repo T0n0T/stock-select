@@ -20,6 +20,17 @@ const DAILY_WINDOW_QUERY: &str = "
             m.vol::double precision AS vol,
             m.turnover_rate::double precision AS turnover_rate,
             CASE
+                WHEN m.amount IS NOT NULL AND m.amount != 0
+                 AND m.vol IS NOT NULL AND m.vol != 0
+                THEN m.amount::double precision * 10.0 / m.vol::double precision
+            END AS chip_vwap,
+            CASE
+                WHEN m.turnover_rate_f IS NOT NULL
+                THEN m.turnover_rate_f::double precision / 100.0
+                WHEN m.turnover_rate IS NOT NULL
+                THEN m.turnover_rate::double precision / 100.0
+            END AS chip_turnover,
+            CASE
                 WHEN m.trade_date = $2
                 THEN m.turnover_rate_f::double precision
             END AS turnover_rate_f,
@@ -192,6 +203,8 @@ pub fn fetch_daily_window(
                 vol: optional_f64(&row, "vol")?,
                 turnover_rate: optional_option_f64(&row, "turnover_rate")?,
                 db_factors: db_factor_values([
+                    ("chip_vwap", optional_option_f64(&row, "chip_vwap")?),
+                    ("chip_turnover", optional_option_f64(&row, "chip_turnover")?),
                     (
                         "turnover_rate_f",
                         optional_option_f64(&row, "turnover_rate_f")?,
@@ -448,6 +461,36 @@ mod tests {
     }
 
     #[test]
+    fn daily_window_query_derives_chip_age_inputs_for_every_history_row() {
+        assert!(DAILY_WINDOW_QUERY.contains("END AS chip_vwap"));
+        assert!(
+            DAILY_WINDOW_QUERY
+                .contains("m.amount::double precision * 10.0 / m.vol::double precision")
+        );
+        assert!(DAILY_WINDOW_QUERY.contains("END AS chip_turnover"));
+        assert!(DAILY_WINDOW_QUERY.contains("m.turnover_rate_f::double precision / 100.0"));
+        assert!(DAILY_WINDOW_QUERY.contains("m.turnover_rate::double precision / 100.0"));
+
+        let chip_vwap_clause = DAILY_WINDOW_QUERY
+            .split("END AS chip_vwap")
+            .next()
+            .unwrap_or_default()
+            .rsplit("CASE")
+            .next()
+            .unwrap_or_default();
+        let chip_turnover_clause = DAILY_WINDOW_QUERY
+            .split("END AS chip_turnover")
+            .next()
+            .unwrap_or_default()
+            .rsplit("CASE")
+            .next()
+            .unwrap_or_default();
+
+        assert!(!chip_vwap_clause.contains("m.trade_date = $2"));
+        assert!(!chip_turnover_clause.contains("m.trade_date = $2"));
+    }
+
+    #[test]
     fn daily_window_query_avoids_database_global_ordering() {
         assert!(!DAILY_WINDOW_QUERY.contains("ORDER BY"));
     }
@@ -457,13 +500,17 @@ mod tests {
         let factors = db_factor_values([
             ("boll_width_pct", Some(12.5)),
             ("wr_qfq", Some(-87.0)),
+            ("chip_vwap", Some(10.25)),
+            ("chip_turnover", Some(0.034)),
             ("turnover_rate_f", None),
             ("dist_to_up_limit_pct", Some(f64::NAN)),
         ]);
 
-        assert_eq!(factors.len(), 2);
+        assert_eq!(factors.len(), 4);
         assert_eq!(factors["boll_width_pct"], 12.5);
         assert_eq!(factors["wr_qfq"], -87.0);
+        assert_eq!(factors["chip_vwap"], 10.25);
+        assert_eq!(factors["chip_turnover"], 0.034);
         assert!(!factors.contains_key("turnover_rate_f"));
         assert!(!factors.contains_key("dist_to_up_limit_pct"));
     }

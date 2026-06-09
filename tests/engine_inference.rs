@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use stock_select::engine::inference::{
     LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector, default_model_dir,
-    resolve_method_model_artifacts, resolve_method_model_artifacts_with_overrides,
+    resolve_method_model_artifacts, resolve_method_model_artifacts_for_mode,
+    resolve_method_model_artifacts_with_overrides,
 };
 use stock_select::engine::types::{FactorRow, FactorValue};
 use stock_select::model::Method;
@@ -27,6 +28,100 @@ fn b2_model_resolution_accepts_complete_default_artifacts() {
     assert_eq!(
         resolved.metadata_path,
         Some(model_dir.join("model_metadata.json"))
+    );
+}
+
+#[test]
+fn b2_eod_model_resolution_uses_default_b2_artifacts() {
+    let temp = tempfile::tempdir().unwrap();
+    let model_dir = temp.path().join(default_model_dir(Method::B2).unwrap());
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
+    std::fs::write(
+        model_dir.join("model_state.json"),
+        serde_json::json!({
+            "eod": {"status": "ready", "model_dir": "models/b2"},
+            "intraday": {"status": "blocked", "reason": "intraday feature coverage is incomplete"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolved = resolve_method_model_artifacts_for_mode(Method::B2, temp.path(), false).unwrap();
+
+    assert_eq!(resolved.model_path, Some(model_dir.join("model.txt")));
+    assert_eq!(
+        resolved.metadata_path,
+        Some(model_dir.join("model_metadata.json"))
+    );
+}
+
+#[test]
+fn b2_intraday_model_resolution_rejects_blocked_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let model_dir = temp.path().join(default_model_dir(Method::B2).unwrap());
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
+    std::fs::write(
+        model_dir.join("model_state.json"),
+        serde_json::json!({
+            "eod": {"status": "ready", "model_dir": "models/b2"},
+            "intraday": {"status": "blocked", "reason": "intraday model is not published yet"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let err = resolve_method_model_artifacts_for_mode(Method::B2, temp.path(), true).unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("intraday model is not published yet")
+    );
+}
+
+#[test]
+fn b2_intraday_model_resolution_requires_state_before_using_model() {
+    let temp = tempfile::tempdir().unwrap();
+    let model_dir = temp.path().join(default_model_dir(Method::B2).unwrap());
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
+
+    let err = resolve_method_model_artifacts_for_mode(Method::B2, temp.path(), true).unwrap_err();
+
+    assert!(err.to_string().contains("intraday model state is missing"));
+}
+
+#[test]
+fn b2_intraday_model_resolution_uses_intraday_dir_when_ready() {
+    let temp = tempfile::tempdir().unwrap();
+    let model_dir = temp.path().join(default_model_dir(Method::B2).unwrap());
+    let intraday_dir = temp.path().join("models/b2_intraday");
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::create_dir_all(&intraday_dir).unwrap();
+    std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
+    std::fs::write(intraday_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(intraday_dir.join("model_metadata.json"), "{}\n").unwrap();
+    std::fs::write(
+        model_dir.join("model_state.json"),
+        serde_json::json!({
+            "eod": {"status": "ready", "model_dir": "models/b2"},
+            "intraday": {"status": "ready", "model_dir": "models/b2_intraday"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolved = resolve_method_model_artifacts_for_mode(Method::B2, temp.path(), true).unwrap();
+
+    assert_eq!(resolved.model_path, Some(intraday_dir.join("model.txt")));
+    assert_eq!(
+        resolved.metadata_path,
+        Some(intraday_dir.join("model_metadata.json"))
     );
 }
 

@@ -15,6 +15,13 @@ pub fn push_category(factors: &mut FactorList, key: &str, value: impl Into<Strin
     factors.push((key.to_string(), FactorValue::Category(value.into())));
 }
 
+pub fn push_bool(factors: &mut FactorList, key: &str, value: Option<bool>) {
+    factors.push((
+        key.to_string(),
+        value.map_or(FactorValue::Missing, FactorValue::Bool),
+    ));
+}
+
 pub fn round4(value: f64) -> f64 {
     (value * 10000.0).round() / 10000.0
 }

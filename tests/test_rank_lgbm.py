@@ -199,6 +199,18 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual([row["code"] for row in selected], ["a", "b"])
         self.assertEqual(labels(selected, label_column="ret3_ge5_label"), [3, 0])
 
+    def test_ret5_ge5_label_is_derived_from_forward_return(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "ret5": "5.1"},
+            {"date": "2026-01-01", "code": "b", "ret5": "4.9"},
+            {"date": "2026-01-01", "code": "c", "ret5": ""},
+        ]
+
+        selected = rows_for_dates(rows, {"2026-01-01"}, label_column="ret5_ge5_label")
+
+        self.assertEqual([row["code"] for row in selected], ["a", "b"])
+        self.assertEqual(labels(selected, label_column="ret5_ge5_label"), [3, 0])
+
     def test_train_model_result_accepts_custom_label_gain(self):
         rows = [
             {"date": "2026-01-01", "code": "a", "ret3": "6", "ret5": "6", "x": "1"},

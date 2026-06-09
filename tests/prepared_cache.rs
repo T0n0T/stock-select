@@ -138,6 +138,31 @@ fn load_prepared_cache_requires_matching_metadata() {
 }
 
 #[test]
+fn load_prepared_cache_rejects_rows_missing_requested_end_date() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
+    let start_date = pick_date - chrono::Duration::days(366);
+    write_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        &[prepared_row(
+            "000001.SZ",
+            NaiveDate::from_ymd_opt(2026, 6, 5).unwrap(),
+            10.0,
+        )],
+    )
+    .unwrap();
+
+    let rows =
+        load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date).unwrap();
+
+    assert!(rows.is_none());
+}
+
+#[test]
 fn prepared_cache_round_trips_db_factor_extras() {
     let root = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -281,9 +306,15 @@ fn lsh_can_read_legacy_shared_prepared_cache_without_lsh_metadata_entry() {
     let root = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
     let start_date = NaiveDate::from_ymd_opt(2025, 6, 3).unwrap();
-    let data_path = prepared_cache_data_path(root.path(), pick_date);
-    std::fs::create_dir_all(data_path.parent().unwrap()).unwrap();
-    std::fs::write(&data_path, prepared_cache_bytes()).unwrap();
+    write_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        &[prepared_row("000001.SZ", pick_date, 12.0)],
+    )
+    .unwrap();
     std::fs::write(
         prepared_cache_meta_path(root.path(), pick_date),
         serde_json::to_vec_pretty(&json!({

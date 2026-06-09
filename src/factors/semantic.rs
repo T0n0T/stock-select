@@ -1,8 +1,14 @@
 use chrono::{Days, NaiveDate};
 
 use crate::environment_profiles::get_method_environment_profile;
-use crate::factors::macd::macd_lines;
-use crate::factors::series::{FactorList, push_category, push_number, rolling_mean_series};
+use crate::factors::ma::push_b2_long_trend_factors;
+use crate::factors::macd::{macd_lines, push_b2_period_macd_factors};
+use crate::factors::price_position::{
+    latest_bar_position_ratio, push_b2_hl90_position_factors, push_latest_upper_shadow_factor,
+};
+use crate::factors::series::{
+    FactorList, pct_change, push_category, push_number, rolling_mean_series,
+};
 use crate::factors::types::{FactorInputRow, FactorValue};
 use crate::factors::zx::zx_lines;
 use crate::macd_trends::{
@@ -22,7 +28,9 @@ pub fn push_b2_semantic_factors(
     history: &[FactorInputRow],
     signal: Option<&str>,
     environment_state: Option<&str>,
+    latest_ma60: Option<f64>,
 ) {
+    push_b2_rdagent_rank_factors(factors, history, latest_ma60);
     push_b2_family_semantic_factors(factors, history, signal, environment_state);
 }
 
@@ -40,6 +48,8 @@ pub fn push_lsh_semantic_factors(factors: &mut FactorList, history: &[FactorInpu
     if history.is_empty() {
         return;
     }
+
+    push_rank_runtime_common_factors(factors, history);
 
     let prepared = prepared_rows(history);
     let daily_trend = classify_daily_macd_trend(&prepared);
@@ -83,6 +93,142 @@ pub fn push_lsh_semantic_factors(factors: &mut FactorList, history: &[FactorInpu
     push_lsh_bullish_engulfing_factors(factors, history);
 }
 
+pub fn push_rank_runtime_common_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
+    if history.is_empty() {
+        return;
+    }
+
+    let prepared = prepared_rows(history);
+    let daily_trend = classify_daily_macd_trend(&prepared);
+    let weekly_trend = classify_weekly_macd_trend(&prepared);
+
+    push_bool(
+        factors,
+        "daily_rising_initial_flag",
+        daily_trend.is_rising_initial,
+    );
+    push_bool(
+        factors,
+        "macd_top_divergence_flag",
+        weekly_trend.is_top_divergence || daily_trend.is_top_divergence,
+    );
+
+    let close = prepared.iter().map(|row| row.close).collect::<Vec<_>>();
+    let high = prepared.iter().map(|row| row.high).collect::<Vec<_>>();
+    let low = prepared.iter().map(|row| row.low).collect::<Vec<_>>();
+    let volume = prepared.iter().map(|row| row.volume).collect::<Vec<_>>();
+    let ma25 = prepared.iter().map(|row| row.ma25).collect::<Vec<_>>();
+    let zxdkx = prepared.iter().map(|row| row.zxdkx).collect::<Vec<_>>();
+
+    let latest_close = close.last().copied();
+    let latest_low = low.last().copied();
+    let latest_ma25 = ma25.last().copied().flatten();
+    let latest_zxdkx = zxdkx.last().copied().flatten();
+    let previous_close = close.iter().rev().nth(1).copied();
+    let previous_volume = volume.iter().rev().nth(1).copied();
+    let previous_ma25 = ma25.iter().rev().nth(1).copied().flatten();
+    let previous_zxdkx = zxdkx.iter().rev().nth(1).copied().flatten();
+    let latest_zxdkx_for_model = latest_zxdkx.or(latest_ma25).or(latest_close);
+    let previous_zxdkx_for_model = previous_zxdkx.or(previous_ma25).or(previous_close);
+    let recent_high_90 = max_tail(&high, 90);
+    let recent_low_90 = min_tail(&low, 90);
+    let mid_90 = recent_high_90
+        .zip(recent_low_90)
+        .map(|(high, low)| (high + low) / 2.0);
+    let recent_high_120 = max_tail(&high, 120);
+    let recent_low_120 = min_tail(&low, 120);
+
+    push_number(
+        factors,
+        "price_vs_90d_high",
+        pct_change_option(latest_close, recent_high_90),
+    );
+    push_number(
+        factors,
+        "price_vs_90d_low",
+        pct_change_option(latest_close, recent_low_90),
+    );
+    push_number(
+        factors,
+        "price_vs_90d_mid",
+        pct_change_option(latest_close, mid_90),
+    );
+    push_number(
+        factors,
+        "close_to_zxdkx_pct",
+        pct_change_option(latest_close, latest_zxdkx_for_model).or(Some(0.0)),
+    );
+    push_number(
+        factors,
+        "ma25_to_zxdkx_pct",
+        pct_change_option(latest_ma25.or(latest_close), latest_zxdkx_for_model).or(Some(0.0)),
+    );
+    push_number(
+        factors,
+        "zxdkx_slope_5d_pct",
+        tail_slope_pct(&zxdkx, 5)
+            .or_else(|| tail_slope_pct(&ma25, 5))
+            .or(Some(0.0)),
+    );
+    push_optional_bool(
+        factors,
+        "near_ma25_support_flag",
+        latest_low
+            .zip(latest_ma25)
+            .map(|(low, ma25)| low <= ma25 * 1.03),
+    );
+    push_optional_bool(
+        factors,
+        "ma_aligned_flag",
+        latest_close
+            .zip(latest_ma25.zip(latest_zxdkx_for_model))
+            .map(|(close, (ma25, zxdkx))| close >= ma25 && ma25 >= zxdkx),
+    );
+    push_optional_bool(
+        factors,
+        "zxdkx_up_1d_flag",
+        latest_zxdkx_for_model
+            .zip(previous_zxdkx_for_model)
+            .map(|(latest, previous)| latest >= previous),
+    );
+    push_number(
+        factors,
+        "breakout_distance_120d_pct",
+        pct_change_option(latest_close, recent_high_120),
+    );
+    push_number(
+        factors,
+        "range_floor_distance_120d_pct",
+        pct_change_option(latest_close, recent_low_120),
+    );
+    push_number(
+        factors,
+        "range_compression_40d",
+        range_compression_pct(&high, &low, latest_close, 40).or(Some(0.0)),
+    );
+    push_number(
+        factors,
+        "abnormal_volume_to_ma20_ratio",
+        abnormal_volume_to_ma20_ratio(&volume).or(Some(0.0)),
+    );
+    push_optional_bool(
+        factors,
+        "price_up_1d_flag",
+        latest_close
+            .zip(previous_close)
+            .map(|(latest, previous)| latest > previous),
+    );
+    push_optional_bool(
+        factors,
+        "volume_up_1d_flag",
+        volume
+            .last()
+            .copied()
+            .zip(previous_volume)
+            .map(|(latest, previous)| latest > previous),
+    );
+}
+
 fn push_lsh_bullish_engulfing_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
     let latest = history.last();
     let previous = history.iter().rev().nth(1);
@@ -108,6 +254,90 @@ fn push_lsh_bullish_engulfing_factors(factors: &mut FactorList, history: &[Facto
         volume_bullish_engulf,
     );
     push_number(factors, "lsh_bullish_engulf_volume_ratio", volume_ratio);
+}
+
+fn push_b2_rdagent_rank_factors(
+    factors: &mut FactorList,
+    history: &[FactorInputRow],
+    latest_ma60: Option<f64>,
+) {
+    if history.is_empty() {
+        return;
+    }
+    let close = history.iter().map(|row| row.close).collect::<Vec<_>>();
+    let high = history.iter().map(|row| row.high).collect::<Vec<_>>();
+    let low = history.iter().map(|row| row.low).collect::<Vec<_>>();
+    let latest = history.last();
+    let latest_close = latest.map(|row| row.close);
+    let latest_high = latest.map(|row| row.high);
+    let latest_low = latest.map(|row| row.low);
+
+    push_number(factors, "D", latest.and_then(|row| row.d));
+    push_number(
+        factors,
+        "bar_close_position",
+        latest_bar_position_ratio(latest_close, latest_low, latest_high),
+    );
+    push_b2_long_trend_factors(factors, &close, latest_close, latest_ma60);
+    push_b2_hl90_position_factors(factors, &high, &low, latest_close);
+    push_latest_upper_shadow_factor(factors, latest_high, latest_close);
+    push_b2_period_macd_factors(factors, history);
+    push_b2_bullish_engulfing_factors(factors, history);
+}
+
+fn push_b2_bullish_engulfing_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
+    let latest = history.last();
+    let previous = history.iter().rev().nth(1);
+    let bullish_engulf = latest.zip(previous).is_some_and(|(latest, previous)| {
+        previous.close < previous.open
+            && latest.close > latest.open
+            && latest.open <= previous.close
+            && latest.close >= previous.open
+    });
+    let volume_ratio = latest.zip(previous).and_then(|(latest, previous)| {
+        (previous.volume > 0.0).then_some(latest.volume / previous.volume)
+    });
+    let volume_bullish_engulf = bullish_engulf && volume_ratio.is_some_and(|ratio| ratio > 1.0);
+    let latest_ma25 = latest.and_then(|row| row.ma25).or_else(|| {
+        let close = history.iter().map(|row| row.close).collect::<Vec<_>>();
+        rolling_mean_series(&close, 25, 25)
+            .last()
+            .copied()
+            .flatten()
+    });
+    let above_ma25 = latest
+        .zip(latest_ma25)
+        .is_some_and(|(latest, ma25)| latest.close > ma25);
+    let ma25_volume_bullish_engulf = volume_bullish_engulf && above_ma25;
+    let body_pct = latest.and_then(|latest| pct_change(Some(latest.close), Some(latest.open)));
+    let strength = match (ma25_volume_bullish_engulf, body_pct, volume_ratio) {
+        (true, Some(body_pct), Some(volume_ratio)) => {
+            Some(body_pct.max(0.0) * volume_ratio.max(0.0).ln_1p())
+        }
+        _ => Some(0.0),
+    };
+
+    push_bool(
+        factors,
+        "b2_bullish_engulf_prev_bearish_flag",
+        bullish_engulf,
+    );
+    push_bool(
+        factors,
+        "b2_volume_bullish_engulf_prev_bearish_flag",
+        volume_bullish_engulf,
+    );
+    push_number(factors, "b2_bullish_engulf_volume_ratio", volume_ratio);
+    push_bool(factors, "b2_yang_engulf_ma25", ma25_volume_bullish_engulf);
+    push_number(
+        factors,
+        "b2_yang_engulf_ma25_vol_ratio",
+        ma25_volume_bullish_engulf
+            .then_some(volume_ratio)
+            .flatten()
+            .or(Some(0.0)),
+    );
+    push_number(factors, "b2_yang_engulf_ma25_strength", strength);
 }
 
 pub fn push_b3_signal_context_factors(
@@ -394,6 +624,13 @@ fn push_bool(factors: &mut FactorList, key: &str, value: bool) {
     factors.push((key.to_string(), FactorValue::Bool(value)));
 }
 
+fn push_optional_bool(factors: &mut FactorList, key: &str, value: Option<bool>) {
+    factors.push((
+        key.to_string(),
+        value.map_or(FactorValue::Missing, FactorValue::Bool),
+    ));
+}
+
 fn max_tail(values: &[f64], len: usize) -> Option<f64> {
     values
         .iter()
@@ -418,12 +655,50 @@ fn min_tail(values: &[f64], len: usize) -> Option<f64> {
         })
 }
 
+fn range_compression_pct(
+    high: &[f64],
+    low: &[f64],
+    latest_close: Option<f64>,
+    window: usize,
+) -> Option<f64> {
+    if high.len() < window || low.len() < window {
+        return None;
+    }
+    let max_high = high[high.len() - window..]
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_low = low[low.len() - window..]
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    latest_close.and_then(|close| (close != 0.0).then_some((max_high - min_low) / close * 100.0))
+}
+
 fn mean_tail(values: &[f64], window: usize) -> Option<f64> {
     if values.len() < window || window == 0 {
         return None;
     }
     let tail = &values[values.len() - window..];
     Some(tail.iter().sum::<f64>() / window as f64)
+}
+
+fn abnormal_volume_to_ma20_ratio(volume: &[f64]) -> Option<f64> {
+    if volume.is_empty() {
+        return None;
+    }
+    let event_start = volume.len().saturating_sub(90);
+    let (event_offset, event_volume) = volume[event_start..]
+        .iter()
+        .copied()
+        .enumerate()
+        .max_by(|left, right| left.1.total_cmp(&right.1))?;
+    let event_idx = event_start + event_offset;
+    if event_idx + 1 < 20 {
+        return None;
+    }
+    let ma20 = mean_tail(&volume[event_idx + 1 - 20..=event_idx], 20)?;
+    ratio_option(Some(event_volume), Some(ma20))
 }
 
 fn volume_ratio_5d(volume: &[f64]) -> Option<f64> {
