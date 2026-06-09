@@ -867,6 +867,21 @@ def write_rf_diagnostics_artifacts(
     return payload, json_path, markdown_path
 
 
+def random_forest_threshold_failures(diagnostics: dict[str, Any]) -> list[str]:
+    thresholds = diagnostics.get("thresholds") or {}
+    failures: list[str] = []
+    min_oob = as_float(thresholds.get("min_oob_score"))
+    oob_score = as_float(diagnostics.get("oob_score"))
+    if min_oob is not None and (oob_score is None or oob_score < min_oob):
+        failures.append(f"oob_score {oob_score} < {min_oob}")
+    min_rank_ic = as_float(thresholds.get("min_test_rank_ic_ret3"))
+    test_metrics = ((diagnostics.get("metrics") or {}).get("test") or {})
+    rank_ic = as_float(test_metrics.get("rank_ic_ret3"))
+    if min_rank_ic is not None and (rank_ic is None or rank_ic < min_rank_ic):
+        failures.append(f"test rank_ic_ret3 {rank_ic} < {min_rank_ic}")
+    return failures
+
+
 def parse_label_gain(value: str) -> list[int]:
     try:
         gains = [int(part.strip()) for part in value.split(",") if part.strip()]
@@ -1071,6 +1086,13 @@ def train_and_report(
             config=rf_config,
         )
         rf_payload, rf_json_path, _rf_markdown_path = write_rf_diagnostics_artifacts(rf_payload, output_dir)
+        failures = random_forest_threshold_failures(rf_payload)
+        if failures:
+            rf_payload["status"] = "failed_threshold"
+            rf_payload, rf_json_path, _rf_markdown_path = write_rf_diagnostics_artifacts(rf_payload, output_dir)
+            raise RandomForestThresholdError(
+                f"random forest diagnostics failed thresholds: {', '.join(failures)}; report={rf_json_path}"
+            )
         rf_summary = rf_diagnostics_summary(rf_payload, rf_json_path)
     else:
         rf_payload = {"enabled": False, "status": "skipped", "output_paths": {}}
