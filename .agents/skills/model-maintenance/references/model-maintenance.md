@@ -10,6 +10,8 @@ diagnostics/ml/<method>/rank_dataset.csv
 diagnostics/ml/<method>/rank_dataset_summary.json
 diagnostics/ml/<method>/model/lgbm_rank_report*.json
 diagnostics/ml/<method>/model/lgbm_rank_report*.md
+diagnostics/ml/<method>/model/rf_feature_diagnostics.json
+diagnostics/ml/<method>/model/rf_feature_diagnostics.md
 diagnostics/ml/<method>/model/model.txt
 diagnostics/ml/<method>/model/model_metadata.json
 diagnostics/ml/<method>/lgbm_scores.csv
@@ -166,6 +168,15 @@ uv run scripts/ml/train_rank_lgbm.py \
   --rolling-test-dates 40
 ```
 
+每个 trial 默认先运行随机森林因子诊断，再训练 LightGBM。诊断使用同一份 feature set、one-hot levels、时间切分和 label，输出：
+
+```text
+rf_feature_diagnostics.json
+rf_feature_diagnostics.md
+```
+
+LightGBM report 会写入 `rf_diagnostics` 摘要。该随机森林诊断只用于训练前确认因子有效性和汇报，不进入生产推理；只有显式配置 `--rf-min-oob-score` 或 `--rf-min-test-rank-ic-ret3` 时，`rf_diagnostics.status=failed_threshold` 才会阻止 LightGBM 训练。快速冒烟可传 `--skip-rf-diagnostics`，正式候选 trial 不建议跳过。
+
 `train_rank_lgbm.py` 主训练路径应直接在 `output_dir` 写出：
 
 ```text
@@ -174,6 +185,8 @@ model.txt
 model_metadata.json
 lgbm_rank_report*.json
 lgbm_rank_report*.md
+rf_feature_diagnostics.json
+rf_feature_diagnostics.md
 ```
 
 这样 rolling trial 目录可以直接拿去做 `promote_lgbm_model.py --dry-run`；`export_lgbm_scores.py` 只在需要补特定 score window 或额外 score CSV 时再跑。传入 `--model-output-dir diagnostics/ml/<method>/tuning/<trial>` 时，默认读取同一 trial 下的 `feature_manifest.json`，并把 `lgbm_scores.csv`、`lgbm_scores_summary.json` 写回该 trial 目录，dataset 仍来自 `diagnostics/ml/<method>/rank_dataset.csv`。
@@ -184,6 +197,14 @@ lgbm_rank_report*.md
 - `top3_ret3_positive_rate`
 - `top3_ret3_le_0_rate`
 - `top3_ret3_ge_5_rate`
+
+随机森林因子诊断至少检查：
+
+- `rf_diagnostics.status`
+- `rf_diagnostics.oob_score`
+- `rf_diagnostics.metrics.test.rank_ic_ret3`
+- `rf_diagnostics.top_features`
+- `rf_diagnostics.low_importance_feature_count`
 
 候选选择优先级：
 
@@ -198,6 +219,7 @@ lgbm_rank_report*.md
 - dataset `date_count` 太少，或 `ret3`/`ret5` label 覆盖不足。
 - `missing_price_row_count` 异常，说明候选与行情数据不一致。
 - rolling fold 数不足，或 walk-forward split 无法构建。
+- 配置了随机森林阈值且 `rf_diagnostics.status=failed_threshold`。
 - 连续 4 组 trial 没有改善。
 - top3 非正收益比例明显偏高，或 rolling 指标整体不可接受。
 
@@ -266,6 +288,12 @@ rolling_summary:
   test_avg.rank_ic_ret5
 
 diagnostics:
+  rf_diagnostics.status
+  rf_diagnostics.oob_score
+  rf_diagnostics.metrics.test.rank_ic_ret3
+  rf_diagnostics.metrics.test.top3_ret3_positive_rate
+  rf_diagnostics.top_features
+  rf_diagnostics.low_importance_feature_count
   top_features
   by_env weak/neutral/strong if present
   by_month weak months if present
@@ -298,6 +326,13 @@ Rolling 平均：
 - rank_ic_ret3=...
 - top3_ret5_ge_5_rate=...
 - rank_ic_ret5=...
+
+随机森林因子诊断：
+- status=...
+- oob_score=...
+- test_rank_ic_ret3=...
+- top_features=...
+- low_importance_feature_count=...
 
 解释与风险：
 - top_features=...

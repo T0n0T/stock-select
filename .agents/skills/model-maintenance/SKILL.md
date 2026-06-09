@@ -84,9 +84,11 @@ uv run scripts/ml/train_rank_lgbm.py \
   --rolling-test-dates 40
 ```
 
+`train_rank_lgbm.py` 默认在 LightGBM 前运行随机森林因子诊断，诊断产物写到同一 `output-dir`：`rf_feature_diagnostics.json/md`。该诊断只用于确认因子有效性和调参汇报，不进入生产推理，也不替代 promote dry-run。临时快速训练可传 `--skip-rf-diagnostics`，但正式候选 trial 应保留诊断。
+
 用户要求训练、重训或调参且没有明确要求“只跑一次”时，默认执行受限自迭代调参：在小网格内最多 12 组 trial，逐个读取 report 比较 rolling 指标。样本不足、label 覆盖不足、关键指标明显劣化或连续多组没有改善时停止；选择候选后只做 export 和 promote dry-run，不自动发布。
 
-训练结束必须向用户汇报模型效果，不只说“训练成功”。汇报至少包含 dataset 覆盖质量、每个 trial 的 rolling 指标、最佳 trial 参数、top features、是否建议发布、promote dry-run 结果和剩余风险；字段清单见 reference。
+训练结束必须向用户汇报模型效果，不只说“训练成功”。汇报至少包含 dataset 覆盖质量、每个 trial 的 rolling 指标、最佳 trial 参数、随机森林因子诊断、top features、是否建议发布、promote dry-run 结果和剩余风险；字段清单见 reference。
 
 导出 score CSV 和候选模型产物：
 
