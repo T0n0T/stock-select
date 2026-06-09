@@ -3,6 +3,7 @@
 # dependencies = [
 #   "lightgbm",
 #   "numpy",
+#   "scikit-learn",
 # ]
 # ///
 from __future__ import annotations
@@ -1341,6 +1342,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         rolling_train_dates=args.rolling_train_dates,
         rolling_test_dates=args.rolling_test_dates,
         method=args.method,
+        rf_diagnostics=args.rf_diagnostics,
+        rf_n_estimators=args.rf_n_estimators,
+        rf_max_depth=args.rf_max_depth,
+        rf_min_samples_leaf=args.rf_min_samples_leaf,
+        rf_max_features=args.rf_max_features,
+        rf_min_oob_score=args.rf_min_oob_score,
+        rf_min_test_rank_ic_ret3=args.rf_min_test_rank_ic_ret3,
     )
     json_path, _markdown_path = report_paths(output_dir, args.feature_set, args.train_mode, args.label_column)
     print(f"wrote report to {json_path}")

@@ -523,6 +523,7 @@ class RankLgbmTest(unittest.TestCase):
                     learning_rate=0.05,
                     label_column="rank_label_3d",
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
         self.assertEqual(report["feature_count"], 4)
@@ -726,6 +727,38 @@ class RankLgbmTest(unittest.TestCase):
             },
         )
 
+    def test_main_passes_random_forest_options_to_train_and_report(self):
+        captured = {}
+
+        def fake_train_and_report(dataset, output_dir, **kwargs):
+            captured["dataset"] = dataset
+            captured["output_dir"] = output_dir
+            captured["kwargs"] = kwargs
+            return {"metrics": {"test": {}}}
+
+        with patch("scripts.ml.train_rank_lgbm.train_and_report", side_effect=fake_train_and_report):
+            from scripts.ml.train_rank_lgbm import main
+
+            exit_code = main(
+                [
+                    "--method",
+                    "b2",
+                    "--skip-rf-diagnostics",
+                    "--rf-n-estimators",
+                    "19",
+                    "--rf-max-depth",
+                    "5",
+                    "--rf-min-oob-score",
+                    "0.6",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(captured["kwargs"]["rf_diagnostics"])
+        self.assertEqual(captured["kwargs"]["rf_n_estimators"], 19)
+        self.assertEqual(captured["kwargs"]["rf_max_depth"], 5)
+        self.assertEqual(captured["kwargs"]["rf_min_oob_score"], 0.6)
+
     def test_train_report_persists_custom_label_gain(self):
         class DummyModel:
             def save_model(self, path: str) -> None:
@@ -790,6 +823,7 @@ class RankLgbmTest(unittest.TestCase):
                     label_gain=[0, 1, 5, 15],
                     lambdarank_truncation_level=8,
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
             metadata = json.loads((output_dir / "model_metadata.json").read_text(encoding="utf-8"))
@@ -874,6 +908,7 @@ class RankLgbmTest(unittest.TestCase):
                     rolling_test_dates=1,
                     label_column="rank_label_3d",
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
             persisted = json.loads((output_dir / "lgbm_rank_report_raw_numeric.json").read_text(encoding="utf-8"))
@@ -950,6 +985,7 @@ class RankLgbmTest(unittest.TestCase):
                     rolling_test_dates=1,
                     label_column="rank_label_3d",
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
             self.assertEqual(report["feature_count"], 1)
