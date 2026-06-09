@@ -28,4 +28,5 @@
 - CLI 架构说明见 `docs/architecture.md`。
 - 模型训练、推理和评分规则见 `docs/model.md`。
 - 常见工作流程见 `docs/workflow.md`。
+- 后续计划和待办事项见 `docs/roadmap.md`。
 - 模型训练、发布、回滚和归档切换见 `scripts/model_maintenance.sh` 与 `.agents/skills/model-maintenance/references/model-maintenance.md`。

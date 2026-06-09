@@ -1,6 +1,6 @@
-# stock-select-new
+# stock-select
 
-`stock-select-new` 是新的 Rust CLI 实现，二进制为 `stock-select-rs`。当前目标是替代旧仓库的日常 `b2` 流程，保持 model-first 架构，生产排序以 LightGBM 模型为主路径。
+`stock-select` 是新的 Rust CLI 实现，二进制为 `stock-select-rs`。model-first 架构，生产排序以 LightGBM 模型为主路径。
 
 ## 环境变量
 
