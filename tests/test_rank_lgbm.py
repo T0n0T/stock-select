@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ml.train_rank_lgbm import (
+    RandomForestDiagnosticsConfig,
     average_metric_dicts,
     build_feature_matrix,
     build_feature_matrix_from_metadata,
@@ -20,6 +21,7 @@ from scripts.ml.train_rank_lgbm import (
     resolve_output_dir,
     rolling_walk_forward_splits,
     rows_for_dates,
+    run_random_forest_diagnostics,
     select_feature_columns,
     train_and_report,
     train_model_result,
@@ -179,6 +181,65 @@ class RankLgbmTest(unittest.TestCase):
         self.assertIn("signal_type=trend_start", feature_names)
         self.assertEqual(matrix[0][feature_names.index("close_to_zxdkx_pct")], 1.5)
         self.assertEqual(matrix[1][feature_names.index("close_to_zxdkx_pct")], 0.0)
+
+    def test_random_forest_diagnostics_reports_importance_and_metrics(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "x": "3", "env": "weak"},
+            {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", "x": "0", "env": "strong"},
+            {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "7", "ret5": "6", "x": "4", "env": "weak"},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "x": "0", "env": "strong"},
+        ]
+        captured = {}
+
+        class FakeRandomForestClassifier:
+            def __init__(self, **kwargs):
+                captured["kwargs"] = kwargs
+                self.classes_ = [0, 3]
+                self.feature_importances_ = [0.8, 0.2, 0.0]
+                self.oob_score_ = 0.62
+
+            def fit(self, matrix, labels):
+                captured["fit_matrix"] = matrix
+                captured["fit_labels"] = labels
+                return self
+
+            def predict_proba(self, matrix):
+                return [[0.1, 0.9] if row[0] > 0 else [0.9, 0.1] for row in matrix]
+
+            def predict(self, matrix):
+                return [3 if row[0] > 0 else 0 for row in matrix]
+
+            def score(self, matrix, labels):
+                return 1.0
+
+        fake_sklearn_ensemble = types.SimpleNamespace(RandomForestClassifier=FakeRandomForestClassifier)
+        with patch.dict(sys.modules, {"sklearn.ensemble": fake_sklearn_ensemble}):
+            diagnostics = run_random_forest_diagnostics(
+                rows[:2],
+                rows[2:],
+                numeric_columns=["x"],
+                categorical_columns=["env"],
+                label_column="rank_label_3d",
+                label_gain=[0, 1, 3, 7],
+                num_threads=2,
+                fixed_categorical_levels={"env": ["weak", "strong"]},
+                config=RandomForestDiagnosticsConfig(n_estimators=17, min_samples_leaf=3),
+            )
+
+        self.assertEqual(captured["kwargs"]["n_estimators"], 17)
+        self.assertEqual(captured["kwargs"]["min_samples_leaf"], 3)
+        self.assertEqual(captured["kwargs"]["n_jobs"], 2)
+        self.assertEqual(captured["kwargs"]["random_state"], 17)
+        self.assertTrue(captured["kwargs"]["bootstrap"])
+        self.assertTrue(captured["kwargs"]["oob_score"])
+        self.assertEqual(captured["fit_labels"], [3, 0])
+        self.assertEqual(diagnostics["status"], "passed")
+        self.assertEqual(diagnostics["feature_count"], 3)
+        self.assertEqual(diagnostics["top_features"][0], {"feature": "x", "importance": 0.8})
+        self.assertEqual(diagnostics["low_importance_features"], [{"feature": "env=strong", "importance": 0.0}])
+        self.assertEqual(diagnostics["oob_score"], 0.62)
+        self.assertEqual(diagnostics["accuracy"], {"train": 1.0, "test": 1.0})
+        self.assertEqual(diagnostics["metrics"]["test"]["top3_ret3_positive_rate"], 50.0)
 
     def test_model_metadata_rebuilds_feature_matrix_with_training_levels(self):
         train_rows = [

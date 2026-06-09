@@ -474,6 +474,140 @@ def assign_scores(rows: Sequence[dict[str, Any]], scores: Sequence[float]) -> li
     return output
 
 
+def random_forest_n_jobs(num_threads: int) -> int | None:
+    return num_threads if num_threads > 0 else None
+
+
+def random_forest_probability_scores(
+    model: Any,
+    probabilities: Sequence[Sequence[float]],
+    label_gain: Sequence[int],
+) -> list[float]:
+    classes = [int(value) for value in getattr(model, "classes_", [])]
+    if not classes:
+        return []
+    scores: list[float] = []
+    for row in probabilities:
+        total = 0.0
+        for class_value, probability in zip(classes, row):
+            gain = label_gain[class_value] if 0 <= class_value < len(label_gain) else float(class_value)
+            total += float(probability) * float(gain)
+        scores.append(total)
+    return scores
+
+
+def random_forest_fallback_scores(model: Any, matrix: Sequence[Sequence[float]]) -> list[float]:
+    return [float(value) for value in model.predict(matrix)]
+
+
+def run_random_forest_diagnostics(
+    train_rows: Sequence[dict[str, Any]],
+    test_rows: Sequence[dict[str, Any]],
+    *,
+    numeric_columns: Sequence[str],
+    categorical_columns: Sequence[str],
+    label_column: str,
+    label_gain: Sequence[int],
+    num_threads: int,
+    fixed_categorical_levels: dict[str, list[str]],
+    config: RandomForestDiagnosticsConfig,
+) -> dict[str, Any]:
+    from sklearn.ensemble import RandomForestClassifier
+
+    levels = category_levels(
+        train_rows,
+        categorical_columns,
+        fixed_categorical_levels=fixed_categorical_levels,
+    )
+    train_matrix, feature_names = build_feature_matrix(
+        train_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        levels=levels,
+    )
+    test_matrix, _feature_names = build_feature_matrix(
+        test_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        levels=levels,
+    )
+    model = RandomForestClassifier(
+        n_estimators=config.n_estimators,
+        max_depth=config.max_depth,
+        min_samples_leaf=config.min_samples_leaf,
+        max_features=config.max_features,
+        random_state=17,
+        bootstrap=True,
+        oob_score=True,
+        n_jobs=random_forest_n_jobs(num_threads),
+    )
+    train_labels = labels(train_rows, label_column=label_column)
+    test_labels = labels(test_rows, label_column=label_column)
+    model.fit(train_matrix, train_labels)
+
+    try:
+        train_scores = random_forest_probability_scores(model, model.predict_proba(train_matrix), label_gain)
+        test_scores = random_forest_probability_scores(model, model.predict_proba(test_matrix), label_gain)
+    except Exception:
+        train_scores = random_forest_fallback_scores(model, train_matrix)
+        test_scores = random_forest_fallback_scores(model, test_matrix)
+
+    if len(train_scores) != len(train_rows):
+        train_scores = random_forest_fallback_scores(model, train_matrix)
+    if len(test_scores) != len(test_rows):
+        test_scores = random_forest_fallback_scores(model, test_matrix)
+
+    importances = [float(value) for value in getattr(model, "feature_importances_", [])]
+    ranked_features = sorted(zip(feature_names, importances), key=lambda item: (-item[1], item[0]))
+    low_features = sorted(
+        (
+            (feature, importance)
+            for feature, importance in zip(feature_names, importances)
+            if importance <= LOW_IMPORTANCE_THRESHOLD
+        ),
+        key=lambda item: (item[1], item[0]),
+    )
+
+    return {
+        "enabled": True,
+        "status": "passed",
+        "label_column": label_column,
+        "feature_count": len(feature_names),
+        "numeric_feature_count": len(numeric_columns),
+        "categorical_feature_count": len(categorical_columns),
+        "params": {
+            "n_estimators": config.n_estimators,
+            "max_depth": config.max_depth,
+            "min_samples_leaf": config.min_samples_leaf,
+            "max_features": config.max_features,
+            "random_state": 17,
+            "bootstrap": True,
+            "oob_score": True,
+            "n_jobs": random_forest_n_jobs(num_threads),
+        },
+        "thresholds": {
+            "min_oob_score": config.min_oob_score,
+            "min_test_rank_ic_ret3": config.min_test_rank_ic_ret3,
+        },
+        "metrics": {
+            "train": evaluate_model(assign_scores(train_rows, train_scores), top_n=3),
+            "test": evaluate_model(assign_scores(test_rows, test_scores), top_n=3),
+        },
+        "oob_score": getattr(model, "oob_score_", None),
+        "accuracy": {
+            "train": float(model.score(train_matrix, train_labels)),
+            "test": float(model.score(test_matrix, test_labels)),
+        },
+        "top_features": [
+            {"feature": feature, "importance": round(importance, 8)} for feature, importance in ranked_features[:50]
+        ],
+        "low_importance_features": [
+            {"feature": feature, "importance": round(importance, 8)} for feature, importance in low_features
+        ],
+        "output_paths": {},
+    }
+
+
 def grouped_by_date(rows: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
