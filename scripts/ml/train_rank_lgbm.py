@@ -27,6 +27,10 @@ from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 DEFAULT_METHOD = "b2"
 DEFAULT_LABEL_GAIN = [0, 1, 3, 7]
+DEFAULT_RF_N_ESTIMATORS = 300
+DEFAULT_RF_MIN_SAMPLES_LEAF = 20
+DEFAULT_RF_MAX_FEATURES = "sqrt"
+LOW_IMPORTANCE_THRESHOLD = 1e-6
 
 IDENTITY_COLUMNS = {"date", "code", "name", "method"}
 LABEL_COLUMNS = {
@@ -86,6 +90,21 @@ class TrainedModelResult:
     feature_names: list[str]
     lightgbm_feature_names: list[str]
     category_levels: dict[str, list[str]]
+
+
+@dataclass
+class RandomForestDiagnosticsConfig:
+    enabled: bool = True
+    n_estimators: int = DEFAULT_RF_N_ESTIMATORS
+    max_depth: int | None = None
+    min_samples_leaf: int = DEFAULT_RF_MIN_SAMPLES_LEAF
+    max_features: str | int | float | None = DEFAULT_RF_MAX_FEATURES
+    min_oob_score: float | None = None
+    min_test_rank_ic_ret3: float | None = None
+
+
+class RandomForestThresholdError(ValueError):
+    pass
 
 
 def as_float(value: Any) -> float | None:
@@ -1031,6 +1050,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rolling-folds", type=int, default=0)
     parser.add_argument("--rolling-train-dates", type=int, default=240)
     parser.add_argument("--rolling-test-dates", type=int, default=40)
+    rf_group = parser.add_mutually_exclusive_group()
+    rf_group.add_argument("--rf-diagnostics", dest="rf_diagnostics", action="store_true", default=True)
+    rf_group.add_argument("--skip-rf-diagnostics", dest="rf_diagnostics", action="store_false")
+    parser.add_argument("--rf-n-estimators", type=int, default=DEFAULT_RF_N_ESTIMATORS)
+    parser.add_argument("--rf-max-depth", type=int)
+    parser.add_argument("--rf-min-samples-leaf", type=int, default=DEFAULT_RF_MIN_SAMPLES_LEAF)
+    parser.add_argument("--rf-max-features", default=DEFAULT_RF_MAX_FEATURES)
+    parser.add_argument("--rf-min-oob-score", type=float)
+    parser.add_argument("--rf-min-test-rank-ic-ret3", type=float)
     return parser.parse_args(argv)
 
 

@@ -38,6 +38,44 @@ class RankLgbmTest(unittest.TestCase):
 
         self.assertEqual(args.label_gain, [0, 1, 5, 15])
 
+    def test_parse_args_enables_random_forest_diagnostics_by_default(self):
+        args = parse_args([])
+
+        self.assertTrue(args.rf_diagnostics)
+        self.assertEqual(args.rf_n_estimators, 300)
+        self.assertIsNone(args.rf_max_depth)
+        self.assertEqual(args.rf_min_samples_leaf, 20)
+        self.assertEqual(args.rf_max_features, "sqrt")
+        self.assertIsNone(args.rf_min_oob_score)
+        self.assertIsNone(args.rf_min_test_rank_ic_ret3)
+
+    def test_parse_args_accepts_random_forest_thresholds_and_skip_flag(self):
+        args = parse_args(
+            [
+                "--skip-rf-diagnostics",
+                "--rf-n-estimators",
+                "123",
+                "--rf-max-depth",
+                "7",
+                "--rf-min-samples-leaf",
+                "11",
+                "--rf-max-features",
+                "log2",
+                "--rf-min-oob-score",
+                "0.51",
+                "--rf-min-test-rank-ic-ret3",
+                "0.02",
+            ]
+        )
+
+        self.assertFalse(args.rf_diagnostics)
+        self.assertEqual(args.rf_n_estimators, 123)
+        self.assertEqual(args.rf_max_depth, 7)
+        self.assertEqual(args.rf_min_samples_leaf, 11)
+        self.assertEqual(args.rf_max_features, "log2")
+        self.assertEqual(args.rf_min_oob_score, 0.51)
+        self.assertEqual(args.rf_min_test_rank_ic_ret3, 0.02)
+
     def test_walk_forward_split_dates_keeps_date_groups_ordered(self):
         train_dates, test_dates = walk_forward_split_dates(
             ["2026-01-03", "2026-01-01", "2026-01-02", "2026-01-04", "2026-01-05"],
