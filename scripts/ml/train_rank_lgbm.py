@@ -706,6 +706,23 @@ def markdown_report(report: dict[str, Any]) -> str:
         )
     lines.extend(["", "## top features", ""])
     lines.extend(f"- {item['feature']}: {item['importance']}" for item in report.get("top_features", [])[:20])
+    rf_summary = report.get("rf_diagnostics") or {}
+    if rf_summary:
+        rf_metrics = ((rf_summary.get("metrics") or {}).get("test") or {})
+        lines.extend(
+            [
+                "",
+                "## random forest factor diagnostics",
+                "",
+                f"- status: {rf_summary.get('status')}",
+                f"- oob_score: {rf_summary.get('oob_score')}",
+                f"- test rank_ic_ret3: {rf_metrics.get('rank_ic_ret3')}",
+                f"- low importance features: {rf_summary.get('low_importance_feature_count')}",
+            ]
+        )
+        lines.extend(
+            f"- {item['feature']}: {item['importance']}" for item in list(rf_summary.get("top_features") or [])[:20]
+        )
     if report.get("rolling_folds"):
         summary = report.get("rolling_summary") or {}
         test_avg = summary.get("test_avg") or {}
@@ -800,6 +817,54 @@ def report_paths(
     if label_column != "rank_label_3d":
         suffix = f"{suffix}_{label_column}"
     return output_dir / f"lgbm_rank_report{suffix}.json", output_dir / f"lgbm_rank_report{suffix}.md"
+
+
+def rf_diagnostic_paths(output_dir: Path) -> tuple[Path, Path]:
+    return output_dir / "rf_feature_diagnostics.json", output_dir / "rf_feature_diagnostics.md"
+
+
+def rf_diagnostics_summary(diagnostics: dict[str, Any], json_path: Path | None = None) -> dict[str, Any]:
+    return {
+        "enabled": bool(diagnostics.get("enabled")),
+        "path": str(json_path) if json_path is not None else None,
+        "status": diagnostics.get("status"),
+        "oob_score": diagnostics.get("oob_score"),
+        "metrics": {"test": (diagnostics.get("metrics") or {}).get("test") or {}},
+        "top_features": list(diagnostics.get("top_features") or [])[:20],
+        "low_importance_feature_count": len(diagnostics.get("low_importance_features") or []),
+    }
+
+
+def markdown_rf_diagnostics(diagnostics: dict[str, Any]) -> str:
+    metrics = ((diagnostics.get("metrics") or {}).get("test") or {})
+    lines = [
+        "# random forest factor diagnostics",
+        "",
+        f"status: `{diagnostics.get('status')}`",
+        f"label: `{diagnostics.get('label_column')}`",
+        f"features: `{diagnostics.get('feature_count')}`",
+        f"oob_score: `{diagnostics.get('oob_score')}`",
+        f"test rank_ic_ret3: `{metrics.get('rank_ic_ret3')}`",
+        f"test top3_ret3_positive_rate: `{metrics.get('top3_ret3_positive_rate')}`",
+        "",
+        "## top features",
+        "",
+    ]
+    lines.extend(f"- {item['feature']}: {item['importance']}" for item in list(diagnostics.get("top_features") or [])[:20])
+    return "\n".join(lines) + "\n"
+
+
+def write_rf_diagnostics_artifacts(
+    diagnostics: dict[str, Any],
+    output_dir: Path,
+) -> tuple[dict[str, Any], Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path, markdown_path = rf_diagnostic_paths(output_dir)
+    payload = dict(diagnostics)
+    payload["output_paths"] = {"json": str(json_path), "markdown": str(markdown_path)}
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    markdown_path.write_text(markdown_rf_diagnostics(payload), encoding="utf-8")
+    return payload, json_path, markdown_path
 
 
 def parse_label_gain(value: str) -> list[int]:
@@ -949,6 +1014,13 @@ def train_and_report(
     label_gain: Sequence[int] | None = None,
     lambdarank_truncation_level: int = 0,
     method: str = DEFAULT_METHOD,
+    rf_diagnostics: bool = True,
+    rf_n_estimators: int = DEFAULT_RF_N_ESTIMATORS,
+    rf_max_depth: int | None = None,
+    rf_min_samples_leaf: int = DEFAULT_RF_MIN_SAMPLES_LEAF,
+    rf_max_features: str | int | float | None = DEFAULT_RF_MAX_FEATURES,
+    rf_min_oob_score: float | None = None,
+    rf_min_test_rank_ic_ret3: float | None = None,
 ) -> dict[str, Any]:
     if train_mode not in TRAIN_MODES:
         raise ValueError(f"unsupported train_mode: {train_mode}")
@@ -976,6 +1048,33 @@ def train_and_report(
             method=method,
         )
         fixed_categorical_levels = {}
+
+    rf_config = RandomForestDiagnosticsConfig(
+        enabled=rf_diagnostics,
+        n_estimators=rf_n_estimators,
+        max_depth=rf_max_depth,
+        min_samples_leaf=rf_min_samples_leaf,
+        max_features=rf_max_features,
+        min_oob_score=rf_min_oob_score,
+        min_test_rank_ic_ret3=rf_min_test_rank_ic_ret3,
+    )
+    if rf_config.enabled:
+        rf_payload = run_random_forest_diagnostics(
+            train_rows,
+            test_rows,
+            numeric_columns=numeric_columns,
+            categorical_columns=categorical_columns,
+            label_column=label_column,
+            label_gain=resolved_label_gain,
+            num_threads=num_threads,
+            fixed_categorical_levels=fixed_categorical_levels,
+            config=rf_config,
+        )
+        rf_payload, rf_json_path, _rf_markdown_path = write_rf_diagnostics_artifacts(rf_payload, output_dir)
+        rf_summary = rf_diagnostics_summary(rf_payload, rf_json_path)
+    else:
+        rf_payload = {"enabled": False, "status": "skipped", "output_paths": {}}
+        rf_summary = rf_diagnostics_summary(rf_payload, None)
 
     if train_mode == "overall":
         model_result = train_model_result(
@@ -1099,6 +1198,7 @@ def train_and_report(
         },
         "env_metrics": env_metrics,
         "top_features": top_features,
+        "rf_diagnostics": rf_summary,
     }
     if model_artifacts is not None:
         report["model_artifacts"] = model_artifacts
