@@ -261,6 +261,20 @@ fn review_writes_llm_tasks_without_changing_display_rank() {
         tasks["rows"][0]["chart_path"],
         "charts/2026-05-25.b2/000001.SZ_day.png"
     );
+    let instruction = tasks["rows"][0]["llm_instruction"].as_str().unwrap();
+    assert!(instruction.contains("游资"));
+    assert!(instruction.contains("龙虎榜"));
+    assert!(instruction.contains("题材"));
+    assert!(instruction.contains("llm_raw"));
+    assert!(instruction.contains("HTML"));
+    assert_eq!(
+        tasks["rows"][0]["raw_response_path"],
+        "select/2026-05-25.b2/llm_raw/000001.SZ.json"
+    );
+    assert_eq!(
+        tasks["rows"][0]["llm_report_path"],
+        "select/2026-05-25.b2/llm_report.html"
+    );
 }
 
 #[test]
@@ -347,6 +361,177 @@ fn review_merge_applies_annotations_to_display_without_changing_rank() {
     assert_eq!(display["rows"][1]["model_rank"], 2);
     assert_eq!(display["rows"][1]["llm_action"], "CAUTION");
     assert_eq!(display["rows"][1]["llm_risk_flags"][0], "量能不足");
+    assert_eq!(display["rows"][1]["llm_comment"], "等待确认");
+}
+
+#[test]
+fn review_merge_writes_html_report_with_chart_comment_and_raw_response() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_dir = write_display(temp.path());
+    std::fs::create_dir_all(run_dir.join("llm_raw")).unwrap();
+    std::fs::write(
+        run_dir.join("llm_raw/000002.SZ.json"),
+        r#"{"youzi_view":"题材仍在，<raw> 需要等二板确认"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        run_dir.join("llm_tasks.json"),
+        serde_json::to_vec_pretty(&json!({
+            "method": "b2",
+            "artifact_key": "2026-05-25",
+            "rows": [
+                {
+                    "code": "000002.SZ",
+                    "name": "测试二",
+                    "industry": "地产",
+                    "model_rank": 2,
+                    "model_score": 0.6,
+                    "chart_path": "charts/2026-05-25.b2/000002.SZ_day.png"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        run_dir.join("llm_annotations.json"),
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {
+                    "code": "000002.SZ",
+                    "llm_action": "KEEP",
+                    "llm_confidence": 0.82,
+                    "llm_risk_flags": ["题材确认"],
+                    "llm_comment": "看多但等二板确认 <script>alert(1)</script>",
+                    "raw_response_path": "select/2026-05-25.b2/llm_raw/000002.SZ.json"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "review-merge",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+    ])
+    .assert()
+    .success();
+
+    let report_path = run_dir.join("llm_report.html");
+    assert!(report_path.exists());
+    let html = std::fs::read_to_string(report_path).unwrap();
+    assert!(html.contains("LLM 游资复盘报告"));
+    assert!(html.contains("测试二"));
+    assert!(html.contains("↑"));
+    assert!(html.contains("../../charts/2026-05-25.b2/000002.SZ_day.png"));
+    assert!(html.contains("看多但等二板确认 &lt;script&gt;alert(1)&lt;/script&gt;"));
+    assert!(html.contains("&lt;raw&gt; 需要等二板确认"));
+    assert!(!html.contains("<script>alert(1)</script>"));
+}
+
+#[test]
+fn review_merge_does_not_inline_oversized_raw_response() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_dir = write_display(temp.path());
+    std::fs::create_dir_all(run_dir.join("llm_raw")).unwrap();
+    let oversized = format!("{}RAW_SHOULD_NOT_BE_INLINED", "x".repeat(40 * 1024));
+    std::fs::write(run_dir.join("llm_raw/000002.SZ.json"), oversized).unwrap();
+    std::fs::write(
+        run_dir.join("llm_tasks.json"),
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {
+                    "code": "000002.SZ",
+                    "chart_path": "charts/2026-05-25.b2/000002.SZ_day.png"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        run_dir.join("llm_annotations.json"),
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {
+                    "code": "000002.SZ",
+                    "llm_action": "KEEP",
+                    "llm_confidence": 0.82,
+                    "llm_risk_flags": [],
+                    "llm_comment": "保留观察",
+                    "raw_response_path": "select/2026-05-25.b2/llm_raw/000002.SZ.json"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "review-merge",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+    ])
+    .assert()
+    .success();
+
+    let html = std::fs::read_to_string(run_dir.join("llm_report.html")).unwrap();
+    assert!(!html.contains("RAW_SHOULD_NOT_BE_INLINED"));
+    assert!(html.contains("原始子代理输出超过"));
+}
+
+#[test]
+fn review_merge_does_not_read_raw_response_outside_llm_raw_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_dir = write_display(temp.path());
+    let outside = temp.path().join("outside.json");
+    std::fs::write(&outside, "RAW_OUTSIDE_SHOULD_NOT_BE_INLINED").unwrap();
+    std::fs::write(
+        run_dir.join("llm_annotations.json"),
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {
+                    "code": "000002.SZ",
+                    "llm_action": "KEEP",
+                    "llm_confidence": 0.82,
+                    "llm_risk_flags": [],
+                    "llm_comment": "保留观察",
+                    "raw_response_path": outside.to_string_lossy()
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "review-merge",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+    ])
+    .assert()
+    .success();
+
+    let html = std::fs::read_to_string(run_dir.join("llm_report.html")).unwrap();
+    assert!(!html.contains("RAW_OUTSIDE_SHOULD_NOT_BE_INLINED"));
+    assert!(html.contains("raw_response_path 必须是 runtime 相对路径"));
 }
 
 #[test]

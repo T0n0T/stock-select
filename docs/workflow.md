@@ -18,11 +18,19 @@ stock-select-rs review-list \
   --limit 20
 
 # 3. 多模态复盘（分配子代理读图并写 annotation）
+# 子代理按 llm_tasks.json 的 chart_path 读图，
+# 用 raw_response_path 写详细复盘，llm_annotations.json 只保留 action/flags/comment。
 
 # 4. 合并复盘结果
 stock-select-rs review-merge \
   --method b2 \
   --pick-date 2026-06-05
+
+# 5. 查看列表符号和 HTML 报告
+stock-select-rs review-list \
+  --method b2 \
+  --pick-date 2026-06-05 \
+  --limit 20
 ```
 
 命令输出路径：
@@ -33,7 +41,9 @@ runtime/
 ├── select/2026-06-05.b2/
 │   ├── display.json        ← review-list 读取
 │   ├── llm_tasks.json      ← review 生成
-│   ├── llm_annotations.json ← review-merge 写入
+│   ├── llm_annotations.json ← 子代理/人工填写
+│   ├── llm_report.html     ← review-merge 生成
+│   ├── llm_raw/            ← 子代理详细复盘原文
 │   └── ...
 ├── charts/2026-06-05.b2/   ← K 线图 PNG
 └── factors/2026-06-05.b2/
@@ -189,6 +199,9 @@ cat runtime/select/2026-06-05.b2/llm_tasks.json
 stock-select-rs review-merge \
   --method b2 \
   --pick-date 2026-06-05
+
+# review-list 会显示 ↑/→/↓ 短线符号，详细图文复盘见：
+# runtime/select/2026-06-05.b2/llm_report.html
 ```
 
 ## 环境评分

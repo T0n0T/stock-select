@@ -13,14 +13,14 @@ use crate::engine::b2::{
 use crate::engine::capability::ensure_model_run_supported;
 use crate::engine::inference::{
     LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector,
-    resolve_method_model_artifacts_with_overrides,
+    resolve_method_model_artifacts_for_mode_with_overrides,
 };
 use crate::engine::types::{
     DisplayRow, FactorRow, FactorValue, RankedCandidate, SelectionCandidate,
 };
 use crate::environment::ResolvedEnvironment;
-use crate::factors::registry::write_factor_artifact;
-use crate::model::Method;
+use crate::factors::registry::{build_candidate_factor_rows_from_refs, write_factor_artifact};
+use crate::model::{Candidate, Method, PreparedRow};
 
 const FEATURE_VECTORS_ARTIFACT: &str = "feature_vectors.json";
 
@@ -55,9 +55,10 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         request.method,
         request.runtime_root.display()
     );
-    let model_artifacts = resolve_method_model_artifacts_with_overrides(
+    let model_artifacts = resolve_method_model_artifacts_for_mode_with_overrides(
         request.method,
         &request.runtime_root,
+        request.intraday,
         request.model_path.as_deref(),
         request.model_feature_metadata_path.as_deref(),
     )?;
@@ -81,11 +82,26 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         request.intraday,
     )?;
     eprintln!("[selection] prepared history injection checked");
-    let factor_provider = CandidatePayloadFactorProvider;
-    let factors = candidates
-        .iter()
-        .map(|candidate| factor_provider.factor_row(candidate))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let factors = match factor_rows_from_prepared_cache(
+        &request.runtime_root,
+        request.method,
+        request.pick_date,
+        request.intraday,
+        request
+            .environment
+            .as_ref()
+            .map(|environment| environment.state.as_str()),
+        &candidates,
+    )? {
+        Some(rows) => rows,
+        None => {
+            let factor_provider = CandidatePayloadFactorProvider;
+            candidates
+                .iter()
+                .map(|candidate| factor_provider.factor_row(candidate))
+                .collect::<anyhow::Result<Vec<_>>>()?
+        }
+    };
     eprintln!("[selection] computed factors rows={}", factors.len());
     write_factor_artifact(
         &request.runtime_root,
@@ -277,6 +293,65 @@ fn inject_prepared_history_if_available(
     }
 
     Ok(())
+}
+
+fn factor_rows_from_prepared_cache(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    intraday: bool,
+    environment_state: Option<&str>,
+    candidates: &[SelectionCandidate],
+) -> anyhow::Result<Option<Vec<FactorRow>>> {
+    let start_date = pick_date - Duration::days(366);
+    let Some(rows) = load_prepared_cache_for_mode(
+        runtime_root,
+        method,
+        pick_date,
+        start_date,
+        pick_date,
+        intraday,
+    )?
+    else {
+        return Ok(None);
+    };
+    let latest_by_code = rows
+        .iter()
+        .filter(|row| row.trade_date == pick_date)
+        .map(|row| (row.ts_code.as_str(), row))
+        .collect::<BTreeMap<_, _>>();
+    let Some(model_candidates) = candidates
+        .iter()
+        .map(|candidate| candidate_from_prepared(candidate, &latest_by_code, pick_date))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok(None);
+    };
+    let prepared_refs = rows.iter().collect::<Vec<&PreparedRow>>();
+    Ok(Some(build_candidate_factor_rows_from_refs(
+        &model_candidates,
+        &prepared_refs,
+        method,
+        environment_state,
+    )))
+}
+
+fn candidate_from_prepared(
+    candidate: &SelectionCandidate,
+    latest_by_code: &BTreeMap<&str, &PreparedRow>,
+    pick_date: NaiveDate,
+) -> Option<Candidate> {
+    let latest = latest_by_code.get(candidate.code.as_str()).copied();
+    Some(Candidate {
+        code: candidate.code.clone(),
+        pick_date,
+        close: candidate.close.or_else(|| latest.map(|row| row.close))?,
+        turnover_n: candidate
+            .turnover_n
+            .or_else(|| latest.map(|row| row.turnover_n))?,
+        signal: candidate.signal.clone(),
+        yellow_b1: None,
+    })
 }
 
 fn candidate_has_complete_history(candidate: &SelectionCandidate) -> bool {

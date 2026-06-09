@@ -322,6 +322,65 @@ fn candidate_factor_rows_include_market_state_from_prepared_cross_section() {
 }
 
 #[test]
+fn b2_factor_profile_adds_chip_age_summary_from_history_when_vwap_and_turnover_are_available() {
+    let trade_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let prepared = (0..3)
+        .map(|offset| {
+            let mut row = prepared_row(
+                "000001.SZ",
+                trade_date - Duration::days(2 - offset),
+                10.0 + offset as f64,
+                1000.0 + offset as f64,
+            );
+            row.db_factors
+                .insert("chip_vwap".to_string(), 10.0 + offset as f64);
+            row.db_factors.insert("chip_turnover".to_string(), 0.20);
+            row
+        })
+        .collect::<Vec<_>>();
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date: trade_date,
+        close: prepared.last().unwrap().close,
+        turnover_n: prepared.last().unwrap().turnover_n,
+        signal: Some("B2".to_string()),
+        yellow_b1: None,
+    };
+
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+    let factors = &rows[0].factors;
+
+    assert!(matches!(
+        factors.get("total_mass"),
+        Some(FactorValue::Number(value)) if (*value - 1.0).abs() < 1e-6
+    ));
+    assert!(matches!(
+        factors.get("chip_age_layer_sum"),
+        Some(FactorValue::Number(value)) if (*value - 1.0).abs() < 1e-6
+    ));
+    assert!(factors.contains_key("chip_age_ultrashort_ratio"));
+    assert!(factors.contains_key("chip_age_mid_ratio"));
+    assert!(factors.contains_key("profit_ratio"));
+    assert!(factors.contains_key("avg_cost_close_ratio"));
+    assert!(factors.contains_key("peak_price_close_ratio"));
+    assert!(factors.contains_key("chip_entropy"));
+    assert!(factors.contains_key("chip_age_l0_b00"));
+    assert!(factors.contains_key("chip_age_l3_b31"));
+    assert_eq!(
+        factors
+            .keys()
+            .filter(|key| key.starts_with("chip_age_l") && key.contains("_b"))
+            .count(),
+        128
+    );
+    assert_eq!(rows[0].diagnostics["factor_profile"], "b2");
+    assert_eq!(
+        rows[0].diagnostics["factor_bundles"],
+        serde_json::json!(["raw_common", "b2_chip_age", "b2_semantic"])
+    );
+}
+
+#[test]
 fn b3_uses_method_registered_factor_profile_matching_b2_for_now() {
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let prepared = vec![prepared_row("000001.SZ", pick_date, 10.0, 1000.0)];
@@ -499,6 +558,26 @@ fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only
     assert!(lsh_factors.contains_key("lsh_daily_macd_wave_index"));
     assert!(lsh_factors.contains_key("lsh_weekly_macd_wave_index"));
     assert!(lsh_factors.contains_key("lsh_weekly_daily_constructive_combo_flag"));
+    for key in [
+        "price_vs_90d_high",
+        "price_vs_90d_low",
+        "price_vs_90d_mid",
+        "near_ma25_support_flag",
+        "ma_aligned_flag",
+        "zxdkx_up_1d_flag",
+        "daily_rising_initial_flag",
+        "macd_top_divergence_flag",
+        "breakout_distance_120d_pct",
+        "range_floor_distance_120d_pct",
+        "price_up_1d_flag",
+        "volume_up_1d_flag",
+        "turnover_to_ma5_ratio",
+    ] {
+        assert!(
+            lsh_factors.contains_key(key),
+            "missing LSH runtime factor {key}"
+        );
+    }
     assert_eq!(
         lsh_factors.get("lsh_bullish_engulf_prev_bearish_flag"),
         Some(&FactorValue::Bool(true))
@@ -513,6 +592,56 @@ fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only
     );
     assert!(!b2_factors.contains_key("lsh_daily_macd_wave_index"));
     assert!(!b2_factors.contains_key("lsh_volume_bullish_engulf_prev_bearish_flag"));
+}
+
+#[test]
+fn lsh_factor_profile_uses_neutral_model_feature_fallbacks_for_short_history() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(29);
+    let prepared = (0..30)
+        .map(|offset| {
+            let close = 10.0 + offset as f64 * 0.1;
+            let mut row = prepared_row(
+                "920011.BJ",
+                first_date + Duration::days(offset),
+                close,
+                1000.0 + offset as f64,
+            );
+            row.zxdkx = None;
+            row.zxdq = None;
+            row
+        })
+        .collect::<Vec<_>>();
+    let candidate = Candidate {
+        code: "920011.BJ".to_string(),
+        pick_date,
+        close: prepared.last().unwrap().close,
+        turnover_n: prepared.last().unwrap().turnover_n,
+        signal: Some("LSH".to_string()),
+        yellow_b1: None,
+    };
+
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::Lsh, None);
+    let factors = &rows[0].factors;
+
+    for key in [
+        "close_to_zxdkx_pct",
+        "ma25_to_zxdkx_pct",
+        "zxdkx_slope_5d_pct",
+        "ma_aligned_flag",
+        "zxdkx_up_1d_flag",
+        "range_compression_40d",
+        "abnormal_volume_to_ma20_ratio",
+    ] {
+        assert!(
+            matches!(
+                factors.get(key),
+                Some(FactorValue::Number(_)) | Some(FactorValue::Bool(_))
+            ),
+            "LSH short-history factor {key} must be explicit, got {:?}",
+            factors.get(key)
+        );
+    }
 }
 
 #[test]

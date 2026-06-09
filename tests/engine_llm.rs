@@ -26,6 +26,7 @@ fn llm_annotation_does_not_change_model_rank() {
     assert_eq!(merged[0].model_rank, Some(1));
     assert_eq!(merged[1].model_rank, Some(2));
     assert_eq!(merged[1].llm_action.as_deref(), Some("REJECT"));
+    assert_eq!(merged[1].llm_comment.as_deref(), Some("风险较高"));
 }
 
 #[test]

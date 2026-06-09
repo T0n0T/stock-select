@@ -13,6 +13,7 @@ from scripts.ml.build_rank_dataset import (
     dataset_columns_for_method,
     format_csv_value,
     load_candidate_rows,
+    load_external_feature_rows,
     load_factor_artifact_rows,
     load_selection_rows,
     normalize_env,
@@ -134,6 +135,7 @@ class RankDatasetTest(unittest.TestCase):
             "large_net_amount_to_amount_pct",
             "small_net_amount_to_amount_pct",
             "net_mf_amount_to_amount_pct",
+            "turnover_n",
             "market_up_ratio",
             "market_ge5_ratio",
             "market_le_minus5_ratio",
@@ -153,6 +155,117 @@ class RankDatasetTest(unittest.TestCase):
         for column in expected:
             self.assertIn(column, dataset_columns_for_method("b2"))
             self.assertIn(column, raw_factor_columns_for_method("b2"))
+
+    def test_b2_dataset_schema_includes_rdagent_rank_factors_without_polluting_other_methods(self):
+        b2_specific = [
+            "D",
+            "close_to_lt_r_pct",
+            "lt_r_to_ma60_pct",
+            "hl90_position",
+            "hl90_range_pct",
+            "close_to_hl90_mid_pct",
+            "bar_close_position",
+            "upper_shadow_pct",
+            "weekly_dea_pctile",
+            "weekly_macd_hist",
+            "monthly_dea_pctile",
+            "monthly_macd_hist",
+            "b2_bullish_engulf_prev_bearish_flag",
+            "b2_volume_bullish_engulf_prev_bearish_flag",
+            "b2_bullish_engulf_volume_ratio",
+        ]
+
+        for column in b2_specific:
+            self.assertIn(column, dataset_columns_for_method("b2"))
+            self.assertIn(column, raw_factor_columns_for_method("b2"))
+            self.assertNotIn(column, dataset_columns_for_method("b3"))
+            self.assertNotIn(column, raw_factor_columns_for_method("b3"))
+            self.assertNotIn(column, dataset_columns_for_method("lsh"))
+            self.assertNotIn(column, raw_factor_columns_for_method("lsh"))
+
+    def test_b2_dataset_schema_includes_local_chip_age_cache_factors(self):
+        expected = [
+            "total_mass",
+            "chip_age_ultrashort_ratio",
+            "chip_age_short_ratio",
+            "chip_age_mid_ratio",
+            "chip_age_long_ratio",
+            "profit_ratio",
+            "avg_cost_close_ratio",
+            "peak_price_close_ratio",
+            "chip_entropy",
+            "chip_concentration",
+            "chip_age_l0_b00",
+            "chip_age_l3_b31",
+        ]
+
+        for column in expected:
+            self.assertIn(column, dataset_columns_for_method("b2"))
+            self.assertIn(column, raw_factor_columns_for_method("b2"))
+            self.assertNotIn(column, dataset_columns_for_method("b3"))
+            self.assertNotIn(column, raw_factor_columns_for_method("b3"))
+
+    def test_load_external_feature_rows_accepts_symbol_or_code_and_filters_to_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "chip_age.csv"
+            path.write_text(
+                "\n".join(
+                    [
+                        "date,symbol,profit_ratio,chip_entropy,unknown_feature,ret5,env",
+                        "2026-05-25,000001.SZ,0.61,0.72,999,88,strong",
+                        "2026-05-25,000002.SZ,,0.55,999,77,weak",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            rows, warnings = load_external_feature_rows(path, method="b2")
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(rows[("2026-05-25", "000001.SZ")]["profit_ratio"], 0.61)
+        self.assertEqual(rows[("2026-05-25", "000001.SZ")]["chip_entropy"], 0.72)
+        self.assertNotIn("unknown_feature", rows[("2026-05-25", "000001.SZ")])
+        self.assertNotIn("ret5", rows[("2026-05-25", "000001.SZ")])
+        self.assertNotIn("env", rows[("2026-05-25", "000001.SZ")])
+        self.assertNotIn("profit_ratio", rows[("2026-05-25", "000002.SZ")])
+
+    def test_build_dataset_rows_merges_external_chip_age_features_by_date_and_code(self):
+        selection_rows = [
+            {
+                "date": "2026-05-25",
+                "code": "000001.SZ",
+                "env": "neutral",
+                "method": "b2",
+            }
+        ]
+        prices = {
+            "000001.SZ": [
+                {"trade_date": "2026-05-25", "close": 10, "high": 10.2, "low": 9.8},
+                {"trade_date": "2026-05-26", "close": 11, "high": 11.2, "low": 10.9},
+                {"trade_date": "2026-05-27", "close": 12, "high": 12.2, "low": 11.8},
+                {"trade_date": "2026-05-28", "close": 13, "high": 13.2, "low": 12.7},
+                {"trade_date": "2026-05-29", "close": 14, "high": 14.2, "low": 13.6},
+                {"trade_date": "2026-06-01", "close": 15, "high": 15.2, "low": 14.4},
+            ],
+        }
+        external_features = {
+            ("2026-05-25", "000001.SZ"): {
+                "profit_ratio": 0.61,
+                "chip_entropy": 0.72,
+                "chip_age_l0_b00": 0.03,
+                "env": "strong",
+                "ret5": 88.0,
+            }
+        }
+
+        rows = build_dataset_rows(selection_rows, prices, external_features_by_key=external_features)
+
+        self.assertEqual(rows[0]["env"], "neutral")
+        self.assertEqual(rows[0]["ret5"], 50.0)
+        self.assertEqual(rows[0]["profit_ratio"], 0.61)
+        self.assertEqual(rows[0]["chip_entropy"], 0.72)
+        self.assertEqual(rows[0]["chip_age_l0_b00"], 0.03)
 
     def test_load_candidate_rows_reads_current_candidates_artifacts_without_select(self):
         with tempfile.TemporaryDirectory() as temp_dir:

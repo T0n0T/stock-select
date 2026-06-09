@@ -62,4 +62,5 @@ fn ranked_candidate_and_llm_annotation_have_distinct_roles() {
     let display = DisplayRow::from_ranked(&ranked, Some(&annotation), Some("平安银行"));
     assert_eq!(display.model_rank, Some(1));
     assert_eq!(display.llm_action.as_deref(), Some("CAUTION"));
+    assert_eq!(display.llm_comment.as_deref(), Some("等待确认"));
 }

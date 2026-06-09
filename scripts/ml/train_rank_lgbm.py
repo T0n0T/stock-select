@@ -65,7 +65,7 @@ MACD_CATEGORICAL_COLUMNS = {
     "weekly_daily_combo_type",
 }
 CONTEXT_CATEGORICAL_COLUMNS = {"midline_state"}
-RAW_NUMERIC_COLUMNS = set(rank_dataset_schema.RAW_FACTOR_COLUMNS)
+RAW_NUMERIC_COLUMNS = set(rank_dataset_schema.raw_factor_columns_for_method(DEFAULT_METHOD))
 LEGACY_CONTEXT_NUMERIC_COLUMNS = {
     "price_vs_90d_high",
     "price_vs_90d_low",
@@ -73,7 +73,7 @@ LEGACY_CONTEXT_NUMERIC_COLUMNS = {
 }
 FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 TRAIN_MODES = {"overall", "by_env"}
-TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "ret3_ge5_label"}
+TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "ret3_ge5_label", "ret5_ge5_label"}
 
 
 @dataclass
@@ -379,6 +379,11 @@ def label_value(row: dict[str, Any], *, label_column: str) -> int | None:
         if ret3 is None:
             return None
         return 3 if ret3 >= 5.0 else 0
+    if label_column == "ret5_ge5_label":
+        ret5 = as_float(row.get("ret5"))
+        if ret5 is None:
+            return None
+        return 3 if ret5 >= 5.0 else 0
     value = as_float(row.get(label_column))
     return None if value is None else int(value)
 

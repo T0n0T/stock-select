@@ -45,6 +45,8 @@ pub struct DisplayRow {
     pub model_score: Option<f64>,
     pub llm_action: Option<String>,
     pub llm_risk_flags: Vec<String>,
+    #[serde(default)]
+    pub llm_comment: Option<String>,
 }
 
 impl DisplayRow {
@@ -63,6 +65,7 @@ impl DisplayRow {
             llm_risk_flags: annotation
                 .map(|item| item.llm_risk_flags.clone())
                 .unwrap_or_default(),
+            llm_comment: annotation.and_then(|item| item.llm_comment.clone()),
         }
     }
 }

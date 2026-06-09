@@ -5,6 +5,7 @@ use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use crate::factors::abnormal_volume::push_abnormal_volume_event_factors;
+use crate::factors::chip_age::push_chip_age_summary_factors;
 use crate::factors::ma::push_ma_support_factors;
 use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
 use crate::factors::price_position::{
@@ -22,7 +23,11 @@ use crate::model::{Candidate, Method, PreparedRow};
 pub const FACTOR_ARTIFACT_VERSION: u32 = 1;
 pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v2";
 
-const B2_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B2Semantic];
+const B2_FACTOR_BUNDLES: &[FactorBundle] = &[
+    FactorBundle::RawCommon,
+    FactorBundle::B2ChipAge,
+    FactorBundle::B2Semantic,
+];
 const B3_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B3Semantic];
 const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::LshSemantic];
 const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
@@ -30,6 +35,7 @@ const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactorBundle {
     RawCommon,
+    B2ChipAge,
     B2Semantic,
     B3Semantic,
     LshSemantic,
@@ -39,6 +45,7 @@ impl FactorBundle {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RawCommon => "raw_common",
+            Self::B2ChipAge => "b2_chip_age",
             Self::B2Semantic => "b2_semantic",
             Self::B3Semantic => "b3_semantic",
             Self::LshSemantic => "lsh_semantic",
@@ -125,16 +132,25 @@ fn history_factor_fields_for_profile(
     let low = history.iter().map(|row| row.low).collect::<Vec<_>>();
     let open = history.iter().map(|row| row.open).collect::<Vec<_>>();
     let volume = history.iter().map(|row| row.volume).collect::<Vec<_>>();
-    let turnover_rates = history
+    let turnover_basis = history
         .iter()
-        .map(|row| row.turnover_rate)
+        .map(|row| {
+            row.turnover_rate
+                .or_else(|| row.turnover_n.is_finite().then_some(row.turnover_n))
+        })
         .collect::<Vec<_>>();
     let derived_ma25 = rolling_mean_series(&close, 25, 25);
+    let derived_ma60 = rolling_mean_series(&close, 60, 60);
     let (derived_zxdq, derived_zxdkx) = zx_lines(&close);
     let ma25 = history
         .iter()
         .enumerate()
         .map(|(idx, row)| row.ma25.or(derived_ma25[idx]))
+        .collect::<Vec<_>>();
+    let ma60 = history
+        .iter()
+        .enumerate()
+        .map(|(idx, row)| row.ma60.or(derived_ma60[idx]))
         .collect::<Vec<_>>();
     let zxdkx = history
         .iter()
@@ -158,11 +174,15 @@ fn history_factor_fields_for_profile(
     let latest_low = latest.map(|row| row.low);
     let latest_high = latest.map(|row| row.high);
     let latest_ma25 = ma25.last().copied().flatten();
+    let latest_ma60 = ma60.last().copied().flatten();
     let latest_zxdkx = zxdkx.last().copied().flatten();
     let previous_zxdkx = zxdkx.iter().rev().nth(1).copied().flatten();
     let latest_volume = latest.map(|row| row.volume);
     let previous_volume = previous.map(|row| row.volume);
-    let latest_turnover_rate = latest.and_then(|row| row.turnover_rate);
+    let latest_turnover_rate = latest.and_then(|row| {
+        row.turnover_rate
+            .or_else(|| row.turnover_n.is_finite().then_some(row.turnover_n))
+    });
 
     let ma25_values = ma25.iter().copied().flatten().collect::<Vec<_>>();
     let zxdkx_values = zxdkx.iter().copied().flatten().collect::<Vec<_>>();
@@ -170,8 +190,8 @@ fn history_factor_fields_for_profile(
     let avg_close5 = mean_tail(&close, 5);
     let avg_volume5 = mean_tail(&volume, 5);
     let avg_volume20 = mean_tail(&volume, 20);
-    let avg_turnover5 = if turnover_rates.len() >= 5 {
-        turnover_rates[turnover_rates.len() - 5..]
+    let avg_turnover5 = if turnover_basis.len() >= 5 {
+        turnover_basis[turnover_basis.len() - 5..]
             .iter()
             .copied()
             .collect::<Option<Vec<_>>>()
@@ -241,8 +261,17 @@ fn history_factor_fields_for_profile(
                     latest_close,
                 );
             }
+            FactorBundle::B2ChipAge => {
+                push_chip_age_summary_factors(&mut factors, history);
+            }
             FactorBundle::B2Semantic => {
-                push_b2_semantic_factors(&mut factors, history, signal, environment_state);
+                push_b2_semantic_factors(
+                    &mut factors,
+                    history,
+                    signal,
+                    environment_state,
+                    latest_ma60,
+                );
             }
             FactorBundle::B3Semantic => {
                 push_latest_volume_shrink_factor(&mut factors, latest_volume, previous_volume);
@@ -327,8 +356,10 @@ pub fn build_candidate_factor_rows_from_refs(
                 volume: row.volume,
                 turnover_n: row.turnover_n,
                 turnover_rate: row.turnover_rate,
+                d: Some(row.d),
                 j: Some(row.j),
                 ma25: row.ma25,
+                ma60: row.ma60,
                 zxdkx: row.zxdkx,
                 zxdq: row.zxdq,
                 dif: Some(row.dif),

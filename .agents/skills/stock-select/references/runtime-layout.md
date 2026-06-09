@@ -1,54 +1,69 @@
 # Runtime Layout
 
-默认 runtime root：
+## Runtime Root
+
+优先来自 `STOCK_SELECT_RUNTIME_ROOT`，缺省为：
 
 ```text
 ~/.agents/skills/stock-select/runtime
 ```
 
-EOD b2：
+也可在命令中显式传 `--runtime-root <path>`。
+
+## EOD Artifact
+
+`stock-select-rs run --method b2 --pick-date 2026-06-05 --llm-review-limit 5` 生成：
 
 ```text
-candidates/<pick_date>.b2.json
-prepared/<pick_date>.bin
-prepared/<pick_date>.meta.json
-select/<pick_date>.b2/run.json
-select/<pick_date>.b2/candidates.json
-select/<pick_date>.b2/factors.json
-select/<pick_date>.b2/ranked.json
-select/<pick_date>.b2/feature_vectors.json
-select/<pick_date>.b2/display.json
-select/<pick_date>.b2/llm_tasks.json
-select/<pick_date>.b2/llm_annotations.json
-select/<pick_date>.b2/llm_raw/<code>.json
-charts/<pick_date>.b2/<code>_day.png
-environment/history.jsonl
-environment/latest.json
-environment/daily/<pick_date>.<state>.json
-custom-pool.txt
-models/b2/model.txt
-models/b2/model_metadata.json
-models/b2/model_card.json
-models/archive/<version>/
-models/archive/rollback-current-<version>/
+<runtime>/
+├── candidates/2026-06-05.b2.json
+├── factors/2026-06-05.b2/
+│   ├── factors.json
+│   └── manifest.json
+├── charts/2026-06-05.b2/
+│   └── <code>_day.png
+└── select/2026-06-05.b2/
+    ├── run.json
+    ├── candidates.json
+    ├── factors.json
+    ├── ranked.json
+    ├── feature_vectors.json
+    ├── display.json
+    ├── llm_tasks.json
+    ├── llm_annotations.json
+    ├── llm_raw/
+    │   └── <code>.json
+    └── llm_report.html
 ```
 
-Intraday b2：
+## Intraday Artifact
+
+盘中 key 多一个 `.intraday`：
 
 ```text
-candidates/<pick_date>.intraday.b2.json
-prepared/<pick_date>.intraday.bin
-prepared/<pick_date>.intraday.meta.json
-select/<pick_date>.intraday.b2/run.json
-select/<pick_date>.intraday.b2/candidates.json
-select/<pick_date>.intraday.b2/factors.json
-select/<pick_date>.intraday.b2/ranked.json
-select/<pick_date>.intraday.b2/feature_vectors.json
-select/<pick_date>.intraday.b2/display.json
-select/<pick_date>.intraday.b2/llm_tasks.json
-select/<pick_date>.intraday.b2/llm_annotations.json
-select/<pick_date>.intraday.b2/llm_raw/<code>.json
-charts/<pick_date>.intraday.b2/<code>_day.png
+<runtime>/
+├── candidates/2026-06-05.intraday.b2.json
+├── factors/2026-06-05.intraday.b2/
+├── charts/2026-06-05.intraday.b2/
+└── select/2026-06-05.intraday.b2/
+    ├── run.json
+    ├── display.json
+    ├── factors.json
+    ├── ranked.json
+    ├── llm_tasks.json
+    ├── llm_annotations.json
+    ├── llm_raw/
+    └── llm_report.html
 ```
 
-盘中 artifact key 是 `<pick_date>.intraday.b2`。重复盘中运行会刷新同一日期组，不按时间戳创建新组。
+同一交易日重复盘中运行会刷新同一组 artifact，不按时间戳创建新目录。
+
+## Review 数据关系
+
+- `display.json`：review-list 的主输入，包含模型 rank/score、名称、行业和合并后的 LLM 字段。
+- `ranked.json`：模型排序后的候选列表，不能由 LLM 改写。
+- `factors.json`：因子矩阵，可给子代理查证量价、均线、MACD、异常放量等结构。
+- `llm_tasks.json`：给子代理的任务入口，每行含 `chart_path`、`raw_response_path`、`llm_report_path` 和股票上下文。
+- `llm_annotations.json`：子代理/人工复盘结论，只写 action、risk flags、comment 等 annotation。
+- `llm_raw/<code>.json`：单票详细分析原文，供 HTML 报告展示。
+- `llm_report.html`：`review-merge` 生成的图文报告。

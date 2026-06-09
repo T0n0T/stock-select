@@ -119,6 +119,7 @@ RAW_FACTOR_COLUMNS = [
     "large_net_amount_to_amount_pct",
     "small_net_amount_to_amount_pct",
     "net_mf_amount_to_amount_pct",
+    "turnover_n",
     "market_up_ratio",
     "market_ge5_ratio",
     "market_le_minus5_ratio",
@@ -134,6 +135,41 @@ RAW_FACTOR_COLUMNS = [
     "cyq_cost_70_width_pct",
     "cyq_cost_90_width_pct",
 ]
+B2_RDAGENT_RAW_FACTOR_COLUMNS = [
+    "D",
+    "close_to_lt_r_pct",
+    "lt_r_to_ma60_pct",
+    "hl90_position",
+    "hl90_range_pct",
+    "close_to_hl90_mid_pct",
+    "bar_close_position",
+    "upper_shadow_pct",
+    "weekly_dea_pctile",
+    "weekly_macd_hist",
+    "monthly_dea_pctile",
+    "monthly_macd_hist",
+    "b2_bullish_engulf_prev_bearish_flag",
+    "b2_volume_bullish_engulf_prev_bearish_flag",
+    "b2_bullish_engulf_volume_ratio",
+    "b2_yang_engulf_ma25",
+    "b2_yang_engulf_ma25_vol_ratio",
+    "b2_yang_engulf_ma25_strength",
+]
+B2_CHIP_AGE_RAW_FACTOR_COLUMNS = [
+    "total_mass",
+    "chip_age_layer_sum",
+    "chip_age_ultrashort_ratio",
+    "chip_age_short_ratio",
+    "chip_age_mid_ratio",
+    "chip_age_long_ratio",
+    "profit_ratio",
+    "avg_cost_close_ratio",
+    "peak_price_close_ratio",
+    "chip_entropy",
+    "chip_concentration",
+    *[f"chip_age_l{layer}_b{bin_index:02}" for layer in range(4) for bin_index in range(32)],
+]
+B2_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + B2_RDAGENT_RAW_FACTOR_COLUMNS + B2_CHIP_AGE_RAW_FACTOR_COLUMNS
 B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_volume_shrink_ratio",
     "b3_amplitude_pct",
@@ -179,7 +215,7 @@ METHOD_REVIEW_COLUMNS = {
     "b3": B3_REVIEW_COLUMNS,
 }
 METHOD_RAW_FACTOR_COLUMNS = {
-    "b2": RAW_FACTOR_COLUMNS,
+    "b2": B2_RAW_FACTOR_COLUMNS,
     "b3": B3_RAW_FACTOR_COLUMNS,
     "lsh": LSH_RAW_FACTOR_COLUMNS,
 }
@@ -564,6 +600,63 @@ def load_candidate_rows(runtime_root: Path, *, method: str, start_date: str, end
     return rows, warnings
 
 
+ExternalFeatureKey = tuple[str, str]
+
+
+def external_feature_columns_for_method(method: str) -> set[str]:
+    return set(raw_factor_columns_for_method(method))
+
+
+def load_external_feature_rows(
+    paths: Path | Sequence[Path],
+    *,
+    method: str = DEFAULT_METHOD,
+) -> tuple[dict[ExternalFeatureKey, dict[str, Any]], list[str]]:
+    feature_paths = [paths] if isinstance(paths, Path) else list(paths)
+    allowed_columns = external_feature_columns_for_method(method)
+    rows: dict[ExternalFeatureKey, dict[str, Any]] = {}
+    warnings: list[str] = []
+
+    for path in feature_paths:
+        if not path.exists():
+            warnings.append(f"missing_external_feature_csv:{path}")
+            continue
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row_index, raw_row in enumerate(reader, start=2):
+                row_date = str(raw_row.get("date") or raw_row.get("trade_date") or "").strip()
+                code = str(raw_row.get("code") or raw_row.get("symbol") or raw_row.get("ts_code") or "").strip()
+                if not row_date or not code:
+                    warnings.append(f"invalid_external_feature_key:{path}:{row_index}")
+                    continue
+                values: dict[str, Any] = {}
+                for column, raw_value in raw_row.items():
+                    if column not in allowed_columns:
+                        continue
+                    value = as_float(raw_value)
+                    if value is None:
+                        continue
+                    values[column] = value
+                if values:
+                    rows[(row_date, code)] = values
+    return rows, warnings
+
+
+def merge_external_feature_values(
+    row: dict[str, Any],
+    external_features_by_key: dict[ExternalFeatureKey, dict[str, Any]],
+    *,
+    method: str = DEFAULT_METHOD,
+) -> None:
+    allowed_columns = external_feature_columns_for_method(method)
+    features = external_features_by_key.get((str(row.get("date") or ""), str(row.get("code") or "")))
+    if not features:
+        return
+    for key, value in features.items():
+        if key in allowed_columns and format_csv_value(value) != "":
+            row[key] = value
+
+
 def load_dotenv_value(env_path: Path, key: str) -> str | None:
     if not env_path.exists():
         return None
@@ -661,9 +754,11 @@ def build_dataset_rows(
     price_rows_by_symbol: dict[str, list[dict[str, Any]]],
     *,
     method: str = DEFAULT_METHOD,
+    external_features_by_key: dict[ExternalFeatureKey, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     dataset_columns = dataset_columns_for_method(method)
     dataset_column_set = set(dataset_columns)
+    external_features_by_key = external_features_by_key or {}
     rows: list[dict[str, Any]] = []
     for selection_row in selection_rows:
         row = {column: "" for column in dataset_columns}
@@ -672,6 +767,7 @@ def build_dataset_rows(
         for key, value in selection_row.items():
             if key in dataset_column_set and key not in LABEL_COLUMNS and format_csv_value(value) != "":
                 row[key] = value
+        merge_external_feature_values(row, external_features_by_key, method=method)
         row.update(compute_forward_labels(symbol_rows, str(row.get("date"))))
         rows.append(row)
     return add_day_relative_labels(rows)
@@ -760,6 +856,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source", choices=["candidates", "select"], default="candidates")
     parser.add_argument("--min-history-days", type=int, default=120)
     parser.add_argument("--forward-days", type=int, default=15)
+    parser.add_argument(
+        "--external-feature-csv",
+        type=Path,
+        action="append",
+        default=[],
+        help="Optional local feature CSV(s), joined by date plus code/symbol/ts_code.",
+    )
     return parser.parse_args(argv)
 
 
@@ -790,7 +893,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()
     prices = fetch_price_rows(dsn, symbols, query_start, query_end)
-    rows = build_dataset_rows(training_input_rows, prices, method=args.method)
+    external_features, external_warnings = load_external_feature_rows(args.external_feature_csv, method=args.method)
+    warnings.extend(external_warnings)
+    rows = build_dataset_rows(
+        training_input_rows,
+        prices,
+        method=args.method,
+        external_features_by_key=external_features,
+    )
     write_dataset(
         rows,
         output_dir,

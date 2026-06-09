@@ -13,6 +13,14 @@ pub fn latest_bar_position(
     }
 }
 
+pub fn latest_bar_position_ratio(
+    latest_close: Option<f64>,
+    latest_low: Option<f64>,
+    latest_high: Option<f64>,
+) -> Option<f64> {
+    latest_bar_position(latest_close, latest_low, latest_high).map(|value| value / 100.0)
+}
+
 pub fn push_price_position_factors(
     factors: &mut FactorList,
     close: &[f64],
@@ -101,6 +109,46 @@ pub fn push_price_position_factors(
     );
 }
 
+pub fn push_b2_hl90_position_factors(
+    factors: &mut FactorList,
+    high: &[f64],
+    low: &[f64],
+    latest_close: Option<f64>,
+) {
+    let tail_high_90 = if high.len() >= 90 {
+        &high[high.len() - 90..]
+    } else {
+        high
+    };
+    let tail_low_90 = if low.len() >= 90 {
+        &low[low.len() - 90..]
+    } else {
+        low
+    };
+    let high_90 = tail_high_90.iter().copied().reduce(f64::max);
+    let low_90 = tail_low_90.iter().copied().reduce(f64::min);
+    let mid_90 = high_90.zip(low_90).map(|(high, low)| (high + low) / 2.0);
+    let range_90 = high_90.zip(low_90).map(|(high, low)| high - low);
+    let position = match (latest_close, low_90, range_90) {
+        (Some(close), Some(low), Some(width)) if width != 0.0 => Some((close - low) / width),
+        _ => None,
+    };
+    push_number(
+        factors,
+        "close_to_hl90_mid_pct",
+        pct_change(latest_close, mid_90),
+    );
+    push_number(factors, "hl90_position", position);
+    push_number(
+        factors,
+        "hl90_range_pct",
+        match (range_90, mid_90) {
+            (Some(width), Some(mid)) if mid != 0.0 => Some(width / mid * 100.0),
+            _ => None,
+        },
+    );
+}
+
 pub fn push_range_compression(
     factors: &mut FactorList,
     high: &[f64],
@@ -167,4 +215,19 @@ pub fn push_latest_bar_shape_factors(
     push_number(factors, "b3_body_pct", body);
     push_number(factors, "b3_upper_shadow_pct", upper_shadow);
     push_number(factors, "b3_lower_shadow_pct", lower_shadow);
+}
+
+pub fn push_latest_upper_shadow_factor(
+    factors: &mut FactorList,
+    latest_high: Option<f64>,
+    latest_close: Option<f64>,
+) {
+    push_number(
+        factors,
+        "upper_shadow_pct",
+        match (latest_high, latest_close) {
+            (Some(high), Some(close)) if close != 0.0 => Some((high - close) / close * 100.0),
+            _ => None,
+        },
+    );
 }

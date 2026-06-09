@@ -130,8 +130,10 @@ fn parse_history_rows(value: &Value) -> anyhow::Result<Vec<FactorInputRow>> {
                     .or_else(|| optional_f64(row, "turnover_rate"))
                     .ok_or_else(|| anyhow::anyhow!("history row missing turnover_n"))?,
                 turnover_rate: optional_f64(row, "turnover_rate"),
+                d: optional_f64(row, "d").or_else(|| optional_f64(row, "D")),
                 j: optional_f64(row, "j"),
                 ma25: optional_f64(row, "ma25"),
+                ma60: optional_f64(row, "ma60"),
                 zxdkx: optional_f64(row, "zxdkx"),
                 zxdq: optional_f64(row, "zxdq"),
                 dif: optional_f64(row, "dif").or_else(|| optional_f64(row, "macd_dif")),

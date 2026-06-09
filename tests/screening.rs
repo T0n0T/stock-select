@@ -2,6 +2,7 @@ use chrono::{Duration, NaiveDate};
 use stock_select::cache::{
     load_prepared_cache, load_prepared_cache_for_mode, prepared_cache_data_path,
     prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
+    write_prepared_cache_for_mode,
 };
 use stock_select::intraday::{RawRtKRow, StaticRtKProvider};
 use stock_select::model::{MarketRow, Method, PreparedRow};
@@ -150,6 +151,69 @@ fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
 }
 
 #[test]
+fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting_existing_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(24);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+        Ok((0..25)
+            .map(|offset| {
+                let close = 10.0 + offset as f64;
+                let mut row = MarketRow {
+                    ts_code: "000001.SZ".to_string(),
+                    trade_date: first_date + Duration::days(offset),
+                    open: close - 0.5,
+                    high: close + 1.0,
+                    low: close - 1.0,
+                    close,
+                    vol: 1000.0 + offset as f64,
+                    turnover_rate: Some(1.0 + offset as f64 / 10.0),
+                    db_factors: Default::default(),
+                };
+                if offset == 24 {
+                    row.db_factors.insert("psy_qfq".to_string(), 88.8);
+                }
+                row
+            })
+            .collect())
+    })
+    .unwrap();
+
+    let prepared = load_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        pick_date - Duration::days(366),
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = prepared.last().unwrap();
+
+    assert!((latest.db_factors["boll_width_pct"] - 94.1433681197616).abs() < 1e-9);
+    assert!((latest.db_factors["bias1_qfq"] - 7.936507936507936).abs() < 1e-9);
+    assert_eq!(latest.db_factors["roc_qfq"], 54.54545454545454);
+    assert_eq!(latest.db_factors["mtm_qfq"], 12.0);
+    assert_eq!(latest.db_factors["psy_qfq"], 88.8);
+    assert_eq!(latest.db_factors["wr_qfq"], 9.090909090909092);
+    assert!((latest.db_factors["dist_to_up_limit_pct"] - 6.764705882352932).abs() < 1e-9);
+    assert!((latest.db_factors["dist_to_down_limit_pct"] - 12.647058823529415).abs() < 1e-9);
+    assert!(!latest.db_factors.contains_key("turnover_rate_f"));
+}
+
+#[test]
 fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -195,6 +259,57 @@ fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
     assert_eq!(payload["pool_file"], pool_file.to_string_lossy().as_ref());
     assert_eq!(payload["candidates"].as_array().unwrap().len(), 1);
     assert_eq!(payload["candidates"][0]["code"], "000002.SZ");
+}
+
+#[test]
+fn screen_missing_pick_date_rows_reports_latest_cached_date() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
+    let start_date = pick_date - Duration::days(366);
+    write_prepared_cache_for_mode(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+        &[prepared_row_at_date(
+            "000001.SZ",
+            pick_date,
+            10.5,
+            1000.0,
+            45.0,
+        )],
+    )
+    .unwrap();
+
+    let err = run_screen_with_loader(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_dsn, _start_date, _end_date| {
+            Ok(vec![market_row_at_date(
+                NaiveDate::from_ymd_opt(2026, 6, 5).unwrap(),
+                10.0,
+                1000.0,
+            )])
+        },
+    )
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("No prepared rows found for pick_date 2026-06-08"));
+    assert!(message.contains("latest cached trade_date is 2026-06-05"));
+    assert!(message.contains("--intraday"));
+    assert!(!prepared_cache_data_path(temp.path(), pick_date).exists());
 }
 
 #[test]
@@ -651,6 +766,96 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
     .unwrap();
     assert_eq!(prepared.last().unwrap().trade_date, pick_date);
     assert_eq!(prepared.last().unwrap().close, 10.6);
+}
+
+#[test]
+fn intraday_screen_export_factors_runs_through_local_factor_fill() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
+    let start_date = previous_trade_date - Duration::days(366);
+    let pool_file = temp.path().join("pool.txt");
+    std::fs::write(&pool_file, "000001.SZ").unwrap();
+    let provider = StaticRtKProvider::new([
+        ("*.SH", vec![]),
+        (
+            "*.SZ",
+            vec![RawRtKRow::from_value(serde_json::json!({
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "open": 27.4,
+                "high": 28.45,
+                "low": 27.2,
+                "close": 28.392,
+                "vol": 200000.0,
+                "amount": 5678400.0,
+                "trade_time": "14:59:59"
+            }))],
+        ),
+        ("*.BJ", vec![]),
+    ]);
+
+    run_intraday_screen_with_loaders(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::Custom,
+            pool_file: Some(pool_file),
+            export_factors: true,
+            environment_state: Some("neutral".to_string()),
+        },
+        &provider,
+        "15:00:00",
+        |_dsn, _trade_date| Ok(previous_trade_date),
+        |dsn, actual_start, actual_end| {
+            assert_eq!(dsn, "postgresql://fixture");
+            assert_eq!(actual_start, start_date);
+            assert_eq!(actual_end, previous_trade_date);
+            Ok((0..24)
+                .map(|offset| {
+                    let close = if offset < 23 {
+                        30.0 - offset as f64 * 0.1
+                    } else {
+                        27.3
+                    };
+                    MarketRow {
+                        ts_code: "000001.SZ".to_string(),
+                        trade_date: first_date + Duration::days(offset),
+                        open: close + 0.1,
+                        high: close + 0.2,
+                        low: close - 0.2,
+                        close,
+                        vol: 1000.0 + offset as f64,
+                        turnover_rate: Some(1.0),
+                        db_factors: Default::default(),
+                    }
+                })
+                .collect())
+        },
+    )
+    .unwrap();
+
+    let factor_path = temp
+        .path()
+        .join("factors/2026-05-25.intraday.b2/factors.json");
+    let factors: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(factor_path).unwrap()).unwrap();
+    assert_eq!(factors["rows"].as_array().unwrap().len(), 1);
+    let row_factors = &factors["rows"][0]["factors"];
+    assert!(row_factors["boll_width_pct"].is_number());
+    assert!(row_factors["bias1_qfq"].is_number());
+    assert!(row_factors["roc_qfq"].is_number());
+    assert!(row_factors["mtm_qfq"].is_number());
+    assert!(row_factors["psy_qfq"].is_number());
+    assert!(row_factors["wr_qfq"].is_number());
+    assert!(row_factors["dist_to_up_limit_pct"].is_number());
+    assert!(row_factors["dist_to_down_limit_pct"].is_number());
+    assert!(row_factors["chip_vwap"].is_number());
+    assert!(row_factors["turnover_rate_f"].is_null());
 }
 
 #[test]

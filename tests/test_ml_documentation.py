@@ -85,26 +85,64 @@ class MlDocumentationTests(unittest.TestCase):
         self.assertIn("promote", completed.stdout)
         self.assertIn("switch", completed.stdout)
         self.assertIn("--method <method>", completed.stdout)
+        self.assertIn("eod/intraday 路由状态", completed.stdout)
 
-    def test_model_maintenance_status_prints_formatted_heading(self):
+    def test_model_maintenance_status_prints_readable_model_summary(self):
         script = PROJECT_ROOT / "scripts" / "model_maintenance.sh"
         with tempfile.TemporaryDirectory() as temp_dir:
-            bin_dir = Path(temp_dir) / "bin"
+            root = Path(temp_dir)
+            bin_dir = root / "bin"
             bin_dir.mkdir()
             uv = bin_dir / "uv"
             uv.write_text(
                 "#!/usr/bin/env bash\n"
-                "printf '%s\\n' 'LightGBM 模型维护摘要'\n"
-                "printf '%s\\n' '模式: describe-current'\n"
-                "printf '%s\\n' '目标: runtime/models/b3'\n",
+                "echo 'status should not call uv' >&2\n"
+                "exit 9\n",
                 encoding="utf-8",
             )
             uv.chmod(0o755)
 
+            runtime = root / "runtime"
+            model_dir = runtime / "models" / "b3"
+            model_dir.mkdir(parents=True)
+            (model_dir / "model_state.json").write_text(
+                json.dumps({"eod": {"status": "ready", "model_dir": "models/b3"}}),
+                encoding="utf-8",
+            )
+            (model_dir / "model.txt").write_text("tree\n", encoding="utf-8")
+            (model_dir / "model_metadata.json").write_text(
+                json.dumps(
+                    {
+                        "numeric_columns": ["a", "b"],
+                        "categorical_columns": [],
+                        "label_column": "rank_label_3d",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (model_dir / "model_card.json").write_text(
+                json.dumps(
+                    {
+                        "model_version": "20260608T010203Z",
+                        "train_window": "2025-01-01..2025-12-31",
+                        "score_window": "2026-01-01..2026-02-01",
+                        "rolling_fold_count": 5,
+                        "rolling_summary": {
+                            "top3_ret3_positive_rate": 52.54,
+                            "top3_ret3_ge_5_rate": 28.5,
+                            "top3_ret3_le_0_rate": 47.46,
+                            "top3_ret3_ge_5_capture_rate": 5.78,
+                            "rank_ic_ret3": 0.0707,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
             completed = subprocess.run(
-                ["bash", str(script), "--method", "b3", "status"],
+                ["bash", str(script), "--method", "b3", "status", "--runtime-root", str(runtime)],
                 check=True,
                 capture_output=True,
                 env=env,
@@ -112,9 +150,148 @@ class MlDocumentationTests(unittest.TestCase):
             )
 
         self.assertIn("模型状态: b3", completed.stdout)
-        self.assertIn("LightGBM 模型维护摘要", completed.stdout)
-        self.assertIn("目标: runtime/models/b3", completed.stdout)
+        self.assertIn("生产路由总览: b3", completed.stdout)
+        self.assertIn("日终模型 (eod)", completed.stdout)
+        self.assertIn("状态: ready (可用)", completed.stdout)
+        self.assertIn("发布版本: 20260608T010203Z", completed.stdout)
+        self.assertIn("训练窗口: 2025-01-01..2025-12-31", completed.stdout)
+        self.assertIn("打分窗口: 2026-01-01..2026-02-01", completed.stdout)
+        self.assertIn("特征/标签: 2 个特征 (数值 2, 分类 0), label=rank_label_3d", completed.stdout)
+        self.assertIn("产物检查: OK", completed.stdout)
+        self.assertIn("指标口径: rolling_summary (5 折滚动验证)", completed.stdout)
+        self.assertIn(
+            "Top3 3日表现: 正收益 52.54% | 涨幅>=5% 28.50% | 非正收益 47.46% | >=5%捕获 5.78% | RankIC 0.0707",
+            completed.stdout,
+        )
+        self.assertNotIn("LightGBM 模型维护摘要", completed.stdout)
+        self.assertNotIn("metrics_source=", completed.stdout)
+        self.assertNotIn("model_sha256", completed.stdout)
         self.assertRegex(completed.stdout, r"={20,}")
+
+    def test_model_maintenance_status_prints_intraday_model_metrics(self):
+        script = PROJECT_ROOT / "scripts" / "model_maintenance.sh"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            uv = bin_dir / "uv"
+            uv.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\n' 'LightGBM 模型维护摘要'\n",
+                encoding="utf-8",
+            )
+            uv.chmod(0o755)
+
+            runtime = root / "runtime"
+            lsh_dir = runtime / "models" / "lsh"
+            intraday_dir = runtime / "models" / "lsh_intraday"
+            lsh_dir.mkdir(parents=True)
+            intraday_dir.mkdir(parents=True)
+            (lsh_dir / "model_state.json").write_text(
+                json.dumps(
+                    {
+                        "eod": {"status": "ready", "model_dir": "models/lsh"},
+                        "intraday": {
+                            "status": "ready",
+                            "model_dir": "models/lsh_intraday",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for model_dir in [lsh_dir, intraday_dir]:
+                (model_dir / "model.txt").write_text("tree\n", encoding="utf-8")
+                (model_dir / "model_metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "numeric_columns": ["a", "b"],
+                            "categorical_columns": [],
+                            "label_column": "rank_label_3d",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            (intraday_dir / "model_card.json").write_text(
+                json.dumps(
+                    {
+                        "model_version": "intraday-test",
+                        "mode": "intraday",
+                        "test_metrics": {
+                            "top3_ret3_positive_rate": 60.1,
+                            "rank_ic_ret3": 0.0769,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+            env["STOCK_SELECT_RUNTIME_ROOT"] = str(runtime)
+            completed = subprocess.run(
+                ["bash", str(script), "--method", "lsh", "status"],
+                check=True,
+                capture_output=True,
+                env=env,
+                text=True,
+            )
+
+        self.assertIn("盘中模型 (intraday)", completed.stdout)
+        self.assertIn("指标口径: test_metrics (模型卡测试集)", completed.stdout)
+        self.assertIn(
+            "Top3 3日表现: 正收益 60.10% | 涨幅>=5% 指标缺失 | 非正收益 指标缺失 | >=5%捕获 指标缺失 | RankIC 0.0769",
+            completed.stdout,
+        )
+        self.assertNotIn("intraday: status=ready", completed.stdout)
+        self.assertNotIn("metrics_source=test_metrics", completed.stdout)
+
+    def test_model_maintenance_status_target_dir_falls_back_without_double_runtime(self):
+        script = PROJECT_ROOT / "scripts" / "model_maintenance.sh"
+        with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as temp_dir:
+            root = Path(temp_dir)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            uv = bin_dir / "uv"
+            uv.write_text(
+                "#!/usr/bin/env bash\n"
+                "echo 'status should not call uv' >&2\n"
+                "exit 9\n",
+                encoding="utf-8",
+            )
+            uv.chmod(0o755)
+
+            model_dir = root / "runtime" / "models" / "b3"
+            model_dir.mkdir(parents=True)
+            (model_dir / "model.txt").write_text("tree\n", encoding="utf-8")
+            (model_dir / "model_metadata.json").write_text(
+                json.dumps(
+                    {
+                        "numeric_columns": ["a"],
+                        "categorical_columns": [],
+                        "label_column": "rank_label_3d",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (model_dir / "model_card.json").write_text(
+                json.dumps({"model_version": "target-dir-test"}),
+                encoding="utf-8",
+            )
+
+            relative_target_dir = model_dir.relative_to(PROJECT_ROOT)
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+            completed = subprocess.run(
+                ["bash", str(script), "--method", "b3", "status", "--target-dir", str(relative_target_dir)],
+                check=True,
+                capture_output=True,
+                env=env,
+                text=True,
+            )
+
+        self.assertIn(f"模型目录: {relative_target_dir}", completed.stdout)
+        self.assertIn("备注: 未找到 model_state.json；按默认日终模型目录展示", completed.stdout)
+        self.assertNotIn("runtime/runtime", completed.stdout)
 
     def test_b2_post_rerank_rule_lives_in_b2_engine_module(self):
         run_source = (PROJECT_ROOT / "src" / "engine" / "run.rs").read_text(encoding="utf-8")

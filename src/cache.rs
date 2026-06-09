@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 4;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedCachePaths {
@@ -266,6 +266,9 @@ pub fn load_prepared_cache_for_mode(
     }
     let rows = decode_prepared_cache_rows(&std::fs::read(paths.data_path)?)?;
     if rows.len() != metadata.row_count {
+        return Ok(None);
+    }
+    if !rows.iter().any(|row| row.trade_date == end_date) {
         return Ok(None);
     }
 

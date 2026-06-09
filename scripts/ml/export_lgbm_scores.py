@@ -95,6 +95,13 @@ def write_csv(path: Path, rows: Sequence[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def score_rows_for_dates(rows: Sequence[dict[str, Any]], dates: set[str]) -> list[dict[str, Any]]:
+    return sorted(
+        [row for row in rows if str(row.get("date")) in dates],
+        key=lambda row: (str(row.get("date")), str(row.get("code"))),
+    )
+
+
 def export_scores(
     *,
     dataset: Path,
@@ -122,7 +129,7 @@ def export_scores(
     train_dates = {date for date in dates if date < train_end_exclusive}
     score_dates = {date for date in dates if score_start <= date <= score_end}
     train_rows = rows_for_dates(rows, train_dates, label_column=label_column)
-    score_rows = rows_for_dates(rows, score_dates, label_column=label_column)
+    score_rows = score_rows_for_dates(rows, score_dates)
     if not train_rows:
         raise ValueError("no train rows after applying train date filter")
     if not score_rows:
