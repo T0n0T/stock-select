@@ -3,6 +3,7 @@
 # dependencies = [
 #   "lightgbm",
 #   "numpy",
+#   "scikit-learn",
 # ]
 # ///
 from __future__ import annotations
@@ -27,6 +28,10 @@ from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 DEFAULT_METHOD = "b2"
 DEFAULT_LABEL_GAIN = [0, 1, 3, 7]
+DEFAULT_RF_N_ESTIMATORS = 300
+DEFAULT_RF_MIN_SAMPLES_LEAF = 20
+DEFAULT_RF_MAX_FEATURES = "sqrt"
+LOW_IMPORTANCE_THRESHOLD = 1e-6
 
 IDENTITY_COLUMNS = {"date", "code", "name", "method"}
 LABEL_COLUMNS = {
@@ -86,6 +91,21 @@ class TrainedModelResult:
     feature_names: list[str]
     lightgbm_feature_names: list[str]
     category_levels: dict[str, list[str]]
+
+
+@dataclass
+class RandomForestDiagnosticsConfig:
+    enabled: bool = True
+    n_estimators: int = DEFAULT_RF_N_ESTIMATORS
+    max_depth: int | None = None
+    min_samples_leaf: int = DEFAULT_RF_MIN_SAMPLES_LEAF
+    max_features: str | int | float | None = DEFAULT_RF_MAX_FEATURES
+    min_oob_score: float | None = None
+    min_test_rank_ic_ret3: float | None = None
+
+
+class RandomForestThresholdError(ValueError):
+    pass
 
 
 def as_float(value: Any) -> float | None:
@@ -455,6 +475,140 @@ def assign_scores(rows: Sequence[dict[str, Any]], scores: Sequence[float]) -> li
     return output
 
 
+def random_forest_n_jobs(num_threads: int) -> int | None:
+    return num_threads if num_threads > 0 else None
+
+
+def random_forest_probability_scores(
+    model: Any,
+    probabilities: Sequence[Sequence[float]],
+    label_gain: Sequence[int],
+) -> list[float]:
+    classes = [int(value) for value in getattr(model, "classes_", [])]
+    if not classes:
+        return []
+    scores: list[float] = []
+    for row in probabilities:
+        total = 0.0
+        for class_value, probability in zip(classes, row):
+            gain = label_gain[class_value] if 0 <= class_value < len(label_gain) else float(class_value)
+            total += float(probability) * float(gain)
+        scores.append(total)
+    return scores
+
+
+def random_forest_fallback_scores(model: Any, matrix: Sequence[Sequence[float]]) -> list[float]:
+    return [float(value) for value in model.predict(matrix)]
+
+
+def run_random_forest_diagnostics(
+    train_rows: Sequence[dict[str, Any]],
+    test_rows: Sequence[dict[str, Any]],
+    *,
+    numeric_columns: Sequence[str],
+    categorical_columns: Sequence[str],
+    label_column: str,
+    label_gain: Sequence[int],
+    num_threads: int,
+    fixed_categorical_levels: dict[str, list[str]],
+    config: RandomForestDiagnosticsConfig,
+) -> dict[str, Any]:
+    from sklearn.ensemble import RandomForestClassifier
+
+    levels = category_levels(
+        train_rows,
+        categorical_columns,
+        fixed_categorical_levels=fixed_categorical_levels,
+    )
+    train_matrix, feature_names = build_feature_matrix(
+        train_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        levels=levels,
+    )
+    test_matrix, _feature_names = build_feature_matrix(
+        test_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        levels=levels,
+    )
+    model = RandomForestClassifier(
+        n_estimators=config.n_estimators,
+        max_depth=config.max_depth,
+        min_samples_leaf=config.min_samples_leaf,
+        max_features=config.max_features,
+        random_state=17,
+        bootstrap=True,
+        oob_score=True,
+        n_jobs=random_forest_n_jobs(num_threads),
+    )
+    train_labels = labels(train_rows, label_column=label_column)
+    test_labels = labels(test_rows, label_column=label_column)
+    model.fit(train_matrix, train_labels)
+
+    try:
+        train_scores = random_forest_probability_scores(model, model.predict_proba(train_matrix), label_gain)
+        test_scores = random_forest_probability_scores(model, model.predict_proba(test_matrix), label_gain)
+    except Exception:
+        train_scores = random_forest_fallback_scores(model, train_matrix)
+        test_scores = random_forest_fallback_scores(model, test_matrix)
+
+    if len(train_scores) != len(train_rows):
+        train_scores = random_forest_fallback_scores(model, train_matrix)
+    if len(test_scores) != len(test_rows):
+        test_scores = random_forest_fallback_scores(model, test_matrix)
+
+    importances = [float(value) for value in getattr(model, "feature_importances_", [])]
+    ranked_features = sorted(zip(feature_names, importances), key=lambda item: (-item[1], item[0]))
+    low_features = sorted(
+        (
+            (feature, importance)
+            for feature, importance in zip(feature_names, importances)
+            if importance <= LOW_IMPORTANCE_THRESHOLD
+        ),
+        key=lambda item: (item[1], item[0]),
+    )
+
+    return {
+        "enabled": True,
+        "status": "passed",
+        "label_column": label_column,
+        "feature_count": len(feature_names),
+        "numeric_feature_count": len(numeric_columns),
+        "categorical_feature_count": len(categorical_columns),
+        "params": {
+            "n_estimators": config.n_estimators,
+            "max_depth": config.max_depth,
+            "min_samples_leaf": config.min_samples_leaf,
+            "max_features": config.max_features,
+            "random_state": 17,
+            "bootstrap": True,
+            "oob_score": True,
+            "n_jobs": random_forest_n_jobs(num_threads),
+        },
+        "thresholds": {
+            "min_oob_score": config.min_oob_score,
+            "min_test_rank_ic_ret3": config.min_test_rank_ic_ret3,
+        },
+        "metrics": {
+            "train": evaluate_model(assign_scores(train_rows, train_scores), top_n=3),
+            "test": evaluate_model(assign_scores(test_rows, test_scores), top_n=3),
+        },
+        "oob_score": getattr(model, "oob_score_", None),
+        "accuracy": {
+            "train": float(model.score(train_matrix, train_labels)),
+            "test": float(model.score(test_matrix, test_labels)),
+        },
+        "top_features": [
+            {"feature": feature, "importance": round(importance, 8)} for feature, importance in ranked_features[:50]
+        ],
+        "low_importance_features": [
+            {"feature": feature, "importance": round(importance, 8)} for feature, importance in low_features
+        ],
+        "output_paths": {},
+    }
+
+
 def grouped_by_date(rows: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -553,6 +707,23 @@ def markdown_report(report: dict[str, Any]) -> str:
         )
     lines.extend(["", "## top features", ""])
     lines.extend(f"- {item['feature']}: {item['importance']}" for item in report.get("top_features", [])[:20])
+    rf_summary = report.get("rf_diagnostics") or {}
+    if rf_summary:
+        rf_metrics = ((rf_summary.get("metrics") or {}).get("test") or {})
+        lines.extend(
+            [
+                "",
+                "## random forest factor diagnostics",
+                "",
+                f"- status: {rf_summary.get('status')}",
+                f"- oob_score: {rf_summary.get('oob_score')}",
+                f"- test rank_ic_ret3: {rf_metrics.get('rank_ic_ret3')}",
+                f"- low importance features: {rf_summary.get('low_importance_feature_count')}",
+            ]
+        )
+        lines.extend(
+            f"- {item['feature']}: {item['importance']}" for item in list(rf_summary.get("top_features") or [])[:20]
+        )
     if report.get("rolling_folds"):
         summary = report.get("rolling_summary") or {}
         test_avg = summary.get("test_avg") or {}
@@ -647,6 +818,69 @@ def report_paths(
     if label_column != "rank_label_3d":
         suffix = f"{suffix}_{label_column}"
     return output_dir / f"lgbm_rank_report{suffix}.json", output_dir / f"lgbm_rank_report{suffix}.md"
+
+
+def rf_diagnostic_paths(output_dir: Path) -> tuple[Path, Path]:
+    return output_dir / "rf_feature_diagnostics.json", output_dir / "rf_feature_diagnostics.md"
+
+
+def rf_diagnostics_summary(diagnostics: dict[str, Any], json_path: Path | None = None) -> dict[str, Any]:
+    return {
+        "enabled": bool(diagnostics.get("enabled")),
+        "path": str(json_path) if json_path is not None else None,
+        "status": diagnostics.get("status"),
+        "oob_score": diagnostics.get("oob_score"),
+        "metrics": {"test": (diagnostics.get("metrics") or {}).get("test") or {}},
+        "top_features": list(diagnostics.get("top_features") or [])[:20],
+        "low_importance_feature_count": len(diagnostics.get("low_importance_features") or []),
+    }
+
+
+def markdown_rf_diagnostics(diagnostics: dict[str, Any]) -> str:
+    metrics = ((diagnostics.get("metrics") or {}).get("test") or {})
+    lines = [
+        "# random forest factor diagnostics",
+        "",
+        f"status: `{diagnostics.get('status')}`",
+        f"label: `{diagnostics.get('label_column')}`",
+        f"features: `{diagnostics.get('feature_count')}`",
+        f"oob_score: `{diagnostics.get('oob_score')}`",
+        f"test rank_ic_ret3: `{metrics.get('rank_ic_ret3')}`",
+        f"test top3_ret3_positive_rate: `{metrics.get('top3_ret3_positive_rate')}`",
+        "",
+        "## top features",
+        "",
+    ]
+    lines.extend(f"- {item['feature']}: {item['importance']}" for item in list(diagnostics.get("top_features") or [])[:20])
+    return "\n".join(lines) + "\n"
+
+
+def write_rf_diagnostics_artifacts(
+    diagnostics: dict[str, Any],
+    output_dir: Path,
+) -> tuple[dict[str, Any], Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path, markdown_path = rf_diagnostic_paths(output_dir)
+    payload = dict(diagnostics)
+    payload["output_paths"] = {"json": str(json_path), "markdown": str(markdown_path)}
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    markdown_path.write_text(markdown_rf_diagnostics(payload), encoding="utf-8")
+    return payload, json_path, markdown_path
+
+
+def random_forest_threshold_failures(diagnostics: dict[str, Any]) -> list[str]:
+    thresholds = diagnostics.get("thresholds") or {}
+    failures: list[str] = []
+    min_oob = as_float(thresholds.get("min_oob_score"))
+    oob_score = as_float(diagnostics.get("oob_score"))
+    if min_oob is not None and (oob_score is None or oob_score < min_oob):
+        failures.append(f"oob_score {oob_score} < {min_oob}")
+    min_rank_ic = as_float(thresholds.get("min_test_rank_ic_ret3"))
+    test_metrics = ((diagnostics.get("metrics") or {}).get("test") or {})
+    rank_ic = as_float(test_metrics.get("rank_ic_ret3"))
+    if min_rank_ic is not None and (rank_ic is None or rank_ic < min_rank_ic):
+        failures.append(f"test rank_ic_ret3 {rank_ic} < {min_rank_ic}")
+    return failures
 
 
 def parse_label_gain(value: str) -> list[int]:
@@ -796,6 +1030,13 @@ def train_and_report(
     label_gain: Sequence[int] | None = None,
     lambdarank_truncation_level: int = 0,
     method: str = DEFAULT_METHOD,
+    rf_diagnostics: bool = True,
+    rf_n_estimators: int = DEFAULT_RF_N_ESTIMATORS,
+    rf_max_depth: int | None = None,
+    rf_min_samples_leaf: int = DEFAULT_RF_MIN_SAMPLES_LEAF,
+    rf_max_features: str | int | float | None = DEFAULT_RF_MAX_FEATURES,
+    rf_min_oob_score: float | None = None,
+    rf_min_test_rank_ic_ret3: float | None = None,
 ) -> dict[str, Any]:
     if train_mode not in TRAIN_MODES:
         raise ValueError(f"unsupported train_mode: {train_mode}")
@@ -823,6 +1064,40 @@ def train_and_report(
             method=method,
         )
         fixed_categorical_levels = {}
+
+    rf_config = RandomForestDiagnosticsConfig(
+        enabled=rf_diagnostics,
+        n_estimators=rf_n_estimators,
+        max_depth=rf_max_depth,
+        min_samples_leaf=rf_min_samples_leaf,
+        max_features=rf_max_features,
+        min_oob_score=rf_min_oob_score,
+        min_test_rank_ic_ret3=rf_min_test_rank_ic_ret3,
+    )
+    if rf_config.enabled:
+        rf_payload = run_random_forest_diagnostics(
+            train_rows,
+            test_rows,
+            numeric_columns=numeric_columns,
+            categorical_columns=categorical_columns,
+            label_column=label_column,
+            label_gain=resolved_label_gain,
+            num_threads=num_threads,
+            fixed_categorical_levels=fixed_categorical_levels,
+            config=rf_config,
+        )
+        rf_payload, rf_json_path, _rf_markdown_path = write_rf_diagnostics_artifacts(rf_payload, output_dir)
+        failures = random_forest_threshold_failures(rf_payload)
+        if failures:
+            rf_payload["status"] = "failed_threshold"
+            rf_payload, rf_json_path, _rf_markdown_path = write_rf_diagnostics_artifacts(rf_payload, output_dir)
+            raise RandomForestThresholdError(
+                f"random forest diagnostics failed thresholds: {', '.join(failures)}; report={rf_json_path}"
+            )
+        rf_summary = rf_diagnostics_summary(rf_payload, rf_json_path)
+    else:
+        rf_payload = {"enabled": False, "status": "skipped", "output_paths": {}}
+        rf_summary = rf_diagnostics_summary(rf_payload, None)
 
     if train_mode == "overall":
         model_result = train_model_result(
@@ -946,6 +1221,7 @@ def train_and_report(
         },
         "env_metrics": env_metrics,
         "top_features": top_features,
+        "rf_diagnostics": rf_summary,
     }
     if model_artifacts is not None:
         report["model_artifacts"] = model_artifacts
@@ -1031,6 +1307,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rolling-folds", type=int, default=0)
     parser.add_argument("--rolling-train-dates", type=int, default=240)
     parser.add_argument("--rolling-test-dates", type=int, default=40)
+    rf_group = parser.add_mutually_exclusive_group()
+    rf_group.add_argument("--rf-diagnostics", dest="rf_diagnostics", action="store_true", default=True)
+    rf_group.add_argument("--skip-rf-diagnostics", dest="rf_diagnostics", action="store_false")
+    parser.add_argument("--rf-n-estimators", type=int, default=DEFAULT_RF_N_ESTIMATORS)
+    parser.add_argument("--rf-max-depth", type=int)
+    parser.add_argument("--rf-min-samples-leaf", type=int, default=DEFAULT_RF_MIN_SAMPLES_LEAF)
+    parser.add_argument("--rf-max-features", default=DEFAULT_RF_MAX_FEATURES)
+    parser.add_argument("--rf-min-oob-score", type=float)
+    parser.add_argument("--rf-min-test-rank-ic-ret3", type=float)
     return parser.parse_args(argv)
 
 
@@ -1057,6 +1342,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         rolling_train_dates=args.rolling_train_dates,
         rolling_test_dates=args.rolling_test_dates,
         method=args.method,
+        rf_diagnostics=args.rf_diagnostics,
+        rf_n_estimators=args.rf_n_estimators,
+        rf_max_depth=args.rf_max_depth,
+        rf_min_samples_leaf=args.rf_min_samples_leaf,
+        rf_max_features=args.rf_max_features,
+        rf_min_oob_score=args.rf_min_oob_score,
+        rf_min_test_rank_ic_ret3=args.rf_min_test_rank_ic_ret3,
     )
     json_path, _markdown_path = report_paths(output_dir, args.feature_set, args.train_mode, args.label_column)
     print(f"wrote report to {json_path}")

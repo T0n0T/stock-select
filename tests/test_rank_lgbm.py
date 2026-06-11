@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ml.train_rank_lgbm import (
+    RandomForestDiagnosticsConfig,
+    RandomForestThresholdError,
     average_metric_dicts,
     build_feature_matrix,
     build_feature_matrix_from_metadata,
@@ -20,6 +22,7 @@ from scripts.ml.train_rank_lgbm import (
     resolve_output_dir,
     rolling_walk_forward_splits,
     rows_for_dates,
+    run_random_forest_diagnostics,
     select_feature_columns,
     train_and_report,
     train_model_result,
@@ -37,6 +40,44 @@ class RankLgbmTest(unittest.TestCase):
         args = parse_args(["--label-gain", "0,1,5,15"])
 
         self.assertEqual(args.label_gain, [0, 1, 5, 15])
+
+    def test_parse_args_enables_random_forest_diagnostics_by_default(self):
+        args = parse_args([])
+
+        self.assertTrue(args.rf_diagnostics)
+        self.assertEqual(args.rf_n_estimators, 300)
+        self.assertIsNone(args.rf_max_depth)
+        self.assertEqual(args.rf_min_samples_leaf, 20)
+        self.assertEqual(args.rf_max_features, "sqrt")
+        self.assertIsNone(args.rf_min_oob_score)
+        self.assertIsNone(args.rf_min_test_rank_ic_ret3)
+
+    def test_parse_args_accepts_random_forest_thresholds_and_skip_flag(self):
+        args = parse_args(
+            [
+                "--skip-rf-diagnostics",
+                "--rf-n-estimators",
+                "123",
+                "--rf-max-depth",
+                "7",
+                "--rf-min-samples-leaf",
+                "11",
+                "--rf-max-features",
+                "log2",
+                "--rf-min-oob-score",
+                "0.51",
+                "--rf-min-test-rank-ic-ret3",
+                "0.02",
+            ]
+        )
+
+        self.assertFalse(args.rf_diagnostics)
+        self.assertEqual(args.rf_n_estimators, 123)
+        self.assertEqual(args.rf_max_depth, 7)
+        self.assertEqual(args.rf_min_samples_leaf, 11)
+        self.assertEqual(args.rf_max_features, "log2")
+        self.assertEqual(args.rf_min_oob_score, 0.51)
+        self.assertEqual(args.rf_min_test_rank_ic_ret3, 0.02)
 
     def test_walk_forward_split_dates_keeps_date_groups_ordered(self):
         train_dates, test_dates = walk_forward_split_dates(
@@ -141,6 +182,65 @@ class RankLgbmTest(unittest.TestCase):
         self.assertIn("signal_type=trend_start", feature_names)
         self.assertEqual(matrix[0][feature_names.index("close_to_zxdkx_pct")], 1.5)
         self.assertEqual(matrix[1][feature_names.index("close_to_zxdkx_pct")], 0.0)
+
+    def test_random_forest_diagnostics_reports_importance_and_metrics(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "x": "3", "env": "weak"},
+            {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", "x": "0", "env": "strong"},
+            {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "7", "ret5": "6", "x": "4", "env": "weak"},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "x": "0", "env": "strong"},
+        ]
+        captured = {}
+
+        class FakeRandomForestClassifier:
+            def __init__(self, **kwargs):
+                captured["kwargs"] = kwargs
+                self.classes_ = [0, 3]
+                self.feature_importances_ = [0.8, 0.2, 0.0]
+                self.oob_score_ = 0.62
+
+            def fit(self, matrix, labels):
+                captured["fit_matrix"] = matrix
+                captured["fit_labels"] = labels
+                return self
+
+            def predict_proba(self, matrix):
+                return [[0.1, 0.9] if row[0] > 0 else [0.9, 0.1] for row in matrix]
+
+            def predict(self, matrix):
+                return [3 if row[0] > 0 else 0 for row in matrix]
+
+            def score(self, matrix, labels):
+                return 1.0
+
+        fake_sklearn_ensemble = types.SimpleNamespace(RandomForestClassifier=FakeRandomForestClassifier)
+        with patch.dict(sys.modules, {"sklearn.ensemble": fake_sklearn_ensemble}):
+            diagnostics = run_random_forest_diagnostics(
+                rows[:2],
+                rows[2:],
+                numeric_columns=["x"],
+                categorical_columns=["env"],
+                label_column="rank_label_3d",
+                label_gain=[0, 1, 3, 7],
+                num_threads=2,
+                fixed_categorical_levels={"env": ["weak", "strong"]},
+                config=RandomForestDiagnosticsConfig(n_estimators=17, min_samples_leaf=3),
+            )
+
+        self.assertEqual(captured["kwargs"]["n_estimators"], 17)
+        self.assertEqual(captured["kwargs"]["min_samples_leaf"], 3)
+        self.assertEqual(captured["kwargs"]["n_jobs"], 2)
+        self.assertEqual(captured["kwargs"]["random_state"], 17)
+        self.assertTrue(captured["kwargs"]["bootstrap"])
+        self.assertTrue(captured["kwargs"]["oob_score"])
+        self.assertEqual(captured["fit_labels"], [3, 0])
+        self.assertEqual(diagnostics["status"], "passed")
+        self.assertEqual(diagnostics["feature_count"], 3)
+        self.assertEqual(diagnostics["top_features"][0], {"feature": "x", "importance": 0.8})
+        self.assertEqual(diagnostics["low_importance_features"], [{"feature": "env=strong", "importance": 0.0}])
+        self.assertEqual(diagnostics["oob_score"], 0.62)
+        self.assertEqual(diagnostics["accuracy"], {"train": 1.0, "test": 1.0})
+        self.assertEqual(diagnostics["metrics"]["test"]["top3_ret3_positive_rate"], 50.0)
 
     def test_model_metadata_rebuilds_feature_matrix_with_training_levels(self):
         train_rows = [
@@ -423,9 +523,241 @@ class RankLgbmTest(unittest.TestCase):
                     learning_rate=0.05,
                     label_column="rank_label_3d",
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
         self.assertEqual(report["feature_count"], 4)
+
+    def test_train_report_writes_and_embeds_random_forest_diagnostics(self):
+        class DummyModel:
+            def save_model(self, path: str) -> None:
+                Path(path).write_text("dummy model", encoding="utf-8")
+
+        def fake_train_model_result(train_rows, test_rows, **_kwargs):
+            from scripts.ml.train_rank_lgbm import TrainedModelResult
+
+            scored = [{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in test_rows]
+            return TrainedModelResult(
+                train_scored=[{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in train_rows],
+                test_scored=scored,
+                top_features=[{"feature": "x", "importance": 1}],
+                feature_count=1,
+                model=DummyModel(),
+                feature_names=["x"],
+                lightgbm_feature_names=["x"],
+                category_levels={},
+            )
+
+        rf_payload = {
+            "enabled": True,
+            "status": "passed",
+            "label_column": "rank_label_3d",
+            "feature_count": 1,
+            "numeric_feature_count": 1,
+            "categorical_feature_count": 0,
+            "params": {"n_estimators": 300},
+            "thresholds": {"min_oob_score": None, "min_test_rank_ic_ret3": None},
+            "metrics": {"test": {"rank_ic_ret3": 0.12, "top3_ret3_positive_rate": 66.7}, "train": {}},
+            "oob_score": 0.61,
+            "accuracy": {"train": 0.8, "test": 0.7},
+            "top_features": [{"feature": "x", "importance": 0.9}],
+            "low_importance_features": [],
+            "output_paths": {},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "x"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "x": "1"},
+                        {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", "x": "0"},
+                        {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "7", "ret5": "6", "x": "1"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "x": "0"},
+                    ]
+                )
+            output_dir = root / "model"
+
+            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics", return_value=rf_payload):
+                with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+                    report = train_and_report(
+                        dataset,
+                        output_dir,
+                        test_ratio=0.5,
+                        feature_set="raw_numeric",
+                        num_leaves=5,
+                        min_data_in_leaf=1,
+                        num_boost_round=1,
+                        learning_rate=0.1,
+                        label_column="rank_label_3d",
+                        method="b2",
+                    )
+
+            rf_json = json.loads((output_dir / "rf_feature_diagnostics.json").read_text(encoding="utf-8"))
+            rf_markdown = (output_dir / "rf_feature_diagnostics.md").read_text(encoding="utf-8")
+            persisted = json.loads((output_dir / "lgbm_rank_report_raw_numeric.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(rf_json["output_paths"]["json"], str(output_dir / "rf_feature_diagnostics.json"))
+        self.assertIn("# random forest factor diagnostics", rf_markdown)
+        self.assertEqual(report["rf_diagnostics"]["status"], "passed")
+        self.assertEqual(report["rf_diagnostics"]["oob_score"], 0.61)
+        self.assertEqual(report["rf_diagnostics"]["top_features"], [{"feature": "x", "importance": 0.9}])
+        self.assertEqual(persisted["rf_diagnostics"]["path"], str(output_dir / "rf_feature_diagnostics.json"))
+
+    def test_random_forest_threshold_failure_writes_report_and_stops_lgbm(self):
+        rf_payload = {
+            "enabled": True,
+            "status": "passed",
+            "label_column": "rank_label_3d",
+            "feature_count": 1,
+            "numeric_feature_count": 1,
+            "categorical_feature_count": 0,
+            "params": {},
+            "thresholds": {"min_oob_score": 0.7, "min_test_rank_ic_ret3": None},
+            "metrics": {"test": {"rank_ic_ret3": 0.03}, "train": {}},
+            "oob_score": 0.61,
+            "accuracy": {"train": 0.8, "test": 0.7},
+            "top_features": [{"feature": "x", "importance": 0.9}],
+            "low_importance_features": [],
+            "output_paths": {},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "x"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "x": "1"},
+                        {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", "x": "0"},
+                        {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "7", "ret5": "6", "x": "1"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "x": "0"},
+                    ]
+                )
+            output_dir = root / "model"
+
+            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics", return_value=rf_payload):
+                with patch("scripts.ml.train_rank_lgbm.train_model_result") as train_lgbm:
+                    with self.assertRaisesRegex(RandomForestThresholdError, "oob_score"):
+                        train_and_report(
+                            dataset,
+                            output_dir,
+                            test_ratio=0.5,
+                            feature_set="raw_numeric",
+                            num_leaves=5,
+                            min_data_in_leaf=1,
+                            num_boost_round=1,
+                            learning_rate=0.1,
+                            label_column="rank_label_3d",
+                            rf_min_oob_score=0.7,
+                            method="b2",
+                        )
+
+                    train_lgbm.assert_not_called()
+
+            self.assertTrue((output_dir / "rf_feature_diagnostics.json").exists())
+            self.assertFalse((output_dir / "model.txt").exists())
+
+    def test_train_report_can_skip_random_forest_diagnostics(self):
+        class DummyModel:
+            def save_model(self, path: str) -> None:
+                Path(path).write_text("dummy model", encoding="utf-8")
+
+        def fake_train_model_result(train_rows, test_rows, **_kwargs):
+            from scripts.ml.train_rank_lgbm import TrainedModelResult
+
+            return TrainedModelResult(
+                train_scored=[{**row, "model_score": 1.0} for row in train_rows],
+                test_scored=[{**row, "model_score": 1.0} for row in test_rows],
+                top_features=[{"feature": "x", "importance": 1}],
+                feature_count=1,
+                model=DummyModel(),
+                feature_names=["x"],
+                lightgbm_feature_names=["x"],
+                category_levels={},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "x"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "x": "1"},
+                        {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", "x": "0"},
+                        {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "7", "ret5": "6", "x": "1"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "x": "0"},
+                    ]
+                )
+
+            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics") as rf_run:
+                with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+                    report = train_and_report(
+                        dataset,
+                        root / "model",
+                        test_ratio=0.5,
+                        feature_set="raw_numeric",
+                        num_leaves=5,
+                        min_data_in_leaf=1,
+                        num_boost_round=1,
+                        learning_rate=0.1,
+                        label_column="rank_label_3d",
+                        rf_diagnostics=False,
+                        method="b2",
+                    )
+
+        rf_run.assert_not_called()
+        self.assertEqual(
+            report["rf_diagnostics"],
+            {
+                "enabled": False,
+                "path": None,
+                "status": "skipped",
+                "oob_score": None,
+                "metrics": {"test": {}},
+                "top_features": [],
+                "low_importance_feature_count": 0,
+            },
+        )
+
+    def test_main_passes_random_forest_options_to_train_and_report(self):
+        captured = {}
+
+        def fake_train_and_report(dataset, output_dir, **kwargs):
+            captured["dataset"] = dataset
+            captured["output_dir"] = output_dir
+            captured["kwargs"] = kwargs
+            return {"metrics": {"test": {}}}
+
+        with patch("scripts.ml.train_rank_lgbm.train_and_report", side_effect=fake_train_and_report):
+            from scripts.ml.train_rank_lgbm import main
+
+            exit_code = main(
+                [
+                    "--method",
+                    "b2",
+                    "--skip-rf-diagnostics",
+                    "--rf-n-estimators",
+                    "19",
+                    "--rf-max-depth",
+                    "5",
+                    "--rf-min-oob-score",
+                    "0.6",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(captured["kwargs"]["rf_diagnostics"])
+        self.assertEqual(captured["kwargs"]["rf_n_estimators"], 19)
+        self.assertEqual(captured["kwargs"]["rf_max_depth"], 5)
+        self.assertEqual(captured["kwargs"]["rf_min_oob_score"], 0.6)
 
     def test_train_report_persists_custom_label_gain(self):
         class DummyModel:
@@ -491,6 +823,7 @@ class RankLgbmTest(unittest.TestCase):
                     label_gain=[0, 1, 5, 15],
                     lambdarank_truncation_level=8,
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
             metadata = json.loads((output_dir / "model_metadata.json").read_text(encoding="utf-8"))
@@ -575,6 +908,7 @@ class RankLgbmTest(unittest.TestCase):
                     rolling_test_dates=1,
                     label_column="rank_label_3d",
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
             persisted = json.loads((output_dir / "lgbm_rank_report_raw_numeric.json").read_text(encoding="utf-8"))
@@ -651,6 +985,7 @@ class RankLgbmTest(unittest.TestCase):
                     rolling_test_dates=1,
                     label_column="rank_label_3d",
                     method="b2",
+                    rf_diagnostics=False,
                 )
 
             self.assertEqual(report["feature_count"], 1)

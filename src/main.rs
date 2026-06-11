@@ -45,6 +45,7 @@ struct Cli {
 enum Commands {
     Screen(ScreenArgs),
     Chart(ArtifactCommandArgs),
+    CleanIntraday(CleanIntradayArgs),
     Review(ReviewArgs),
     ReviewMerge(ArtifactCommandArgs),
     ReviewList(ReviewListArgs),
@@ -190,6 +191,15 @@ struct ReviewArgs {
     record_window_trading_days: Option<usize>,
 }
 
+#[derive(Debug, Args)]
+struct CleanIntradayArgs {
+    #[arg(long)]
+    runtime_root: Option<PathBuf>,
+
+    #[arg(long)]
+    dry_run: bool,
+}
+
 #[derive(Debug, Default)]
 struct ReviewTaskMetadata {
     environment_state: Option<String>,
@@ -299,6 +309,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Screen(args) => run_screen_command(args),
         Commands::Chart(args) => run_chart_command(args),
+        Commands::CleanIntraday(args) => run_clean_intraday_command(args),
         Commands::Review(args) => run_review_command(args),
         Commands::ReviewMerge(args) => run_review_merge_command(args),
         Commands::ReviewList(args) => run_review_list(args),
@@ -528,6 +539,57 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         result.rows,
         result.artifact_key
     );
+    Ok(())
+}
+
+fn run_clean_intraday_command(args: CleanIntradayArgs) -> anyhow::Result<()> {
+    let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
+    let artifacts = find_intraday_runtime_artifacts(&runtime_root)?;
+    if args.dry_run {
+        println!("clean-intraday dry-run: removable={}", artifacts.len());
+        return Ok(());
+    }
+    let removed = remove_intraday_runtime_artifacts(&artifacts)?;
+    println!("clean-intraday complete: removed={removed}");
+    Ok(())
+}
+
+fn find_intraday_runtime_artifacts(runtime_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut artifacts = Vec::new();
+    for dir_name in ["candidates", "prepared", "factors", "charts", "select"] {
+        let dir = runtime_root.join(dir_name);
+        if !dir.exists() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !name.contains(".intraday.") {
+                continue;
+            }
+            artifacts.push(path);
+        }
+    }
+    artifacts.sort();
+    Ok(artifacts)
+}
+
+fn remove_intraday_runtime_artifacts(paths: &[PathBuf]) -> anyhow::Result<usize> {
+    for path in paths {
+        remove_runtime_entry(path)?;
+    }
+    Ok(paths.len())
+}
+
+fn remove_runtime_entry(path: &Path) -> anyhow::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
     Ok(())
 }
 

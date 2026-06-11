@@ -9,11 +9,13 @@
 ```mermaid
 flowchart LR
     BC["backfill_candidates.py<br/>补齐历史候选"] --> BD["build_rank_dataset.py<br/>构建样本集 + label"]
-    BD --> TR["train_rank_lgbm.py<br/>训练 + 评估"]
+    BD --> RF["train_rank_lgbm.py<br/>随机森林因子诊断"]
+    RF --> TR["train_rank_lgbm.py<br/>LightGBM 训练 + 评估"]
 
     BC -.-> C["candidates/"]
     BD -.-> D["diagnostics/ml/&lt;method&gt;/"]
-    TR -.-> M["diagnostics/ml/&lt;method&gt;/model/"]
+    RF -.-> M["diagnostics/ml/&lt;method&gt;/model/"]
+    TR -.-> M
 
     M --> EXP["export_lgbm_scores.py"]
     EXP --> PROM["promote_lgbm_model.py"]
@@ -79,6 +81,22 @@ uv run scripts/ml/train_rank_lgbm.py \
   --rolling-train-dates 240 \
   --rolling-test-dates 40
 ```
+
+`train_rank_lgbm.py` 默认在 LightGBM 前运行随机森林因子诊断，用同一份特征选择、one-hot 编码、时间切分和 label 口径确认因子有效性。诊断产物写入同一输出目录：
+
+```text
+diagnostics/ml/<method>/model/rf_feature_diagnostics.json
+diagnostics/ml/<method>/model/rf_feature_diagnostics.md
+```
+
+LightGBM report 的 `rf_diagnostics` 字段会嵌入随机森林摘要，包括诊断状态、OOB、测试集 RankIC、Top features 和低重要性因子数量。随机森林只用于训练前诊断，不进入 Rust 生产推理；快速冒烟或依赖不可用时可传 `--skip-rf-diagnostics` 跳过，但正式候选 trial 应保留诊断。
+
+可选门禁参数：
+
+| 参数 | 说明 |
+|------|------|
+| `--rf-min-oob-score` | OOB 低于阈值时停止 LightGBM 训练 |
+| `--rf-min-test-rank-ic-ret3` | 随机森林测试集 `rank_ic_ret3` 低于阈值时停止 LightGBM 训练 |
 
 训练参数：
 

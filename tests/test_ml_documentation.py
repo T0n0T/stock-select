@@ -40,6 +40,30 @@ class MlDocumentationTests(unittest.TestCase):
         self.assertNotIn("### P7: b2 LightGBM 训练/维护脚本", docs)
         self.assertIn("LightGBM", docs)
 
+    def test_model_docs_describe_random_forest_factor_diagnostics(self):
+        docs = (PROJECT_ROOT / "docs" / "model.md").read_text(encoding="utf-8")
+
+        self.assertIn("随机森林因子诊断", docs)
+        self.assertIn("rf_feature_diagnostics.json", docs)
+        self.assertIn("rf_diagnostics", docs)
+        self.assertIn("--skip-rf-diagnostics", docs)
+        self.assertIn("不进入 Rust 生产推理", docs)
+
+    def test_model_maintenance_skill_reports_random_forest_diagnostics(self):
+        combined = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in [
+                PROJECT_ROOT / ".agents" / "skills" / "model-maintenance" / "SKILL.md",
+                PROJECT_ROOT / ".agents" / "skills" / "model-maintenance" / "references" / "model-maintenance.md",
+            ]
+        )
+
+        self.assertIn("随机森林因子诊断", combined)
+        self.assertIn("rf_feature_diagnostics.json", combined)
+        self.assertIn("rf_diagnostics", combined)
+        self.assertIn("low_importance_feature_count", combined)
+        self.assertIn("不进入生产推理", combined)
+
     def test_model_fixture_metadata_references_existing_feature_manifest(self):
         metadata_path = PROJECT_ROOT / "tests" / "fixtures" / "b2_model" / "model_metadata.json"
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))

@@ -72,6 +72,18 @@ stock-select-rs review-list \
 
 盘中 artifact key 为 `<date>.intraday.b2`，与 EOD 隔离。
 
+清理盘中运行产物：
+
+```bash
+# 预览可清理条目数量，不删除文件
+stock-select-rs clean-intraday --dry-run
+
+# 删除 runtime 中的盘中产物
+stock-select-rs clean-intraday
+```
+
+`clean-intraday` 只清理 `candidates/`、`prepared/`、`factors/`、`charts/`、`select/` 下文件名或目录名包含 `.intraday.` 的条目，不扫描或删除 `runtime/models/` 下的模型产物。
+
 ## 场景三：模型更新
 
 当需要重新训练或更新模型时：
