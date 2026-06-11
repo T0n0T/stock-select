@@ -314,8 +314,9 @@ def archive_dirs_for_target(target_dir: Path) -> list[Path]:
     return sorted(dirs, key=lambda item: item.name, reverse=True)
 
 
-def list_archived_models(target_dir: Path | None = None) -> list[dict[str, Any]]:
+def list_archived_models(target_dir: Path | None = None, *, expected_method: str | None = None) -> list[dict[str, Any]]:
     target_dir = target_dir or resolve_default_target_dir()
+    method = expected_method or target_dir.name
     rows: list[dict[str, Any]] = []
     for path in archive_dirs_for_target(target_dir):
         rows.append(
@@ -324,7 +325,7 @@ def list_archived_models(target_dir: Path | None = None) -> list[dict[str, Any]]
                 "version": path.name,
                 "source": str(path),
                 "target": str(target_dir),
-                "validation": validate_model_artifacts(path, expected_method=target_dir.name),
+                "validation": validate_model_artifacts(path, expected_method=method),
             }
         )
     return rows
@@ -381,9 +382,11 @@ def rollback_model(
     version: str | None = None,
     *,
     dry_run: bool = False,
+    expected_method: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     target_dir = target_dir or resolve_default_target_dir()
+    method = expected_method or target_dir.name
     if not version:
         raise ValueError("rollback 必须指定 archive version")
     timestamp = now or utc_timestamp()
@@ -391,12 +394,12 @@ def rollback_model(
     source = archive_source_for_version(target_dir, version)
     if not source.exists():
         raise ValueError(f"找不到回滚版本: {source}")
-    validation = validate_model_artifacts(source, expected_method=target_dir.name)
+    validation = validate_model_artifacts(source, expected_method=method)
     current_archive = archive_root / f"rollback-current-{timestamp}"
     temp_target = target_dir.parent / f".{target_dir.name}.rollback-tmp-{timestamp}"
     summary = {
         "mode": "dry-run" if dry_run else "rollback",
-        "method": target_dir.name,
+        "method": method,
         "rollback_version": version,
         "source": str(source),
         "target": str(target_dir),
@@ -486,10 +489,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             summary = describe_current_model(target_dir)
             print_chinese_summary(summary)
         elif args.list_archives:
-            rows = list_archived_models(target_dir)
+            rows = list_archived_models(target_dir, expected_method=args.method)
             print_archive_list(rows)
         elif args.rollback:
-            summary = rollback_model(target_dir, args.rollback, dry_run=args.dry_run)
+            summary = rollback_model(target_dir, args.rollback, dry_run=args.dry_run, expected_method=args.method)
             print_chinese_summary(summary)
         else:
             summary = promote_model(

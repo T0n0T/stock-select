@@ -243,6 +243,55 @@ class LgbmModelPromotionTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
 
+    def test_cli_list_archives_accepts_mode_specific_target_dir_for_same_method(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "runtime" / "models" / "b2_intraday"
+            archive = target.parent / "archive" / "b2_intraday" / "20260609T010203Z"
+            write_candidate_model(archive, report=passing_report())
+            (archive / "model_card.json").write_text(
+                json.dumps({"target": str(target)}),
+                encoding="utf-8",
+            )
+
+            exit_code = main(
+                [
+                    "--method",
+                    "b2",
+                    "--target-dir",
+                    str(target),
+                    "--list-archives",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+
+    def test_cli_rollback_accepts_mode_specific_target_dir_for_same_method(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "runtime" / "models" / "b2_intraday"
+            archive = target.parent / "archive" / "b2_intraday" / "20260609T010203Z"
+            write_candidate_model(target, report=passing_report())
+            write_candidate_model(archive, report=passing_report())
+            (archive / "model_card.json").write_text(
+                json.dumps({"target": str(target)}),
+                encoding="utf-8",
+            )
+
+            exit_code = main(
+                [
+                    "--method",
+                    "b2",
+                    "--target-dir",
+                    str(target),
+                    "--rollback",
+                    "20260609T010203Z",
+                    "--dry-run",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
