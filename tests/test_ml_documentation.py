@@ -49,6 +49,15 @@ class MlDocumentationTests(unittest.TestCase):
         self.assertIn("--skip-rf-diagnostics", docs)
         self.assertIn("不进入 Rust 生产推理", docs)
 
+    def test_model_docs_describe_factor_artifact_training_contract(self):
+        docs = (PROJECT_ROOT / "docs" / "model.md").read_text(encoding="utf-8")
+
+        self.assertIn("factors.json", docs)
+        self.assertIn("训练特征契约", docs)
+        self.assertIn("review-only", docs)
+        self.assertIn("box_mid_position_120d_pct", docs)
+        self.assertIn("feature_coverage", docs)
+        self.assertIn("zero coverage", docs)
     def test_model_maintenance_skill_reports_random_forest_diagnostics(self):
         combined = "\n".join(
             path.read_text(encoding="utf-8")

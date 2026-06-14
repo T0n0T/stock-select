@@ -25,6 +25,7 @@ from scripts.ml.train_rank_lgbm import (
     run_random_forest_diagnostics,
     select_feature_columns,
     train_and_report,
+    validate_selected_feature_coverage,
     train_model_result,
     walk_forward_split_dates,
 )
@@ -164,6 +165,111 @@ class RankLgbmTest(unittest.TestCase):
             self.assertEqual(b3_numeric, ["close_to_zxdkx_pct", "b3_only_raw_factor"])
         finally:
             rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
+    def test_select_feature_columns_uses_b3_training_factors(self):
+        columns = [
+            "env",
+            "signal",
+            "signal_type",
+            "daily_macd_phase_type",
+            "daily_macd_wave_stage",
+            "weekly_macd_phase_type",
+            "weekly_macd_wave_stage",
+            "weekly_daily_combo_type",
+            "midline_state",
+            "macd_phase",
+            "daily_macd_wave_index",
+            "weekly_macd_wave_index",
+            "box_mid_position_120d_pct",
+            "trend_structure",
+            "price_position",
+            "volume_behavior",
+            "close_to_zxdkx_pct",
+        ]
+
+        numeric, categorical = select_feature_columns(columns, feature_set="all", method="b3")
+
+        self.assertEqual(
+            numeric,
+            [
+                "macd_phase",
+                "daily_macd_wave_index",
+                "weekly_macd_wave_index",
+                "box_mid_position_120d_pct",
+                "close_to_zxdkx_pct",
+            ],
+        )
+        self.assertEqual(
+            categorical,
+            [
+                "env",
+                "signal",
+                "signal_type",
+                "daily_macd_phase_type",
+                "daily_macd_wave_stage",
+                "weekly_macd_phase_type",
+                "weekly_macd_wave_stage",
+                "weekly_daily_combo_type",
+                "midline_state",
+            ],
+        )
+
+    def test_select_feature_columns_uses_lsh_specific_training_schema(self):
+        columns = [
+            "env",
+            "signal",
+            "signal_type",
+            "daily_macd_phase_type",
+            "macd_phase",
+            "daily_macd_wave_index",
+            "weekly_macd_wave_index",
+            "price_vs_90d_high",
+            "lsh_daily_macd_wave_index",
+            "lsh_weekly_macd_wave_index",
+            "lsh_daily_macd_rising_initial_flag",
+            "close_to_zxdkx_pct",
+        ]
+
+        numeric, categorical = select_feature_columns(columns, feature_set="all", method="lsh")
+
+        self.assertEqual(
+            numeric,
+            [
+                "lsh_daily_macd_wave_index",
+                "lsh_weekly_macd_wave_index",
+                "lsh_daily_macd_rising_initial_flag",
+                "close_to_zxdkx_pct",
+            ],
+        )
+        self.assertEqual(categorical, ["env", "signal"])
+
+    def test_validate_selected_feature_coverage_fails_zero_coverage_feature(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "b3_volume_shrink_ratio": ""},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "close_to_zxdkx_pct": "0.8", "b3_volume_shrink_ratio": ""},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "zero coverage.*b3_volume_shrink_ratio"):
+            validate_selected_feature_coverage(
+                rows,
+                numeric_columns=["close_to_zxdkx_pct", "b3_volume_shrink_ratio"],
+                categorical_columns=[],
+            )
+
+    def test_validate_selected_feature_coverage_reports_non_empty_counts(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "signal_type": "trend_start"},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "close_to_zxdkx_pct": "", "signal_type": "rebound"},
+        ]
+
+        report = validate_selected_feature_coverage(
+            rows,
+            numeric_columns=["close_to_zxdkx_pct"],
+            categorical_columns=["signal_type"],
+        )
+
+        self.assertEqual(report["features"]["close_to_zxdkx_pct"]["non_empty_count"], 1)
+        self.assertEqual(report["features"]["signal_type"]["non_empty_count"], 2)
+        self.assertEqual(report["zero_coverage_features"], [])
 
     def test_build_feature_matrix_one_hot_encodes_categoricals(self):
         rows = [

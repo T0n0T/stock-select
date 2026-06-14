@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::engine::types::{FactorRow, FactorValue, SelectionCandidate};
 use crate::factors::registry::{
     factor_profile_for_method, history_factor_fields_for_method, record_factor_profile_diagnostics,
+    remove_review_only_factors,
 };
 use crate::factors::types::FactorInputRow;
 use crate::model::Method;
@@ -76,6 +77,7 @@ impl B2FactorProvider for CandidatePayloadFactorProvider {
             for (key, value) in factors {
                 row.factors.insert(key, value);
             }
+            remove_review_only_factors(&mut row);
             Some(count)
         } else {
             None

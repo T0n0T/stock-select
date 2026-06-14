@@ -127,6 +127,8 @@ uv run scripts/ml/train_rank_lgbm.py \
   --learning-rate 0.05 \
   --num-threads 16
 
+# 训练前会校验 feature_coverage；zero coverage 的确认训练特征会中断训练，需先修复 Rust artifact 或 Python schema。
+
 # 6. 查看训练 report 评估效果
 
 # 7. 导出并发布

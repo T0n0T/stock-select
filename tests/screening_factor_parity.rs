@@ -404,7 +404,7 @@ fn b3_uses_method_registered_factor_profile_matching_b2_for_now() {
         rows[0].diagnostics["factor_bundles"],
         serde_json::json!(["raw_common", "b3_semantic"])
     );
-    assert!(rows[0].factors.contains_key("trend_structure"));
+    assert!(!rows[0].factors.contains_key("trend_structure"));
     assert_eq!(
         rows[0].factors.get("signal"),
         Some(&FactorValue::Category("B3".to_string()))
@@ -495,6 +495,82 @@ fn b3_factor_profile_adds_b3_specific_raw_factors_only_for_b3() {
     assert!(!b2_factors.contains_key("b3_prev_b2_flag"));
 }
 
+
+#[test]
+fn b3_factor_artifact_excludes_review_scores_but_keeps_training_context() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    let pick_date = first_date + Duration::days(130);
+    let prepared = (0..=130)
+        .map(|offset| PreparedRow {
+            open: 10.0 + offset as f64 * 0.03,
+            high: 10.4 + offset as f64 * 0.03,
+            low: 9.8 + offset as f64 * 0.03,
+            close: 10.2 + offset as f64 * 0.03,
+            volume: if offset == 130 { 600.0 } else { 1000.0 },
+            j: 30.0 + offset as f64 * 0.1,
+            ..prepared_row(
+                "000001.SZ",
+                first_date + Duration::days(offset),
+                10.2 + offset as f64 * 0.03,
+                if offset == 130 { 600.0 } else { 1000.0 },
+            )
+        })
+        .collect::<Vec<_>>();
+    let latest = prepared.last().unwrap();
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date,
+        close: latest.close,
+        turnover_n: latest.turnover_n,
+        signal: Some("B3+".to_string()),
+        yellow_b1: None,
+    };
+
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B3, Some("neutral"));
+    let factors = &rows[0].factors;
+
+    for key in [
+        "trend_structure",
+        "price_position",
+        "volume_behavior",
+        "previous_abnormal_move",
+        "weekly_daily_combo_score",
+        "total_score",
+        "verdict",
+    ] {
+        assert!(!factors.contains_key(key), "review-only key leaked into factors: {key}");
+    }
+
+    for key in [
+        "signal_type",
+        "daily_macd_phase_type",
+        "daily_macd_wave_stage",
+        "weekly_macd_phase_type",
+        "weekly_macd_wave_stage",
+        "weekly_daily_combo_type",
+        "macd_phase",
+        "daily_macd_wave_index",
+        "weekly_macd_wave_index",
+        "near_ma25_support_flag",
+        "ma_aligned_flag",
+        "zxdkx_up_1d_flag",
+        "breakout_distance_120d_pct",
+        "range_floor_distance_120d_pct",
+        "price_up_1d_flag",
+        "volume_up_1d_flag",
+        "b3_volume_shrink_ratio",
+        "b3_prev_b2_flag",
+        "b3_plus_flag",
+        "env",
+    ] {
+        assert!(factors.contains_key(key), "training key missing from factors: {key}");
+    }
+
+    assert!(matches!(
+        factors.get("box_mid_position_120d_pct"),
+        Some(FactorValue::Number(value)) if value.is_finite()
+    ));
+}
 #[test]
 fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only_for_lsh() {
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();

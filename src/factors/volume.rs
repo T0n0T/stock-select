@@ -1,9 +1,9 @@
-use crate::factors::series::{FactorList, push_number, ratio};
+use crate::factors::series::{FactorList, push_bool, push_number, ratio};
 
 pub fn push_volume_turnover_factors(
     factors: &mut FactorList,
     latest_volume: Option<f64>,
-    _previous_volume: Option<f64>,
+    previous_volume: Option<f64>,
     avg_volume5: Option<f64>,
     avg_volume20: Option<f64>,
     latest_turnover: Option<f64>,
@@ -28,6 +28,13 @@ pub fn push_volume_turnover_factors(
         factors,
         "turnover_to_ma5_ratio",
         ratio(latest_turnover, avg_turnover5),
+    );
+    push_bool(
+        factors,
+        "volume_up_1d_flag",
+        latest_volume
+            .zip(previous_volume)
+            .map(|(latest, previous)| latest > previous),
     );
 }
 
