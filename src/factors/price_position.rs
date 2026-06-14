@@ -1,4 +1,4 @@
-use crate::factors::series::{FactorList, pct_change, push_number};
+use crate::factors::series::{FactorList, pct_change, push_bool, push_number};
 
 pub fn latest_bar_position(
     latest_close: Option<f64>,
@@ -62,6 +62,13 @@ pub fn push_price_position_factors(
         }
         _ => None,
     };
+    let box_mid_position_120 = match (latest_high, latest_low, low_120, range_width_120) {
+        (Some(high), Some(low), Some(box_low), Some(width)) if width != 0.0 => {
+            let current_mid_price = (high + low) / 2.0;
+            Some((current_mid_price - box_low) / width * 100.0)
+        }
+        _ => None,
+    };
 
     push_number(
         factors,
@@ -74,10 +81,21 @@ pub fn push_price_position_factors(
         pct_change(latest_close, avg_close5),
     );
     push_number(factors, "box_position_120d_pct", box_position_120);
+    push_number(factors, "box_mid_position_120d_pct", box_mid_position_120);
     push_number(
         factors,
         "close_to_120d_max_pct",
         pct_change(latest_close, high_120),
+    );
+    push_number(
+        factors,
+        "breakout_distance_120d_pct",
+        pct_change(latest_close, high_120),
+    );
+    push_number(
+        factors,
+        "range_floor_distance_120d_pct",
+        pct_change(latest_close, low_120),
     );
     push_number(
         factors,
@@ -101,6 +119,13 @@ pub fn push_price_position_factors(
         factors,
         "close_to_20d_max_close_pct",
         pct_change(latest_close, high_20_close),
+    );
+    push_bool(
+        factors,
+        "price_up_1d_flag",
+        latest_close
+            .zip(previous_close)
+            .map(|(latest, previous)| latest > previous),
     );
     push_number(
         factors,

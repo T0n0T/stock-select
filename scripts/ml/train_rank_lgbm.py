@@ -50,17 +50,7 @@ NON_FEATURE_COLUMNS = {
     "llm_action",
     "risk_flags",
 }
-CATEGORICAL_COLUMNS = {
-    "env",
-    "signal",
-    "signal_type",
-    "daily_macd_phase_type",
-    "daily_macd_wave_stage",
-    "weekly_macd_phase_type",
-    "weekly_macd_wave_stage",
-    "weekly_daily_combo_type",
-    "midline_state",
-}
+CATEGORICAL_COLUMNS = set(rank_dataset_schema.training_categorical_columns_for_method(DEFAULT_METHOD)) | {"env"}
 SIGNAL_CATEGORICAL_COLUMNS = {"env", "signal", "signal_type"}
 MACD_CATEGORICAL_COLUMNS = {
     "daily_macd_phase_type",
@@ -71,11 +61,8 @@ MACD_CATEGORICAL_COLUMNS = {
 }
 CONTEXT_CATEGORICAL_COLUMNS = {"midline_state"}
 RAW_NUMERIC_COLUMNS = set(rank_dataset_schema.raw_factor_columns_for_method(DEFAULT_METHOD))
-LEGACY_CONTEXT_NUMERIC_COLUMNS = {
-    "price_vs_90d_high",
-    "price_vs_90d_low",
-    "price_vs_90d_mid",
-}
+LEGACY_CONTEXT_NUMERIC_COLUMNS = set(rank_dataset_schema.context_numeric_columns_for_method(DEFAULT_METHOD))
+MACD_NUMERIC_COLUMNS = set(rank_dataset_schema.training_macd_numeric_columns_for_method(DEFAULT_METHOD))
 FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 TRAIN_MODES = {"overall", "by_env"}
 TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "ret3_ge5_label", "ret5_ge5_label"}
@@ -166,8 +153,16 @@ def rolling_walk_forward_splits(
     return result
 
 
+def categorical_columns_for_method(method: str = DEFAULT_METHOD) -> set[str]:
+    return set(rank_dataset_schema.training_categorical_columns_for_method(method)) | {"env"}
+
+
 def raw_numeric_columns_for_method(method: str = DEFAULT_METHOD) -> set[str]:
-    return set(rank_dataset_schema.raw_factor_columns_for_method(method))
+    return (
+        set(rank_dataset_schema.raw_factor_columns_for_method(method))
+        | set(rank_dataset_schema.context_numeric_columns_for_method(method))
+        | set(rank_dataset_schema.training_macd_numeric_columns_for_method(method))
+    )
 
 
 def select_feature_columns(
@@ -180,26 +175,69 @@ def select_feature_columns(
         raise ValueError(f"unsupported feature_set: {feature_set}")
     numeric: list[str] = []
     categorical: list[str] = []
-    raw_numeric_columns = raw_numeric_columns_for_method(method) | LEGACY_CONTEXT_NUMERIC_COLUMNS
+    raw_numeric_columns = raw_numeric_columns_for_method(method)
+    method_categorical_columns = categorical_columns_for_method(method)
     if feature_set == "raw_numeric":
         allowed_categorical: set[str] = set()
     elif feature_set == "raw_plus_signal":
-        allowed_categorical = SIGNAL_CATEGORICAL_COLUMNS
+        allowed_categorical = SIGNAL_CATEGORICAL_COLUMNS & method_categorical_columns
     elif feature_set == "raw_plus_signal_macd":
         allowed_categorical = (
             SIGNAL_CATEGORICAL_COLUMNS | MACD_CATEGORICAL_COLUMNS | CONTEXT_CATEGORICAL_COLUMNS
-        )
+        ) & method_categorical_columns
     else:
-        allowed_categorical = CATEGORICAL_COLUMNS
+        allowed_categorical = method_categorical_columns
     excluded = IDENTITY_COLUMNS | LABEL_COLUMNS | NON_FEATURE_COLUMNS
     for column in columns:
         if column in excluded:
             continue
         if column in allowed_categorical:
             categorical.append(column)
-        elif column in raw_numeric_columns or column in LEGACY_CONTEXT_NUMERIC_COLUMNS:
+        elif column in raw_numeric_columns:
             numeric.append(column)
     return numeric, categorical
+
+
+def feature_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    if isinstance(value, float) and math.isnan(value):
+        return False
+    return True
+
+
+def validate_selected_feature_coverage(
+    rows: Sequence[dict[str, Any]],
+    *,
+    numeric_columns: Sequence[str],
+    categorical_columns: Sequence[str],
+) -> dict[str, Any]:
+    selected = list(numeric_columns) + list(categorical_columns)
+    features: dict[str, dict[str, int]] = {}
+    zero_coverage: list[str] = []
+    row_count = len(rows)
+
+    for column in selected:
+        present_count = sum(1 for row in rows if column in row)
+        non_empty_count = sum(1 for row in rows if feature_value_present(row.get(column)))
+        features[column] = {
+            "present_count": present_count,
+            "non_empty_count": non_empty_count,
+        }
+        if non_empty_count == 0:
+            zero_coverage.append(column)
+
+    report = {
+        "row_count": row_count,
+        "feature_count": len(selected),
+        "features": features,
+        "zero_coverage_features": zero_coverage,
+    }
+    if zero_coverage:
+        raise ValueError(f"selected training features have zero coverage: {', '.join(zero_coverage)}")
+    return report
 
 
 def load_feature_manifest_with_levels(
@@ -212,7 +250,8 @@ def load_feature_manifest_with_levels(
     if not isinstance(payload, dict):
         raise ValueError("feature manifest must be a JSON object")
     excluded = set(payload.get("excluded_features") or []) | IDENTITY_COLUMNS | LABEL_COLUMNS | NON_FEATURE_COLUMNS
-    raw_numeric_columns = raw_numeric_columns_for_method(method) | LEGACY_CONTEXT_NUMERIC_COLUMNS
+    raw_numeric_columns = raw_numeric_columns_for_method(method)
+    categorical_columns = categorical_columns_for_method(method)
 
     def clean(values: Any, *, allowed_columns: set[str]) -> list[str]:
         if not isinstance(values, list):
@@ -230,7 +269,7 @@ def load_feature_manifest_with_levels(
         return result
 
     numeric = clean(payload.get("numeric_features"), allowed_columns=raw_numeric_columns)
-    categorical = clean(payload.get("categorical_features"), allowed_columns=CATEGORICAL_COLUMNS)
+    categorical = clean(payload.get("categorical_features"), allowed_columns=categorical_columns)
     fixed_levels: dict[str, list[str]] = {}
     raw_levels = payload.get("categorical_levels")
     if isinstance(raw_levels, dict):
@@ -1064,6 +1103,11 @@ def train_and_report(
             method=method,
         )
         fixed_categorical_levels = {}
+    feature_coverage = validate_selected_feature_coverage(
+        train_rows + test_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+    )
 
     rf_config = RandomForestDiagnosticsConfig(
         enabled=rf_diagnostics,
@@ -1215,6 +1259,7 @@ def train_and_report(
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
         "fixed_categorical_levels": fixed_categorical_levels,
+        "feature_coverage": feature_coverage,
         "metrics": {
             "train": evaluate_model(train_scored, top_n=3),
             "test": evaluate_model(test_scored, top_n=3),

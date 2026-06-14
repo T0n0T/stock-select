@@ -158,7 +158,7 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
         row.diagnostics
             .get("history_factor_count")
             .and_then(|value| value.as_u64()),
-        Some(72)
+        Some(80)
     );
 }
 
@@ -232,22 +232,14 @@ fn candidate_payload_factor_provider_includes_legacy_semantic_factors() {
         row.factors.get("macd_top_divergence_flag"),
         Some(FactorValue::Bool(_)) | Some(FactorValue::Number(_))
     ));
-    assert!(matches!(
-        row.factors.get("trend_structure"),
-        Some(FactorValue::Number(value)) if *value >= 1.0
-    ));
-    assert!(matches!(
-        row.factors.get("price_position"),
-        Some(FactorValue::Number(value)) if *value >= 1.0
-    ));
-    assert!(matches!(
-        row.factors.get("volume_behavior"),
-        Some(FactorValue::Number(value)) if *value >= 1.0
-    ));
-    assert!(matches!(
-        row.factors.get("previous_abnormal_move"),
-        Some(FactorValue::Number(value)) if *value >= 1.0
-    ));
+    for key in [
+        "trend_structure",
+        "price_position",
+        "volume_behavior",
+        "previous_abnormal_move",
+    ] {
+        assert!(!row.factors.contains_key(key), "review-only key leaked into factors: {key}");
+    }
     assert!(matches!(
         row.factors.get("macd_phase"),
         Some(FactorValue::Number(value)) if *value >= 1.0
