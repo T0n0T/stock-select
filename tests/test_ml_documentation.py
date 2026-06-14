@@ -40,6 +40,39 @@ class MlDocumentationTests(unittest.TestCase):
         self.assertNotIn("### P7: b2 LightGBM 训练/维护脚本", docs)
         self.assertIn("LightGBM", docs)
 
+    def test_screening_methods_document_current_filter_conditions(self):
+        doc_path = PROJECT_ROOT / "docs" / "screening-methods.md"
+        self.assertTrue(doc_path.exists(), "missing screening method filter documentation")
+        docs = doc_path.read_text(encoding="utf-8")
+
+        expected_fragments = [
+            "# 选股筛选方法过滤条件",
+            "实际接入 screen 的方法：`b2`、`b3`、`lsh`。",
+            "`turnover-top` 股票池",
+            "取 `turnover_n` 最高的前 5000 只",
+            "`b2` / `b3`：要求当日 `MA25 > MA60`",
+            "`custom` 股票池",
+            "`b1`、`dribull` 当前没有 screen 策略实现",
+            "`b2`",
+            "当日涨幅 `pct >= 3.7%`",
+            "当前成交量大于前一日成交量",
+            "当前 `J` 值大于前一日 `J` 值",
+            "同一轮 `J` 转强周期内只保留第一次 raw B2",
+            "`b3`",
+            "前一交易日已经触发 `B2`",
+            "当前振幅 `amp` 小于阈值",
+            "当前成交量不超过前一日的 `90%`",
+            "`B3+`：在 `B3` 基础上",
+            "`lsh`",
+            "当日最低价跌破 `MA25`",
+            "当日收盘价高于 `MA25`",
+            "周线和月线最新 MACD 柱值与 DEA 都大于 0",
+            "`run` 阶段不再增加硬过滤",
+        ]
+        for fragment in expected_fragments:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, docs)
+
     def test_model_docs_describe_random_forest_factor_diagnostics(self):
         docs = (PROJECT_ROOT / "docs" / "model.md").read_text(encoding="utf-8")
 

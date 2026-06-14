@@ -165,6 +165,8 @@ scripts/backfill_run.py \
 
 ## 场景五：仅筛选候选
 
+当前 `screen` 支持 `b2`、`b3`、`lsh`。各方法的公共股票池过滤、具体策略条件和 `run` 阶段排序口径见 [选股筛选方法过滤条件](screening-methods.md)。
+
 ```bash
 # 只生成候选（不跑模型）
 stock-select-rs screen --method b2 --pick-date 2026-06-05
