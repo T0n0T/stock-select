@@ -85,6 +85,108 @@ class RankDatasetTest(unittest.TestCase):
         finally:
             rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
+    def test_b3_dataset_schema_excludes_review_scores_but_keeps_training_factors(self):
+        columns = dataset_columns_for_method("b3")
+
+        for review_score in [
+            "trend_structure",
+            "price_position",
+            "volume_behavior",
+            "previous_abnormal_move",
+            "weekly_daily_combo_score",
+            "total_score",
+            "verdict",
+        ]:
+            self.assertNotIn(review_score, columns)
+
+        for training_column in [
+            "signal_type",
+            "daily_macd_phase_type",
+            "daily_macd_wave_stage",
+            "weekly_macd_phase_type",
+            "weekly_macd_wave_stage",
+            "weekly_daily_combo_type",
+            "midline_state",
+            "macd_phase",
+            "daily_macd_wave_index",
+            "weekly_macd_wave_index",
+            "box_mid_position_120d_pct",
+        ]:
+            self.assertIn(training_column, columns)
+
+    def test_b3_factor_artifact_merge_ignores_review_scores_and_keeps_training_features(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate_dir = root / "candidates"
+            factor_dir = root / "factors" / "2026-05-25.b3"
+            candidate_dir.mkdir(parents=True)
+            factor_dir.mkdir(parents=True)
+            (candidate_dir / "2026-05-25.b3.json").write_text(
+                json.dumps(
+                    {
+                        "method": "b3",
+                        "pick_date": "2026-05-25",
+                        "candidates": [{"code": "000001.SZ", "name": "平安银行", "signal": "B3+"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (factor_dir / "factors.json").write_text(
+                json.dumps(
+                    {
+                        "method": "b3",
+                        "artifact_key": "2026-05-25",
+                        "rows": [
+                            {
+                                "code": "000001.SZ",
+                                "factors": {
+                                    "env": "neutral",
+                                    "signal_type": "trend_start",
+                                    "daily_macd_phase_type": "rising",
+                                    "daily_macd_wave_index": 2,
+                                    "daily_macd_wave_stage": "early",
+                                    "weekly_macd_phase_type": "rising",
+                                    "weekly_macd_wave_index": 1,
+                                    "weekly_macd_wave_stage": "early",
+                                    "weekly_daily_combo_type": "rising:1|rising:2",
+                                    "midline_state": "above_hold",
+                                    "macd_phase": 4.5,
+                                    "box_mid_position_120d_pct": 74.0,
+                                    "b3_volume_shrink_ratio": 0.5,
+                                    "close_to_zxdkx_pct": 1.25,
+                                    "trend_structure": 4.0,
+                                    "price_position": 3.0,
+                                    "volume_behavior": 5.0,
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            rows, warnings = load_candidate_rows(
+                root,
+                method="b3",
+                start_date="2026-05-25",
+                end_date="2026-05-25",
+            )
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(rows[0]["signal_type"], "trend_start")
+        self.assertEqual(rows[0]["daily_macd_phase_type"], "rising")
+        self.assertEqual(rows[0]["daily_macd_wave_index"], 2)
+        self.assertEqual(rows[0]["weekly_macd_phase_type"], "rising")
+        self.assertEqual(rows[0]["weekly_macd_wave_index"], 1)
+        self.assertEqual(rows[0]["weekly_daily_combo_type"], "rising:1|rising:2")
+        self.assertEqual(rows[0]["midline_state"], "above_hold")
+        self.assertEqual(rows[0]["macd_phase"], 4.5)
+        self.assertEqual(rows[0]["box_mid_position_120d_pct"], 74.0)
+        self.assertEqual(rows[0]["b3_volume_shrink_ratio"], 0.5)
+        self.assertEqual(rows[0]["close_to_zxdkx_pct"], 1.25)
+        self.assertNotIn("trend_structure", rows[0])
+        self.assertNotIn("price_position", rows[0])
+        self.assertNotIn("volume_behavior", rows[0])
     def test_lsh_dataset_schema_has_independent_method_entry_with_lsh_specific_factors(self):
         lsh_specific = [
             "lsh_daily_macd_wave_index",
@@ -110,7 +212,39 @@ class RankDatasetTest(unittest.TestCase):
             self.assertNotIn(column, dataset_columns_for_method("lsh"))
             self.assertNotIn(column, raw_factor_columns_for_method("lsh"))
             self.assertIn(column, dataset_columns_for_method("b2"))
-            self.assertIn(column, raw_factor_columns_for_method("b2"))
+
+    def test_lsh_schema_uses_lsh_state_machine_not_b2_family_semantics(self):
+        columns = dataset_columns_for_method("lsh")
+
+        for excluded in [
+            "signal_type",
+            "daily_macd_phase_type",
+            "daily_macd_wave_stage",
+            "weekly_macd_phase_type",
+            "weekly_macd_wave_stage",
+            "weekly_daily_combo_type",
+            "midline_state",
+            "macd_phase",
+            "daily_macd_wave_index",
+            "weekly_macd_wave_index",
+            "price_vs_90d_high",
+            "price_vs_90d_low",
+            "price_vs_90d_mid",
+        ]:
+            self.assertNotIn(excluded, columns)
+
+        for included in [
+            "env",
+            "signal",
+            "lsh_daily_macd_wave_index",
+            "lsh_weekly_macd_wave_index",
+            "lsh_daily_macd_rising_initial_flag",
+            "lsh_weekly_macd_rising_initial_flag",
+            "lsh_daily_macd_top_divergence_flag",
+            "lsh_weekly_macd_top_divergence_flag",
+            "lsh_weekly_daily_constructive_combo_flag",
+        ]:
+            self.assertIn(included, columns)
 
     def test_b2_dataset_schema_includes_db_and_market_state_factors(self):
         expected = [
