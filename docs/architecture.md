@@ -47,6 +47,8 @@ stock-select-rs screen --method b2 --pick-date 2026-06-05 --export-factors
 - 写入 `runtime/candidates/<date>.<method>.json`
 - `--export-factors` 额外导出因子到 `runtime/factors/`
 
+当前已接入 `screen` 的方法为 `b2`、`b3`、`lsh`；各方法的股票池过滤和策略条件见 [选股筛选方法过滤条件](screening-methods.md)。
+
 ### run
 
 ```bash
@@ -115,7 +117,7 @@ stock-select-rs chart --method b2 --pick-date 2026-06-05 --chart-workers 4
 
 | 参数 | 说明 |
 |------|------|
-| `--method` | 筛选方法，当前仅 `b2` |
+| `--method` | 筛选方法，当前 `screen` 支持 `b2` / `b3` / `lsh`，默认 `b2` |
 | `--pick-date` | 交易日（默认取当前日期） |
 | `--intraday` | 盘中模式 |
 | `--runtime-root` | runtime 根目录（默认 `~/.agents/skills/stock-select/runtime`） |
@@ -171,36 +173,112 @@ runtime/
     └── daily/
 ```
 
-## 执行顺序图
+# 运行时架构全图
 
 ```mermaid
 flowchart TD
-    A["resolve_pick_date()"] --> B["auto-screen<br/>(ScreenRequest)"]
-    B --> C["resolve_command_environment()"]
-    C --> D["run_selection()"]
+    subgraph CLI["CLI Entry (src/main.rs)"]
+        CMD["Commands"]
+        CMD --> SCREEN["screen"]
+        CMD --> RUN["run<br/>(全流水线)"]
+        CMD --> REVIEW["review"]
+        CMD --> RL["review-list"]
+        CMD --> RM["review-merge"]
+        CMD --> CHART["chart"]
+        CMD --> CI["clean-intraday"]
+    end
 
-    D --> D1["resolve_method_model_artifacts()"]
-    D1 --> D2["load_model()"]
-    D2 --> D3["read_candidates()"]
-    D3 --> D4["inject_environment_factor()"]
-    D4 --> D5["inject_prepared_history()"]
-    D5 --> D6["CandidatePayloadFactorProvider<br/>.factor_row()"]
-    D6 --> D7["write_factor_artifact()"]
-    D7 --> D8["rank_candidates()"]
+    %% ── screen 子命令 ──
+    SCREEN --> SCR["run_screen_with_loader()<br/>src/screening.rs"]
+    SCR --> POOL{"pool_source"}
+    POOL -->|turnover-top| TOP["fetch turnover_top N<br/>from PostgreSQL"]
+    POOL -->|custom| POOLF["读取 pool_file"]
+    TOP --> WINDOW["fetch_daily_window()<br/>366 天行情窗口<br/>src/db.rs"]
+    POOLF --> WINDOW
+    WINDOW --> LOCAL["enrich_local_market_factors()<br/>boll_width / bias / roc / mtm / psy / wr"]
+    LOCAL --> IND["计算技术指标<br/>KDJ / MACD / Bollinger / ZX"]
+    IND --> PREP["write_prepared_cache()<br/>→ runtime/prepared/"]
+    PREP --> STRAT{"策略筛选"}
+    STRAT -->|b2| B2STRAT["run_b2_strategy_from_refs()<br/>src/strategies/b2.rs"]
+    STRAT -->|b3| B3STRAT["run_b3_strategy_from_refs()<br/>src/strategies/b3.rs"]
+    STRAT -->|lsh| LSHSTRAT["run_lsh_strategy_from_refs()<br/>src/strategies/lsh.rs"]
+    B2STRAT --> CAND["candidates JSON<br/>→ runtime/candidates/"]
+    B3STRAT --> CAND
+    LSHSTRAT --> CAND
+    CAND --> EXP{"--export-factors"}
+    EXP -->|yes| EFACT["build_candidate_factor_rows_from_refs()<br/>→ runtime/factors/"]
+    EXP -->|no| SDONE["screen 完成"]
 
-    D8 --> D8a["build_feature_vector()"]
-    D8a --> D8b["LightGbmRuntimeModel<br/>.predict()"]
-    D8b --> D8c["sort by score → assign rank"]
+    %% ── intraday 路径 ──
+    SCREEN -.->|intraday| RT["TushareRestProvider<br/>fetch_rt_k() 实时快照<br/>src/intraday.rs"]
+    RT --> IWINDOW["build_intraday_market_rows()"]
+    IWINDOW -.-> PREP
 
-    D8c --> D9["display_rows()"]
-    D9 --> DA["write artifacts<br/>(run / candidates / factors /<br/>ranked / display)"]
+    %% ── run 全流水线 ──
+    RUN --> RPICK["resolve_pick_date()"]
+    RPICK --> ASCREEN["auto-screen<br/>ScreenRequest{export_factors:false}"]
+    ASCREEN --> CAND
+    ASCREEN --> ENV["resolve_command_environment()<br/>src/environment.rs"]
+    ENV --> ENVEVAL{"手动指定?"}
+    ENVEVAL -->|manual_state| MREC["upsert manual EnvironmentRecord"]
+    ENVEVAL -->|自动| EVAL["ensure_market_environment()<br/>上证/国证2000 评分<br/>→ weak / neutral / strong"]
+    EVAL --> PERSIST["persist → runtime/environment/daily/"]
+    MREC --> ENVDONE["ResolvedEnvironment"]
+    PERSIST --> ENVDONE
 
-    DA --> E["write_chart_artifacts()"]
-    E --> E1["load_chart_histories()"]
-    E1 --> E2["write_chart_payloads()"]
-    E2 --> E3["run_chart_renderers()<br/>→ uv run render_charts.py"]
+    ENVDONE --> SEL["run_selection()<br/>src/engine/run.rs"]
 
-    E3 --> F["write_review_task_artifacts()"]
+    subgraph SELECTION["Selection Engine"]
+        SEL --> MART["resolve_method_model_artifacts()<br/>→ runtime/models/{method}/"]
+        MART --> LOADM["load_model()<br/>LightGbmRuntimeModel<br/>src/engine/inference.rs"]
+        LOADM --> RCAND["read_candidates()"]
+        RCAND --> INJENV["inject_environment_factor()"]
+        INJENV --> INJPREP["inject_prepared_history()"]
+        INJPREP --> PCACHE["load factor_rows from<br/>prepared cache 或<br/>recompute"]
+        PCACHE --> FACTROW["FactorRow 计算<br/>src/factors/registry.rs"]
+
+        subgraph FACTORS["Factor Registry"]
+            FACTROW --> BUNDLE{"method → FactorBundle"}
+            BUNDLE -->|b2| B2F["RawCommon + B2ChipAge + B2Semantic"]
+            BUNDLE -->|b3| B3F["RawCommon + B3Semantic"]
+            BUNDLE -->|lsh| LSHF["RawCommon + LshSemantic"]
+            B2F --> COMMON["RawCommon 因子<br/>macd / ma_support / volume_turnover<br/>price_position / bar_shape<br/>range_compression / zx_pullback<br/>abnormal_volume / volume_shrink"]
+            B2F --> CHIP["B2ChipAge<br/>chip_age_summary"]
+            B2F --> B2SEM["B2Semantic<br/>语义因子"]
+            B3F --> COMMON
+            B3F --> B3SEM["B3Semantic<br/>语义因子"]
+            LSHF --> COMMON
+            LSHF --> LSHSEM["LshSemantic<br/>语义因子"]
+        end
+
+        FACTROW --> WRFACT["write_factor_artifact()<br/>→ runtime/select/.../factors.json"]
+        WRFACT --> RANK["rank_candidates()"]
+        RANK --> FVEC["build_feature_vector()<br/>按 model_metadata 特征顺序"]
+        FVEC --> PRED["LightGbmRuntimeModel.predict()<br/>num_threads=1"]
+        PRED --> SORT["sort by model_score ↓ → assign model_rank"]
+        SORT --> DROW["display_rows()<br/>merge name/industry"]
+    end
+
+    DROW --> WART["write artifacts<br/>run.json / candidates.json<br/>factors.json / ranked.json<br/>display.json / feature_vectors.json"]
+
+    WART --> CHARTBLK["write_chart_artifacts()"]
+    CHARTBLK --> CHIST["load_chart_histories()<br/>从 prepared cache 取日线"]
+    CHIST --> CPAYLOAD["write_chart_payloads()<br/>分批 JSON payload"]
+    CPAYLOAD --> CREND["run_chart_renderers()<br/>uv run scripts/render_charts.py<br/>→ runtime/charts/{date}.{method}/"]
+
+    CREND --> REVBLK["write_review_task_artifacts()"]
+    REVBLK --> LLMT["→ llm_tasks.json<br/>含 chart_path / 复盘提示"]
+
+    %% ── LLM 复盘回路 ──
+    LLMT -.-> SUBAGENT["子代理复盘<br/>逐票填 annotation"]
+    SUBAGENT -.-> LLMANN["→ llm_annotations.json"]
+    LLMANN -.-> RMERGE["review-merge"]
+    RMERGE -.-> HTML["生成 llm_report.html<br/>图文复盘报告"]
+
+    %% ── Styles ──
+    style CLI fill:#1a1a2e,stroke:#16213e,color:#eee
+    style SELECTION fill:#0f3460,stroke:#16213e,color:#eee
+    style FACTORS fill:#16213e,stroke:#0f3460,color:#eee
 ```
 
 ## 数据流

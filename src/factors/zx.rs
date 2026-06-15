@@ -1,5 +1,5 @@
 use crate::factors::series::{
-    FactorList, ema, pct_change, push_number, rolling_mean_series, slope_pct_values,
+    FactorList, ema, pct_change, push_bool, push_number, rolling_mean_series, slope_pct_values,
 };
 
 pub fn zx_lines(close: &[f64]) -> (Vec<f64>, Vec<Option<f64>>) {
@@ -23,7 +23,7 @@ pub fn push_zx_pullback_factors(
     latest_close: Option<f64>,
     latest_ma25: Option<f64>,
     latest_zxdkx: Option<f64>,
-    _previous_zxdkx: Option<f64>,
+    previous_zxdkx: Option<f64>,
     zxdkx_values: &[f64],
     zxdq_values: &[f64],
 ) {
@@ -46,5 +46,12 @@ pub fn push_zx_pullback_factors(
         factors,
         "zxdq_slope_5d_pct",
         slope_pct_values(zxdq_values, 5),
+    );
+    push_bool(
+        factors,
+        "zxdkx_up_1d_flag",
+        latest_zxdkx
+            .zip(previous_zxdkx)
+            .map(|(latest, previous)| latest >= previous),
     );
 }

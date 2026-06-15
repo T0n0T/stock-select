@@ -24,34 +24,35 @@ RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
 
 
 IDENTITY_COLUMNS = ["date", "code", "name", "env", "method"]
-REVIEW_COLUMNS = [
+REVIEW_METADATA_COLUMNS = [
     "model_score",
     "model_rank",
     "llm_action",
     "risk_flags",
+]
+TRAINING_CATEGORICAL_COLUMNS = [
     "signal",
     "signal_type",
-]
-B2_REVIEW_COLUMNS = [
-    "trend_structure",
-    "price_position",
-    "volume_behavior",
-    "previous_abnormal_move",
-    "macd_phase",
     "daily_macd_phase_type",
-    "daily_macd_wave_index",
     "daily_macd_wave_stage",
     "weekly_macd_phase_type",
-    "weekly_macd_wave_index",
     "weekly_macd_wave_stage",
     "weekly_daily_combo_type",
+    "midline_state",
 ]
-B3_REVIEW_COLUMNS = list(B2_REVIEW_COLUMNS)
-CONTEXT_COLUMNS = [
+LSH_TRAINING_CATEGORICAL_COLUMNS = [
+    "signal",
+]
+
+TRAINING_MACD_NUMERIC_COLUMNS = [
+    "macd_phase",
+    "daily_macd_wave_index",
+    "weekly_macd_wave_index",
+]
+CONTEXT_NUMERIC_COLUMNS = [
     "price_vs_90d_high",
     "price_vs_90d_low",
     "price_vs_90d_mid",
-    "midline_state",
 ]
 RAW_FACTOR_COLUMNS = [
     "close_to_ma25_pct",
@@ -67,6 +68,7 @@ RAW_FACTOR_COLUMNS = [
     "daily_rising_initial_flag",
     "macd_top_divergence_flag",
     "box_position_120d_pct",
+    "box_mid_position_120d_pct",
     "close_to_120d_max_pct",
     "close_to_120d_min_pct",
     "close_to_120d_range_center_pct",
@@ -210,10 +212,6 @@ LABEL_COLUMNS = [
     "rank_label_3d",
     "rank_label_5d",
 ]
-METHOD_REVIEW_COLUMNS = {
-    "b2": B2_REVIEW_COLUMNS,
-    "b3": B3_REVIEW_COLUMNS,
-}
 METHOD_RAW_FACTOR_COLUMNS = {
     "b2": B2_RAW_FACTOR_COLUMNS,
     "b3": B3_RAW_FACTOR_COLUMNS,
@@ -221,21 +219,42 @@ METHOD_RAW_FACTOR_COLUMNS = {
 }
 
 
-def review_columns_for_method(method: str) -> list[str]:
-    return list(METHOD_REVIEW_COLUMNS.get(method, B2_REVIEW_COLUMNS))
+def training_categorical_columns_for_method(method: str) -> list[str]:
+    if method == "lsh":
+        return list(LSH_TRAINING_CATEGORICAL_COLUMNS)
+    return list(TRAINING_CATEGORICAL_COLUMNS)
+
+
+def training_macd_numeric_columns_for_method(method: str) -> list[str]:
+    if method == "lsh":
+        return []
+    return list(TRAINING_MACD_NUMERIC_COLUMNS)
+
+
+def context_numeric_columns_for_method(method: str) -> list[str]:
+    if method == "lsh":
+        return []
+    return list(CONTEXT_NUMERIC_COLUMNS)
 
 
 def raw_factor_columns_for_method(method: str) -> list[str]:
     return list(METHOD_RAW_FACTOR_COLUMNS.get(method, RAW_FACTOR_COLUMNS))
 
 
+def confirmed_training_columns_for_method(method: str) -> list[str]:
+    return (
+        training_categorical_columns_for_method(method)
+        + training_macd_numeric_columns_for_method(method)
+        + context_numeric_columns_for_method(method)
+        + raw_factor_columns_for_method(method)
+    )
+
+
 def dataset_columns_for_method(method: str) -> list[str]:
     return (
         IDENTITY_COLUMNS
-        + REVIEW_COLUMNS
-        + review_columns_for_method(method)
-        + CONTEXT_COLUMNS
-        + raw_factor_columns_for_method(method)
+        + REVIEW_METADATA_COLUMNS
+        + confirmed_training_columns_for_method(method)
         + LABEL_COLUMNS
     )
 

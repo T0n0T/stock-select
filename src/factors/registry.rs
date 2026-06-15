@@ -32,6 +32,16 @@ const B3_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBund
 const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::LshSemantic];
 const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
 
+const REVIEW_ONLY_FACTOR_KEYS: &[&str] = &[
+    "trend_structure",
+    "price_position",
+    "volume_behavior",
+    "previous_abnormal_move",
+    "weekly_daily_combo_score",
+    "total_score",
+    "verdict",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactorBundle {
     RawCommon,
@@ -312,6 +322,12 @@ pub fn record_factor_profile_diagnostics(row: &mut FactorRow, profile: FactorPro
         .insert("factor_bundles".to_string(), json!(profile.bundle_names()));
 }
 
+pub fn remove_review_only_factors(row: &mut FactorRow) {
+    for key in REVIEW_ONLY_FACTOR_KEYS {
+        row.factors.remove(*key);
+    }
+}
+
 pub fn factor_artifact_dir(runtime_root: &Path, method: Method, artifact_key: &str) -> PathBuf {
     runtime_root
         .join("factors")
@@ -402,6 +418,7 @@ pub fn build_candidate_factor_rows_from_refs(
             for (key, value) in history_factors {
                 row.factors.insert(key, value);
             }
+            remove_review_only_factors(&mut row);
             if let Some(market_state_factors) = market_state_by_date.get(&candidate.pick_date) {
                 for (key, value) in market_state_factors {
                     row.factors.insert(key.clone(), value.clone());

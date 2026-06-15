@@ -182,6 +182,82 @@ class LgbmScoreExportTest(unittest.TestCase):
             self.assertEqual(metadata["model_params"]["lambdarank_truncation_level"], 8)
             self.assertEqual(summary["model_artifacts"]["model"], str(artifact_dir / "model.txt"))
 
+    def test_export_scores_preserves_trial_feature_selection_metadata(self):
+        import csv
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "code", "rank_label_3d", "ret3", "close_to_zxdkx_pct"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "close_to_zxdkx_pct": "1"},
+                        {"date": "2026-03-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "close_to_zxdkx_pct": "2"},
+                    ]
+                )
+            feature_manifest = root / "feature_manifest.json"
+            feature_manifest.write_text(
+                json.dumps({"numeric_features": ["close_to_zxdkx_pct"], "categorical_features": []}),
+                encoding="utf-8",
+            )
+            feature_selection = {
+                "mode": "cumulative_importance",
+                "candidate_feature_count": 3,
+                "selected_feature_count": 1,
+                "dropped_feature_count": 2,
+                "selected_features": ["close_to_zxdkx_pct"],
+                "dropped_features": ["x1", "x2"],
+            }
+            artifact_dir = root / "model"
+            artifact_dir.mkdir()
+            (artifact_dir / "lgbm_rank_report_raw_numeric.json").write_text(
+                json.dumps({"feature_selection": feature_selection}),
+                encoding="utf-8",
+            )
+
+            with patch("scripts.ml.export_lgbm_scores.train_model_result") as train_model_result:
+                train_model_result.return_value = type(
+                    "Result",
+                    (),
+                    {
+                        "train_scored": [],
+                        "test_scored": [{"date": "2026-03-01", "code": "b", "model_score": 0.5}],
+                        "top_features": [],
+                        "feature_count": 1,
+                        "model": FakeModel(),
+                        "feature_names": ["close_to_zxdkx_pct"],
+                        "lightgbm_feature_names": ["close_to_zxdkx_pct"],
+                        "category_levels": {},
+                    },
+                )()
+
+                export_scores(
+                    dataset=dataset,
+                    feature_manifest=feature_manifest,
+                    output=root / "scores.csv",
+                    summary_output=root / "summary.json",
+                    model_output_dir=artifact_dir,
+                    train_end_exclusive="2026-03-01",
+                    score_start="2026-03-01",
+                    score_end="2026-03-31",
+                    num_leaves=9,
+                    min_data_in_leaf=120,
+                    num_boost_round=60,
+                    learning_rate=0.05,
+                    num_threads=1,
+                    label_column="rank_label_3d",
+                )
+
+            metadata = json.loads((artifact_dir / "model_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["feature_selection"], feature_selection)
+
     def test_export_scores_keeps_unlabeled_score_rows(self):
         import csv
         import json

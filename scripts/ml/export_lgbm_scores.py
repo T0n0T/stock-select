@@ -102,6 +102,16 @@ def score_rows_for_dates(rows: Sequence[dict[str, Any]], dates: set[str]) -> lis
     )
 
 
+def load_trial_feature_selection(model_output_dir: Path) -> dict[str, Any] | None:
+    reports = sorted(model_output_dir.glob("lgbm_rank_report*.json"))
+    for report in reports:
+        payload = json.loads(report.read_text(encoding="utf-8"))
+        feature_selection = payload.get("feature_selection")
+        if isinstance(feature_selection, dict):
+            return feature_selection
+    return None
+
+
 def export_scores(
     *,
     dataset: Path,
@@ -180,6 +190,7 @@ def export_scores(
         lightgbm_feature_names=model_result.lightgbm_feature_names,
         label_column=label_column,
         model_params=model_params,
+        feature_selection=load_trial_feature_selection(model_output_dir),
     )
     model_artifacts = write_model_artifacts(model_result.model, metadata, model_output_dir)
     summary = {

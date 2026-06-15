@@ -89,7 +89,17 @@ diagnostics/ml/<method>/model/rf_feature_diagnostics.json
 diagnostics/ml/<method>/model/rf_feature_diagnostics.md
 ```
 
-LightGBM report 的 `rf_diagnostics` 字段会嵌入随机森林摘要，包括诊断状态、OOB、测试集 RankIC、Top features 和低重要性因子数量。随机森林只用于训练前诊断，不进入 Rust 生产推理；快速冒烟或依赖不可用时可传 `--skip-rf-diagnostics` 跳过，但正式候选 trial 应保留诊断。
+LightGBM report 的 `rf_diagnostics` 字段会嵌入随机森林摘要，包括诊断状态、OOB、测试集 RankIC、Top features 和低重要性因子数量。默认情况下随机森林只用于训练前诊断，不进入 Rust 生产推理；快速冒烟或依赖不可用时可传 `--skip-rf-diagnostics` 跳过，但正式候选 trial 应保留诊断。
+
+如果需要让 RF 层实际承担筛选职责，训练时显式传 `--rf-feature-selection cumulative_importance`，并用 `--rf-cumulative-importance-threshold` 和 `--rf-min-selected-features` 控制累计重要性阈值与最小保留数量。开启后，RF 先在候选特征上计算完整重要性，类别 one-hot 重要性会聚合回原始类别列；随后 LightGBM 最终模型、rolling validation、`feature_manifest.json` 和 `model_metadata.json` 都只使用 RF 选中的特征。`rf_feature_diagnostics.json` 会保留完整 `feature_importances`，`top_features` 只作为展示截断列表。
+
+## factors.json 训练特征契约
+
+`factors.json` 的 `rows[].factors` 只承载训练候选特征：数值因子、布尔因子和低基数类别因子。review-only 评分字段不进入 `rows[].factors`，包括 `trend_structure`、`price_position`、`volume_behavior`、`previous_abnormal_move`、`weekly_daily_combo_score`、`total_score` 和 `verdict`。
+
+允许保留的训练语义字段必须被 schema 明确确认，例如数值字段 `macd_phase`、`daily_macd_wave_index`、`weekly_macd_wave_index`，原始位置字段 `box_mid_position_120d_pct`，以及类别字段 `signal_type`、`daily_macd_phase_type`、`daily_macd_wave_stage`、`weekly_macd_phase_type`、`weekly_macd_wave_stage`、`weekly_daily_combo_type` 和 `midline_state`。这些字段由 RF 和 LightGBM 共用同一份特征选择逻辑。
+
+训练前会生成并校验 `feature_coverage`：每个被选中的训练特征必须在数据集中至少有一个非空值。若确认训练的特征 zero coverage，训练会失败并输出缺失列表，避免 schema 中的因子没有真实进入 RF/LightGBM。
 
 可选门禁参数：
 

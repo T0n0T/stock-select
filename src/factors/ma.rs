@@ -1,5 +1,5 @@
 use crate::factors::series::{
-    FactorList, pct_change, push_number, rolling_mean_series, slope_pct_values,
+    FactorList, pct_change, push_bool, push_number, rolling_mean_series, slope_pct_values,
 };
 
 pub fn push_ma_support_factors(
@@ -24,6 +24,20 @@ pub fn push_ma_support_factors(
         factors,
         "low_to_ma25_pct",
         pct_change(latest_low, latest_ma25),
+    );
+    push_bool(
+        factors,
+        "near_ma25_support_flag",
+        latest_low
+            .zip(latest_ma25)
+            .map(|(low, ma25)| low <= ma25 * 1.03),
+    );
+    push_bool(
+        factors,
+        "ma_aligned_flag",
+        latest_close
+            .zip(latest_ma25.zip(_latest_zxdkx))
+            .map(|(close, (ma25, zxdkx))| close >= ma25 && ma25 >= zxdkx),
     );
 }
 
