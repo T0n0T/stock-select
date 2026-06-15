@@ -66,6 +66,7 @@ MACD_NUMERIC_COLUMNS = set(rank_dataset_schema.training_macd_numeric_columns_for
 FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 TRAIN_MODES = {"overall", "by_env"}
 TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "ret3_ge5_label", "ret5_ge5_label"}
+RF_FEATURE_SELECTION_MODES = {"none", "cumulative_importance"}
 
 
 @dataclass
@@ -240,6 +241,95 @@ def validate_selected_feature_coverage(
     return report
 
 
+def base_feature_from_rf_feature(feature: str, categorical_columns: set[str]) -> str:
+    if "=" in feature:
+        prefix, _level = feature.split("=", 1)
+        if prefix in categorical_columns:
+            return prefix
+    return feature
+
+
+def select_features_by_rf_importance(
+    diagnostics: dict[str, Any],
+    *,
+    numeric_columns: Sequence[str],
+    categorical_columns: Sequence[str],
+    threshold: float,
+    min_selected_features: int,
+) -> dict[str, Any]:
+    if threshold <= 0.0 or threshold > 1.0:
+        raise ValueError("RF cumulative importance threshold must be in (0, 1]")
+    if min_selected_features < 1:
+        raise ValueError("RF minimum selected feature count must be positive")
+
+    numeric = list(numeric_columns)
+    categorical = list(categorical_columns)
+    candidate_features = numeric + categorical
+    candidate_set = set(candidate_features)
+    categorical_set = set(categorical)
+    feature_importance: dict[str, float] = {feature: 0.0 for feature in candidate_features}
+    ordered_base_features: list[str] = []
+
+    importance_items = diagnostics.get("feature_importances") or diagnostics.get("top_features") or []
+    for item in importance_items:
+        if not isinstance(item, dict):
+            continue
+        feature = str(item.get("feature") or "")
+        base_feature = base_feature_from_rf_feature(feature, categorical_set)
+        if base_feature not in candidate_set:
+            continue
+        importance = as_float(item.get("importance")) or 0.0
+        feature_importance[base_feature] = feature_importance.get(base_feature, 0.0) + max(0.0, importance)
+        if base_feature not in ordered_base_features:
+            ordered_base_features.append(base_feature)
+
+    for feature in candidate_features:
+        if feature not in ordered_base_features:
+            ordered_base_features.append(feature)
+
+    total_importance = sum(feature_importance.values())
+    if total_importance <= 0.0:
+        selected_features = candidate_features
+        selected_importance_sum = 1.0 if candidate_features else 0.0
+    else:
+        ranked = sorted(
+            ordered_base_features,
+            key=lambda feature: (-feature_importance.get(feature, 0.0), candidate_features.index(feature)),
+        )
+        selected_features = []
+        selected_raw_importance = 0.0
+        min_count = min(min_selected_features, len(candidate_features))
+        for feature in ranked:
+            if feature in selected_features:
+                continue
+            selected_features.append(feature)
+            selected_raw_importance += feature_importance.get(feature, 0.0)
+            if selected_raw_importance / total_importance >= threshold and len(selected_features) >= min_count:
+                break
+        selected_importance_sum = selected_raw_importance / total_importance if total_importance else 0.0
+
+    selected_set = set(selected_features)
+    selected_numeric = [feature for feature in numeric if feature in selected_set]
+    selected_categorical = [feature for feature in categorical if feature in selected_set]
+    dropped_features = [feature for feature in candidate_features if feature not in selected_set]
+    return {
+        "mode": "cumulative_importance",
+        "candidate_feature_count": len(candidate_features),
+        "selected_feature_count": len(selected_numeric) + len(selected_categorical),
+        "dropped_feature_count": len(dropped_features),
+        "cumulative_importance_threshold": threshold,
+        "min_selected_features": min_selected_features,
+        "selected_importance_sum": round(selected_importance_sum, 8),
+        "numeric_columns": selected_numeric,
+        "categorical_columns": selected_categorical,
+        "selected_features": selected_numeric + selected_categorical,
+        "dropped_features": dropped_features,
+        "feature_importance": {
+            feature: round(feature_importance.get(feature, 0.0), 8) for feature in candidate_features
+        },
+    }
+
+
 def load_feature_manifest_with_levels(
     path: Path,
     *,
@@ -371,10 +461,11 @@ def build_model_metadata(
     lightgbm_feature_names: Sequence[str],
     label_column: str,
     model_params: dict[str, Any],
+    feature_selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     train_dates = sorted({str(row.get("date")) for row in train_rows})
     score_dates = sorted({str(row.get("date")) for row in score_rows})
-    return {
+    metadata = {
         "feature_manifest": feature_manifest,
         "train_start": train_dates[0] if train_dates else None,
         "train_end": train_dates[-1] if train_dates else None,
@@ -389,6 +480,9 @@ def build_model_metadata(
         "one_hot_levels": {column: [f"{column}={value}" for value in values] for column, values in levels.items()},
         "label_column": label_column,
     }
+    if feature_selection is not None:
+        metadata["feature_selection"] = feature_selection
+    return metadata
 
 
 def write_model_artifacts(model: Any, metadata: dict[str, Any], output_dir: Path) -> dict[str, str]:
@@ -641,6 +735,9 @@ def run_random_forest_diagnostics(
         "top_features": [
             {"feature": feature, "importance": round(importance, 8)} for feature, importance in ranked_features[:50]
         ],
+        "feature_importances": [
+            {"feature": feature, "importance": round(importance, 8)} for feature, importance in ranked_features
+        ],
         "low_importance_features": [
             {"feature": feature, "importance": round(importance, 8)} for feature, importance in low_features
         ],
@@ -864,7 +961,7 @@ def rf_diagnostic_paths(output_dir: Path) -> tuple[Path, Path]:
 
 
 def rf_diagnostics_summary(diagnostics: dict[str, Any], json_path: Path | None = None) -> dict[str, Any]:
-    return {
+    summary = {
         "enabled": bool(diagnostics.get("enabled")),
         "path": str(json_path) if json_path is not None else None,
         "status": diagnostics.get("status"),
@@ -873,6 +970,9 @@ def rf_diagnostics_summary(diagnostics: dict[str, Any], json_path: Path | None =
         "top_features": list(diagnostics.get("top_features") or [])[:20],
         "low_importance_feature_count": len(diagnostics.get("low_importance_features") or []),
     }
+    if diagnostics.get("feature_selection") is not None:
+        summary["feature_selection"] = diagnostics.get("feature_selection")
+    return summary
 
 
 def markdown_rf_diagnostics(diagnostics: dict[str, Any]) -> str:
@@ -1076,11 +1176,18 @@ def train_and_report(
     rf_max_features: str | int | float | None = DEFAULT_RF_MAX_FEATURES,
     rf_min_oob_score: float | None = None,
     rf_min_test_rank_ic_ret3: float | None = None,
+    rf_feature_selection: str = "none",
+    rf_cumulative_importance_threshold: float = 0.85,
+    rf_min_selected_features: int = 12,
 ) -> dict[str, Any]:
     if train_mode not in TRAIN_MODES:
         raise ValueError(f"unsupported train_mode: {train_mode}")
     if label_column not in TRAIN_LABEL_COLUMNS:
         raise ValueError(f"unsupported label_column: {label_column}")
+    if rf_feature_selection not in RF_FEATURE_SELECTION_MODES:
+        raise ValueError(f"unsupported RF feature selection mode: {rf_feature_selection}")
+    if rf_feature_selection != "none" and not rf_diagnostics:
+        raise ValueError("RF feature selection requires RF diagnostics")
     resolved_label_gain = list(label_gain or DEFAULT_LABEL_GAIN)
 
     rows = read_dataset(dataset)
@@ -1103,11 +1210,21 @@ def train_and_report(
             method=method,
         )
         fixed_categorical_levels = {}
+    candidate_numeric_columns = list(numeric_columns)
+    candidate_categorical_columns = list(categorical_columns)
     feature_coverage = validate_selected_feature_coverage(
         train_rows + test_rows,
         numeric_columns=numeric_columns,
         categorical_columns=categorical_columns,
     )
+    feature_selection_payload = {
+        "mode": "none",
+        "candidate_feature_count": len(candidate_numeric_columns) + len(candidate_categorical_columns),
+        "selected_feature_count": len(candidate_numeric_columns) + len(candidate_categorical_columns),
+        "dropped_feature_count": 0,
+        "selected_features": candidate_numeric_columns + candidate_categorical_columns,
+        "dropped_features": [],
+    }
 
     rf_config = RandomForestDiagnosticsConfig(
         enabled=rf_diagnostics,
@@ -1138,6 +1255,29 @@ def train_and_report(
             raise RandomForestThresholdError(
                 f"random forest diagnostics failed thresholds: {', '.join(failures)}; report={rf_json_path}"
             )
+        if rf_feature_selection == "cumulative_importance":
+            feature_selection_payload = select_features_by_rf_importance(
+                rf_payload,
+                numeric_columns=candidate_numeric_columns,
+                categorical_columns=candidate_categorical_columns,
+                threshold=rf_cumulative_importance_threshold,
+                min_selected_features=rf_min_selected_features,
+            )
+            numeric_columns = list(feature_selection_payload["numeric_columns"])
+            categorical_columns = list(feature_selection_payload["categorical_columns"])
+            if not numeric_columns and not categorical_columns:
+                raise ValueError("RF feature selection produced no training features")
+            feature_coverage = validate_selected_feature_coverage(
+                train_rows + test_rows,
+                numeric_columns=numeric_columns,
+                categorical_columns=categorical_columns,
+            )
+            if fixed_categorical_levels:
+                fixed_categorical_levels = {
+                    column: levels for column, levels in fixed_categorical_levels.items() if column in set(categorical_columns)
+                }
+        rf_payload["feature_selection"] = feature_selection_payload
+        rf_payload, rf_json_path, _rf_markdown_path = write_rf_diagnostics_artifacts(rf_payload, output_dir)
         rf_summary = rf_diagnostics_summary(rf_payload, rf_json_path)
     else:
         rf_payload = {"enabled": False, "status": "skipped", "output_paths": {}}
@@ -1232,6 +1372,7 @@ def train_and_report(
                 "label_gain": resolved_label_gain,
                 "lambdarank_truncation_level": lambdarank_truncation_level,
             },
+            feature_selection=feature_selection_payload,
         )
         model_artifacts = write_model_artifacts(model_result.model, metadata, output_dir)
 
@@ -1258,7 +1399,10 @@ def train_and_report(
         },
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
+        "candidate_numeric_columns": candidate_numeric_columns,
+        "candidate_categorical_columns": candidate_categorical_columns,
         "fixed_categorical_levels": fixed_categorical_levels,
+        "feature_selection": feature_selection_payload,
         "feature_coverage": feature_coverage,
         "metrics": {
             "train": evaluate_model(train_scored, top_n=3),
@@ -1361,6 +1505,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rf-max-features", default=DEFAULT_RF_MAX_FEATURES)
     parser.add_argument("--rf-min-oob-score", type=float)
     parser.add_argument("--rf-min-test-rank-ic-ret3", type=float)
+    parser.add_argument("--rf-feature-selection", choices=sorted(RF_FEATURE_SELECTION_MODES), default="none")
+    parser.add_argument("--rf-cumulative-importance-threshold", type=float, default=0.85)
+    parser.add_argument("--rf-min-selected-features", type=int, default=12)
     return parser.parse_args(argv)
 
 
@@ -1394,6 +1541,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         rf_max_features=args.rf_max_features,
         rf_min_oob_score=args.rf_min_oob_score,
         rf_min_test_rank_ic_ret3=args.rf_min_test_rank_ic_ret3,
+        rf_feature_selection=args.rf_feature_selection,
+        rf_cumulative_importance_threshold=args.rf_cumulative_importance_threshold,
+        rf_min_selected_features=args.rf_min_selected_features,
     )
     json_path, _markdown_path = report_paths(output_dir, args.feature_set, args.train_mode, args.label_column)
     print(f"wrote report to {json_path}")

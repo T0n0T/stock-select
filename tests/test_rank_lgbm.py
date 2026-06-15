@@ -23,6 +23,7 @@ from scripts.ml.train_rank_lgbm import (
     rolling_walk_forward_splits,
     rows_for_dates,
     run_random_forest_diagnostics,
+    select_features_by_rf_importance,
     select_feature_columns,
     train_and_report,
     validate_selected_feature_coverage,
@@ -52,6 +53,9 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual(args.rf_max_features, "sqrt")
         self.assertIsNone(args.rf_min_oob_score)
         self.assertIsNone(args.rf_min_test_rank_ic_ret3)
+        self.assertEqual(args.rf_feature_selection, "none")
+        self.assertEqual(args.rf_cumulative_importance_threshold, 0.85)
+        self.assertEqual(args.rf_min_selected_features, 12)
 
     def test_parse_args_accepts_random_forest_thresholds_and_skip_flag(self):
         args = parse_args(
@@ -69,6 +73,12 @@ class RankLgbmTest(unittest.TestCase):
                 "0.51",
                 "--rf-min-test-rank-ic-ret3",
                 "0.02",
+                "--rf-feature-selection",
+                "cumulative_importance",
+                "--rf-cumulative-importance-threshold",
+                "0.9",
+                "--rf-min-selected-features",
+                "8",
             ]
         )
 
@@ -79,6 +89,9 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual(args.rf_max_features, "log2")
         self.assertEqual(args.rf_min_oob_score, 0.51)
         self.assertEqual(args.rf_min_test_rank_ic_ret3, 0.02)
+        self.assertEqual(args.rf_feature_selection, "cumulative_importance")
+        self.assertEqual(args.rf_cumulative_importance_threshold, 0.9)
+        self.assertEqual(args.rf_min_selected_features, 8)
 
     def test_walk_forward_split_dates_keeps_date_groups_ordered(self):
         train_dates, test_dates = walk_forward_split_dates(
@@ -271,6 +284,73 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual(report["features"]["signal_type"]["non_empty_count"], 2)
         self.assertEqual(report["zero_coverage_features"], [])
 
+    def test_select_features_by_rf_importance_uses_cumulative_threshold_and_minimum(self):
+        diagnostics = {
+            "top_features": [
+                {"feature": "x1", "importance": 0.5},
+                {"feature": "env=weak", "importance": 0.2},
+                {"feature": "x2", "importance": 0.1},
+                {"feature": "env=strong", "importance": 0.1},
+                {"feature": "x3", "importance": 0.1},
+            ]
+        }
+
+        selection = select_features_by_rf_importance(
+            diagnostics,
+            numeric_columns=["x1", "x2", "x3"],
+            categorical_columns=["env"],
+            threshold=0.7,
+            min_selected_features=1,
+        )
+
+        self.assertEqual(selection["numeric_columns"], ["x1"])
+        self.assertEqual(selection["categorical_columns"], ["env"])
+        self.assertEqual(selection["candidate_feature_count"], 4)
+        self.assertEqual(selection["selected_feature_count"], 2)
+        self.assertEqual(selection["selected_features"], ["x1", "env"])
+        self.assertEqual(selection["dropped_features"], ["x2", "x3"])
+        self.assertGreaterEqual(selection["selected_importance_sum"], 0.7)
+
+    def test_select_features_by_rf_importance_keeps_all_when_total_importance_is_zero(self):
+        diagnostics = {"top_features": [{"feature": "x1", "importance": 0.0}]}
+
+        selection = select_features_by_rf_importance(
+            diagnostics,
+            numeric_columns=["x1", "x2"],
+            categorical_columns=[],
+            threshold=0.85,
+            min_selected_features=1,
+        )
+
+        self.assertEqual(selection["numeric_columns"], ["x1", "x2"])
+        self.assertEqual(selection["dropped_features"], [])
+        self.assertEqual(selection["selected_feature_count"], 2)
+
+    def test_select_features_by_rf_importance_prefers_full_importance_list(self):
+        diagnostics = {
+            "top_features": [
+                {"feature": "x1", "importance": 0.5},
+                {"feature": "x2", "importance": 0.3},
+            ],
+            "feature_importances": [
+                {"feature": "x1", "importance": 0.5},
+                {"feature": "x2", "importance": 0.3},
+                {"feature": "x3", "importance": 0.15},
+                {"feature": "x4", "importance": 0.05},
+            ],
+        }
+
+        selection = select_features_by_rf_importance(
+            diagnostics,
+            numeric_columns=["x1", "x2", "x3", "x4"],
+            categorical_columns=[],
+            threshold=0.9,
+            min_selected_features=1,
+        )
+
+        self.assertEqual(selection["selected_features"], ["x1", "x2", "x3"])
+        self.assertEqual(selection["dropped_features"], ["x4"])
+
     def test_build_feature_matrix_one_hot_encodes_categoricals(self):
         rows = [
             {"date": "2026-01-01", "env": "weak", "signal_type": "rebound", "close_to_zxdkx_pct": "1.5"},
@@ -343,10 +423,61 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual(diagnostics["status"], "passed")
         self.assertEqual(diagnostics["feature_count"], 3)
         self.assertEqual(diagnostics["top_features"][0], {"feature": "x", "importance": 0.8})
+        self.assertEqual(
+            diagnostics["feature_importances"],
+            [
+                {"feature": "x", "importance": 0.8},
+                {"feature": "env=weak", "importance": 0.2},
+                {"feature": "env=strong", "importance": 0.0},
+            ],
+        )
         self.assertEqual(diagnostics["low_importance_features"], [{"feature": "env=strong", "importance": 0.0}])
         self.assertEqual(diagnostics["oob_score"], 0.62)
         self.assertEqual(diagnostics["accuracy"], {"train": 1.0, "test": 1.0})
         self.assertEqual(diagnostics["metrics"]["test"]["top3_ret3_positive_rate"], 50.0)
+
+    def test_random_forest_diagnostics_keeps_full_importance_list_for_selection(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", **{f"x{i}": str(i) for i in range(55)}},
+            {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", **{f"x{i}": "0" for i in range(55)}},
+            {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "7", "ret5": "6", **{f"x{i}": str(i + 1) for i in range(55)}},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", **{f"x{i}": "0" for i in range(55)}},
+        ]
+
+        class FakeRandomForestClassifier:
+            def __init__(self, **_kwargs):
+                self.classes_ = [0, 3]
+                self.feature_importances_ = [1.0 / 55.0 for _ in range(55)]
+                self.oob_score_ = 0.62
+
+            def fit(self, matrix, labels):
+                return self
+
+            def predict_proba(self, matrix):
+                return [[0.1, 0.9] if row[1] > 0 else [0.9, 0.1] for row in matrix]
+
+            def predict(self, matrix):
+                return [3 if row[1] > 0 else 0 for row in matrix]
+
+            def score(self, matrix, labels):
+                return 1.0
+
+        fake_sklearn_ensemble = types.SimpleNamespace(RandomForestClassifier=FakeRandomForestClassifier)
+        with patch.dict(sys.modules, {"sklearn.ensemble": fake_sklearn_ensemble}):
+            diagnostics = run_random_forest_diagnostics(
+                rows[:2],
+                rows[2:],
+                numeric_columns=[f"x{i}" for i in range(55)],
+                categorical_columns=[],
+                label_column="rank_label_3d",
+                label_gain=[0, 1, 3, 7],
+                num_threads=2,
+                fixed_categorical_levels={},
+                config=RandomForestDiagnosticsConfig(n_estimators=17, min_samples_leaf=3),
+            )
+
+        self.assertEqual(len(diagnostics["top_features"]), 50)
+        self.assertEqual(len(diagnostics["feature_importances"]), 55)
 
     def test_model_metadata_rebuilds_feature_matrix_with_training_levels(self):
         train_rows = [
@@ -713,6 +844,122 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual(report["rf_diagnostics"]["top_features"], [{"feature": "x", "importance": 0.9}])
         self.assertEqual(persisted["rf_diagnostics"]["path"], str(output_dir / "rf_feature_diagnostics.json"))
 
+    def test_train_report_uses_rf_selected_features_for_lgbm_and_manifest(self):
+        class DummyModel:
+            def save_model(self, path: str) -> None:
+                Path(path).write_text("dummy model", encoding="utf-8")
+
+        def fake_train_model_result(train_rows, test_rows, **kwargs):
+            self.assertEqual(kwargs["numeric_columns"], ["close_to_zxdkx_pct"])
+            self.assertEqual(kwargs["categorical_columns"], [])
+            from scripts.ml.train_rank_lgbm import TrainedModelResult
+
+            return TrainedModelResult(
+                train_scored=[{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in train_rows],
+                test_scored=[{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in test_rows],
+                top_features=[{"feature": "close_to_zxdkx_pct", "importance": 1}],
+                feature_count=1,
+                model=DummyModel(),
+                feature_names=["close_to_zxdkx_pct"],
+                lightgbm_feature_names=["close_to_zxdkx_pct"],
+                category_levels={},
+            )
+
+        rf_payload = {
+            "enabled": True,
+            "status": "passed",
+            "label_column": "rank_label_3d",
+            "feature_count": 3,
+            "numeric_feature_count": 3,
+            "categorical_feature_count": 0,
+            "params": {},
+            "thresholds": {"min_oob_score": None, "min_test_rank_ic_ret3": None},
+            "metrics": {"test": {"rank_ic_ret3": 0.12}, "train": {}},
+            "oob_score": 0.61,
+            "accuracy": {"train": 0.8, "test": 0.7},
+            "top_features": [
+                {"feature": "close_to_zxdkx_pct", "importance": 0.8},
+                {"feature": "low_to_ma25_pct", "importance": 0.1},
+                {"feature": "pct_chg_1d", "importance": 0.1},
+            ],
+            "low_importance_features": [],
+            "output_paths": {},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "low_to_ma25_pct", "close_to_zxdkx_pct", "pct_chg_1d"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "low_to_ma25_pct": "1", "close_to_zxdkx_pct": "9", "pct_chg_1d": "3"},
+                        {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", "low_to_ma25_pct": "2", "close_to_zxdkx_pct": "8", "pct_chg_1d": "4"},
+                        {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "7", "ret5": "6", "low_to_ma25_pct": "3", "close_to_zxdkx_pct": "7", "pct_chg_1d": "5"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-2", "ret5": "-1", "low_to_ma25_pct": "4", "close_to_zxdkx_pct": "6", "pct_chg_1d": "6"},
+                    ]
+                )
+            output_dir = root / "model"
+
+            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics", return_value=rf_payload):
+                with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+                    report = train_and_report(
+                        dataset,
+                        output_dir,
+                        test_ratio=0.5,
+                        feature_set="raw_numeric",
+                        num_leaves=5,
+                        min_data_in_leaf=1,
+                        num_boost_round=1,
+                        learning_rate=0.1,
+                        label_column="rank_label_3d",
+                        method="b2",
+                        rf_feature_selection="cumulative_importance",
+                        rf_cumulative_importance_threshold=0.8,
+                        rf_min_selected_features=1,
+                    )
+
+            manifest = json.loads((output_dir / "feature_manifest.json").read_text(encoding="utf-8"))
+            rf_json = json.loads((output_dir / "rf_feature_diagnostics.json").read_text(encoding="utf-8"))
+            metadata = json.loads((output_dir / "model_metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["numeric_features"], ["close_to_zxdkx_pct"])
+        self.assertEqual(report["numeric_columns"], ["close_to_zxdkx_pct"])
+        self.assertEqual(report["rf_diagnostics"]["feature_selection"]["selected_features"], ["close_to_zxdkx_pct"])
+        self.assertEqual(rf_json["feature_selection"]["dropped_features"], ["low_to_ma25_pct", "pct_chg_1d"])
+        self.assertEqual(metadata["feature_selection"]["selected_features"], ["close_to_zxdkx_pct"])
+
+    def test_train_report_rejects_rf_feature_selection_when_rf_is_skipped(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "x"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "5", "x": "1"},
+                        {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "0", "x": "0"},
+                    ]
+                )
+
+            with self.assertRaisesRegex(ValueError, "RF feature selection requires RF diagnostics"):
+                train_and_report(
+                    dataset,
+                    root / "model",
+                    test_ratio=0.5,
+                    feature_set="raw_numeric",
+                    num_leaves=5,
+                    min_data_in_leaf=1,
+                    num_boost_round=1,
+                    learning_rate=0.1,
+                    label_column="rank_label_3d",
+                    rf_diagnostics=False,
+                    rf_feature_selection="cumulative_importance",
+                    method="b2",
+                )
+
     def test_random_forest_threshold_failure_writes_report_and_stops_lgbm(self):
         rf_payload = {
             "enabled": True,
@@ -864,6 +1111,9 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["rf_n_estimators"], 19)
         self.assertEqual(captured["kwargs"]["rf_max_depth"], 5)
         self.assertEqual(captured["kwargs"]["rf_min_oob_score"], 0.6)
+        self.assertEqual(captured["kwargs"]["rf_feature_selection"], "none")
+        self.assertEqual(captured["kwargs"]["rf_cumulative_importance_threshold"], 0.85)
+        self.assertEqual(captured["kwargs"]["rf_min_selected_features"], 12)
 
     def test_train_report_persists_custom_label_gain(self):
         class DummyModel:
