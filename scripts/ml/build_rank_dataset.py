@@ -313,7 +313,12 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
     current = [row for row in history if str(row.get("trade_date")) <= pick_date]
     if not current:
         return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
-    entry_close = as_float(current[-1].get("close"))
+    entry_adj_factor = valid_adj_factor(current[-1].get("adj_factor"))
+    entry_close = adjusted_price(
+        current[-1].get("close"),
+        current[-1].get("adj_factor"),
+        entry_adj_factor,
+    )
     if entry_close is None or entry_close == 0.0:
         return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
     future = [row for row in history if str(row.get("trade_date")) > pick_date]
@@ -322,9 +327,17 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
         index = position - 1
         if len(future) <= index:
             return None
-        return round4(pct_change(as_float(future[index].get("close")), entry_close))
+        close = adjusted_price(
+            future[index].get("close"),
+            future[index].get("adj_factor"),
+            entry_adj_factor,
+        )
+        return round4(pct_change(close, entry_close))
 
-    lows = [as_float(row.get("low")) for row in future[:5]]
+    lows = [
+        adjusted_price(row.get("low"), row.get("adj_factor"), entry_adj_factor)
+        for row in future[:5]
+    ]
     valid_lows = [value for value in lows if value is not None]
     drawdown = round4(pct_change(min(valid_lows), entry_close)) if valid_lows else None
     return {
@@ -333,6 +346,23 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
         "ret10": ret_at(10),
         "max_drawdown_5d": drawdown,
     }
+
+
+def valid_adj_factor(value: Any) -> float | None:
+    parsed = as_float(value)
+    if parsed is None or parsed <= 0.0:
+        return None
+    return parsed
+
+
+def adjusted_price(value: Any, adj_factor: Any, base_adj_factor: float | None) -> float | None:
+    price = as_float(value)
+    if price is None:
+        return None
+    current_factor = valid_adj_factor(adj_factor)
+    if current_factor is None or base_adj_factor is None:
+        return price
+    return price * current_factor / base_adj_factor
 
 
 def median(values: Sequence[float]) -> float | None:
@@ -740,7 +770,11 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
         return {}
     query = """
         SELECT ts_code, trade_date, open::double precision, close::double precision, high::double precision, low::double precision,
-               vol::double precision, turnover_rate::double precision, pct_chg::double precision
+               vol::double precision, turnover_rate::double precision, pct_chg::double precision,
+               CASE
+                   WHEN extra_market_jsonb ? 'adj_factor'
+                   THEN (extra_market_jsonb->>'adj_factor')::double precision
+               END AS adj_factor
         FROM daily_market
         WHERE ts_code = ANY(%s)
           AND trade_date >= %s
@@ -752,7 +786,7 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
     with psycopg.connect(dsn) as connection:
         with connection.cursor() as cursor:
             cursor.execute(query, (list(symbols), start_date, end_date))
-            for ts_code, trade_date, open_price, close, high, low, vol, turnover_rate, pct_chg in cursor.fetchall():
+            for ts_code, trade_date, open_price, close, high, low, vol, turnover_rate, pct_chg, adj_factor in cursor.fetchall():
                 grouped[str(ts_code)].append(
                     {
                         "trade_date": trade_date.isoformat() if hasattr(trade_date, "isoformat") else str(trade_date),
@@ -763,6 +797,7 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
                         "vol": as_float(vol),
                         "turnover_rate": as_float(turnover_rate),
                         "pct_chg": as_float(pct_chg),
+                        "adj_factor": as_float(adj_factor),
                     }
                 )
     return dict(grouped)

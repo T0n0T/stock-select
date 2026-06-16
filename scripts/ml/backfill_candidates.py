@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import signal
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -126,6 +127,17 @@ def candidate_path(runtime_root: Path, pick_date: str, method: str) -> Path:
 
 def factor_artifact_path(runtime_root: Path, pick_date: str, method: str) -> Path:
     return runtime_root / "factors" / f"{pick_date}.{method}" / "factors.json"
+
+
+def format_returncode(returncode: int) -> str:
+    if returncode >= 0:
+        return f"rc={returncode}"
+    signum = -returncode
+    try:
+        signal_name = signal.Signals(signum).name
+    except ValueError:
+        signal_name = str(signum)
+    return f"signal={signal_name}"
 
 
 def select_missing_dates(
@@ -263,7 +275,7 @@ def run_backfill(
                     )
                 )
                 if not config.quiet:
-                    print(f"[{completed_count}/{len(dates)}] {actual_date} failed rc={completed.returncode}")
+                    print(f"[{completed_count}/{len(dates)}] {actual_date} failed {format_returncode(completed.returncode)}")
     return result
 
 
@@ -281,14 +293,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--end-date", type=validate_date, required=True)
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--dsn")
+    parser.add_argument("--postgres-dsn", dest="dsn", help="Compatibility alias for --dsn.")
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--method", default=DEFAULT_METHOD)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--jobs", "-j", type=int, dest="workers", help="Compatibility alias for --workers.")
     parser.add_argument("--pool-source", default=DEFAULT_POOL_SOURCE)
     parser.add_argument("--dates-file", type=Path)
     parser.add_argument("--recompute", action="store_true")
     parser.add_argument("--export-factors", action="store_true")
     parser.add_argument("--no-skip-existing", action="store_true")
+    parser.add_argument("--force", action="store_true", dest="no_skip_existing", help="Compatibility alias for --no-skip-existing.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
@@ -351,7 +366,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(shlex.join(command))
 
-    result = run_backfill(selected_dates, config=config)
+    try:
+        result = run_backfill(selected_dates, config=config)
+    except KeyboardInterrupt:
+        print("backfill interrupted; cancel pending work and rerun remaining dates.")
+        return 130
     print(
         "backfill summary: "
         f"success={result.success_count} dry_run={result.dry_run_count} failed={len(result.failures)}"
@@ -361,7 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for failure in result.failures:
             message = (failure.stderr or failure.stdout or "").strip().splitlines()
             suffix = f" {message[-1]}" if message else ""
-            print(f"- {failure.pick_date} rc={failure.returncode}{suffix}")
+            print(f"- {failure.pick_date} {format_returncode(failure.returncode)}{suffix}")
         return 1
     return 0
 

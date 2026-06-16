@@ -13,17 +13,19 @@ backfill_run.py — 并发补跑历史 run 数据
 
 用法:
     scripts/backfill_run.py --start-date 2026-01-01 --end-date 2026-06-04
-    scripts/backfill_run.py --start-date 2026-05-01 --end-date 2026-05-31 --force
-    scripts/backfill_run.py --start-date 2026-03-01 --end-date 2026-06-04 --jobs 4
+    scripts/backfill_run.py --start-date 2026-05-01 --end-date 2026-05-31 --no-skip-existing
+    scripts/backfill_run.py --start-date 2026-03-01 --end-date 2026-06-04 --workers 4
 """
 from __future__ import annotations
 
 import argparse
 import os
+import shlex
+import signal
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
@@ -104,6 +106,8 @@ class RunConfig:
     workers: int
     skip_existing: bool
     dry_run: bool
+    recompute: bool
+    pool_source: str
 
 
 @dataclass
@@ -118,6 +122,42 @@ class RunResult:
 
 def select_dir(runtime_root: Path, pick_date: str, method: str) -> Path:
     return runtime_root / "select" / f"{pick_date}.{method}"
+
+
+def format_returncode(returncode: int) -> str:
+    if returncode < 0:
+        signum = -returncode
+        try:
+            return f"signal={signal.Signals(signum).name}"
+        except ValueError:
+            return f"signal={signum}"
+    return f"exit={returncode}"
+
+
+def build_run_command(
+    *,
+    binary: Path,
+    pick_date: str,
+    runtime_root: Path,
+    method: str,
+    recompute: bool,
+    pool_source: str,
+) -> list[str]:
+    cmd = [
+        str(binary),
+        "run",
+        "--method",
+        method,
+        "--pick-date",
+        pick_date,
+        "--runtime-root",
+        str(runtime_root),
+        "--pool-source",
+        pool_source,
+    ]
+    if recompute:
+        cmd.append("--recompute")
+    return cmd
 
 
 def build_dates(start_date: date, end_date: date, dsn: str | None, runtime_root: Path, method: str, skip_existing: bool) -> tuple[list[str], int]:
@@ -148,8 +188,14 @@ def build_dates(start_date: date, end_date: date, dsn: str | None, runtime_root:
 
 def run_single(date_str: str, config: RunConfig) -> bool:
     """执行一次 run，返回 True=成功。"""
-    cmd = [str(config.binary), "run", "--method", config.method, "--pick-date", date_str]
-    prefix = f"[{date_str}]"
+    cmd = build_run_command(
+        binary=config.binary,
+        pick_date=date_str,
+        runtime_root=config.runtime_root,
+        method=config.method,
+        recompute=config.recompute,
+        pool_source=config.pool_source,
+    )
 
     try:
         proc = subprocess.run(
@@ -162,7 +208,7 @@ def run_single(date_str: str, config: RunConfig) -> bool:
             print(f"  ✓ [{date_str}] 完成")
             return True
         else:
-            print(f"  ✗ [{date_str}] 失败 (exit={proc.returncode})")
+            print(f"  ✗ [{date_str}] 失败 ({format_returncode(proc.returncode)})")
             # 打印最后几行 stderr 帮助排查
             if proc.stderr:
                 last = "\n".join(proc.stderr.strip().splitlines()[-5:])
@@ -176,7 +222,14 @@ def run_single(date_str: str, config: RunConfig) -> bool:
 
 def run_single_quiet(date_str: str, config: RunConfig) -> tuple[str, bool]:
     """给并发用的静默执行，返回 (date_str, success)。"""
-    cmd = [str(config.binary), "run", "--method", config.method, "--pick-date", date_str]
+    cmd = build_run_command(
+        binary=config.binary,
+        pick_date=date_str,
+        runtime_root=config.runtime_root,
+        method=config.method,
+        recompute=config.recompute,
+        pool_source=config.pool_source,
+    )
 
     try:
         proc = subprocess.run(
@@ -196,7 +249,7 @@ def run_single_quiet(date_str: str, config: RunConfig) -> tuple[str, bool]:
         if ok:
             print(f"  ✓ [{date_str}] 完成")
         else:
-            print(f"  ✗ [{date_str}] 失败 (exit={proc.returncode})")
+            print(f"  ✗ [{date_str}] 失败 ({format_returncode(proc.returncode)})")
         return date_str, ok
     except FileNotFoundError:
         print(f"  ✗ [{date_str}] 找不到二进制: {config.binary}")
@@ -215,8 +268,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         epilog=(
             "示例:\n"
             "  %(prog)s --start-date 2026-01-01 --end-date 2026-06-04\n"
-            "  %(prog)s --start-date 2026-05-01 --end-date 2026-05-31 --force\n"
-            "  %(prog)s --start-date 2026-03-01 --end-date 2026-06-04 --jobs 4\n"
+            "  %(prog)s --start-date 2026-05-01 --end-date 2026-05-31 --no-skip-existing\n"
+            "  %(prog)s --start-date 2026-03-01 --end-date 2026-06-04 --workers 4\n"
         ),
     )
 
@@ -224,11 +277,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--end-date", required=True, type=date.fromisoformat, help="截止日期 (含)")
     parser.add_argument("--method", default=resolve_env("STOCK_SELECT_METHOD", DEFAULT_METHOD, dotenv), help="筛选方法，默认 b2")
     parser.add_argument("--binary", type=Path, default=Path(resolve_env("STOCK_SELECT_BIN", str(DEFAULT_BINARY), dotenv) or str(DEFAULT_BINARY)), help="二进制路径")
-    parser.add_argument("--force", action="store_true", help="覆盖已存在的 run artifact")
+    parser.add_argument("--force", action="store_true", dest="no_skip_existing", help="兼容旧参数；等同 --no-skip-existing")
+    parser.add_argument("--no-skip-existing", action="store_true", help="覆盖已存在的 run artifact")
     parser.add_argument("--dry-run", action="store_true", help="只打印要执行的命令")
-    parser.add_argument("--jobs", "-j", type=int, default=2, help="并发数，默认 2（设为 1 则串行）")
+    parser.add_argument("--workers", type=int, default=4, help="并发数，默认 4（设为 1 则串行）")
+    parser.add_argument("--jobs", "-j", type=int, dest="workers", help="兼容旧参数；等同 --workers")
     parser.add_argument("--runtime-root", type=Path, default=Path(resolve_env("STOCK_SELECT_RUNTIME_ROOT", "runtime", dotenv) or "runtime"), help="runtime 根目录")
-    parser.add_argument("--postgres-dsn", default=resolve_env("POSTGRES_DSN", dotenv=dotenv), help="PostgreSQL DSN（用于查交易日历）")
+    parser.add_argument("--dsn", default=resolve_env("POSTGRES_DSN", dotenv=dotenv), help="PostgreSQL DSN（用于查交易日历）")
+    parser.add_argument("--postgres-dsn", dest="dsn", help="兼容旧参数；等同 --dsn")
+    parser.add_argument("--pool-source", default="turnover-top", help="传给 run 自动筛选的股票池来源")
+    parser.add_argument("--recompute", action="store_true", help="传给 run 自动筛选，强制重算 prepared cache")
 
     return parser.parse_args(argv)
 
@@ -238,15 +296,17 @@ def main() -> int:
     dotenv = load_dotenv()
 
     # 确定 DSN：优先参数，其次环境变量，其次 .env
-    dsn = args.postgres_dsn or resolve_env("POSTGRES_DSN", dotenv=dotenv)
+    dsn = args.dsn or resolve_env("POSTGRES_DSN", dotenv=dotenv)
 
     config = RunConfig(
         binary=args.binary,
         runtime_root=args.runtime_root,
         method=args.method,
-        workers=args.jobs,
-        skip_existing=not args.force,
+        workers=args.workers,
+        skip_existing=not args.no_skip_existing,
         dry_run=args.dry_run,
+        recompute=args.recompute,
+        pool_source=args.pool_source,
     )
 
     # ── 阶段 1：确定待处理日期 ─────────────────────────────────────────────
@@ -283,7 +343,15 @@ def main() -> int:
     if config.dry_run:
         print("━━━ DRY RUN ━━━")
         for d in dates:
-            print(f"  {config.binary} run --method {config.method} --pick-date {d}")
+            command = build_run_command(
+                binary=config.binary,
+                pick_date=d,
+                runtime_root=config.runtime_root,
+                method=config.method,
+                recompute=config.recompute,
+                pool_source=config.pool_source,
+            )
+            print(f"  {shlex.join(command)}")
         print(f"总计 {len(dates)} 天")
         return 0
 

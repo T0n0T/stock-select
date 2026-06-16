@@ -15,6 +15,7 @@ fn clean_intraday_removes_runtime_intraday_artifacts_without_touching_models_or_
 
     let intraday_paths = [
         runtime.join("candidates/2026-06-05.intraday.b2.json"),
+        runtime.join("prepared/2026-06-05.intraday.bin.zst"),
         runtime.join("prepared/2026-06-05.intraday.bin"),
         runtime.join("prepared/2026-06-05.intraday.meta.json"),
         runtime.join("factors/2026-06-05.intraday.b2/factors.json"),
@@ -28,7 +29,7 @@ fn clean_intraday_removes_runtime_intraday_artifacts_without_touching_models_or_
 
     let retained_paths = [
         runtime.join("candidates/2026-06-05.b2.json"),
-        runtime.join("prepared/2026-06-05.bin"),
+        runtime.join("prepared/2026-06-05.bin.zst"),
         runtime.join("prepared/2026-06-05.meta.json"),
         runtime.join("factors/2026-06-05.b2/factors.json"),
         runtime.join("charts/2026-06-05.b2/000001.SZ_day.png"),
@@ -50,7 +51,7 @@ fn clean_intraday_removes_runtime_intraday_artifacts_without_touching_models_or_
     .assert()
     .success()
     .stdout(predicate::str::contains(
-        "clean-intraday complete: removed=7",
+        "clean-intraday complete: removed=8",
     ));
 
     for path in &intraday_paths {

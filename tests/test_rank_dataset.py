@@ -664,6 +664,19 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(labels["ret10"], 70.0)
         self.assertEqual(labels["max_drawdown_5d"], -24.0)
 
+    def test_forward_labels_use_front_adjusted_prices_when_adj_factor_is_available(self):
+        rows = [
+            {"trade_date": "2026-05-25", "close": 10.0, "low": 9.8, "adj_factor": 1.0},
+            {"trade_date": "2026-05-26", "close": 5.5, "low": 5.0, "adj_factor": 2.0},
+            {"trade_date": "2026-05-27", "close": 5.75, "low": 5.5, "adj_factor": 2.0},
+            {"trade_date": "2026-05-28", "close": 6.0, "low": 5.8, "adj_factor": 2.0},
+        ]
+
+        labels = compute_forward_labels(rows, "2026-05-25")
+
+        self.assertEqual(labels["ret3"], 20.0)
+        self.assertEqual(labels["max_drawdown_5d"], 0.0)
+
     def test_build_dataset_rows_merges_labels_and_runtime_factors(self):
         selection_rows = [
             {

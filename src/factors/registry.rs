@@ -22,6 +22,7 @@ use crate::model::{Candidate, Method, PreparedRow};
 
 pub const FACTOR_ARTIFACT_VERSION: u32 = 1;
 pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v2";
+pub(crate) const RAW_MARKET_AMOUNT_FACTOR: &str = "_raw_market_amount";
 
 const B2_FACTOR_BUNDLES: &[FactorBundle] = &[
     FactorBundle::RawCommon,
@@ -309,6 +310,9 @@ fn push_latest_db_factor_extras(factors: &mut FactorList, latest: Option<&Factor
         return;
     };
     for (key, value) in &latest.db_factors {
+        if key == RAW_MARKET_AMOUNT_FACTOR {
+            continue;
+        }
         push_number(factors, key, value.is_finite().then_some(*value));
     }
 }
@@ -533,7 +537,7 @@ fn market_amount_ma5_ratio_by_date(
             (
                 *trade_date,
                 rows.iter()
-                    .map(|row| ((row.open + row.close) / 2.0) * row.volume)
+                    .filter_map(|row| market_amount(row))
                     .filter(|value| value.is_finite())
                     .sum::<f64>(),
             )
@@ -551,6 +555,17 @@ fn market_amount_ma5_ratio_by_date(
         );
     }
     ratios
+}
+
+fn market_amount(row: &PreparedRow) -> Option<f64> {
+    row.db_factors
+        .get(RAW_MARKET_AMOUNT_FACTOR)
+        .copied()
+        .filter(|value| value.is_finite())
+        .or_else(|| {
+            let amount = ((row.open + row.close) / 2.0) * row.volume;
+            amount.is_finite().then_some(amount)
+        })
 }
 
 fn ratio_count(numerator: usize, denominator: f64) -> Option<f64> {

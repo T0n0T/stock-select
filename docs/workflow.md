@@ -151,13 +151,13 @@ scripts/model_maintenance.sh --method "$METHOD" promote "diagnostics/ml/$METHOD/
 scripts/backfill_run.py \
   --start-date 2026-01-01 \
   --end-date 2026-06-04 \
-  --jobs 4
+  --workers 4
 
 # 覆盖重跑
 scripts/backfill_run.py \
   --start-date 2026-01-01 \
   --end-date 2026-06-04 \
-  --force
+  --no-skip-existing
 
 # 只补某个月
 scripts/backfill_run.py \

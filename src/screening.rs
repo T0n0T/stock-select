@@ -8,7 +8,9 @@ use serde_json::json;
 use crate::cache::{
     candidate_output_path, load_prepared_cache, write_prepared_cache, write_prepared_cache_for_mode,
 };
-use crate::factors::registry::{build_candidate_factor_rows_from_refs, write_factor_artifact};
+use crate::factors::registry::{
+    RAW_MARKET_AMOUNT_FACTOR, build_candidate_factor_rows_from_refs, write_factor_artifact,
+};
 use crate::indicators::{kdj, macd, rolling_mean, rolling_sum, zx_lines};
 use crate::intraday::{IntradaySnapshotProvider, build_intraday_market_rows, fetch_rt_k_snapshot};
 use crate::local_factors::enrich_local_market_factors;
@@ -362,8 +364,7 @@ where
     Ok(prepared)
 }
 
-fn prepare_rows(mut rows: Vec<MarketRow>) -> Vec<PreparedRow> {
-    enrich_local_market_factors(&mut rows);
+fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
     let mut grouped = BTreeMap::<String, Vec<MarketRow>>::new();
     for row in rows {
         let code = row.ts_code.clone();
@@ -372,13 +373,15 @@ fn prepare_rows(mut rows: Vec<MarketRow>) -> Vec<PreparedRow> {
     let mut prepared = Vec::with_capacity(grouped.values().map(Vec::len).sum());
     for (_code, mut rows) in grouped {
         rows.sort_by_key(|row| row.trade_date);
-        let high = rows.iter().map(|row| row.high).collect::<Vec<_>>();
-        let low = rows.iter().map(|row| row.low).collect::<Vec<_>>();
-        let close = rows.iter().map(|row| row.close).collect::<Vec<_>>();
         let turnover_daily = rows
             .iter()
             .map(|row| ((row.open + row.close) / 2.0) * row.vol)
             .collect::<Vec<_>>();
+        front_adjust_rows(&mut rows);
+        enrich_local_market_factors(&mut rows);
+        let high = rows.iter().map(|row| row.high).collect::<Vec<_>>();
+        let low = rows.iter().map(|row| row.low).collect::<Vec<_>>();
+        let close = rows.iter().map(|row| row.close).collect::<Vec<_>>();
         let turnover_n = rolling_sum(&turnover_daily, 43, 1)
             .into_iter()
             .map(|value| value.unwrap_or(0.0))
@@ -418,7 +421,14 @@ fn prepare_rows(mut rows: Vec<MarketRow>) -> Vec<PreparedRow> {
                 safe_mode: true,
                 lt_filter: true,
                 yellow_b1: false,
-                db_factors: row.db_factors,
+                db_factors: {
+                    let mut db_factors = row.db_factors;
+                    if turnover_daily[idx].is_finite() {
+                        db_factors
+                            .insert(RAW_MARKET_AMOUNT_FACTOR.to_string(), turnover_daily[idx]);
+                    }
+                    db_factors
+                },
             });
         }
     }
@@ -428,6 +438,41 @@ fn prepare_rows(mut rows: Vec<MarketRow>) -> Vec<PreparedRow> {
             .then(left.trade_date.cmp(&right.trade_date))
     });
     prepared
+}
+
+fn front_adjust_rows(rows: &mut [MarketRow]) {
+    let Some(latest_factor) = rows
+        .iter()
+        .rev()
+        .find_map(|row| valid_adj_factor(row.adj_factor))
+    else {
+        return;
+    };
+    for row in rows {
+        let Some(adj_factor) = valid_adj_factor(row.adj_factor) else {
+            continue;
+        };
+        let multiplier = adj_factor / latest_factor;
+        row.open = adjust_price(row.open, multiplier);
+        row.high = adjust_price(row.high, multiplier);
+        row.low = adjust_price(row.low, multiplier);
+        row.close = adjust_price(row.close, multiplier);
+        if let Some(chip_vwap) = row.db_factors.get_mut("chip_vwap") {
+            *chip_vwap = adjust_price(*chip_vwap, multiplier);
+        }
+    }
+}
+
+fn valid_adj_factor(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn adjust_price(value: f64, multiplier: f64) -> f64 {
+    if value.is_finite() {
+        value * multiplier
+    } else {
+        value
+    }
 }
 
 fn filter_turnover_top_pool_codes(

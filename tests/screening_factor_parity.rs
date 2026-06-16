@@ -36,6 +36,7 @@ fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
                     close,
                     vol: 1000.0 + day as f64 * 10.0,
                     turnover_rate: Some(1.0 + day as f64 / 100.0),
+                    adj_factor: None,
                     db_factors: Default::default(),
                 }
             })
@@ -124,6 +125,7 @@ fn db_factor_extras_flow_from_screen_loader_into_candidate_factors() {
                     close,
                     vol: 1000.0 + day as f64 * 10.0,
                     turnover_rate: Some(1.0 + day as f64 / 100.0),
+                    adj_factor: None,
                     db_factors: Default::default(),
                 };
                 if row.trade_date == pick_date {
@@ -322,6 +324,64 @@ fn candidate_factor_rows_include_market_state_from_prepared_cross_section() {
 }
 
 #[test]
+fn market_amount_ma5_ratio_uses_raw_price_basis_after_qfq_prepare() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    let pick_date = first_date + Duration::days(4);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+        Ok((0..5)
+            .map(|offset| {
+                let trade_date = first_date + Duration::days(offset);
+                let mut row = market_row("000001.SZ", trade_date, 10.0, 100.0);
+                row.open = 10.0;
+                row.high = 10.0;
+                row.low = 10.0;
+                row.adj_factor = Some(if offset < 4 { 0.5 } else { 1.0 });
+                row
+            })
+            .collect())
+    })
+    .unwrap();
+    let prepared = load_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        pick_date - Duration::days(366),
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = prepared.last().unwrap();
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date,
+        close: latest.close,
+        turnover_n: latest.turnover_n,
+        signal: Some("B2".to_string()),
+        yellow_b1: None,
+    };
+
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+
+    assert_eq!(
+        rows[0].factors.get("market_amount_ma5_ratio"),
+        Some(&FactorValue::Number(1.0))
+    );
+}
+
+#[test]
 fn b2_factor_profile_adds_chip_age_summary_from_history_when_vwap_and_turnover_are_available() {
     let trade_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let prepared = (0..3)
@@ -495,7 +555,6 @@ fn b3_factor_profile_adds_b3_specific_raw_factors_only_for_b3() {
     assert!(!b2_factors.contains_key("b3_prev_b2_flag"));
 }
 
-
 #[test]
 fn b3_factor_artifact_excludes_review_scores_but_keeps_training_context() {
     let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
@@ -538,7 +597,10 @@ fn b3_factor_artifact_excludes_review_scores_but_keeps_training_context() {
         "total_score",
         "verdict",
     ] {
-        assert!(!factors.contains_key(key), "review-only key leaked into factors: {key}");
+        assert!(
+            !factors.contains_key(key),
+            "review-only key leaked into factors: {key}"
+        );
     }
 
     for key in [
@@ -563,7 +625,10 @@ fn b3_factor_artifact_excludes_review_scores_but_keeps_training_context() {
         "b3_plus_flag",
         "env",
     ] {
-        assert!(factors.contains_key(key), "training key missing from factors: {key}");
+        assert!(
+            factors.contains_key(key),
+            "training key missing from factors: {key}"
+        );
     }
 
     assert!(matches!(
@@ -772,6 +837,7 @@ fn market_row(ts_code: &str, trade_date: NaiveDate, close: f64, vol: f64) -> Mar
         close,
         vol,
         turnover_rate: Some(vol / 100.0),
+        adj_factor: None,
         db_factors: Default::default(),
     }
 }

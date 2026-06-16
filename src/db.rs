@@ -20,6 +20,10 @@ const DAILY_WINDOW_QUERY: &str = "
             m.vol::double precision AS vol,
             m.turnover_rate::double precision AS turnover_rate,
             CASE
+                WHEN m.extra_market_jsonb ? 'adj_factor'
+                THEN (m.extra_market_jsonb->>'adj_factor')::double precision
+            END AS adj_factor,
+            CASE
                 WHEN m.amount IS NOT NULL AND m.amount != 0
                  AND m.vol IS NOT NULL AND m.vol != 0
                 THEN m.amount::double precision * 10.0 / m.vol::double precision
@@ -202,6 +206,7 @@ pub fn fetch_daily_window(
                 close: optional_f64(&row, "close")?,
                 vol: optional_f64(&row, "vol")?,
                 turnover_rate: optional_option_f64(&row, "turnover_rate")?,
+                adj_factor: optional_option_f64(&row, "adj_factor")?,
                 db_factors: db_factor_values([
                     ("chip_vwap", optional_option_f64(&row, "chip_vwap")?),
                     ("chip_turnover", optional_option_f64(&row, "chip_turnover")?),
@@ -323,6 +328,7 @@ pub fn fetch_index_history(
                 close: optional_f64(&row, "close")?,
                 vol: optional_f64(&row, "vol")?,
                 turnover_rate: None,
+                adj_factor: None,
                 db_factors: BTreeMap::new(),
             })
         })
@@ -442,6 +448,12 @@ mod tests {
         ] {
             assert!(DAILY_WINDOW_QUERY.contains(key), "missing {key}");
         }
+    }
+
+    #[test]
+    fn daily_window_query_reads_market_adj_factor_from_extra_market_jsonb() {
+        assert!(DAILY_WINDOW_QUERY.contains("m.extra_market_jsonb ? 'adj_factor'"));
+        assert!(DAILY_WINDOW_QUERY.contains("AS adj_factor"));
     }
 
     #[test]
