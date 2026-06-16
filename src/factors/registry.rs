@@ -20,17 +20,25 @@ use crate::factors::volume::{push_latest_volume_shrink_factor, push_volume_turno
 use crate::factors::zx::{push_zx_pullback_factors, zx_lines};
 use crate::model::{Candidate, Method, PreparedRow};
 
-pub const FACTOR_ARTIFACT_VERSION: u32 = 1;
-pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v2";
+pub const FACTOR_ARTIFACT_VERSION: u32 = 2;
+pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v3";
 pub(crate) const RAW_MARKET_AMOUNT_FACTOR: &str = "_raw_market_amount";
 
 const B2_FACTOR_BUNDLES: &[FactorBundle] = &[
     FactorBundle::RawCommon,
-    FactorBundle::B2ChipAge,
+    FactorBundle::ChipAge,
     FactorBundle::B2Semantic,
 ];
-const B3_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B3Semantic];
-const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::LshSemantic];
+const B3_FACTOR_BUNDLES: &[FactorBundle] = &[
+    FactorBundle::RawCommon,
+    FactorBundle::ChipAge,
+    FactorBundle::B3Semantic,
+];
+const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[
+    FactorBundle::RawCommon,
+    FactorBundle::ChipAge,
+    FactorBundle::LshSemantic,
+];
 const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
 
 const REVIEW_ONLY_FACTOR_KEYS: &[&str] = &[
@@ -46,7 +54,7 @@ const REVIEW_ONLY_FACTOR_KEYS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactorBundle {
     RawCommon,
-    B2ChipAge,
+    ChipAge,
     B2Semantic,
     B3Semantic,
     LshSemantic,
@@ -56,7 +64,7 @@ impl FactorBundle {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RawCommon => "raw_common",
-            Self::B2ChipAge => "b2_chip_age",
+            Self::ChipAge => "chip_age",
             Self::B2Semantic => "b2_semantic",
             Self::B3Semantic => "b3_semantic",
             Self::LshSemantic => "lsh_semantic",
@@ -272,7 +280,7 @@ fn history_factor_fields_for_profile(
                     latest_close,
                 );
             }
-            FactorBundle::B2ChipAge => {
+            FactorBundle::ChipAge => {
                 push_chip_age_summary_factors(&mut factors, history);
             }
             FactorBundle::B2Semantic => {
@@ -302,7 +310,51 @@ fn history_factor_fields_for_profile(
         }
     }
     push_latest_db_factor_extras(&mut factors, latest);
+    push_stock_relative_to_sw_l2_factors(&mut factors, &close, latest);
     factors
+}
+
+fn push_stock_relative_to_sw_l2_factors(
+    factors: &mut FactorList,
+    close: &[f64],
+    latest: Option<&FactorInputRow>,
+) {
+    let latest = latest.map(|row| &row.db_factors);
+    push_number(
+        factors,
+        "stock_vs_sw_l2_ret5_pct",
+        stock_return_minus_factor(
+            close,
+            5,
+            latest.and_then(|factors| factors.get("sw_l2_ret5_pct").copied()),
+        ),
+    );
+    push_number(
+        factors,
+        "stock_vs_sw_l2_ret20_pct",
+        stock_return_minus_factor(
+            close,
+            20,
+            latest.and_then(|factors| factors.get("sw_l2_ret20_pct").copied()),
+        ),
+    );
+}
+
+fn stock_return_minus_factor(
+    close: &[f64],
+    periods: usize,
+    compare_ret_pct: Option<f64>,
+) -> Option<f64> {
+    let compare_ret_pct = compare_ret_pct.filter(|value| value.is_finite())?;
+    if close.len() <= periods {
+        return None;
+    }
+    let latest = *close.last()?;
+    let base = close[close.len() - 1 - periods];
+    if !latest.is_finite() || !base.is_finite() || base == 0.0 {
+        return None;
+    }
+    Some((latest - base) / base * 100.0 - compare_ret_pct)
 }
 
 fn push_latest_db_factor_extras(factors: &mut FactorList, latest: Option<&FactorInputRow>) {

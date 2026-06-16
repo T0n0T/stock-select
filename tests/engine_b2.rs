@@ -238,7 +238,10 @@ fn candidate_payload_factor_provider_includes_legacy_semantic_factors() {
         "volume_behavior",
         "previous_abnormal_move",
     ] {
-        assert!(!row.factors.contains_key(key), "review-only key leaked into factors: {key}");
+        assert!(
+            !row.factors.contains_key(key),
+            "review-only key leaked into factors: {key}"
+        );
     }
     assert!(matches!(
         row.factors.get("macd_phase"),

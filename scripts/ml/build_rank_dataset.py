@@ -21,6 +21,8 @@ from typing import Any, Sequence
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METHOD = "b2"
 RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
+EXPECTED_FACTOR_ARTIFACT_VERSION = 2
+EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v3"
 
 
 IDENTITY_COLUMNS = ["date", "code", "name", "env", "method"]
@@ -130,6 +132,43 @@ RAW_FACTOR_COLUMNS = [
     "market_net_mf_to_amount_pct",
     "market_approx_limit_up_count",
     "market_approx_limit_down_count",
+    "market_sse_ret5_pct",
+    "market_sse_ret20_pct",
+    "market_sse_ma20_bias_pct",
+    "market_sse_volatility20_pct",
+    "market_cn2000_ret5_pct",
+    "market_cn2000_ret20_pct",
+    "market_cn2000_ma20_bias_pct",
+    "market_cn2000_volatility20_pct",
+    "market_broad_ret5_pct",
+    "market_broad_ret20_pct",
+    "market_broad_ma20_bias_pct",
+    "market_broad_volatility20_pct",
+    "sw_l2_ret5_pct",
+    "sw_l2_ret20_pct",
+    "sw_l2_ma20_bias_pct",
+    "sw_l2_volatility20_pct",
+    "sw_l2_ret5_rank_pct",
+    "sw_l2_ret20_rank_pct",
+    "sw_l2_vs_market_ret5_pct",
+    "sw_l2_vs_market_ret20_pct",
+    "stock_vs_sw_l2_ret5_pct",
+    "stock_vs_sw_l2_ret20_pct",
+    "sw_l2_up_ratio",
+    "sw_l2_ge5_ratio",
+    "sw_l2_limit_up_ratio",
+    "sw_l2_limit_down_ratio",
+    "sw_l2_amount_share_pct",
+    "sw_l2_amount_share_rank_pct",
+    "sw_l2_amount_share_ma5_ratio",
+    "sw_l2_top1_amount_share_pct",
+    "sw_l2_top3_amount_share_pct",
+    "sw_l2_top5_amount_share_pct",
+    "sw_l2_net_mf_to_amount_pct",
+    "sw_l2_net_mf_market_share_pct",
+    "sw_l2_net_mf_rank_pct",
+    "stock_amount_to_sw_l2_amount_pct",
+    "stock_net_mf_to_sw_l2_amount_pct",
     "cyq_winner_rate",
     "cyq_cost_50_to_close_pct",
     "cyq_cost_85_to_close_pct",
@@ -157,7 +196,7 @@ B2_RDAGENT_RAW_FACTOR_COLUMNS = [
     "b2_yang_engulf_ma25_vol_ratio",
     "b2_yang_engulf_ma25_strength",
 ]
-B2_CHIP_AGE_RAW_FACTOR_COLUMNS = [
+CHIP_AGE_RAW_FACTOR_COLUMNS = [
     "total_mass",
     "chip_age_layer_sum",
     "chip_age_ultrashort_ratio",
@@ -171,7 +210,7 @@ B2_CHIP_AGE_RAW_FACTOR_COLUMNS = [
     "chip_concentration",
     *[f"chip_age_l{layer}_b{bin_index:02}" for layer in range(4) for bin_index in range(32)],
 ]
-B2_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + B2_RDAGENT_RAW_FACTOR_COLUMNS + B2_CHIP_AGE_RAW_FACTOR_COLUMNS
+B2_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + CHIP_AGE_RAW_FACTOR_COLUMNS + B2_RDAGENT_RAW_FACTOR_COLUMNS
 B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_volume_shrink_ratio",
     "b3_amplitude_pct",
@@ -182,7 +221,7 @@ B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_prev_b2_flag",
     "b3_plus_flag",
 ]
-B3_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + B3_SPECIFIC_RAW_FACTOR_COLUMNS
+B3_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + CHIP_AGE_RAW_FACTOR_COLUMNS + B3_SPECIFIC_RAW_FACTOR_COLUMNS
 LSH_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "lsh_daily_macd_wave_index",
     "lsh_weekly_macd_wave_index",
@@ -201,7 +240,7 @@ LSH_EXCLUDED_RAW_FACTOR_COLUMNS = {
 }
 LSH_RAW_FACTOR_COLUMNS = [
     column for column in RAW_FACTOR_COLUMNS if column not in LSH_EXCLUDED_RAW_FACTOR_COLUMNS
-] + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
+] + CHIP_AGE_RAW_FACTOR_COLUMNS + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
 LABEL_COLUMNS = [
     "ret3",
     "ret5",
@@ -455,6 +494,17 @@ def factor_artifact_key_for_date(pick_date: str, *, intraday: bool = False) -> s
     return f"{pick_date}.intraday" if intraday else pick_date
 
 
+def validate_factor_artifact_contract(payload: dict[str, Any], *, method: str, artifact_key: str) -> str | None:
+    artifact_version = payload.get("artifact_version")
+    library_version = payload.get("factor_library_version")
+    if artifact_version == EXPECTED_FACTOR_ARTIFACT_VERSION and library_version == EXPECTED_FACTOR_LIBRARY_VERSION:
+        return None
+    return (
+        f"stale_factor_artifact:{artifact_key}.{method}:"
+        f"artifact_version={artifact_version}:factor_library_version={library_version}"
+    )
+
+
 def load_factor_artifact_rows(runtime_root: Path, *, method: str, artifact_key: str) -> tuple[dict[str, dict[str, Any]], list[str]]:
     path = runtime_root / "factors" / f"{artifact_key}.{method}" / "factors.json"
     if not path.exists():
@@ -462,6 +512,9 @@ def load_factor_artifact_rows(runtime_root: Path, *, method: str, artifact_key: 
     payload = read_json(path)
     if payload is None:
         return {}, [f"invalid_factor_artifact:{path}"]
+    stale_warning = validate_factor_artifact_contract(payload, method=method, artifact_key=artifact_key)
+    if stale_warning is not None:
+        return {}, [stale_warning]
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         return {}, [f"invalid_factor_rows:{path}"]

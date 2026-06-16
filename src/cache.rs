@@ -9,8 +9,7 @@ use serde_json::{Value, json};
 use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 6;
-const LEGACY_PREPARED_CACHE_SCHEMA_VERSION: u32 = 5;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 8;
 const LEGACY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRBIN1";
 const DICTIONARY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRDIC2";
 const ZSTD_FRAME_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
@@ -368,26 +367,19 @@ pub fn load_prepared_cache_for_mode(
     if !paths.meta_path.exists() {
         return Ok(None);
     }
-    let (data_path, allow_legacy_schema) = if paths.data_path.exists() {
-        (paths.data_path, false)
+    let data_path = if paths.data_path.exists() {
+        paths.data_path
     } else {
         let legacy_path = legacy_prepared_cache_data_path(runtime_root, pick_date, intraday);
         if !legacy_path.exists() {
             return Ok(None);
         }
-        (legacy_path, true)
+        legacy_path
     };
 
     let metadata: PreparedCacheMetadata =
         serde_json::from_slice(&std::fs::read(&paths.meta_path)?)?;
-    if !metadata_matches(
-        &metadata,
-        method,
-        pick_date,
-        start_date,
-        end_date,
-        allow_legacy_schema,
-    ) {
+    if !metadata_matches(&metadata, method, pick_date, start_date, end_date) {
         return Ok(None);
     }
     let rows = decode_prepared_cache_rows(&std::fs::read(data_path)?)?;
@@ -407,10 +399,9 @@ fn metadata_matches(
     pick_date: NaiveDate,
     start_date: NaiveDate,
     end_date: NaiveDate,
-    allow_legacy_schema: bool,
 ) -> bool {
     metadata.artifact_version == PREPARED_CACHE_ARTIFACT_VERSION
-        && metadata_schema_matches(metadata.schema_version, allow_legacy_schema)
+        && metadata_schema_matches(metadata.schema_version)
         && metadata_method_matches(metadata, method)
         && metadata.pick_date == pick_date
         && (metadata.start_date == start_date
@@ -419,9 +410,8 @@ fn metadata_matches(
         && metadata.source_table == "daily_market"
 }
 
-fn metadata_schema_matches(schema_version: u32, allow_legacy_schema: bool) -> bool {
+fn metadata_schema_matches(schema_version: u32) -> bool {
     schema_version == PREPARED_CACHE_SCHEMA_VERSION
-        || (allow_legacy_schema && schema_version == LEGACY_PREPARED_CACHE_SCHEMA_VERSION)
 }
 
 fn metadata_method_matches(metadata: &PreparedCacheMetadata, method: Method) -> bool {

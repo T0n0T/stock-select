@@ -9,6 +9,11 @@ use stock_select::cache::{
 use stock_select::model::{Method, PreparedRow};
 
 #[test]
+fn prepared_cache_schema_version_requires_market_industry_factor_refresh() {
+    assert_eq!(PREPARED_CACHE_SCHEMA_VERSION, 8);
+}
+
+#[test]
 fn prepared_cache_paths_use_zstd_data_extension() {
     let root = tempfile::tempdir().unwrap();
     let date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -83,7 +88,7 @@ fn load_prepared_cache_falls_back_to_legacy_bin_path() {
 }
 
 #[test]
-fn load_prepared_cache_accepts_legacy_bin_schema_version() {
+fn load_prepared_cache_rejects_legacy_bin_with_stale_schema_version() {
     let root = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let start_date = NaiveDate::from_ymd_opt(2025, 5, 24).unwrap();
@@ -108,11 +113,51 @@ fn load_prepared_cache_accepts_legacy_bin_schema_version() {
     )
     .unwrap();
 
-    let rows = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
-        .unwrap()
-        .unwrap();
+    let rows =
+        load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date).unwrap();
 
-    assert_eq!(rows[0].ts_code, "000001.SZ");
+    assert!(rows.is_none());
+}
+
+#[test]
+fn load_intraday_prepared_cache_rejects_legacy_bin_with_stale_schema_version() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 5, 24).unwrap();
+    let data_path = root.path().join("prepared/2026-05-25.intraday.bin");
+    std::fs::create_dir_all(data_path.parent().unwrap()).unwrap();
+    std::fs::write(&data_path, prepared_cache_bytes()).unwrap();
+    std::fs::write(
+        prepared_cache_paths(root.path(), pick_date, true).meta_path,
+        serde_json::to_vec_pretty(&json!({
+            "artifact_version": 1,
+            "method": "b2",
+            "shared_methods": ["b1", "b2", "dribull"],
+            "pick_date": "2026-05-25",
+            "start_date": "2025-05-24",
+            "end_date": "2026-05-25",
+            "schema_version": 5,
+            "row_count": 1,
+            "symbol_count": 1,
+            "source_table": "daily_market",
+            "mode": "intraday_snapshot",
+            "source": "tushare_rt_k"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let rows = load_prepared_cache_for_mode(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+    )
+    .unwrap();
+
+    assert!(rows.is_none());
 }
 
 #[test]

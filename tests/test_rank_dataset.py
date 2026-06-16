@@ -25,8 +25,19 @@ from scripts.ml.build_rank_dataset import (
 )
 from scripts.ml import build_rank_dataset as rank_dataset_schema
 
+TEST_FACTOR_ARTIFACT_VERSION = 2
+TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v3"
+
 
 class RankDatasetTest(unittest.TestCase):
+    def write_factor_artifact(self, factor_dir: Path, payload: dict) -> None:
+        artifact = {
+            "artifact_version": TEST_FACTOR_ARTIFACT_VERSION,
+            "factor_library_version": TEST_FACTOR_LIBRARY_VERSION,
+            **payload,
+        }
+        (factor_dir / "factors.json").write_text(json.dumps(artifact), encoding="utf-8")
+
     def test_parse_args_requires_training_window_dates(self):
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
@@ -131,38 +142,36 @@ class RankDatasetTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (factor_dir / "factors.json").write_text(
-                json.dumps(
-                    {
-                        "method": "b3",
-                        "artifact_key": "2026-05-25",
-                        "rows": [
-                            {
-                                "code": "000001.SZ",
-                                "factors": {
-                                    "env": "neutral",
-                                    "signal_type": "trend_start",
-                                    "daily_macd_phase_type": "rising",
-                                    "daily_macd_wave_index": 2,
-                                    "daily_macd_wave_stage": "early",
-                                    "weekly_macd_phase_type": "rising",
-                                    "weekly_macd_wave_index": 1,
-                                    "weekly_macd_wave_stage": "early",
-                                    "weekly_daily_combo_type": "rising:1|rising:2",
-                                    "midline_state": "above_hold",
-                                    "macd_phase": 4.5,
-                                    "box_mid_position_120d_pct": 74.0,
-                                    "b3_volume_shrink_ratio": 0.5,
-                                    "close_to_zxdkx_pct": 1.25,
-                                    "trend_structure": 4.0,
-                                    "price_position": 3.0,
-                                    "volume_behavior": 5.0,
-                                },
-                            }
-                        ],
+            self.write_factor_artifact(
+                factor_dir,
+                {
+                    "method": "b3",
+                    "artifact_key": "2026-05-25",
+                    "rows": [
+                        {
+                            "code": "000001.SZ",
+                            "factors": {
+                                "env": "neutral",
+                                "signal_type": "trend_start",
+                                "daily_macd_phase_type": "rising",
+                                "daily_macd_wave_index": 2,
+                                "daily_macd_wave_stage": "early",
+                                "weekly_macd_phase_type": "rising",
+                                "weekly_macd_wave_index": 1,
+                                "weekly_macd_wave_stage": "early",
+                                "weekly_daily_combo_type": "rising:1|rising:2",
+                                "midline_state": "above_hold",
+                                "macd_phase": 4.5,
+                                "box_mid_position_120d_pct": 74.0,
+                                "b3_volume_shrink_ratio": 0.5,
+                                "close_to_zxdkx_pct": 1.25,
+                                "trend_structure": 4.0,
+                                "price_position": 3.0,
+                                "volume_behavior": 5.0,
+                            },
+                        }
+                    ],
                     }
-                ),
-                encoding="utf-8",
             )
 
             rows, warnings = load_candidate_rows(
@@ -290,6 +299,61 @@ class RankDatasetTest(unittest.TestCase):
             self.assertIn(column, dataset_columns_for_method("b2"))
             self.assertIn(column, raw_factor_columns_for_method("b2"))
 
+    def test_dataset_schema_includes_market_and_sw_l2_relative_strength_factors(self):
+        expected = [
+            "market_sse_ret5_pct",
+            "market_sse_ret20_pct",
+            "market_sse_ma20_bias_pct",
+            "market_sse_volatility20_pct",
+            "market_cn2000_ret5_pct",
+            "market_cn2000_ret20_pct",
+            "market_cn2000_ma20_bias_pct",
+            "market_cn2000_volatility20_pct",
+            "market_broad_ret5_pct",
+            "market_broad_ret20_pct",
+            "market_broad_ma20_bias_pct",
+            "market_broad_volatility20_pct",
+            "sw_l2_ret5_pct",
+            "sw_l2_ret20_pct",
+            "sw_l2_ma20_bias_pct",
+            "sw_l2_volatility20_pct",
+            "sw_l2_ret5_rank_pct",
+            "sw_l2_ret20_rank_pct",
+            "sw_l2_vs_market_ret5_pct",
+            "sw_l2_vs_market_ret20_pct",
+            "stock_vs_sw_l2_ret5_pct",
+            "stock_vs_sw_l2_ret20_pct",
+        ]
+
+        for method in ("b2", "b3", "lsh"):
+            for column in expected:
+                self.assertIn(column, dataset_columns_for_method(method))
+                self.assertIn(column, raw_factor_columns_for_method(method))
+
+    def test_dataset_schema_includes_sw_l2_crowding_and_capital_concentration_factors(self):
+        expected = [
+            "sw_l2_up_ratio",
+            "sw_l2_ge5_ratio",
+            "sw_l2_limit_up_ratio",
+            "sw_l2_limit_down_ratio",
+            "sw_l2_amount_share_pct",
+            "sw_l2_amount_share_rank_pct",
+            "sw_l2_amount_share_ma5_ratio",
+            "sw_l2_top1_amount_share_pct",
+            "sw_l2_top3_amount_share_pct",
+            "sw_l2_top5_amount_share_pct",
+            "sw_l2_net_mf_to_amount_pct",
+            "sw_l2_net_mf_market_share_pct",
+            "sw_l2_net_mf_rank_pct",
+            "stock_amount_to_sw_l2_amount_pct",
+            "stock_net_mf_to_sw_l2_amount_pct",
+        ]
+
+        for method in ("b2", "b3", "lsh"):
+            for column in expected:
+                self.assertIn(column, dataset_columns_for_method(method))
+                self.assertIn(column, raw_factor_columns_for_method(method))
+
     def test_b2_dataset_schema_includes_rdagent_rank_factors_without_polluting_other_methods(self):
         b2_specific = [
             "D",
@@ -317,7 +381,7 @@ class RankDatasetTest(unittest.TestCase):
             self.assertNotIn(column, dataset_columns_for_method("lsh"))
             self.assertNotIn(column, raw_factor_columns_for_method("lsh"))
 
-    def test_b2_dataset_schema_includes_local_chip_age_cache_factors(self):
+    def test_dataset_schema_includes_shared_chip_age_cache_factors_for_model_methods(self):
         expected = [
             "total_mass",
             "chip_age_ultrashort_ratio",
@@ -334,10 +398,9 @@ class RankDatasetTest(unittest.TestCase):
         ]
 
         for column in expected:
-            self.assertIn(column, dataset_columns_for_method("b2"))
-            self.assertIn(column, raw_factor_columns_for_method("b2"))
-            self.assertNotIn(column, dataset_columns_for_method("b3"))
-            self.assertNotIn(column, raw_factor_columns_for_method("b3"))
+            for method in ("b2", "b3", "lsh"):
+                self.assertIn(column, dataset_columns_for_method(method))
+                self.assertIn(column, raw_factor_columns_for_method(method))
 
     def test_load_external_feature_rows_accepts_symbol_or_code_and_filters_to_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -424,22 +487,22 @@ class RankDatasetTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (factor_dir / "factors.json").write_text(
-                json.dumps(
-                    {
-                        "rows": [
-                            {
-                                "code": "000001.SZ",
-                                "factors": {
-                                    "env": "neutral",
-                                    "signal_type": "trend_start",
-                                    "close_to_zxdkx_pct": 1.25,
-                                },
-                            }
-                        ]
-                    }
-                ),
-                encoding="utf-8",
+            self.write_factor_artifact(
+                factor_dir,
+                {
+                    "method": "b2",
+                    "artifact_key": "2026-05-25",
+                    "rows": [
+                        {
+                            "code": "000001.SZ",
+                            "factors": {
+                                "env": "neutral",
+                                "signal_type": "trend_start",
+                                "close_to_zxdkx_pct": 1.25,
+                            },
+                        }
+                    ],
+                },
             )
 
             rows, warnings = load_candidate_rows(
@@ -478,24 +541,22 @@ class RankDatasetTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (factor_dir / "factors.json").write_text(
-                json.dumps(
-                    {
-                        "method": "b3",
-                        "artifact_key": "2026-05-25",
-                        "rows": [
-                            {
-                                "code": "000001.SZ",
-                                "factors": {
-                                    "env": "neutral",
-                                    "signal_type": "trend_start",
-                                    "close_to_zxdkx_pct": 1.25,
-                                },
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
+            self.write_factor_artifact(
+                factor_dir,
+                {
+                    "method": "b3",
+                    "artifact_key": "2026-05-25",
+                    "rows": [
+                        {
+                            "code": "000001.SZ",
+                            "factors": {
+                                "env": "neutral",
+                                "signal_type": "trend_start",
+                                "close_to_zxdkx_pct": 1.25,
+                            },
+                        }
+                    ],
+                },
             )
 
             rows, warnings = load_candidate_rows(
@@ -529,25 +590,23 @@ class RankDatasetTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (factor_dir / "factors.json").write_text(
-                json.dumps(
-                    {
-                        "method": "b2",
-                        "artifact_key": "2026-05-25",
-                        "rows": [
-                            {
-                                "code": "000001.SZ",
-                                "factors": {
-                                    "env": "strong",
-                                    "close_to_zxdkx_pct": 1.5,
-                                    "macd_hist_to_close_pct": 0.25,
-                                    "macd_hist_positive_flag": 1,
-                                },
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
+            self.write_factor_artifact(
+                factor_dir,
+                {
+                    "method": "b2",
+                    "artifact_key": "2026-05-25",
+                    "rows": [
+                        {
+                            "code": "000001.SZ",
+                            "factors": {
+                                "env": "strong",
+                                "close_to_zxdkx_pct": 1.5,
+                                "macd_hist_to_close_pct": 0.25,
+                                "macd_hist_positive_flag": 1,
+                            },
+                        }
+                    ],
+                },
             )
 
             rows, warnings = load_candidate_rows(root, method="b2", start_date="2026-05-25", end_date="2026-05-25")
@@ -564,6 +623,42 @@ class RankDatasetTest(unittest.TestCase):
 
         self.assertEqual(rows, {})
         self.assertEqual(warnings, ["missing_factor_artifact:2026-05-25.b2"])
+
+    def test_load_factor_artifact_rows_rejects_stale_artifact_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            factor_dir = root / "factors" / "2026-05-25.b2"
+            factor_dir.mkdir(parents=True)
+            (factor_dir / "factors.json").write_text(
+                json.dumps(
+                    {
+                        "artifact_version": 1,
+                        "factor_library_version": "rust-factor-library-v2",
+                        "method": "b2",
+                        "artifact_key": "2026-05-25",
+                        "rows": [
+                            {
+                                "code": "000001.SZ",
+                                "factors": {
+                                    "close_to_zxdkx_pct": 1.25,
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            rows, warnings = load_factor_artifact_rows(root, method="b2", artifact_key="2026-05-25")
+
+        self.assertEqual(rows, {})
+        self.assertEqual(
+            warnings,
+            [
+                "stale_factor_artifact:2026-05-25.b2:"
+                "artifact_version=1:factor_library_version=rust-factor-library-v2"
+            ],
+        )
 
     def test_load_selection_rows_reads_current_select_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -599,23 +694,23 @@ class RankDatasetTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (factor_dir / "factors.json").write_text(
-                json.dumps(
-                    {
-                        "rows": [
-                            {
-                                "code": "000001.SZ",
-                                "factors": {
-                                    "signal": "B2",
-                                    "signal_type": "trend_start",
-                                    "close_to_zxdkx_pct": 1.25,
-                                    "near_ma25_support_flag": True,
-                                },
-                            }
-                        ]
-                    }
-                ),
-                encoding="utf-8",
+            self.write_factor_artifact(
+                factor_dir,
+                {
+                    "method": "b2",
+                    "artifact_key": "2026-05-25",
+                    "rows": [
+                        {
+                            "code": "000001.SZ",
+                            "factors": {
+                                "signal": "B2",
+                                "signal_type": "trend_start",
+                                "close_to_zxdkx_pct": 1.25,
+                                "near_ma25_support_flag": True,
+                            },
+                        }
+                    ],
+                },
             )
 
             rows, warnings = load_selection_rows(
