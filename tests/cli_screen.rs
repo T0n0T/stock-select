@@ -26,6 +26,28 @@ fn b2_screen_requires_resolved_dsn_instead_of_stub_success() {
 }
 
 #[test]
+fn b3_screen_export_factors_without_cached_environment_reaches_daily_loader() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env_remove("POSTGRES_DSN")
+        .args([
+            "screen",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-06-09",
+            "--method",
+            "b3",
+            "--export-factors",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("A database DSN is required."))
+        .stderr(predicate::str::contains("No manual, persisted, or prepared").not());
+}
+
+#[test]
 fn b2_screen_accepts_pool_file_for_custom_pool() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();

@@ -19,10 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.ml.train_rank_lgbm import (
+    CATEGORICAL_ENCODINGS,
+    DEFAULT_CATEGORICAL_ENCODING,
     as_float,
     build_model_metadata,
     DEFAULT_LABEL_GAIN,
     grouped_by_date,
+    load_feature_manifest_encoding,
     load_feature_manifest_with_levels,
     parse_label_gain,
     read_dataset,
@@ -131,7 +134,10 @@ def export_scores(
     lambdarank_truncation_level: int = 0,
     label_column: str = "rank_label_3d",
     method: str = DEFAULT_METHOD,
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
 ) -> dict[str, Any]:
+    if categorical_encoding not in CATEGORICAL_ENCODINGS:
+        raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
     rows = read_dataset(dataset)
     if not rows:
         raise ValueError("dataset is empty")
@@ -165,6 +171,7 @@ def export_scores(
         label_gain=resolved_label_gain,
         lambdarank_truncation_level=lambdarank_truncation_level,
         fixed_categorical_levels=fixed_categorical_levels,
+        categorical_encoding=categorical_encoding,
     )
     score_scored = model_result.test_scored
 
@@ -191,6 +198,8 @@ def export_scores(
         label_column=label_column,
         model_params=model_params,
         feature_selection=load_trial_feature_selection(model_output_dir),
+        categorical_encoding=categorical_encoding,
+        categorical_code_maps=model_result.categorical_code_maps,
     )
     model_artifacts = write_model_artifacts(model_result.model, metadata, model_output_dir)
     summary = {
@@ -208,6 +217,7 @@ def export_scores(
         "score_date_count": len({row["date"] for row in score_rows}),
         "score_row_count": len(score_rows),
         "feature_count": model_result.feature_count,
+        "categorical_encoding": categorical_encoding,
         "model_params": model_params,
         "top_features": model_result.top_features[:20],
         "columns": EXPORT_COLUMNS,
@@ -239,6 +249,8 @@ def load_trial_report_defaults(model_output_dir: Path | None) -> dict[str, Any]:
             result[key] = params[key]
     if payload.get("label_column"):
         result["label_column"] = str(payload["label_column"])
+    if payload.get("categorical_encoding"):
+        result["categorical_encoding"] = str(payload["categorical_encoding"])
     return result
 
 
@@ -261,6 +273,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--label-column")
     parser.add_argument("--label-gain", type=parse_label_gain)
     parser.add_argument("--lambdarank-truncation-level", type=int)
+    parser.add_argument("--categorical-encoding", choices=sorted(CATEGORICAL_ENCODINGS))
     return parser.parse_args(argv)
 
 
@@ -268,9 +281,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     defaults = resolve_default_paths(args.method, model_output_dir=args.model_output_dir)
     report_defaults = load_trial_report_defaults(args.model_output_dir)
+    feature_manifest = args.feature_manifest or defaults["feature_manifest"]
+    categorical_encoding = (
+        args.categorical_encoding
+        or report_defaults.get("categorical_encoding")
+        or load_feature_manifest_encoding(feature_manifest)
+    )
     summary = export_scores(
         dataset=args.dataset or defaults["dataset"],
-        feature_manifest=args.feature_manifest or defaults["feature_manifest"],
+        feature_manifest=feature_manifest,
         output=args.output or defaults["output"],
         summary_output=args.summary_output or defaults["summary_output"],
         model_output_dir=defaults["model_output_dir"],
@@ -286,6 +305,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lambdarank_truncation_level=args.lambdarank_truncation_level if args.lambdarank_truncation_level is not None else int(report_defaults.get("lambdarank_truncation_level", 0)),
         label_column=args.label_column or str(report_defaults.get("label_column", "rank_label_3d")),
         method=args.method,
+        categorical_encoding=str(categorical_encoding),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

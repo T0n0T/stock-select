@@ -228,6 +228,7 @@ const DAILY_WINDOW_QUERY: &str = "
                 d.trade_date,
                 d.l2_code,
                 d.industry_amount,
+                d.industry_net_mf_amount_base,
                 CASE WHEN d.pct_count > 0 THEN d.up_count::double precision / d.pct_count::double precision END AS sw_l2_up_ratio,
                 CASE WHEN d.pct_count > 0 THEN d.ge5_count::double precision / d.pct_count::double precision END AS sw_l2_ge5_ratio,
                 CASE WHEN d.limit_up_base_count > 0 THEN d.limit_up_count::double precision / d.limit_up_base_count::double precision END AS sw_l2_limit_up_ratio,
@@ -1103,6 +1104,7 @@ mod tests {
         assert!(normalized.contains(
             "sum(amount) FILTER ( WHERE net_mf_amount IS NOT NULL AND amount IS NOT NULL ) AS industry_net_mf_amount_base"
         ));
+        assert!(normalized.contains("d.industry_net_mf_amount_base, CASE WHEN d.pct_count > 0"));
         assert!(normalized.contains(
             "sum(amount) FILTER ( WHERE net_mf_amount IS NOT NULL AND amount IS NOT NULL ) AS market_net_mf_amount_base"
         ));

@@ -715,6 +715,13 @@ fn b2_eod_run_without_manual_environment_or_dsn_uses_prepared_market_state() {
     .unwrap();
     assert_eq!(run["environment"]["source"], "prepared_market_state");
     assert_eq!(run["environment"]["state"], "neutral");
+    assert!(temp.path().join("environment/history.jsonl").exists());
+    assert!(temp.path().join("environment/latest.json").exists());
+    assert!(
+        temp.path()
+            .join("environment/daily/2026-05-25.neutral.json")
+            .exists()
+    );
 }
 
 #[test]

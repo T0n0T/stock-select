@@ -773,6 +773,62 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
 }
 
 #[test]
+fn screen_export_factors_derives_environment_from_prepared_cross_section() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 5, 3).unwrap();
+    let mut rows = vec![
+        prepared_row("000001.SZ", 1, 10.0, 1000.0, 30.0),
+        prepared_row("000001.SZ", 2, 10.1, 900.0, 35.0),
+        prepared_row("000001.SZ", 3, 10.6, 1200.0, 45.0),
+        prepared_row("000001.SZ", 4, 10.7, 600.0, 46.0),
+        prepared_row("000002.SZ", 3, 20.0, 1000.0, 35.0),
+        prepared_row("000002.SZ", 4, 21.0, 1000.0, 40.0),
+        prepared_row("000003.SZ", 3, 30.0, 1000.0, 35.0),
+        prepared_row("000003.SZ", 4, 31.5, 1000.0, 40.0),
+    ];
+    for row in rows.iter_mut().filter(|row| row.trade_date == pick_date) {
+        row.chg_d = Some(5.0);
+    }
+    write_prepared_cache(
+        temp.path(),
+        Method::B3,
+        pick_date,
+        start_date,
+        pick_date,
+        &rows,
+    )
+    .unwrap();
+
+    run_screen_with_loader(
+        ScreenRequest {
+            method: Method::B3,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: true,
+            environment_state: None,
+        },
+        |_dsn, _start_date, _end_date| {
+            panic!("environment export test should reuse prepared cache")
+        },
+    )
+    .unwrap();
+
+    let factors: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("factors/2026-05-04.b3/factors.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!temp.path().join("environment/history.jsonl").exists());
+    assert!(!factors["rows"].as_array().unwrap().is_empty());
+    assert_eq!(factors["rows"][0]["factors"]["env"], "strong");
+}
+
+#[test]
 fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();

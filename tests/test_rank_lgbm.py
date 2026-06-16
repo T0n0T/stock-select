@@ -357,7 +357,7 @@ class RankLgbmTest(unittest.TestCase):
             {"date": "2026-01-01", "env": "strong", "signal_type": "trend_start", "close_to_zxdkx_pct": ""},
         ]
 
-        matrix, feature_names = build_feature_matrix(
+        matrix, feature_names, _code_maps = build_feature_matrix(
             rows,
             numeric_columns=["close_to_zxdkx_pct"],
             categorical_columns=["env", "signal_type"],
@@ -368,6 +368,30 @@ class RankLgbmTest(unittest.TestCase):
         self.assertIn("signal_type=trend_start", feature_names)
         self.assertEqual(matrix[0][feature_names.index("close_to_zxdkx_pct")], 1.5)
         self.assertEqual(matrix[1][feature_names.index("close_to_zxdkx_pct")], 0.0)
+
+    def test_build_feature_matrix_native_encodes_categoricals_as_codes(self):
+        rows = [
+            {"date": "2026-01-01", "env": "weak", "signal_type": "rebound", "close_to_zxdkx_pct": "1.5"},
+            {"date": "2026-01-01", "env": "strong", "signal_type": "trend_start", "close_to_zxdkx_pct": ""},
+            {"date": "2026-01-01", "env": "missing_level", "signal_type": "", "close_to_zxdkx_pct": "2.5"},
+        ]
+
+        matrix, feature_names, code_maps = build_feature_matrix(
+            rows,
+            numeric_columns=["close_to_zxdkx_pct"],
+            categorical_columns=["env", "signal_type"],
+            levels={"env": ["weak", "strong"], "signal_type": ["rebound", "trend_start"]},
+            categorical_encoding="native",
+        )
+
+        self.assertEqual(feature_names, ["close_to_zxdkx_pct", "env", "signal_type"])
+        self.assertEqual(
+            code_maps,
+            {"env": {"weak": 0, "strong": 1}, "signal_type": {"rebound": 0, "trend_start": 1}},
+        )
+        self.assertEqual(matrix[0], [1.5, 0.0, 0.0])
+        self.assertEqual(matrix[1], [0.0, 1.0, 1.0])
+        self.assertEqual(matrix[2], [2.5, -1.0, -1.0])
 
     def test_random_forest_diagnostics_reports_importance_and_metrics(self):
         rows = [
@@ -489,7 +513,7 @@ class RankLgbmTest(unittest.TestCase):
             {"date": "2026-01-03", "env": "weak", "close_to_zxdkx_pct": "3.5"},
         ]
         levels = {"env": ["weak", "strong"]}
-        expected_matrix, feature_names = build_feature_matrix(
+        expected_matrix, feature_names, _code_maps = build_feature_matrix(
             score_rows,
             numeric_columns=["close_to_zxdkx_pct"],
             categorical_columns=["env"],
@@ -508,11 +532,33 @@ class RankLgbmTest(unittest.TestCase):
             model_params={"num_leaves": 9},
         )
 
-        matrix, rebuilt_names = build_feature_matrix_from_metadata(score_rows, metadata)
+        matrix, rebuilt_names, _rebuilt_code_maps = build_feature_matrix_from_metadata(score_rows, metadata)
 
         self.assertEqual(rebuilt_names, feature_names)
         self.assertEqual(matrix, expected_matrix)
         self.assertEqual(matrix[0], [0.0, 0.0, 0.0])
+        self.assertEqual(metadata["categorical_encoding"], "one_hot")
+
+    def test_model_metadata_rebuilds_native_categorical_matrix(self):
+        rows = [
+            {"date": "2026-01-03", "env": "neutral", "close_to_zxdkx_pct": ""},
+            {"date": "2026-01-03", "env": "weak", "close_to_zxdkx_pct": "3.5"},
+            {"date": "2026-01-03", "env": "unseen", "close_to_zxdkx_pct": "1.0"},
+        ]
+        metadata = {
+            "numeric_columns": ["close_to_zxdkx_pct"],
+            "categorical_columns": ["env"],
+            "categorical_levels": {"env": ["weak", "neutral", "strong"]},
+            "categorical_code_maps": {"env": {"weak": 0, "neutral": 1, "strong": 2}},
+            "categorical_encoding": "native",
+            "feature_names": ["close_to_zxdkx_pct", "env"],
+        }
+
+        matrix, rebuilt_names, code_maps = build_feature_matrix_from_metadata(rows, metadata)
+
+        self.assertEqual(rebuilt_names, ["close_to_zxdkx_pct", "env"])
+        self.assertEqual(code_maps, {"env": {"weak": 0, "neutral": 1, "strong": 2}})
+        self.assertEqual(matrix, [[0.0, 1.0], [3.5, 0.0], [1.0, -1.0]])
 
     def test_rows_for_dates_uses_requested_label_column(self):
         rows = [
@@ -593,6 +639,56 @@ class RankLgbmTest(unittest.TestCase):
 
         self.assertEqual(captured["label_gain"], [0, 1, 4, 12])
         self.assertEqual(captured["lambdarank_truncation_level"], 8)
+
+    def test_train_model_result_passes_native_categorical_features_to_lightgbm(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "ret3": "6", "ret5": "6", "x": "1", "env": "weak"},
+            {"date": "2026-01-01", "code": "b", "rank_label_3d": "0", "ret3": "-1", "ret5": "-1", "x": "0", "env": "strong"},
+            {"date": "2026-01-02", "code": "a", "rank_label_3d": "3", "ret3": "5", "ret5": "5", "x": "2", "env": "weak"},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "ret3": "0", "ret5": "0", "x": "0", "env": "strong"},
+        ]
+        captured = {}
+
+        class DummyDataset:
+            def __init__(self, matrix, **kwargs):
+                captured["dataset_matrix"] = matrix
+                captured["dataset_kwargs"] = kwargs
+
+        class DummyModel:
+            def predict(self, matrix):
+                return [float(row[0] + row[1]) for row in matrix]
+
+            def feature_importance(self):
+                return [1, 1]
+
+        def fake_train(params, dataset, num_boost_round):
+            captured["params"] = params
+            captured["num_boost_round"] = num_boost_round
+            return DummyModel()
+
+        fake_lightgbm = types.SimpleNamespace(Dataset=DummyDataset, train=fake_train)
+        fake_numpy = types.SimpleNamespace(array=lambda values, dtype=None: values)
+        with patch.dict(sys.modules, {"lightgbm": fake_lightgbm, "numpy": fake_numpy}):
+            result = train_model_result(
+                rows[:2],
+                rows[2:],
+                numeric_columns=["x"],
+                categorical_columns=["env"],
+                num_leaves=5,
+                min_data_in_leaf=1,
+                num_boost_round=3,
+                learning_rate=0.1,
+                label_column="rank_label_3d",
+                num_threads=1,
+                fixed_categorical_levels={"env": ["weak", "strong"]},
+                categorical_encoding="native",
+            )
+
+        self.assertEqual(captured["dataset_kwargs"]["categorical_feature"], ["env"])
+        self.assertEqual(captured["dataset_matrix"], [[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(result.feature_names, ["x", "env"])
+        self.assertEqual(result.category_levels, {"env": ["weak", "strong"]})
+        self.assertEqual(result.categorical_code_maps, {"env": {"weak": 0, "strong": 1}})
 
     def test_evaluate_model_reports_ret3_and_ret5_metrics(self):
         rows = [
@@ -716,6 +812,7 @@ class RankLgbmTest(unittest.TestCase):
                 feature_names=["close_to_zxdkx_pct", "env=weak", "env=strong", "env=neutral"],
                 lightgbm_feature_names=["close_to_zxdkx_pct", "env_weak", "env_strong", "env_neutral"],
                 category_levels={"env": ["weak", "strong", "neutral"]},
+                categorical_code_maps={"env": {"weak": 0, "strong": 1, "neutral": 2}},
             )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -783,6 +880,7 @@ class RankLgbmTest(unittest.TestCase):
                 feature_names=["x"],
                 lightgbm_feature_names=["x"],
                 category_levels={},
+                categorical_code_maps={},
             )
 
         rf_payload = {
@@ -863,6 +961,7 @@ class RankLgbmTest(unittest.TestCase):
                 feature_names=["close_to_zxdkx_pct"],
                 lightgbm_feature_names=["close_to_zxdkx_pct"],
                 category_levels={},
+                categorical_code_maps={},
             )
 
         rf_payload = {
@@ -1033,6 +1132,7 @@ class RankLgbmTest(unittest.TestCase):
                 feature_names=["x"],
                 lightgbm_feature_names=["x"],
                 category_levels={},
+                categorical_code_maps={},
             )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1144,6 +1244,7 @@ class RankLgbmTest(unittest.TestCase):
                 feature_names=["close_to_zxdkx_pct"],
                 lightgbm_feature_names=["close_to_zxdkx_pct"],
                 category_levels={},
+                categorical_code_maps={},
             )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1226,6 +1327,7 @@ class RankLgbmTest(unittest.TestCase):
                 feature_names=["close_to_zxdkx_pct"],
                 lightgbm_feature_names=["close_to_zxdkx_pct"],
                 category_levels={},
+                categorical_code_maps={},
             )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1303,6 +1405,7 @@ class RankLgbmTest(unittest.TestCase):
                 feature_names=["close_to_zxdkx_pct"],
                 lightgbm_feature_names=["close_to_zxdkx_pct"],
                 category_levels={"env": ["weak", "strong"]},
+                categorical_code_maps={"env": {"weak": 0, "strong": 1}},
             )
 
         with tempfile.TemporaryDirectory() as temp_dir:

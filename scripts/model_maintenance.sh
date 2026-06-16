@@ -106,7 +106,7 @@ def coalesce(*values):
 
 
 def feature_summary(model_dir: Path, card: dict) -> str:
-    metadata = read_json(model_dir / "model_metadata.json")
+    metadata = summary_metadata(model_dir)
     numeric_count = coalesce(card.get("numeric_feature_count"), count_list(metadata.get("numeric_columns")), 0)
     categorical_count = coalesce(
         card.get("categorical_feature_count"),
@@ -123,12 +123,75 @@ def feature_summary(model_dir: Path, card: dict) -> str:
     return f"{feature_count} 个特征 (数值 {numeric_count}, 分类 {categorical_count}), label={label}"
 
 
+def routing_manifest(model_dir: Path) -> dict:
+    manifest = read_json(model_dir / "model_routing.json")
+    models = manifest.get("models")
+    if not isinstance(models, dict) or not models:
+        return {}
+    return manifest
+
+
+def routed_child_dir(model_dir: Path, relative_dir: str) -> Path:
+    child = Path(relative_dir)
+    return child if child.is_absolute() else model_dir / child
+
+
+def default_routed_model_dir(model_dir: Path, manifest: dict) -> Path | None:
+    models = manifest.get("models")
+    if not isinstance(models, dict) or not models:
+        return None
+    default_model = manifest.get("default_model")
+    relative_dir = models.get(default_model) if isinstance(default_model, str) else None
+    if not isinstance(relative_dir, str):
+        first_key = sorted(models)[0]
+        relative_dir = models.get(first_key)
+    if not isinstance(relative_dir, str):
+        return None
+    return routed_child_dir(model_dir, relative_dir)
+
+
+def summary_metadata(model_dir: Path) -> dict:
+    metadata = read_json(model_dir / "model_metadata.json")
+    if metadata:
+        return metadata
+    manifest = routing_manifest(model_dir)
+    default_dir = default_routed_model_dir(model_dir, manifest)
+    if default_dir is None:
+        return {}
+    return read_json(default_dir / "model_metadata.json")
+
+
 def artifact_summary(model_dir: Path) -> str:
+    manifest = routing_manifest(model_dir)
+    if manifest:
+        missing = []
+        models = manifest.get("models") or {}
+        for model_key, relative_dir in sorted(models.items()):
+            if not isinstance(relative_dir, str):
+                missing.append(f"{model_key}/model_dir")
+                continue
+            child_dir = routed_child_dir(model_dir, relative_dir)
+            for name in ["model.txt", "model_metadata.json"]:
+                if not (child_dir / name).exists():
+                    missing.append(f"{model_key}/{name}")
+        if not missing:
+            return "OK"
+        return "缺失 " + ", ".join(missing)
+
     required = ["model.txt", "model_metadata.json"]
     missing = [name for name in required if not (model_dir / name).exists()]
     if not missing:
         return "OK"
     return "缺失 " + ", ".join(missing)
+
+
+def routed_summary(model_dir: Path) -> str | None:
+    manifest = routing_manifest(model_dir)
+    if not manifest:
+        return None
+    models = manifest.get("models") or {}
+    default_model = manifest.get("default_model") or "未记录"
+    return f"default={default_model}, 子模型 {len(models)} 个"
 
 
 def status_summary(status: str) -> str:
@@ -197,18 +260,13 @@ def route_title(mode: str) -> str:
     }.get(mode, mode)
 
 
-def route_items(state: dict, default_model_dir_text: str) -> list[tuple[str, dict]]:
+def route_items(root: Path, state: dict, default_model_dir_text: str) -> list[tuple[str, dict]]:
     if not state:
-        return [
-            (
-                "eod",
-                {
-                    "status": "ready",
-                    "model_dir": default_model_dir_text,
-                    "reason": "未找到 model_state.json；按默认日终模型目录展示",
-                },
-            )
-        ]
+        item = {"status": "ready", "model_dir": default_model_dir_text}
+        default_dir = resolve_model_dir(root, default_model_dir_text)
+        if not (default_dir / "model_routing.json").exists():
+            item["reason"] = "未找到 model_state.json；按默认日终模型目录展示"
+        return [("eod", item)]
     output = []
     for mode in ("eod", "intraday"):
         item = state.get(mode)
@@ -245,6 +303,9 @@ def print_route(root: Path, method: str, mode: str, item: dict) -> None:
     print(f"  状态: {status_summary(status)}")
     print(f"  模型目录: {model_dir}")
     print(f"  产物检查: {artifact_summary(model_dir)}")
+    route_summary = routed_summary(model_dir)
+    if route_summary:
+        print(f"  路由模型: {route_summary}")
     print(f"  发布版本: {coalesce(card.get('model_version'), '未记录')}")
     print(f"  训练窗口: {coalesce(card.get('train_window'), '未记录')}")
     print(f"  打分窗口: {coalesce(card.get('score_window'), '未记录')}")
@@ -281,7 +342,7 @@ print(f"运行目录: {root}")
 print("说明: eod=日终收盘后模型；intraday=盘中实时可计算模型")
 
 state = read_json(state_path) if state_path.exists() else {}
-for mode, item in route_items(state, default_model_dir_text):
+for mode, item in route_items(root, state, default_model_dir_text):
     print_route(root, method, mode, item)
 PY
 }

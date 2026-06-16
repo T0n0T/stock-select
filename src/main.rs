@@ -24,7 +24,8 @@ use stock_select::engine::presentation::{
 use stock_select::engine::run::{SelectionRunRequest, run_selection};
 use stock_select::engine::types::{DisplayRow, LlmAnnotation};
 use stock_select::environment::{
-    ResolvedEnvironment, ensure_market_environment, resolve_intraday_market_environment,
+    ResolvedEnvironment, ensure_market_environment, normalize_environment_state,
+    persist_prepared_market_environment, prepared_market_state, resolve_intraday_market_environment,
     resolve_market_environment,
 };
 use stock_select::intraday::TushareRestProvider;
@@ -331,21 +332,11 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
     let pick_date = resolve_pick_date(args.pick_date, args.method.intraday, "screen")?;
     let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
     let dsn = resolve_config_value(args.dsn.as_deref(), "POSTGRES_DSN").unwrap_or_default();
-    let export_environment_state = if args.export_factors {
-        Some(
-            resolve_command_environment(
-                &runtime_root,
-                pick_date,
-                args.method.intraday,
-                dsn.as_str(),
-                args.environment_state.clone(),
-                args.environment_reason.clone(),
-            )?
-            .state,
-        )
-    } else {
-        None
-    };
+    let environment_state = args
+        .environment_state
+        .as_deref()
+        .map(normalize_environment_state)
+        .transpose()?;
     let request = ScreenRequest {
         method: args.method.method,
         pick_date,
@@ -359,7 +350,7 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
         },
         pool_file: args.pool_file,
         export_factors: args.export_factors,
-        environment_state: export_environment_state,
+        environment_state,
     };
     let path = if args.method.intraday {
         let token = resolve_config_value(args.tushare_token.as_deref(), "TUSHARE_TOKEN")
@@ -678,50 +669,12 @@ fn resolve_prepared_market_environment(
     let state = prepared_market_state(&rows, pick_date).ok_or_else(|| {
         anyhow::anyhow!("Prepared cache has no usable market state for {pick_date}.")
     })?;
-    Ok(ResolvedEnvironment {
+    persist_prepared_market_environment(
+        runtime_root,
+        pick_date,
         state,
-        interval_start: Some(pick_date),
-        interval_end: Some(pick_date),
-        reason: Some("derived from prepared market breadth factors".to_string()),
-        source: "prepared_market_state".to_string(),
-    })
-}
-
-fn prepared_market_state(rows: &[PreparedRow], pick_date: NaiveDate) -> Option<String> {
-    let has_pick_date_rows = rows.iter().any(|row| row.trade_date == pick_date);
-    let pct_changes = rows
-        .iter()
-        .filter(|row| row.trade_date == pick_date)
-        .filter_map(|row| row.chg_d.filter(|value| value.is_finite()))
-        .collect::<Vec<_>>();
-    if pct_changes.is_empty() {
-        return has_pick_date_rows.then(|| "neutral".to_string());
-    }
-    let total = pct_changes.len() as f64;
-    let up_ratio = pct_changes.iter().filter(|value| **value > 0.0).count() as f64 / total;
-    let ge5_ratio = pct_changes.iter().filter(|value| **value >= 5.0).count() as f64 / total;
-    let le_minus5_ratio = pct_changes.iter().filter(|value| **value <= -5.0).count() as f64 / total;
-    let median = median_f64(pct_changes)?;
-    if up_ratio >= 0.62 || ge5_ratio >= 0.12 || median >= 1.2 {
-        Some("strong".to_string())
-    } else if up_ratio <= 0.38 || le_minus5_ratio >= 0.12 || median <= -1.2 {
-        Some("weak".to_string())
-    } else {
-        Some("neutral".to_string())
-    }
-}
-
-fn median_f64(mut values: Vec<f64>) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort_by(f64::total_cmp);
-    let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
-        Some((values[mid - 1] + values[mid]) / 2.0)
-    } else {
-        Some(values[mid])
-    }
+        "derived from prepared market breadth factors".to_string(),
+    )
 }
 
 fn run_chart_command(args: ArtifactCommandArgs) -> anyhow::Result<()> {

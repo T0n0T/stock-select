@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::engine::capability::ensure_model_run_supported;
 use crate::engine::types::{FactorRow, FactorValue};
@@ -40,6 +41,8 @@ impl LightGbmRuntimeModel {
 pub struct ResolvedMethodModelArtifacts {
     pub model_path: Option<PathBuf>,
     pub metadata_path: Option<PathBuf>,
+    pub model_dir: Option<PathBuf>,
+    pub routing_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -132,6 +135,8 @@ pub fn resolve_method_model_artifacts_for_mode_with_overrides(
             return Ok(ResolvedMethodModelArtifacts {
                 model_path: Some(model_path.to_path_buf()),
                 metadata_path: Some(metadata_path.to_path_buf()),
+                model_dir: None,
+                routing_path: None,
             });
         }
         (None, None) => {}
@@ -143,6 +148,40 @@ pub fn resolve_method_model_artifacts_for_mode_with_overrides(
         .ok_or_else(|| anyhow::anyhow!("method has no default model dir"))?;
     let model_dir = resolve_model_dir_for_mode(method, runtime_root, default_model_dir, intraday)?;
     resolve_complete_model_dir(method, &model_dir)
+}
+
+pub fn resolve_method_model_artifacts_for_route<'a, I>(
+    method: Method,
+    runtime_root: &Path,
+    intraday: bool,
+    route_values: I,
+) -> anyhow::Result<ResolvedMethodModelArtifacts>
+where
+    I: IntoIterator<Item = (&'a str, Option<&'a str>)>,
+{
+    ensure_model_run_supported(method)?;
+    let default_model_dir = default_model_dir(method)
+        .ok_or_else(|| anyhow::anyhow!("method has no default model dir"))?;
+    let model_dir = resolve_model_dir_for_mode(method, runtime_root, default_model_dir, intraday)?;
+    let routing_path = model_dir.join("model_routing.json");
+    if !routing_path.exists() {
+        return resolve_complete_model_dir(method, &model_dir);
+    }
+
+    let manifest = read_model_routing_manifest(&routing_path)?;
+    let mut context = BTreeMap::<String, Option<String>>::new();
+    context.insert("intraday".to_string(), Some(intraday.to_string()));
+    for (key, value) in route_values {
+        context.insert(key.to_string(), value.map(str::to_string));
+    }
+    let model_key = select_routed_model_key(&manifest, &context);
+    let relative_dir = manifest.models.get(model_key).ok_or_else(|| {
+        anyhow::anyhow!(
+            "model_routing.json selected unknown model '{model_key}' under {}",
+            model_dir.display()
+        )
+    })?;
+    resolve_complete_model_dir(method, &model_dir.join(relative_dir))
 }
 
 fn resolve_model_dir_for_mode(
@@ -192,6 +231,17 @@ fn resolve_complete_model_dir(
     method: Method,
     model_dir: &Path,
 ) -> anyhow::Result<ResolvedMethodModelArtifacts> {
+    let routing_path = model_dir.join("model_routing.json");
+    if routing_path.exists() {
+        let _manifest = read_model_routing_manifest(&routing_path)?;
+        return Ok(ResolvedMethodModelArtifacts {
+            model_path: None,
+            metadata_path: None,
+            model_dir: Some(model_dir.to_path_buf()),
+            routing_path: Some(routing_path),
+        });
+    }
+
     let model_path = model_dir.join("model.txt");
     let metadata_path = model_dir.join("model_metadata.json");
 
@@ -199,6 +249,8 @@ fn resolve_complete_model_dir(
         (true, true) => Ok(ResolvedMethodModelArtifacts {
             model_path: Some(model_path),
             metadata_path: Some(metadata_path),
+            model_dir: Some(model_dir.to_path_buf()),
+            routing_path: None,
         }),
         (false, false) => {
             anyhow::bail!(
@@ -215,6 +267,87 @@ fn resolve_complete_model_dir(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ModelRoutingManifest {
+    #[serde(default)]
+    pub version: u64,
+    pub default_model: String,
+    #[serde(default)]
+    pub models: BTreeMap<String, String>,
+    #[serde(default)]
+    pub routes: Vec<ModelRouteManifest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ModelRouteManifest {
+    #[serde(default)]
+    pub when: BTreeMap<String, Value>,
+    pub model: String,
+}
+
+pub fn read_model_routing_manifest(path: &Path) -> anyhow::Result<ModelRoutingManifest> {
+    let manifest: ModelRoutingManifest = serde_json::from_slice(&std::fs::read(path)?)?;
+    if manifest.default_model.is_empty() {
+        anyhow::bail!("model_routing.json default_model cannot be empty");
+    }
+    if !manifest.models.contains_key(&manifest.default_model) {
+        anyhow::bail!(
+            "model_routing.json default_model '{}' is not listed in models",
+            manifest.default_model
+        );
+    }
+    for route in &manifest.routes {
+        if !manifest.models.contains_key(&route.model) {
+            anyhow::bail!(
+                "model_routing.json route references unknown model '{}'",
+                route.model
+            );
+        }
+    }
+    Ok(manifest)
+}
+
+pub fn select_routed_model_key<'a>(
+    manifest: &'a ModelRoutingManifest,
+    context: &BTreeMap<String, Option<String>>,
+) -> &'a str {
+    manifest
+        .routes
+        .iter()
+        .find(|route| route_matches(route, context))
+        .map(|route| route.model.as_str())
+        .unwrap_or(manifest.default_model.as_str())
+}
+
+fn route_matches(
+    route: &ModelRouteManifest,
+    context: &BTreeMap<String, Option<String>>,
+) -> bool {
+    route
+        .when
+        .iter()
+        .all(|(key, expected)| route_value_matches(context.get(key), expected))
+}
+
+fn route_value_matches(actual: Option<&Option<String>>, expected: &Value) -> bool {
+    match expected {
+        Value::Array(values) => values
+            .iter()
+            .any(|candidate| route_value_matches(actual, candidate)),
+        Value::Null => actual.is_none_or(Option::is_none),
+        Value::Bool(expected_bool) => actual
+            .and_then(|value| value.as_deref())
+            .is_some_and(|value| value == expected_bool.to_string()),
+        Value::String(expected_string) => actual
+            .and_then(|value| value.as_deref())
+            .is_some_and(|value| value == expected_string),
+        Value::Number(expected_number) => actual
+            .and_then(|value| value.as_deref())
+            .is_some_and(|value| value == expected_number.to_string()),
+        Value::Object(_) => false,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelFeatureMetadata {
     #[serde(default)]
@@ -223,8 +356,16 @@ pub struct ModelFeatureMetadata {
     pub categorical_columns: Vec<String>,
     #[serde(default)]
     pub categorical_levels: BTreeMap<String, Vec<String>>,
+    #[serde(default = "default_categorical_encoding")]
+    pub categorical_encoding: String,
+    #[serde(default)]
+    pub categorical_code_maps: BTreeMap<String, BTreeMap<String, i64>>,
     #[serde(default)]
     pub feature_names: Vec<String>,
+}
+
+fn default_categorical_encoding() -> String {
+    "one_hot".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,14 +403,29 @@ pub fn build_feature_vector(
             _ => "unknown",
         };
 
-        for level in metadata
-            .categorical_levels
-            .get(column)
-            .cloned()
-            .unwrap_or_default()
-        {
-            feature_names.push(format!("{column}={level}"));
-            values.push(if current == level { 1.0 } else { 0.0 });
+        match metadata.categorical_encoding.as_str() {
+            "one_hot" => {
+                for level in metadata
+                    .categorical_levels
+                    .get(column)
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    feature_names.push(format!("{column}={level}"));
+                    values.push(if current == level { 1.0 } else { 0.0 });
+                }
+            }
+            "native" => {
+                feature_names.push(column.clone());
+                let code = metadata
+                    .categorical_code_maps
+                    .get(column)
+                    .and_then(|code_map| code_map.get(current))
+                    .copied()
+                    .unwrap_or(-1);
+                values.push(code as f64);
+            }
+            other => anyhow::bail!("unsupported categorical_encoding: {other}"),
         }
     }
 

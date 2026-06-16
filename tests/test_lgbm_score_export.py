@@ -73,6 +73,123 @@ class LgbmScoreExportTest(unittest.TestCase):
         self.assertEqual(kwargs["label_gain"], [0, 1, 5, 15])
         self.assertEqual(kwargs["lambdarank_truncation_level"], 8)
 
+    def test_main_inherits_native_categorical_encoding_from_trial_report(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_output_dir = Path(temp_dir) / "trial-001"
+            model_output_dir.mkdir()
+            (model_output_dir / "feature_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "numeric_features": ["close_to_zxdkx_pct"],
+                        "categorical_features": ["env"],
+                        "categorical_levels": {"env": ["weak", "strong"]},
+                        "categorical_encoding": "one_hot",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (model_output_dir / "lgbm_rank_report_raw_plus_signal.json").write_text(
+                json.dumps(
+                    {
+                        "categorical_encoding": "native",
+                        "model_params": {
+                            "num_leaves": 5,
+                            "min_data_in_leaf": 240,
+                            "num_boost_round": 60,
+                            "learning_rate": 0.05,
+                            "num_threads": 8,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("scripts.ml.export_lgbm_scores.export_scores", return_value={"ok": True}) as export_scores:
+                rc = main(["--method", "b2", "--model-output-dir", str(model_output_dir)])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(export_scores.call_args.kwargs["categorical_encoding"], "native")
+
+    def test_export_scores_writes_native_categorical_metadata(self):
+        import csv
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "dataset.csv"
+            with dataset.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "code", "rank_label_3d", "close_to_zxdkx_pct", "env"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2026-01-01", "code": "a", "rank_label_3d": "1", "close_to_zxdkx_pct": "1", "env": "weak"},
+                        {"date": "2026-03-01", "code": "b", "rank_label_3d": "2", "close_to_zxdkx_pct": "2", "env": "strong"},
+                    ]
+                )
+            feature_manifest = root / "feature_manifest.json"
+            feature_manifest.write_text(
+                json.dumps(
+                    {
+                        "numeric_features": ["close_to_zxdkx_pct"],
+                        "categorical_features": ["env"],
+                        "categorical_levels": {"env": ["weak", "strong"]},
+                        "categorical_encoding": "native",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            artifact_dir = root / "model"
+
+            with patch("scripts.ml.export_lgbm_scores.train_model_result") as train_model_result:
+                train_model_result.return_value = type(
+                    "Result",
+                    (),
+                    {
+                        "train_scored": [],
+                        "test_scored": [{"date": "2026-03-01", "code": "b", "model_score": 0.5}],
+                        "top_features": [{"feature": "env", "importance": 1}],
+                        "feature_count": 2,
+                        "model": FakeModel(),
+                        "feature_names": ["close_to_zxdkx_pct", "env"],
+                        "lightgbm_feature_names": ["close_to_zxdkx_pct", "env"],
+                        "category_levels": {"env": ["weak", "strong"]},
+                        "categorical_code_maps": {"env": {"weak": 0, "strong": 1}},
+                    },
+                )()
+
+                summary = export_scores(
+                    dataset=dataset,
+                    feature_manifest=feature_manifest,
+                    output=root / "scores.csv",
+                    summary_output=root / "summary.json",
+                    model_output_dir=artifact_dir,
+                    train_end_exclusive="2026-03-01",
+                    score_start="2026-03-01",
+                    score_end="2026-03-31",
+                    num_leaves=9,
+                    min_data_in_leaf=120,
+                    num_boost_round=60,
+                    learning_rate=0.05,
+                    num_threads=1,
+                    label_column="rank_label_3d",
+                    categorical_encoding="native",
+                )
+
+            metadata = json.loads((artifact_dir / "model_metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(train_model_result.call_args.kwargs["categorical_encoding"], "native")
+        self.assertEqual(metadata["categorical_encoding"], "native")
+        self.assertEqual(metadata["feature_names"], ["close_to_zxdkx_pct", "env"])
+        self.assertEqual(metadata["categorical_code_maps"], {"env": {"weak": 0, "strong": 1}})
+        self.assertEqual(summary["categorical_encoding"], "native")
+
     def test_assign_model_ranks_are_date_local_and_score_descending(self):
         rows = [
             {"date": "2026-03-02", "code": "b", "model_score": 0.2},
@@ -145,6 +262,7 @@ class LgbmScoreExportTest(unittest.TestCase):
                         "feature_names": ["close_to_zxdkx_pct", "env=weak", "env=strong", "env=neutral"],
                         "lightgbm_feature_names": ["close_to_zxdkx_pct", "env_weak", "env_strong", "env_neutral"],
                         "category_levels": {"env": ["weak", "strong", "neutral"]},
+                        "categorical_code_maps": {"env": {"weak": 0, "strong": 1, "neutral": 2}},
                     },
                 )()
 
@@ -175,8 +293,10 @@ class LgbmScoreExportTest(unittest.TestCase):
             )
             self.assertEqual(train_model_result.call_args.kwargs["label_gain"], [0, 1, 5, 15])
             self.assertEqual(train_model_result.call_args.kwargs["lambdarank_truncation_level"], 8)
+            self.assertEqual(train_model_result.call_args.kwargs["categorical_encoding"], "one_hot")
             self.assertEqual(metadata["feature_names"], ["close_to_zxdkx_pct", "env=weak", "env=strong", "env=neutral"])
             self.assertEqual(metadata["categorical_levels"], {"env": ["weak", "strong", "neutral"]})
+            self.assertEqual(metadata["categorical_encoding"], "one_hot")
             self.assertEqual(metadata["label_column"], "rank_label_3d")
             self.assertEqual(metadata["model_params"]["label_gain"], [0, 1, 5, 15])
             self.assertEqual(metadata["model_params"]["lambdarank_truncation_level"], 8)
@@ -235,6 +355,7 @@ class LgbmScoreExportTest(unittest.TestCase):
                         "feature_names": ["close_to_zxdkx_pct"],
                         "lightgbm_feature_names": ["close_to_zxdkx_pct"],
                         "category_levels": {},
+                        "categorical_code_maps": {},
                     },
                 )()
 
@@ -309,6 +430,7 @@ class LgbmScoreExportTest(unittest.TestCase):
                         "feature_names": ["close_to_zxdkx_pct"],
                         "lightgbm_feature_names": ["close_to_zxdkx_pct"],
                         "category_levels": {},
+                        "categorical_code_maps": {},
                     },
                 )()
 
@@ -394,6 +516,7 @@ class LgbmScoreExportTest(unittest.TestCase):
                             "feature_names": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
                             "lightgbm_feature_names": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
                             "category_levels": {},
+                            "categorical_code_maps": {},
                         },
                     )()
 

@@ -8,6 +8,7 @@ use serde_json::json;
 use crate::cache::{
     candidate_output_path, load_prepared_cache, write_prepared_cache, write_prepared_cache_for_mode,
 };
+use crate::environment::{normalize_environment_state, prepared_market_state};
 use crate::factors::registry::{
     RAW_MARKET_AMOUNT_FACTOR, build_candidate_factor_rows_from_refs, write_factor_artifact,
 };
@@ -293,11 +294,15 @@ fn write_screen_factor_artifact(
     intraday: bool,
 ) -> anyhow::Result<PathBuf> {
     let artifact_key = screen_artifact_key(request.pick_date, intraday);
+    let environment_state = match request.environment_state.as_deref() {
+        Some(state) => Some(normalize_environment_state(state)?),
+        None => prepared_market_state(prepared_rows.iter().copied(), request.pick_date),
+    };
     let rows = build_candidate_factor_rows_from_refs(
         candidates,
         prepared_rows,
         request.method,
-        request.environment_state.as_deref(),
+        environment_state.as_deref(),
     );
     write_factor_artifact(
         &request.runtime_root,

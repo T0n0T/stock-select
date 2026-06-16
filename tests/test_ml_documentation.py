@@ -311,6 +311,81 @@ class MlDocumentationTests(unittest.TestCase):
         self.assertNotIn("intraday: status=ready", completed.stdout)
         self.assertNotIn("metrics_source=test_metrics", completed.stdout)
 
+    def test_model_maintenance_status_understands_routed_model_without_state_file(self):
+        script = PROJECT_ROOT / "scripts" / "model_maintenance.sh"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            uv = bin_dir / "uv"
+            uv.write_text(
+                "#!/usr/bin/env bash\n"
+                "echo 'status should not call uv' >&2\n"
+                "exit 9\n",
+                encoding="utf-8",
+            )
+            uv.chmod(0o755)
+
+            runtime = root / "runtime"
+            model_dir = runtime / "models" / "b3"
+            child_dir = model_dir / "models" / "neutral_rf"
+            child_dir.mkdir(parents=True)
+            (model_dir / "model_routing.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "default_model": "neutral_rf",
+                        "models": {"neutral_rf": "models/neutral_rf"},
+                        "routes": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (child_dir / "model.txt").write_text("tree\n", encoding="utf-8")
+            (child_dir / "model_metadata.json").write_text(
+                json.dumps(
+                    {
+                        "feature_names": ["a", "b", "env=strong"],
+                        "numeric_columns": ["a", "b"],
+                        "categorical_columns": ["env"],
+                        "label_column": "rank_label_3d",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (model_dir / "model_card.json").write_text(
+                json.dumps(
+                    {
+                        "model_version": "routed-test",
+                        "feature_count": 3,
+                        "label_column": "rank_label_3d",
+                        "rolling_summary": {
+                            "top3_ret3_positive_rate": 52.54,
+                            "rank_ic_ret3": 0.0707,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+            completed = subprocess.run(
+                ["bash", str(script), "--method", "b3", "status", "--runtime-root", str(runtime)],
+                check=True,
+                capture_output=True,
+                env=env,
+                text=True,
+            )
+
+        self.assertIn("日终模型 (eod)", completed.stdout)
+        self.assertIn("模型目录: " + str(model_dir), completed.stdout)
+        self.assertIn("产物检查: OK", completed.stdout)
+        self.assertIn("路由模型: default=neutral_rf, 子模型 1 个", completed.stdout)
+        self.assertIn("特征/标签: 3 个特征 (数值 2, 分类 1), label=rank_label_3d", completed.stdout)
+        self.assertNotIn("备注: 未找到 model_state.json", completed.stdout)
+        self.assertNotIn("缺失 model.txt", completed.stdout)
+
     def test_model_maintenance_status_target_dir_falls_back_without_double_runtime(self):
         script = PROJECT_ROOT / "scripts" / "model_maintenance.sh"
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as temp_dir:

@@ -177,6 +177,14 @@ rf_feature_diagnostics.md
 
 LightGBM report 会写入 `rf_diagnostics` 摘要。该随机森林诊断只用于训练前确认因子有效性和汇报，不进入生产推理；只有显式配置 `--rf-min-oob-score` 或 `--rf-min-test-rank-ic-ret3` 时，`rf_diagnostics.status=failed_threshold` 才会阻止 LightGBM 训练。快速冒烟可传 `--skip-rf-diagnostics`，正式候选 trial 不建议跳过。
 
+分类特征编码：
+
+- 缺省 `categorical_encoding=one_hot`，保持旧模型兼容。
+- LightGBM 原生分类试验传 `--categorical-encoding native`。
+- `native` 模式下，`feature_manifest.json`、`model_metadata.json` 和 report 都会写入 `categorical_encoding=native`；`model_metadata.json` 必须包含 `categorical_code_maps`。
+- Rust runtime 使用 `categorical_code_maps` 把分类值映射成 LightGBM 原生分类整数 code，未知或缺失分类值映射为 `-1`。
+- native 模型发布前必须跑 Python/Rust parity 测试和 `promote_lgbm_model.py --dry-run --require-report`。
+
 `train_rank_lgbm.py` 主训练路径应直接在 `output_dir` 写出：
 
 ```text

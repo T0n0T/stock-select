@@ -1,0 +1,4 @@
+code,x,env,prediction
+a,0.15,weak,0.137381875464
+b,0.85,strong,0.862618124536
+c,0.50,unknown,0.137381875464

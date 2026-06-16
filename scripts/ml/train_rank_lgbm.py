@@ -67,6 +67,8 @@ FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 TRAIN_MODES = {"overall", "by_env"}
 TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "ret3_ge5_label", "ret5_ge5_label"}
 RF_FEATURE_SELECTION_MODES = {"none", "cumulative_importance"}
+CATEGORICAL_ENCODINGS = {"one_hot", "native"}
+DEFAULT_CATEGORICAL_ENCODING = "one_hot"
 
 
 @dataclass
@@ -79,6 +81,7 @@ class TrainedModelResult:
     feature_names: list[str]
     lightgbm_feature_names: list[str]
     category_levels: dict[str, list[str]]
+    categorical_code_maps: dict[str, dict[str, int]]
 
 
 @dataclass
@@ -377,6 +380,18 @@ def load_feature_manifest_with_levels(
     return numeric, categorical, fixed_levels
 
 
+def load_feature_manifest_encoding(path: Path) -> str:
+    if not path.exists():
+        return DEFAULT_CATEGORICAL_ENCODING
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("feature manifest must be a JSON object")
+    categorical_encoding = str(payload.get("categorical_encoding") or DEFAULT_CATEGORICAL_ENCODING)
+    if categorical_encoding not in CATEGORICAL_ENCODINGS:
+        raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
+    return categorical_encoding
+
+
 def load_feature_manifest(
     path: Path,
     *,
@@ -408,32 +423,49 @@ def category_levels(
     return levels
 
 
+def categorical_code_maps(levels: dict[str, list[str]]) -> dict[str, dict[str, int]]:
+    return {
+        column: {str(level): index for index, level in enumerate(values)}
+        for column, values in levels.items()
+    }
+
+
 def build_feature_matrix(
     rows: Sequence[dict[str, Any]],
     *,
     numeric_columns: Sequence[str],
     categorical_columns: Sequence[str],
     levels: dict[str, list[str]] | None = None,
-) -> tuple[list[list[float]], list[str]]:
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
+) -> tuple[list[list[float]], list[str], dict[str, dict[str, int]]]:
+    if categorical_encoding not in CATEGORICAL_ENCODINGS:
+        raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
     levels = levels or category_levels(rows, categorical_columns)
+    code_maps = categorical_code_maps(levels)
     feature_names = list(numeric_columns)
-    for column in categorical_columns:
-        feature_names.extend(f"{column}={value}" for value in levels.get(column, []))
+    if categorical_encoding == "one_hot":
+        for column in categorical_columns:
+            feature_names.extend(f"{column}={value}" for value in levels.get(column, []))
+    else:
+        feature_names.extend(categorical_columns)
 
     matrix: list[list[float]] = []
     for row in rows:
         values = [as_float(row.get(column)) or 0.0 for column in numeric_columns]
         for column in categorical_columns:
             current = str(row.get(column) or "unknown")
-            values.extend(1.0 if current == value else 0.0 for value in levels.get(column, []))
+            if categorical_encoding == "one_hot":
+                values.extend(1.0 if current == value else 0.0 for value in levels.get(column, []))
+            else:
+                values.append(float(code_maps.get(column, {}).get(current, -1)))
         matrix.append(values)
-    return matrix, feature_names
+    return matrix, feature_names, code_maps
 
 
 def build_feature_matrix_from_metadata(
     rows: Sequence[dict[str, Any]],
     metadata: dict[str, Any],
-) -> tuple[list[list[float]], list[str]]:
+) -> tuple[list[list[float]], list[str], dict[str, dict[str, int]]]:
     numeric_columns = [str(value) for value in metadata.get("numeric_columns") or []]
     categorical_columns = [str(value) for value in metadata.get("categorical_columns") or []]
     levels = {
@@ -441,11 +473,13 @@ def build_feature_matrix_from_metadata(
         for column, values in (metadata.get("categorical_levels") or {}).items()
         if isinstance(values, list)
     }
+    categorical_encoding = str(metadata.get("categorical_encoding") or DEFAULT_CATEGORICAL_ENCODING)
     return build_feature_matrix(
         rows,
         numeric_columns=numeric_columns,
         categorical_columns=categorical_columns,
         levels=levels,
+        categorical_encoding=categorical_encoding,
     )
 
 
@@ -462,6 +496,8 @@ def build_model_metadata(
     label_column: str,
     model_params: dict[str, Any],
     feature_selection: dict[str, Any] | None = None,
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
+    categorical_code_maps: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     train_dates = sorted({str(row.get("date")) for row in train_rows})
     score_dates = sorted({str(row.get("date")) for row in score_rows})
@@ -476,6 +512,8 @@ def build_model_metadata(
         "categorical_columns": list(categorical_columns),
         "feature_names": list(feature_names),
         "lightgbm_feature_names": list(lightgbm_feature_names),
+        "categorical_encoding": categorical_encoding,
+        "categorical_code_maps": categorical_code_maps or {},
         "categorical_levels": {column: list(values) for column, values in levels.items()},
         "one_hot_levels": {column: [f"{column}={value}" for value in values] for column, values in levels.items()},
         "label_column": label_column,
@@ -500,6 +538,7 @@ def write_feature_manifest(
     numeric_columns: Sequence[str],
     categorical_columns: Sequence[str],
     fixed_categorical_levels: dict[str, list[str]],
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "feature_manifest.json"
@@ -507,6 +546,7 @@ def write_feature_manifest(
         "numeric_features": list(numeric_columns),
         "categorical_features": list(categorical_columns),
         "categorical_levels": {column: list(values) for column, values in fixed_categorical_levels.items()},
+        "categorical_encoding": categorical_encoding,
         "excluded_features": [],
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -653,13 +693,13 @@ def run_random_forest_diagnostics(
         categorical_columns,
         fixed_categorical_levels=fixed_categorical_levels,
     )
-    train_matrix, feature_names = build_feature_matrix(
+    train_matrix, feature_names, _code_maps = build_feature_matrix(
         train_rows,
         numeric_columns=numeric_columns,
         categorical_columns=categorical_columns,
         levels=levels,
     )
-    test_matrix, _feature_names = build_feature_matrix(
+    test_matrix, _feature_names, _test_code_maps = build_feature_matrix(
         test_rows,
         numeric_columns=numeric_columns,
         categorical_columns=categorical_columns,
@@ -1055,6 +1095,7 @@ def train_model(
     label_gain: Sequence[int] | None = None,
     lambdarank_truncation_level: int = 0,
     fixed_categorical_levels: dict[str, list[str]] | None = None,
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], int]:
     result = train_model_result(
         train_rows,
@@ -1070,6 +1111,7 @@ def train_model(
         label_gain=label_gain,
         lambdarank_truncation_level=lambdarank_truncation_level,
         fixed_categorical_levels=fixed_categorical_levels,
+        categorical_encoding=categorical_encoding,
     )
     return result.train_scored, result.test_scored, result.top_features, result.feature_count
 
@@ -1089,31 +1131,50 @@ def train_model_result(
     label_gain: Sequence[int] | None = None,
     lambdarank_truncation_level: int = 0,
     fixed_categorical_levels: dict[str, list[str]] | None = None,
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
 ) -> TrainedModelResult:
     import lightgbm as lgb
     import numpy as np
 
+    if categorical_encoding not in CATEGORICAL_ENCODINGS:
+        raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
     if not train_rows or not test_rows:
-        return TrainedModelResult([], [], [], 0, None, [], [], {})
+        return TrainedModelResult([], [], [], 0, None, [], [], {}, {})
     resolved_label_gain = list(label_gain or DEFAULT_LABEL_GAIN)
     levels = category_levels(
         train_rows,
         categorical_columns,
         fixed_categorical_levels=fixed_categorical_levels,
     )
-    train_matrix, feature_names = build_feature_matrix(train_rows, numeric_columns=numeric_columns, categorical_columns=categorical_columns, levels=levels)
-    test_matrix, _feature_names = build_feature_matrix(test_rows, numeric_columns=numeric_columns, categorical_columns=categorical_columns, levels=levels)
+    train_matrix, feature_names, code_maps = build_feature_matrix(
+        train_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        levels=levels,
+        categorical_encoding=categorical_encoding,
+    )
+    test_matrix, _feature_names, _test_code_maps = build_feature_matrix(
+        test_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        levels=levels,
+        categorical_encoding=categorical_encoding,
+    )
     lightgbm_feature_names = safe_feature_names(feature_names)
 
     train_array = np.array(train_matrix, dtype=float)
     test_array = np.array(test_matrix, dtype=float)
-    train_dataset = lgb.Dataset(
-        train_array,
-        label=np.array(labels(train_rows, label_column=label_column), dtype=int),
-        group=group_sizes_by_date(train_rows),
-        feature_name=lightgbm_feature_names,
-        free_raw_data=False,
-    )
+    dataset_kwargs = {
+        "label": np.array(labels(train_rows, label_column=label_column), dtype=int),
+        "group": group_sizes_by_date(train_rows),
+        "feature_name": lightgbm_feature_names,
+        "free_raw_data": False,
+    }
+    if categorical_encoding == "native" and categorical_columns:
+        categorical_start = len(numeric_columns)
+        categorical_end = categorical_start + len(categorical_columns)
+        dataset_kwargs["categorical_feature"] = lightgbm_feature_names[categorical_start:categorical_end]
+    train_dataset = lgb.Dataset(train_array, **dataset_kwargs)
     params = {
             "objective": "lambdarank",
             "metric": "ndcg",
@@ -1146,6 +1207,7 @@ def train_model_result(
         feature_names=feature_names,
         lightgbm_feature_names=lightgbm_feature_names,
         category_levels=levels,
+        categorical_code_maps=code_maps,
     )
 
 
@@ -1179,6 +1241,7 @@ def train_and_report(
     rf_feature_selection: str = "none",
     rf_cumulative_importance_threshold: float = 0.85,
     rf_min_selected_features: int = 12,
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
 ) -> dict[str, Any]:
     if train_mode not in TRAIN_MODES:
         raise ValueError(f"unsupported train_mode: {train_mode}")
@@ -1186,6 +1249,8 @@ def train_and_report(
         raise ValueError(f"unsupported label_column: {label_column}")
     if rf_feature_selection not in RF_FEATURE_SELECTION_MODES:
         raise ValueError(f"unsupported RF feature selection mode: {rf_feature_selection}")
+    if categorical_encoding not in CATEGORICAL_ENCODINGS:
+        raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
     if rf_feature_selection != "none" and not rf_diagnostics:
         raise ValueError("RF feature selection requires RF diagnostics")
     resolved_label_gain = list(label_gain or DEFAULT_LABEL_GAIN)
@@ -1298,6 +1363,7 @@ def train_and_report(
             label_gain=resolved_label_gain,
             lambdarank_truncation_level=lambdarank_truncation_level,
             fixed_categorical_levels=fixed_categorical_levels,
+            categorical_encoding=categorical_encoding,
         )
         train_scored = model_result.train_scored
         test_scored = model_result.test_scored
@@ -1332,6 +1398,7 @@ def train_and_report(
                 label_gain=resolved_label_gain,
                 lambdarank_truncation_level=lambdarank_truncation_level,
                 fixed_categorical_levels=fixed_categorical_levels,
+                categorical_encoding=categorical_encoding,
             )
             train_scored.extend(env_train_scored)
             test_scored.extend(env_test_scored)
@@ -1351,6 +1418,7 @@ def train_and_report(
         numeric_columns=numeric_columns,
         categorical_columns=categorical_columns,
         fixed_categorical_levels=fixed_categorical_levels,
+        categorical_encoding=categorical_encoding,
     )
     if model_result is not None and model_result.model is not None:
         metadata = build_model_metadata(
@@ -1373,6 +1441,8 @@ def train_and_report(
                 "lambdarank_truncation_level": lambdarank_truncation_level,
             },
             feature_selection=feature_selection_payload,
+            categorical_encoding=categorical_encoding,
+            categorical_code_maps=model_result.categorical_code_maps,
         )
         model_artifacts = write_model_artifacts(model_result.model, metadata, output_dir)
 
@@ -1387,6 +1457,7 @@ def train_and_report(
         "feature_set": feature_set,
         "train_mode": train_mode,
         "label_column": label_column,
+        "categorical_encoding": categorical_encoding,
         "feature_manifest": str(feature_manifest_output),
         "model_params": {
             "num_leaves": num_leaves,
@@ -1443,6 +1514,7 @@ def train_and_report(
                 label_gain=resolved_label_gain,
                 lambdarank_truncation_level=lambdarank_truncation_level,
                 fixed_categorical_levels=fixed_categorical_levels,
+                categorical_encoding=categorical_encoding,
             )
             fold_report = {
                 "fold": fold_index,
@@ -1485,6 +1557,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--feature-set", choices=sorted(FEATURE_SETS), default="all")
     parser.add_argument("--train-mode", choices=sorted(TRAIN_MODES), default="overall")
     parser.add_argument("--feature-manifest", type=Path)
+    parser.add_argument("--categorical-encoding", choices=sorted(CATEGORICAL_ENCODINGS), default=DEFAULT_CATEGORICAL_ENCODING)
     parser.add_argument("--num-leaves", type=int, default=15)
     parser.add_argument("--min-data-in-leaf", type=int, default=20)
     parser.add_argument("--num-boost-round", type=int, default=120)
@@ -1522,6 +1595,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         feature_set=args.feature_set,
         train_mode=args.train_mode,
         feature_manifest=args.feature_manifest,
+        categorical_encoding=args.categorical_encoding,
         num_leaves=args.num_leaves,
         min_data_in_leaf=args.min_data_in_leaf,
         num_boost_round=args.num_boost_round,
