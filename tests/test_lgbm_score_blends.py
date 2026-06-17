@@ -1,8 +1,13 @@
 import unittest
+from pathlib import Path
+import json
+import tempfile
+from unittest.mock import patch
 
-from scripts.ml.evaluate_lgbm_score_blends import (
+from ml.scoring.score_blends import (
     blend_model_scores,
     evaluate_blended_score_sets,
+    rolling_scores_for_trial,
     normalized_scores_by_key,
 )
 
@@ -71,6 +76,75 @@ class LgbmScoreBlendTest(unittest.TestCase):
 
         self.assertEqual(report["metrics"]["top3_ret3_ge_5_rate"], 50.0)
         self.assertEqual([fold["metrics"]["top3_ret3_ge_5_rate"] for fold in report["folds"]], [100.0, 0.0])
+
+    def test_rolling_scores_for_trial_restores_full_lightgbm_params(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "1", "factor": "1"},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "2", "factor": "2"},
+            {"date": "2026-01-03", "code": "c", "rank_label_3d": "3", "factor": "3"},
+            {"date": "2026-01-04", "code": "d", "rank_label_3d": "0", "factor": "4"},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            trial_dir = Path(temp_dir) / "trial"
+            trial_dir.mkdir()
+            (trial_dir / "feature_manifest.json").write_text(
+                json.dumps({"numeric_features": ["factor"], "categorical_features": []}),
+                encoding="utf-8",
+            )
+            (trial_dir / "lgbm_rank_report_raw_numeric.json").write_text(
+                json.dumps(
+                    {
+                        "model_params": {
+                            "num_leaves": 5,
+                            "min_data_in_leaf": 2,
+                            "num_boost_round": 7,
+                            "learning_rate": 0.04,
+                            "boosting_type": "dart",
+                            "bagging_fraction": 0.72,
+                            "bagging_freq": 3,
+                            "feature_fraction": 0.83,
+                            "lambda_l1": 0.11,
+                            "lambda_l2": 0.22,
+                            "min_gain_to_split": 0.33,
+                            "num_threads": 2,
+                            "label_gain": [0, 1, 5, 15],
+                            "lambdarank_truncation_level": 6,
+                            "eval_at": [3, 5],
+                            "early_stopping_rounds": 9,
+                            "seed": 31,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("ml.scoring.score_blends.train_model") as train_model:
+                train_model.return_value = (
+                    [],
+                    [{"date": "2026-01-03", "code": "c", "model_score": 0.1, "ret3": 1, "ret5": 1}],
+                    [],
+                    1,
+                )
+                rolling_scores_for_trial(
+                    rows,
+                    trial_dir=trial_dir,
+                    method="b2",
+                    rolling_train_dates=2,
+                    rolling_test_dates=1,
+                    rolling_folds=1,
+                )
+
+        kwargs = train_model.call_args.kwargs
+        self.assertEqual(kwargs["boosting_type"], "dart")
+        self.assertEqual(kwargs["bagging_fraction"], 0.72)
+        self.assertEqual(kwargs["bagging_freq"], 3)
+        self.assertEqual(kwargs["feature_fraction"], 0.83)
+        self.assertEqual(kwargs["lambda_l1"], 0.11)
+        self.assertEqual(kwargs["lambda_l2"], 0.22)
+        self.assertEqual(kwargs["min_gain_to_split"], 0.33)
+        self.assertEqual(kwargs["eval_at"], [3, 5])
+        self.assertEqual(kwargs["early_stopping_rounds"], 9)
+        self.assertEqual(kwargs["seed"], 31)
 
 
 if __name__ == "__main__":

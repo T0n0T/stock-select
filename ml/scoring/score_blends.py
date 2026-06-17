@@ -9,26 +9,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from scripts.ml.train_rank_lgbm import (
-    DEFAULT_LABEL_GAIN,
-    as_float,
-    average_metric_dicts,
-    evaluate_model,
-    load_feature_manifest_with_levels,
-    partition_diagnostics,
-    read_dataset,
-    rolling_walk_forward_splits,
-    rows_for_dates,
-    train_model,
-)
+from ml.paths import PROJECT_ROOT
+from ml.training.evaluation import average_metric_dicts, evaluate_model, partition_diagnostics
+from ml.training.features import load_feature_manifest_with_levels
+from ml.training.labels import as_float, rows_for_dates
+from ml.training.train_lgbm_rank import read_dataset, rolling_walk_forward_splits, train_model
+from ml.training.trial_params import trial_config_from_report
 
 
 DEFAULT_METHOD = "b2"
@@ -167,21 +156,13 @@ def parse_weight_spec(value: str) -> tuple[str, float]:
 
 
 def load_trial_config(trial_dir: Path) -> dict[str, Any]:
-    reports = sorted(trial_dir.glob("lgbm_rank_report*.json"))
-    if not reports:
-        raise FileNotFoundError(f"no lgbm_rank_report*.json under {trial_dir}")
-    payload = json.loads(reports[0].read_text(encoding="utf-8"))
-    params = payload.get("model_params") or {}
+    feature_manifest = trial_dir / "feature_manifest.json"
+    report_config = trial_config_from_report(trial_dir, feature_manifest=feature_manifest)
     return {
-        "feature_manifest": trial_dir / "feature_manifest.json",
-        "label_column": str(payload.get("label_column") or "rank_label_3d"),
-        "num_leaves": int(params.get("num_leaves", 9)),
-        "min_data_in_leaf": int(params.get("min_data_in_leaf", 120)),
-        "num_boost_round": int(params.get("num_boost_round", 60)),
-        "learning_rate": float(params.get("learning_rate", 0.05)),
-        "num_threads": int(params.get("num_threads", 0)),
-        "label_gain": list(params.get("label_gain") or DEFAULT_LABEL_GAIN),
-        "lambdarank_truncation_level": int(params.get("lambdarank_truncation_level", 0)),
+        "feature_manifest": feature_manifest,
+        "label_column": report_config["label_column"],
+        "categorical_encoding": report_config["categorical_encoding"],
+        **report_config["model_params"],
     }
 
 
@@ -230,6 +211,17 @@ def rolling_scores_for_trial(
             label_gain=list(config["label_gain"]),
             lambdarank_truncation_level=int(config["lambdarank_truncation_level"]),
             fixed_categorical_levels=fixed_levels,
+            categorical_encoding=str(config["categorical_encoding"]),
+            boosting_type=str(config["boosting_type"]),
+            bagging_fraction=float(config["bagging_fraction"]),
+            bagging_freq=int(config["bagging_freq"]),
+            feature_fraction=float(config["feature_fraction"]),
+            lambda_l1=float(config["lambda_l1"]),
+            lambda_l2=float(config["lambda_l2"]),
+            min_gain_to_split=float(config["min_gain_to_split"]),
+            eval_at=list(config["eval_at"]),
+            early_stopping_rounds=int(config["early_stopping_rounds"]),
+            seed=int(config["seed"]),
         )
         feature_count = max(feature_count, fold_feature_count)
         for row in test_scored:
@@ -254,7 +246,28 @@ def rolling_scores_for_trial(
         "feature_count": feature_count,
         "numeric_feature_count": len(numeric_columns),
         "categorical_features": categorical_columns,
-        "model_params": {key: config[key] for key in ["num_leaves", "min_data_in_leaf", "num_boost_round", "learning_rate", "num_threads", "label_gain", "lambdarank_truncation_level"]},
+        "model_params": {
+            key: config[key]
+            for key in [
+                "boosting_type",
+                "num_leaves",
+                "min_data_in_leaf",
+                "num_boost_round",
+                "learning_rate",
+                "bagging_fraction",
+                "bagging_freq",
+                "feature_fraction",
+                "lambda_l1",
+                "lambda_l2",
+                "min_gain_to_split",
+                "num_threads",
+                "label_gain",
+                "lambdarank_truncation_level",
+                "eval_at",
+                "early_stopping_rounds",
+                "seed",
+            ]
+        },
         "folds": fold_reports,
         "metrics": average_metric_dicts([fold["metrics"] for fold in fold_reports]),
         "by_env": average_partition_metrics([fold["by_env"] for fold in fold_reports]),
@@ -320,6 +333,11 @@ def evaluate_blend_grid(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate offline LightGBM score blends on rolling folds.")
+    add_parser_arguments(parser)
+    return parser.parse_args(argv)
+
+
+def add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--method", default=DEFAULT_METHOD)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--model", action="append", type=parse_model_spec, required=True)
@@ -329,11 +347,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rolling-train-dates", type=int, default=240)
     parser.add_argument("--rolling-test-dates", type=int, default=40)
     parser.add_argument("--output", type=Path)
-    return parser.parse_args(argv)
+
+
+def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("evaluate-blends", description="Evaluate offline LightGBM score blends on rolling folds.")
+    add_parser_arguments(parser)
+    parser.set_defaults(handler=main_from_args)
+    return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+    return main_from_args(parse_args(argv))
+
+
+def main_from_args(args: argparse.Namespace) -> int:
     report = evaluate_blend_grid(
         dataset=args.dataset,
         model_specs=args.model,

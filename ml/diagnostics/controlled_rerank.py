@@ -10,29 +10,22 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from scripts.ml.train_rank_lgbm import (
+from ml.paths import PROJECT_ROOT
+from ml.training.evaluation import average_metric_dicts, evaluate_model
+from ml.training.features import (
     DEFAULT_CATEGORICAL_ENCODING,
-    DEFAULT_LABEL_GAIN,
-    as_float,
-    average_metric_dicts,
-    evaluate_model,
     load_feature_manifest_encoding,
     load_feature_manifest_with_levels,
-    read_dataset,
-    rolling_walk_forward_splits,
-    rows_for_dates,
-    train_model_result,
 )
+from ml.training.labels import as_float, rows_for_dates
+from ml.training.lgbm_ranker import train_model_result
+from ml.training.train_lgbm_rank import read_dataset, rolling_walk_forward_splits
+from ml.training.trial_params import lightgbm_ranking_params_with_defaults, trial_config_from_report
 
 
 DEFAULT_METHOD = "b3"
@@ -247,19 +240,15 @@ def load_trial_model_config(
     rows: Sequence[dict[str, Any]],
     method: str,
 ) -> TrialModelConfig:
-    reports = sorted(trial_dir.glob("lgbm_rank_report*.json"))
-    if not reports:
-        raise FileNotFoundError(f"no lgbm_rank_report*.json under {trial_dir}")
-    report = json.loads(reports[0].read_text(encoding="utf-8"))
-    params = report.get("model_params") or {}
     feature_manifest = trial_dir / "feature_manifest.json"
+    report_config = trial_config_from_report(trial_dir, feature_manifest=feature_manifest)
     numeric_columns, categorical_columns, fixed_levels = load_feature_manifest_with_levels(
         feature_manifest,
         available_columns=set(rows[0].keys()),
         method=method,
     )
     categorical_encoding = str(
-        report.get("categorical_encoding")
+        report_config.get("categorical_encoding")
         or load_feature_manifest_encoding(feature_manifest)
         or DEFAULT_CATEGORICAL_ENCODING
     )
@@ -269,16 +258,8 @@ def load_trial_model_config(
         categorical_columns=categorical_columns,
         fixed_categorical_levels=fixed_levels,
         categorical_encoding=categorical_encoding,
-        label_column=str(report.get("label_column") or "rank_label_3d"),
-        model_params={
-            "num_leaves": int(params.get("num_leaves", 9)),
-            "min_data_in_leaf": int(params.get("min_data_in_leaf", 120)),
-            "num_boost_round": int(params.get("num_boost_round", 60)),
-            "learning_rate": float(params.get("learning_rate", 0.05)),
-            "num_threads": int(params.get("num_threads", 0)),
-            "label_gain": list(params.get("label_gain") or DEFAULT_LABEL_GAIN),
-            "lambdarank_truncation_level": int(params.get("lambdarank_truncation_level", 0)),
-        },
+        label_column=str(report_config["label_column"]),
+        model_params=dict(report_config["model_params"]),
         trial_dir=str(trial_dir),
     )
 
@@ -306,6 +287,7 @@ def rolling_oof_predictions(
 
     for fold_index, (train_dates, test_dates) in enumerate(splits, start=1):
         for config in configs:
+            model_params = lightgbm_ranking_params_with_defaults(config.model_params)
             train_rows = rows_for_dates(rows, set(train_dates), label_column=config.label_column)
             test_rows = rows_for_dates(rows, set(test_dates), label_column=config.label_column)
             if not train_rows or not test_rows:
@@ -315,16 +297,26 @@ def rolling_oof_predictions(
                 test_rows,
                 numeric_columns=config.numeric_columns,
                 categorical_columns=config.categorical_columns,
-                num_leaves=int(config.model_params["num_leaves"]),
-                min_data_in_leaf=int(config.model_params["min_data_in_leaf"]),
-                num_boost_round=int(config.model_params["num_boost_round"]),
-                learning_rate=float(config.model_params["learning_rate"]),
+                num_leaves=int(model_params["num_leaves"]),
+                min_data_in_leaf=int(model_params["min_data_in_leaf"]),
+                num_boost_round=int(model_params["num_boost_round"]),
+                learning_rate=float(model_params["learning_rate"]),
                 label_column=config.label_column,
-                num_threads=int(config.model_params["num_threads"]),
-                label_gain=list(config.model_params["label_gain"]),
-                lambdarank_truncation_level=int(config.model_params["lambdarank_truncation_level"]),
+                num_threads=int(model_params["num_threads"]),
+                label_gain=list(model_params["label_gain"]),
+                lambdarank_truncation_level=int(model_params["lambdarank_truncation_level"]),
                 fixed_categorical_levels=config.fixed_categorical_levels,
                 categorical_encoding=config.categorical_encoding,
+                boosting_type=str(model_params["boosting_type"]),
+                bagging_fraction=float(model_params["bagging_fraction"]),
+                bagging_freq=int(model_params["bagging_freq"]),
+                feature_fraction=float(model_params["feature_fraction"]),
+                lambda_l1=float(model_params["lambda_l1"]),
+                lambda_l2=float(model_params["lambda_l2"]),
+                min_gain_to_split=float(model_params["min_gain_to_split"]),
+                eval_at=list(model_params["eval_at"]),
+                early_stopping_rounds=int(model_params["early_stopping_rounds"]),
+                seed=int(model_params["seed"]),
             )
             for row in result.test_scored:
                 key = (fold_index, str(row.get("date") or ""), str(row.get("code") or ""))
@@ -583,6 +575,11 @@ def evaluate_controlled_rerank(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate B3 controlled rolling OOF rerank/risk-filter diagnostics.")
+    add_parser_arguments(parser)
+    return parser.parse_args(argv)
+
+
+def add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--method", default=DEFAULT_METHOD)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--model", action="append", type=parse_model_spec, required=True)
@@ -594,11 +591,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rolling-test-dates", type=int, default=16)
     parser.add_argument("--top-n", type=int, default=3)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    return parser.parse_args(argv)
+
+
+def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("controlled-rerank", description="Evaluate B3 controlled rolling OOF rerank/risk-filter diagnostics.")
+    add_parser_arguments(parser)
+    parser.set_defaults(handler=main_from_args)
+    return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+    return main_from_args(parse_args(argv))
+
+
+def main_from_args(args: argparse.Namespace) -> int:
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     report = evaluate_controlled_rerank(

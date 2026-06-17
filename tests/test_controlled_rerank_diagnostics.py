@@ -1,7 +1,10 @@
 import unittest
+from pathlib import Path
+import json
+import tempfile
 from unittest.mock import patch
 
-from scripts.ml.controlled_rerank_diagnostics import (
+from ml.diagnostics.controlled_rerank import (
     TrialModelConfig,
     assign_date_local_model_ranks,
     rolling_oof_predictions,
@@ -11,6 +14,7 @@ from scripts.ml.controlled_rerank_diagnostics import (
     score_median_risk_demote,
     summarize_scored_folds,
     evaluate_rerank_rules,
+    load_trial_model_config,
 )
 
 
@@ -155,7 +159,7 @@ class ControlledRerankDiagnosticsTest(unittest.TestCase):
             )()
 
         with patch(
-            "scripts.ml.controlled_rerank_diagnostics.train_model_result",
+            "ml.diagnostics.controlled_rerank.train_model_result",
             side_effect=fake_train_model_result,
         ) as train_model_result:
             predictions = rolling_oof_predictions(
@@ -170,6 +174,73 @@ class ControlledRerankDiagnosticsTest(unittest.TestCase):
         self.assertEqual([(row["fold"], row["date"], row["code"]) for row in predictions], [(1, "2026-01-03", "c"), (2, "2026-01-05", "e")])
         self.assertEqual([row["main_score"] for row in predictions], [3.0, 5.0])
         self.assertEqual([row["main_rank"] for row in predictions], [1, 1])
+
+    def test_load_trial_config_and_oof_restore_full_lightgbm_params(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "1", "factor": "1"},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "2", "factor": "2"},
+            {"date": "2026-01-03", "code": "c", "rank_label_3d": "3", "factor": "3"},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            trial_dir = Path(temp_dir) / "trial"
+            trial_dir.mkdir()
+            (trial_dir / "feature_manifest.json").write_text(
+                json.dumps({"numeric_features": ["factor"], "categorical_features": []}),
+                encoding="utf-8",
+            )
+            (trial_dir / "lgbm_rank_report_raw_numeric.json").write_text(
+                json.dumps(
+                    {
+                        "model_params": {
+                            "num_leaves": 5,
+                            "min_data_in_leaf": 2,
+                            "num_boost_round": 7,
+                            "learning_rate": 0.04,
+                            "boosting_type": "dart",
+                            "bagging_fraction": 0.72,
+                            "bagging_freq": 3,
+                            "feature_fraction": 0.83,
+                            "lambda_l1": 0.11,
+                            "lambda_l2": 0.22,
+                            "min_gain_to_split": 0.33,
+                            "num_threads": 2,
+                            "label_gain": [0, 1, 5, 15],
+                            "lambdarank_truncation_level": 6,
+                            "eval_at": [3, 5],
+                            "early_stopping_rounds": 9,
+                            "seed": 31,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = load_trial_model_config("main", trial_dir, rows=rows, method="b2")
+
+            with patch("ml.diagnostics.controlled_rerank.train_model_result") as train_model_result:
+                train_model_result.return_value = type(
+                    "Result",
+                    (),
+                    {"test_scored": [{"date": "2026-01-03", "code": "c", "model_score": 0.1}]},
+                )()
+                rolling_oof_predictions(
+                    rows,
+                    [config],
+                    rolling_train_dates=2,
+                    rolling_test_dates=1,
+                    rolling_folds=1,
+                )
+
+        kwargs = train_model_result.call_args.kwargs
+        self.assertEqual(kwargs["boosting_type"], "dart")
+        self.assertEqual(kwargs["bagging_fraction"], 0.72)
+        self.assertEqual(kwargs["bagging_freq"], 3)
+        self.assertEqual(kwargs["feature_fraction"], 0.83)
+        self.assertEqual(kwargs["lambda_l1"], 0.11)
+        self.assertEqual(kwargs["lambda_l2"], 0.22)
+        self.assertEqual(kwargs["min_gain_to_split"], 0.33)
+        self.assertEqual(kwargs["eval_at"], [3, 5])
+        self.assertEqual(kwargs["early_stopping_rounds"], 9)
+        self.assertEqual(kwargs["seed"], 31)
 
 
 if __name__ == "__main__":

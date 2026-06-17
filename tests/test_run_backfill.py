@@ -6,9 +6,9 @@ import sys
 import unittest
 from pathlib import Path
 
-from scripts import backfill_run
-from scripts.backfill_run import RunConfig, parse_args, run_single_quiet
-from scripts.ml.backfill_candidates import parse_args as parse_candidate_args
+from ml.backfill import runs as backfill_run
+from ml.backfill.candidates import parse_args as parse_candidate_args
+from ml.backfill.runs import RunConfig, main_from_args, parse_args, run_single_quiet
 
 
 class RunBackfillTest(unittest.TestCase):
@@ -144,7 +144,7 @@ class RunBackfillTest(unittest.TestCase):
     def test_main_dry_run_prints_full_run_command(self):
         original_argv = sys.argv
         sys.argv = [
-            "backfill_run.py",
+            "stock-select-ml backfill runs",
             "--start-date",
             "2026-06-01",
             "--end-date",
@@ -169,6 +169,97 @@ class RunBackfillTest(unittest.TestCase):
         self.assertIn("run --method b3 --pick-date 2026-06-01", output)
         self.assertIn("--runtime-root /tmp/runtime", output)
         self.assertIn("--pool-source turnover-top", output)
+
+    def test_main_reports_failed_run_dates_with_returncode_and_output_tail(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dates_file = Path(temp_dir) / "dates.txt"
+            dates_file.write_text("2026-06-01\n2026-06-02\n", encoding="utf-8")
+
+            def fake_run(command, **_kwargs):
+                if "2026-06-02" in command:
+                    return subprocess.CompletedProcess(command, 7, stdout="out first\nout tail\n", stderr="err first\nerr tail\n")
+                return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+            original_run = backfill_run.subprocess.run
+            backfill_run.subprocess.run = fake_run
+            try:
+                stream = io.StringIO()
+                with contextlib.redirect_stdout(stream):
+                    rc = main_from_args(
+                        parse_args(
+                            [
+                                "--start-date",
+                                "2026-06-01",
+                                "--end-date",
+                                "2026-06-02",
+                                "--runtime-root",
+                                "/tmp/runtime",
+                                "--binary",
+                                "stock-select-rs",
+                                "--method",
+                                "b3",
+                                "--dates-file",
+                                str(dates_file),
+                                "--workers",
+                                "2",
+                            ]
+                        )
+                    )
+            finally:
+                backfill_run.subprocess.run = original_run
+
+        output = stream.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("失败:           1", output)
+        self.assertIn("failed dates", output)
+        self.assertIn("2026-06-02", output)
+        self.assertIn("returncode=7", output)
+        self.assertIn("err tail", output)
+        self.assertIn("out tail", output)
+
+    def test_main_returns_130_on_keyboard_interrupt(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dates_file = Path(temp_dir) / "dates.txt"
+            dates_file.write_text("2026-06-01\n", encoding="utf-8")
+
+            def interrupted_run(_command, **_kwargs):
+                raise KeyboardInterrupt
+
+            original_run = backfill_run.subprocess.run
+            backfill_run.subprocess.run = interrupted_run
+            try:
+                stream = io.StringIO()
+                with contextlib.redirect_stdout(stream):
+                    rc = main_from_args(
+                        parse_args(
+                            [
+                                "--start-date",
+                                "2026-06-01",
+                                "--end-date",
+                                "2026-06-01",
+                                "--runtime-root",
+                                "/tmp/runtime",
+                                "--binary",
+                                "stock-select-rs",
+                                "--method",
+                                "b3",
+                                "--dates-file",
+                                str(dates_file),
+                                "--workers",
+                                "1",
+                            ]
+                        )
+                    )
+            finally:
+                backfill_run.subprocess.run = original_run
+
+        self.assertEqual(rc, 130)
+        self.assertIn("interrupted", stream.getvalue())
+        self.assertIn("rerun remaining dates", stream.getvalue())
 
 
 if __name__ == "__main__":

@@ -7,30 +7,31 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.ml.train_rank_lgbm import (
+from ml.dataset import schema as rank_dataset_schema
+from ml.training.artifacts import build_model_metadata
+from ml.training.evaluation import average_metric_dicts, evaluate_model
+from ml.training.features import (
+    load_feature_manifest,
+    select_features_by_rf_importance,
+    select_feature_columns,
+    validate_selected_feature_coverage,
+)
+from ml.training.labels import labels, rows_for_dates
+from ml.training.lgbm_ranker import TrainedModelResult, train_model_result
+from ml.training.matrices import build_feature_matrix, build_feature_matrix_from_metadata
+from ml.training.rf_diagnostics import (
     RandomForestDiagnosticsConfig,
     RandomForestThresholdError,
-    average_metric_dicts,
-    build_feature_matrix,
-    build_feature_matrix_from_metadata,
-    build_model_metadata,
-    evaluate_model,
-    labels,
-    load_feature_manifest,
+    run_random_forest_diagnostics,
+)
+from ml.training.train_lgbm_rank import (
     parse_args,
     resolve_dataset_path,
     resolve_output_dir,
     rolling_walk_forward_splits,
-    rows_for_dates,
-    run_random_forest_diagnostics,
-    select_features_by_rf_importance,
-    select_feature_columns,
     train_and_report,
-    validate_selected_feature_coverage,
-    train_model_result,
     walk_forward_split_dates,
 )
-from scripts.ml import build_rank_dataset as rank_dataset_schema
 
 
 class RankLgbmTest(unittest.TestCase):
@@ -801,8 +802,6 @@ class RankLgbmTest(unittest.TestCase):
                     for row in rows
                 ]
 
-            from scripts.ml.train_rank_lgbm import TrainedModelResult
-
             return TrainedModelResult(
                 train_scored=scored(train_rows),
                 test_scored=scored(test_rows),
@@ -844,7 +843,7 @@ class RankLgbmTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+            with patch("ml.training.train_lgbm_rank.train_model_result", side_effect=fake_train_model_result):
                 report = train_and_report(
                     dataset,
                     root / "model",
@@ -868,8 +867,6 @@ class RankLgbmTest(unittest.TestCase):
                 Path(path).write_text("dummy model", encoding="utf-8")
 
         def fake_train_model_result(train_rows, test_rows, **_kwargs):
-            from scripts.ml.train_rank_lgbm import TrainedModelResult
-
             scored = [{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in test_rows]
             return TrainedModelResult(
                 train_scored=[{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in train_rows],
@@ -916,8 +913,8 @@ class RankLgbmTest(unittest.TestCase):
                 )
             output_dir = root / "model"
 
-            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics", return_value=rf_payload):
-                with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+            with patch("ml.training.train_lgbm_rank.run_random_forest_diagnostics", return_value=rf_payload):
+                with patch("ml.training.train_lgbm_rank.train_model_result", side_effect=fake_train_model_result):
                     report = train_and_report(
                         dataset,
                         output_dir,
@@ -950,8 +947,6 @@ class RankLgbmTest(unittest.TestCase):
         def fake_train_model_result(train_rows, test_rows, **kwargs):
             self.assertEqual(kwargs["numeric_columns"], ["close_to_zxdkx_pct"])
             self.assertEqual(kwargs["categorical_columns"], [])
-            from scripts.ml.train_rank_lgbm import TrainedModelResult
-
             return TrainedModelResult(
                 train_scored=[{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in train_rows],
                 test_scored=[{**row, "model_score": float(row.get("rank_label_3d") or 0)} for row in test_rows],
@@ -1001,8 +996,8 @@ class RankLgbmTest(unittest.TestCase):
                 )
             output_dir = root / "model"
 
-            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics", return_value=rf_payload):
-                with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+            with patch("ml.training.train_lgbm_rank.run_random_forest_diagnostics", return_value=rf_payload):
+                with patch("ml.training.train_lgbm_rank.train_model_result", side_effect=fake_train_model_result):
                     report = train_and_report(
                         dataset,
                         output_dir,
@@ -1093,8 +1088,8 @@ class RankLgbmTest(unittest.TestCase):
                 )
             output_dir = root / "model"
 
-            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics", return_value=rf_payload):
-                with patch("scripts.ml.train_rank_lgbm.train_model_result") as train_lgbm:
+            with patch("ml.training.train_lgbm_rank.run_random_forest_diagnostics", return_value=rf_payload):
+                with patch("ml.training.train_lgbm_rank.train_model_result") as train_lgbm:
                     with self.assertRaisesRegex(RandomForestThresholdError, "oob_score"):
                         train_and_report(
                             dataset,
@@ -1121,8 +1116,6 @@ class RankLgbmTest(unittest.TestCase):
                 Path(path).write_text("dummy model", encoding="utf-8")
 
         def fake_train_model_result(train_rows, test_rows, **_kwargs):
-            from scripts.ml.train_rank_lgbm import TrainedModelResult
-
             return TrainedModelResult(
                 train_scored=[{**row, "model_score": 1.0} for row in train_rows],
                 test_scored=[{**row, "model_score": 1.0} for row in test_rows],
@@ -1150,8 +1143,8 @@ class RankLgbmTest(unittest.TestCase):
                     ]
                 )
 
-            with patch("scripts.ml.train_rank_lgbm.run_random_forest_diagnostics") as rf_run:
-                with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+            with patch("ml.training.train_lgbm_rank.run_random_forest_diagnostics") as rf_run:
+                with patch("ml.training.train_lgbm_rank.train_model_result", side_effect=fake_train_model_result):
                     report = train_and_report(
                         dataset,
                         root / "model",
@@ -1189,8 +1182,8 @@ class RankLgbmTest(unittest.TestCase):
             captured["kwargs"] = kwargs
             return {"metrics": {"test": {}}}
 
-        with patch("scripts.ml.train_rank_lgbm.train_and_report", side_effect=fake_train_and_report):
-            from scripts.ml.train_rank_lgbm import main
+        with patch("ml.training.train_lgbm_rank.train_and_report", side_effect=fake_train_and_report):
+            from ml.training.train_lgbm_rank import main
 
             exit_code = main(
                 [
@@ -1233,8 +1226,6 @@ class RankLgbmTest(unittest.TestCase):
                     for row in rows
                 ]
 
-            from scripts.ml.train_rank_lgbm import TrainedModelResult
-
             return TrainedModelResult(
                 train_scored=scored(train_rows),
                 test_scored=scored(test_rows),
@@ -1266,7 +1257,7 @@ class RankLgbmTest(unittest.TestCase):
                 )
             output_dir = root / "model"
 
-            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+            with patch("ml.training.train_lgbm_rank.train_model_result", side_effect=fake_train_model_result):
                 report = train_and_report(
                     dataset,
                     output_dir,
@@ -1316,8 +1307,6 @@ class RankLgbmTest(unittest.TestCase):
                     for row in rows
                 ]
 
-            from scripts.ml.train_rank_lgbm import TrainedModelResult
-
             return TrainedModelResult(
                 train_scored=scored(train_rows),
                 test_scored=scored(test_rows),
@@ -1351,7 +1340,7 @@ class RankLgbmTest(unittest.TestCase):
                 )
             output_dir = root / "model"
 
-            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+            with patch("ml.training.train_lgbm_rank.train_model_result", side_effect=fake_train_model_result):
                 report = train_and_report(
                     dataset,
                     output_dir,
@@ -1394,8 +1383,6 @@ class RankLgbmTest(unittest.TestCase):
                     for row in rows
                 ]
 
-            from scripts.ml.train_rank_lgbm import TrainedModelResult
-
             return TrainedModelResult(
                 train_scored=scored(train_rows),
                 test_scored=scored(test_rows),
@@ -1429,7 +1416,7 @@ class RankLgbmTest(unittest.TestCase):
                 )
             output_dir = root / "model"
 
-            with patch("scripts.ml.train_rank_lgbm.train_model_result", side_effect=fake_train_model_result):
+            with patch("ml.training.train_lgbm_rank.train_model_result", side_effect=fake_train_model_result):
                 report = train_and_report(
                     dataset,
                     output_dir,

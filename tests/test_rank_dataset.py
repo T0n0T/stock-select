@@ -6,7 +6,7 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
-from scripts.ml.build_rank_dataset import (
+from ml.dataset.rank_dataset import (
     add_day_relative_labels,
     build_dataset_rows,
     compute_forward_labels,
@@ -16,6 +16,7 @@ from scripts.ml.build_rank_dataset import (
     load_external_feature_rows,
     load_factor_artifact_rows,
     load_selection_rows,
+    main_from_args,
     normalize_env,
     normalize_verdict,
     parse_args,
@@ -23,7 +24,7 @@ from scripts.ml.build_rank_dataset import (
     resolve_output_dir,
     resolve_runtime_root,
 )
-from scripts.ml import build_rank_dataset as rank_dataset_schema
+from ml.dataset import schema as rank_dataset_schema
 
 TEST_FACTOR_ARTIFACT_VERSION = 2
 TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v3"
@@ -659,6 +660,64 @@ class RankDatasetTest(unittest.TestCase):
                 "artifact_version=1:factor_library_version=rust-factor-library-v2"
             ],
         )
+
+    def test_dataset_build_fails_on_stale_factor_artifact_without_writing_dataset(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runtime = root / "runtime"
+            output_dir = root / "out"
+            candidate_dir = runtime / "candidates"
+            factor_dir = runtime / "factors" / "2026-05-25.b2"
+            candidate_dir.mkdir(parents=True)
+            factor_dir.mkdir(parents=True)
+            (candidate_dir / "2026-05-25.b2.json").write_text(
+                json.dumps(
+                    {
+                        "pick_date": "2026-05-25",
+                        "environment": {"state": "neutral"},
+                        "candidates": [{"code": "000001.SZ", "name": "平安银行"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (factor_dir / "factors.json").write_text(
+                json.dumps(
+                    {
+                        "artifact_version": 1,
+                        "factor_library_version": "rust-factor-library-v2",
+                        "method": "b2",
+                        "artifact_key": "2026-05-25",
+                        "rows": [{"code": "000001.SZ", "factors": {"close_to_zxdkx_pct": 1.2}}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(SystemExit) as raised:
+                main_from_args(
+                    type(
+                        "Args",
+                        (),
+                        {
+                            "runtime_root": runtime,
+                            "dsn": "postgres://fixture",
+                            "method": "b2",
+                            "start_date": "2026-05-25",
+                            "end_date": "2026-05-25",
+                            "output_dir": output_dir,
+                            "source": "candidates",
+                            "min_history_days": 120,
+                            "forward_days": 15,
+                            "external_feature_csv": [],
+                        },
+                    )()
+                )
+
+        message = str(raised.exception)
+        self.assertIn("stale_factor_artifact", message)
+        self.assertIn("2026-05-25.b2", message)
+        self.assertIn("stock-select-rs screen --method b2 --pick-date 2026-05-25 --export-factors", message)
+        self.assertFalse((output_dir / "rank_dataset.csv").exists())
 
     def test_load_selection_rows_reads_current_select_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:

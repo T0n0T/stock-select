@@ -12,7 +12,7 @@ POSTGRES_DSN=...
 TUSHARE_TOKEN=...
 ```
 
-CLI、训练脚本和模型维护脚本都按 `CLI 参数 > shell 环境变量 > 当前目录 .env` 解析配置。
+Rust CLI 和 `stock-select-ml` Python CLI 都按 `CLI 参数 > shell 环境变量 > 当前目录 .env` 解析配置。
 
 ## 常用命令
 
@@ -45,14 +45,14 @@ cargo run -- review-list --method b2 --pick-date 2026-06-05 --limit 20
 统一入口：
 
 ```bash
-scripts/model_maintenance.sh status
-scripts/model_maintenance.sh archives
-scripts/model_maintenance.sh dry-run-promote <candidate_dir>
-scripts/model_maintenance.sh promote <candidate_dir>
-scripts/model_maintenance.sh switch <archive_version>
+uv run stock-select-ml model status --method b2
+uv run stock-select-ml model archives --method b2
+uv run stock-select-ml model dry-run-promote <candidate_dir> --method b2 --require-report
+uv run stock-select-ml model promote <candidate_dir> --method b2 --require-report
+uv run stock-select-ml model rollback <archive_version> --method b2
 ```
 
-这个入口会封装当前模型查看、归档浏览、发布和切换旧归档模型。
+这个入口会封装当前模型查看、归档浏览、发布和回滚旧归档模型。
 
 ## 历史补跑
 
@@ -60,20 +60,20 @@ scripts/model_maintenance.sh switch <archive_version>
 
 ```bash
 # 补跑 2026-01-01 ~ 2026-06-04 的数据
-scripts/backfill_run.py --start-date 2026-01-01 --end-date 2026-06-04
+uv run stock-select-ml backfill runs --start-date 2026-01-01 --end-date 2026-06-04
 
 # 覆盖已有的重新跑
-scripts/backfill_run.py --start-date 2026-05-01 --end-date 2026-05-31 --force
+uv run stock-select-ml backfill runs --start-date 2026-05-01 --end-date 2026-05-31 --force
 
 # 先预览要跑的日期
-scripts/backfill_run.py --start-date 2026-05-01 --end-date 2026-05-31 --dry-run
+uv run stock-select-ml backfill runs --start-date 2026-05-01 --end-date 2026-05-31 --dry-run
 
 # 并发补跑（4 个 worker 同时跑，加快历史回填）
-scripts/backfill_run.py --start-date 2026-01-01 --end-date 2026-05-31 --jobs 4
+uv run stock-select-ml backfill runs --start-date 2026-01-01 --end-date 2026-05-31 --jobs 4
 ```
 
-Python 版本直接从 DB 查询交易日历（`daily_market` 表），精确跳过非交易日；
-无 DB 连接时兜底跳过周末。支持 `--jobs N` 并发补跑（默认 2，设为 1 则串行）。
+Python CLI 直接从 DB 查询交易日历（`daily_market` 表），精确跳过非交易日；
+无 DB 连接时兜底跳过周末。支持 `--jobs N` 并发补跑（默认 4，设为 1 则串行）。
 
 ## 参考
 

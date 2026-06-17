@@ -1,29 +1,23 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#   "psycopg[binary]",
-# ]
-# ///
 from __future__ import annotations
 
 import argparse
-import os
 import shlex
-import signal
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import date
 from pathlib import Path
 from typing import Callable, Sequence
 
+from ml.backfill.commands import build_screen_command
+from ml.dates import fetch_trade_dates, read_dates_file, validate_date
+from ml.env import load_dotenv_values, resolve_config_value
+from ml.paths import PROJECT_ROOT, candidate_path, factor_artifact_path
+from ml.subprocesses import format_returncode
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DOTENV_PATH = PROJECT_ROOT / ".env"
+
 DEFAULT_BINARY = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
 DEFAULT_METHOD = "b2"
 DEFAULT_POOL_SOURCE = "turnover-top"
-
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -58,88 +52,6 @@ class BackfillResult:
     failures: list[BackfillFailure] = field(default_factory=list)
 
 
-def load_dotenv_values(env_path: Path = DOTENV_PATH) -> dict[str, str]:
-    if not env_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line.removeprefix("export ").strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        if key:
-            values[key] = value
-    return values
-
-
-def resolve_config_value(cli_value: str | None, key: str, dotenv_values: dict[str, str]) -> str | None:
-    for value in (cli_value, os.getenv(key), dotenv_values.get(key)):
-        if value and value.strip():
-            return value.strip()
-    return None
-
-
-def validate_date(value: str) -> str:
-    try:
-        return date.fromisoformat(value).isoformat()
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("date must use YYYY-MM-DD format") from exc
-
-
-def fetch_trade_dates(dsn: str, start_date: str, end_date: str) -> list[str]:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                select distinct trade_date
-                from daily_market
-                where trade_date between %s and %s
-                order by trade_date
-                """,
-                (start_date, end_date),
-            )
-            return [row[0].isoformat() for row in cur.fetchall()]
-
-
-def read_dates_file(path: Path) -> list[str]:
-    dates: list[str] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        value = raw_line.strip()
-        if not value or value.startswith("#"):
-            continue
-        dates.append(validate_date(value))
-    return sorted(dict.fromkeys(dates))
-
-
-def candidate_path(runtime_root: Path, pick_date: str, method: str) -> Path:
-    return runtime_root / "candidates" / f"{pick_date}.{method}.json"
-
-
-def factor_artifact_path(runtime_root: Path, pick_date: str, method: str) -> Path:
-    return runtime_root / "factors" / f"{pick_date}.{method}" / "factors.json"
-
-
-def format_returncode(returncode: int) -> str:
-    if returncode >= 0:
-        return f"rc={returncode}"
-    signum = -returncode
-    try:
-        signal_name = signal.Signals(signum).name
-    except ValueError:
-        signal_name = str(signum)
-    return f"signal={signal_name}"
-
-
 def select_missing_dates(
     trade_dates: Sequence[str],
     *,
@@ -159,35 +71,6 @@ def select_missing_dates(
     ]
 
 
-def build_screen_command(
-    *,
-    binary: Path,
-    pick_date: str,
-    runtime_root: Path,
-    method: str,
-    recompute: bool,
-    pool_source: str,
-    export_factors: bool,
-) -> list[str]:
-    command = [
-        str(binary),
-        "screen",
-        "--method",
-        method,
-        "--pick-date",
-        pick_date,
-        "--runtime-root",
-        str(runtime_root),
-        "--pool-source",
-        pool_source,
-    ]
-    if recompute:
-        command.append("--recompute")
-    if export_factors:
-        command.append("--export-factors")
-    return command
-
-
 def _run_one(
     pick_date: str,
     *,
@@ -203,13 +86,7 @@ def _run_one(
         pool_source=config.pool_source,
         export_factors=config.export_factors,
     )
-    completed = runner(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    completed = runner(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
     return pick_date, completed
 
 
@@ -250,12 +127,7 @@ def run_backfill(
                 actual_date, completed = future.result()
             except Exception as exc:  # pragma: no cover - defensive for subprocess launch errors
                 result.failures.append(
-                    BackfillFailure(
-                        pick_date=pick_date,
-                        command=command,
-                        returncode=1,
-                        stderr=str(exc),
-                    )
+                    BackfillFailure(pick_date=pick_date, command=command, returncode=1, stderr=str(exc))
                 )
                 if not config.quiet:
                     print(f"[{completed_count}/{len(dates)}] {pick_date} failed: {exc}")
@@ -287,8 +159,7 @@ def resolve_binary(cli_binary: Path | None) -> Path:
     return Path("stock-select-rs")
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Backfill candidate artifacts with concurrent screen runs.")
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start-date", type=validate_date, required=True)
     parser.add_argument("--end-date", type=validate_date, required=True)
     parser.add_argument("--runtime-root", type=Path)
@@ -306,11 +177,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", dest="no_skip_existing", help="Compatibility alias for --no-skip-existing.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--quiet", action="store_true")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Backfill candidate artifacts with concurrent screen runs.")
+    add_arguments(parser)
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+def _resolve_trade_dates(args: argparse.Namespace, dotenv_values: dict[str, str]) -> list[str]:
+    if args.dates_file:
+        return read_dates_file(args.dates_file)
+    dsn = resolve_config_value(args.dsn, "POSTGRES_DSN", dotenv_values)
+    if not dsn:
+        raise SystemExit("POSTGRES_DSN is required; set it in .env, export it, or pass --dsn.")
+    return fetch_trade_dates(dsn, args.start_date, args.end_date)
+
+
+def main_from_args(args: argparse.Namespace) -> int:
     dotenv_values = load_dotenv_values()
     runtime_root_value = resolve_config_value(
         str(args.runtime_root) if args.runtime_root else None,
@@ -321,14 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("STOCK_SELECT_RUNTIME_ROOT is required; set it in .env or pass --runtime-root.")
     runtime_root = Path(runtime_root_value).expanduser()
 
-    if args.dates_file:
-        trade_dates = read_dates_file(args.dates_file)
-    else:
-        dsn = resolve_config_value(args.dsn, "POSTGRES_DSN", dotenv_values)
-        if not dsn:
-            raise SystemExit("POSTGRES_DSN is required; set it in .env, export it, or pass --dsn.")
-        trade_dates = fetch_trade_dates(dsn, args.start_date, args.end_date)
-
+    trade_dates = _resolve_trade_dates(args, dotenv_values)
     selected_dates = select_missing_dates(
         trade_dates,
         runtime_root=runtime_root,
@@ -365,7 +242,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 export_factors=config.export_factors,
             )
             print(shlex.join(command))
-
     try:
         result = run_backfill(selected_dates, config=config)
     except KeyboardInterrupt:
@@ -385,5 +261,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("candidates", description="Backfill candidate artifacts with concurrent screen runs.")
+    add_arguments(parser)
+    parser.set_defaults(handler=main_from_args)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    return main_from_args(parse_args(argv))

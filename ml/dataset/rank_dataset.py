@@ -952,8 +952,56 @@ def write_dataset(
     )
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build offline review ranking dataset.")
+FATAL_FACTOR_WARNING_PREFIXES = (
+    "missing_factor_artifact:",
+    "stale_factor_artifact:",
+    "invalid_factor_artifact:",
+    "invalid_factor_rows:",
+    "empty_factor_artifact:",
+)
+
+
+def factor_artifact_label_from_warning(warning: str, *, method: str) -> str:
+    details = warning.split(":", 1)[1] if ":" in warning else warning
+    token = details.split(":", 1)[0]
+    path = Path(token)
+    candidates = [token, path.parent.name]
+    suffix = f".{method}"
+    for candidate in candidates:
+        if candidate.endswith(suffix):
+            return candidate
+    return token
+
+
+def rerun_factor_artifact_hint(label: str, *, method: str) -> str:
+    suffix = f".{method}"
+    artifact_key = label.removesuffix(suffix) if label.endswith(suffix) else label
+    if artifact_key.endswith(".intraday"):
+        pick_date = artifact_key.removesuffix(".intraday")
+    else:
+        pick_date = artifact_key
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", pick_date):
+        return f"stock-select-rs screen --method {method} --pick-date {pick_date} --export-factors"
+    return f"stock-select-rs screen --method {method} --pick-date <date> --export-factors"
+
+
+def fatal_factor_warning_message(warnings: Sequence[str], *, method: str, limit: int = 10) -> str | None:
+    fatal = [warning for warning in warnings if warning.startswith(FATAL_FACTOR_WARNING_PREFIXES)]
+    if not fatal:
+        return None
+    labels = [factor_artifact_label_from_warning(warning, method=method) for warning in fatal]
+    unique_labels = list(dict.fromkeys(labels))
+    shown_labels = unique_labels[:limit]
+    hints = list(dict.fromkeys(rerun_factor_artifact_hint(label, method=method) for label in shown_labels))
+    return (
+        "fatal runtime factor artifact warnings: "
+        f"{', '.join(fatal[:limit])}. Affected artifacts: {', '.join(shown_labels)}. "
+        f"Rerun: {'; '.join(hints)}. "
+        "Or rerun candidate backfill with factor export enabled."
+    )
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--dsn")
     parser.add_argument("--method", default=DEFAULT_METHOD)
@@ -970,11 +1018,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Optional local feature CSV(s), joined by date plus code/symbol/ts_code.",
     )
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build rank dataset for offline review ranking.")
+    add_arguments(parser)
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+def main_from_args(args: argparse.Namespace) -> int:
     output_dir = resolve_output_dir(args.output_dir, method=args.method)
     runtime_root = resolve_runtime_root(args.runtime_root, env_runtime_root=os.getenv(RUNTIME_ROOT_ENV))
     if not runtime_root.exists():
@@ -988,14 +1040,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         training_input_rows, warnings = load_candidate_rows(
             runtime_root, method=args.method, start_date=args.start_date, end_date=args.end_date
         )
-    missing_factor_artifacts = [warning for warning in warnings if warning.startswith("missing_factor_artifact:")]
-    if missing_factor_artifacts:
-        missing = ", ".join(item.removeprefix("missing_factor_artifact:") for item in missing_factor_artifacts[:10])
-        raise SystemExit(
-            "missing runtime factor artifacts: "
-            f"{missing}. Run stock-select-rs screen --method {args.method} --pick-date <date> --export-factors "
-            "for each missing EOD date, or rerun candidate backfill with factor export enabled."
-        )
+    fatal_factor_message = fatal_factor_warning_message(warnings, method=args.method)
+    if fatal_factor_message is not None:
+        raise SystemExit(fatal_factor_message)
     symbols = sorted({str(row.get("code")) for row in training_input_rows if row.get("code")})
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()
@@ -1020,6 +1067,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"wrote {len(rows)} rows to {output_dir / 'rank_dataset.csv'}")
     return 0
+
+
+def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("build", description="Build rank dataset for offline review ranking.")
+    add_arguments(parser)
+    parser.set_defaults(handler=main_from_args)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    return main_from_args(parse_args(argv))
 
 
 if __name__ == "__main__":

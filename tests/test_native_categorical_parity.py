@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ml.train_rank_lgbm import build_feature_matrix
+from ml.training.matrices import build_feature_matrix
 
 
 FIXTURE_DIR = Path("tests/fixtures/native_categorical_model")

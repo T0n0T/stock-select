@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
+from .runtime import RUNTIME_ROOT_ENV, resolve_default_target_dir, resolve_runtime_root
 
-RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
 DEFAULT_METHOD = "b2"
 REQUIRED_METADATA_KEYS = {
     "feature_names",
@@ -34,57 +34,6 @@ def read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON 必须是对象: {path}")
     return payload
-
-
-def load_dotenv_value(env_path: Path, key: str) -> str | None:
-    if not env_path.exists():
-        return None
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line.removeprefix("export ").strip()
-        if "=" not in line:
-            continue
-        candidate_key, candidate_value = line.split("=", 1)
-        if candidate_key.strip() != key:
-            continue
-        value = candidate_value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        return value or None
-    return None
-
-
-def resolve_runtime_root(
-    cli_runtime_root: Path | None = None,
-    *,
-    env_runtime_root: str | None = None,
-    dotenv_path: Path = Path(".env"),
-) -> Path:
-    if cli_runtime_root is not None:
-        return cli_runtime_root
-    dotenv_value = load_dotenv_value(dotenv_path, RUNTIME_ROOT_ENV)
-    if dotenv_value:
-        return Path(dotenv_value)
-    if env_runtime_root and env_runtime_root.strip():
-        return Path(env_runtime_root.strip())
-    raise ValueError(f"默认发布目标需要当前目录 .env 配置 {RUNTIME_ROOT_ENV}，或显式传 --runtime-root")
-
-
-def resolve_default_target_dir(
-    cli_runtime_root: Path | None = None,
-    *,
-    method: str = DEFAULT_METHOD,
-    env_runtime_root: str | None = None,
-    dotenv_path: Path = Path(".env"),
-) -> Path:
-    return resolve_runtime_root(
-        cli_runtime_root,
-        env_runtime_root=env_runtime_root,
-        dotenv_path=dotenv_path,
-    ) / "models" / method
 
 
 def file_hash(path: Path) -> str:
@@ -598,6 +547,74 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--list-archives", action="store_true", help="列出可切换的归档模型")
     parser.add_argument("--rollback", help="回滚到 runtime archive 下的指定版本")
     return parser.parse_args(argv)
+
+
+def add_dry_run_promote_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("dry-run-promote", description="dry-run 发布候选模型")
+    add_promote_parser_arguments(parser)
+    parser.set_defaults(handler=main_from_dry_run_promote_args)
+    return parser
+
+
+def add_promote_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("promote", description="正式发布候选模型")
+    add_promote_parser_arguments(parser)
+    parser.set_defaults(handler=main_from_promote_args)
+    return parser
+
+
+def add_rollback_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("rollback", description="回滚到归档版本")
+    parser.add_argument("archive_version")
+    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--runtime-root", type=Path)
+    parser.add_argument("--target-dir", type=Path)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.set_defaults(handler=main_from_rollback_args)
+    return parser
+
+
+def add_promote_parser_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("candidate_dir", type=Path)
+    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--runtime-root", type=Path)
+    parser.add_argument("--target-dir", type=Path)
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--require-report", action="store_true")
+
+
+def main_from_dry_run_promote_args(args: argparse.Namespace) -> int:
+    args.dry_run = True
+    return main_from_promote_args(args)
+
+
+def main_from_promote_args(args: argparse.Namespace) -> int:
+    try:
+        target_dir = args.target_dir or resolve_default_target_dir(args.runtime_root, method=args.method)
+        summary = promote_model(
+            args.candidate_dir,
+            target_dir,
+            report_path=args.report,
+            dry_run=bool(getattr(args, "dry_run", False)),
+            require_report=args.require_report,
+            expected_method=args.method,
+        )
+        print_chinese_summary(summary)
+        return 0
+    except ValueError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
+
+
+def main_from_rollback_args(args: argparse.Namespace) -> int:
+    try:
+        target_dir = args.target_dir or resolve_default_target_dir(args.runtime_root, method=args.method)
+        summary = rollback_model(target_dir, args.archive_version, dry_run=args.dry_run, expected_method=args.method)
+        print_chinese_summary(summary)
+        return 0
+    except ValueError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -4,21 +4,21 @@
 
 当前生产主路径是 **b2 LightGBM model-first** 架构。模型使用 LambdaRank 算法训练，对候选股进行排序，`model_rank` 和 `model_score` 决定最终展示顺序。LLM/人工复盘只做 annotation（风险标记、备注），不改 rank。
 
-训练、导出、发布和回滚脚本按 `--method` 维护产物，可用于 b2/b3 等类别；生产 `run/review` 是否能实际使用某个 method，取决于 Rust CLI 对该 method 的 capability，不接入 Python predict。
+训练、导出、发布和回滚统一通过 `stock-select-ml` Python CLI 按 `--method` 维护产物，可用于 b2/b3 等类别；生产 `run/review` 是否能实际使用某个 method，取决于 Rust CLI 对该 method 的 capability，不接入 Python predict。
 
 ```mermaid
 flowchart LR
-    BC["backfill_candidates.py<br/>补齐历史候选"] --> BD["build_rank_dataset.py<br/>构建样本集 + label"]
-    BD --> RF["train_rank_lgbm.py<br/>随机森林因子诊断"]
-    RF --> TR["train_rank_lgbm.py<br/>LightGBM 训练 + 评估"]
+    BC["stock-select-ml backfill candidates<br/>补齐历史候选"] --> BD["stock-select-ml dataset build<br/>构建样本集 + label"]
+    BD --> RF["stock-select-ml train lgbm-rank<br/>随机森林因子诊断"]
+    RF --> TR["stock-select-ml train lgbm-rank<br/>LightGBM 训练 + 评估"]
 
     BC -.-> C["candidates/"]
     BD -.-> D["diagnostics/ml/&lt;method&gt;/"]
     RF -.-> M["diagnostics/ml/&lt;method&gt;/model/"]
     TR -.-> M
 
-    M --> EXP["export_lgbm_scores.py"]
-    EXP --> PROM["promote_lgbm_model.py"]
+    M --> EXP["stock-select-ml score export-lgbm"]
+    EXP --> PROM["stock-select-ml model promote"]
     PROM --> R["runtime/models/&lt;method&gt;/<br/>model.txt + model_metadata.json"]
 ```
 
@@ -29,7 +29,7 @@ flowchart LR
 ```bash
 METHOD=b2
 
-uv run scripts/ml/backfill_candidates.py \
+uv run stock-select-ml backfill candidates \
   --method "$METHOD" \
   --start-date <TRAIN_START> \
   --end-date <TRAIN_END> \
@@ -43,7 +43,7 @@ uv run scripts/ml/backfill_candidates.py \
 ### 2. 构建训练集
 
 ```bash
-uv run scripts/ml/build_rank_dataset.py \
+uv run stock-select-ml dataset build \
   --method "$METHOD" \
   --runtime-root runtime \
   --source candidates \
@@ -67,7 +67,7 @@ uv run scripts/ml/build_rank_dataset.py \
 ### 3. 训练
 
 ```bash
-uv run scripts/ml/train_rank_lgbm.py \
+uv run stock-select-ml train lgbm-rank \
   --method "$METHOD" \
   --dataset "diagnostics/ml/$METHOD/rank_dataset.csv" \
   --output-dir "diagnostics/ml/$METHOD/model" \
@@ -82,7 +82,7 @@ uv run scripts/ml/train_rank_lgbm.py \
   --rolling-test-dates 40
 ```
 
-`train_rank_lgbm.py` 默认在 LightGBM 前运行随机森林因子诊断，用同一份特征选择、one-hot 编码、时间切分和 label 口径确认因子有效性。诊断产物写入同一输出目录：
+`stock-select-ml train lgbm-rank` 默认在 LightGBM 前运行随机森林因子诊断，用同一份特征选择、one-hot 编码、时间切分和 label 口径确认因子有效性。诊断产物写入同一输出目录：
 
 ```text
 diagnostics/ml/<method>/model/rf_feature_diagnostics.json
@@ -150,7 +150,7 @@ native 模型的 `feature_names` 必须等于 `numeric_columns + categorical_col
 ### 4. 导出模型
 
 ```bash
-uv run scripts/ml/export_lgbm_scores.py \
+uv run stock-select-ml score export-lgbm \
   --method "$METHOD" \
   --model-output-dir "diagnostics/ml/$METHOD/model"
 ```
@@ -163,22 +163,18 @@ uv run scripts/ml/export_lgbm_scores.py \
 
 ```bash
 # 预览
-uv run scripts/ml/promote_lgbm_model.py \
+uv run stock-select-ml model dry-run-promote "diagnostics/ml/$METHOD/model" \
   --method "$METHOD" \
-  --candidate-dir "diagnostics/ml/$METHOD/model" \
-  --dry-run \
   --require-report
 
 # 正式发布
-uv run scripts/ml/promote_lgbm_model.py \
+uv run stock-select-ml model promote "diagnostics/ml/$METHOD/model" \
   --method "$METHOD" \
-  --candidate-dir "diagnostics/ml/$METHOD/model" \
   --require-report
 
 # 回滚
-uv run scripts/ml/promote_lgbm_model.py \
-  --method "$METHOD" \
-  --rollback <archive-version>
+uv run stock-select-ml model rollback <archive-version> \
+  --method "$METHOD"
 ```
 
 发布后产物在 `runtime/models/<method>/`：
@@ -235,18 +231,17 @@ fn rank_candidates(...) -> Vec<RankedCandidate> {
 }
 ```
 
-## 模型维护脚本
+## 模型维护 CLI
 
-统一入口 `scripts/model_maintenance.sh`：
+统一入口 `uv run stock-select-ml model`：
 
 | 命令 | 功能 |
 |------|------|
-| `--method <method> status` | 查看当前激活模型 |
-| `--method <method> archives` | 列出当前 method 的归档版本 |
-| `--method <method> dry-run-promote <dir>` | 预览发布 |
-| `--method <method> promote <dir>` | 正式发布 |
-| `--method <method> switch <version>` | 切换活跃模型 |
-| `--method <method> rollback <version>` | 回滚到指定版本 |
+| `status --method <method>` | 查看当前激活模型 |
+| `archives --method <method>` | 列出当前 method 的归档版本 |
+| `dry-run-promote <dir> --method <method>` | 预览发布 |
+| `promote <dir> --method <method>` | 正式发布 |
+| `rollback <version> --method <method>` | 回滚到指定版本 |
 
 ## 因子系统
 

@@ -1,5 +1,5 @@
 /target
-diagnostics/
+/diagnostics
 runtime/
 __pycache*
 .env

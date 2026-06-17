@@ -6,15 +6,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ml import backfill_candidates
-from scripts.ml.backfill_candidates import (
+from ml.backfill import candidates as backfill_candidates
+from ml.backfill.candidates import (
     BackfillConfig,
-    build_screen_command,
-    format_returncode,
     parse_args,
     run_backfill,
     select_missing_dates,
 )
+from ml.backfill.commands import build_screen_command
+from ml.subprocesses import format_returncode
 
 
 class CandidateBackfillTest(unittest.TestCase):

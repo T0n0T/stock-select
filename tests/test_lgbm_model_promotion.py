@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ml.promote_lgbm_model import (
+from ml.model_ops.promote import (
     describe_current_model,
     list_archived_models,
     main,
@@ -80,16 +80,17 @@ def passing_report() -> dict:
 
 
 class LgbmModelPromotionTest(unittest.TestCase):
-    def test_default_target_dir_uses_dotenv_runtime_root_and_current_model_dir(self):
+    def test_default_target_dir_prefers_shell_env_over_dotenv_runtime_root(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            runtime = root / "runtime"
+            dotenv_runtime = root / "dotenv-runtime"
+            shell_runtime = root / "shell-runtime"
             dotenv = root / ".env"
-            dotenv.write_text(f"STOCK_SELECT_RUNTIME_ROOT={runtime}\n", encoding="utf-8")
+            dotenv.write_text(f"STOCK_SELECT_RUNTIME_ROOT={dotenv_runtime}\n", encoding="utf-8")
 
-            target = resolve_default_target_dir(method="b1", dotenv_path=dotenv, env_runtime_root="/tmp/ignored-shell-runtime")
+            target = resolve_default_target_dir(method="b1", dotenv_path=dotenv, env_runtime_root=str(shell_runtime))
 
-        self.assertEqual(target, runtime / "models" / "b1")
+        self.assertEqual(target, shell_runtime / "models" / "b1")
 
     def test_default_target_dir_requires_runtime_root_without_home_fallback(self):
         with tempfile.TemporaryDirectory() as temp_dir:
