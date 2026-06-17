@@ -66,29 +66,26 @@ uv run stock-select-ml dataset build \
   --end-date "$TRAIN_END_DATE"
 ```
 
-训练并输出 report：
+默认使用 Optuna 自动调参并输出 trial report。除非用户明确要求 RF/随机森林诊断、RF 阈值门禁或 RF 因子选择，训练命令必须传 `--skip-rf-diagnostics`；不要因为 CLI 默认会跑 RF 就保留它：
 
 ```bash
-uv run stock-select-ml train lgbm-rank \
+uv run stock-select-ml tune lgbm-rank \
   --method "$METHOD" \
   --dataset "diagnostics/ml/$METHOD/rank_dataset.csv" \
-  --output-dir "diagnostics/ml/$METHOD/model" \
-  --feature-set raw_numeric \
-  --num-leaves 9 \
-  --min-data-in-leaf 120 \
-  --num-boost-round 60 \
-  --learning-rate 0.05 \
-  --num-threads 16 \
+  --output-root "diagnostics/ml/$METHOD/tuning/optuna-<run-id>" \
+  --strategy optuna \
+  --max-trials 12 \
   --rolling-folds 5 \
   --rolling-train-dates 240 \
-  --rolling-test-dates 40
+  --rolling-test-dates 40 \
+  --skip-rf-diagnostics
 ```
 
-`stock-select-ml train lgbm-rank` 默认在 LightGBM 前运行随机森林因子诊断，诊断产物写到同一 `output-dir`：`rf_feature_diagnostics.json/md`。该诊断只用于确认因子有效性和调参汇报，不进入生产推理，也不替代 promote dry-run。临时快速训练可传 `--skip-rf-diagnostics`，但正式候选 trial 应保留诊断。
+默认先跑一轮不带因子裁剪的 Optuna baseline。随后由 agent 根据 method、schema、特征覆盖、领域含义和 baseline 指标自行决定是否做领域知识裁剪；用户未指定裁剪口径时，不要停下来问。裁剪不使用 RF feature selection 作为默认手段，且必须记录保留/剔除的因子组和理由。若当前 CLI 不支持自定义裁剪后的 Optuna 搜索，只使用已有 `feature_set`/config 能力做粗粒度裁剪，并在汇报中说明限制。
 
-用户要求训练、重训或调参且没有明确要求“只跑一次”时，默认执行受限自迭代调参：在小网格内最多 12 组 trial，逐个读取 report 比较 rolling 指标。样本不足、label 覆盖不足、关键指标明显劣化或连续多组没有改善时停止；选择候选后只做 export 和 promote dry-run，不自动发布。
+用户要求训练、重训或调参且没有明确要求“只跑一次”时，默认执行受限 Optuna 调参：最多 12 组 trial，逐个读取 report 比较 rolling 指标。样本不足、label 覆盖不足、关键指标明显劣化或连续多组没有改善时停止；选择候选后只做 export 和 promote dry-run，不自动发布。
 
-训练结束必须向用户汇报模型效果，不只说“训练成功”。汇报至少包含 dataset 覆盖质量、每个 trial 的 rolling 指标、最佳 trial 参数、随机森林因子诊断、top features、是否建议发布、promote dry-run 结果和剩余风险；字段清单见 reference。
+训练结束必须向用户汇报模型效果，不只说“训练成功”。汇报至少包含 dataset 覆盖质量、每个 trial 的 rolling 指标、最佳 trial 参数、是否跳过 RF 诊断、因子裁剪决策、top features、是否建议发布、promote dry-run 结果和剩余风险；字段清单见 reference。
 
 导出 score CSV 和候选模型产物：
 

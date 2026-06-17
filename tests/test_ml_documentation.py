@@ -332,6 +332,56 @@ class MlDocumentationTests(unittest.TestCase):
         self.assertNotIn("intraday: status=ready", completed.stdout)
         self.assertNotIn("metrics_source=test_metrics", completed.stdout)
 
+    def test_model_maintenance_status_discovers_intraday_only_model_without_state_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runtime = root / "runtime"
+            intraday_dir = runtime / "models" / "lsh_intraday"
+            intraday_dir.mkdir(parents=True)
+            (intraday_dir / "model.txt").write_text("tree\n", encoding="utf-8")
+            (intraday_dir / "model_metadata.json").write_text(
+                json.dumps(
+                    {
+                        "feature_names": ["a", "b"],
+                        "numeric_columns": ["a", "b"],
+                        "categorical_columns": [],
+                        "label_column": "rank_label_3d",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (intraday_dir / "model_card.json").write_text(
+                json.dumps(
+                    {
+                        "model_version": "intraday-only",
+                        "mode": "promote",
+                        "target": str(intraday_dir),
+                        "rolling_summary": {
+                            "top3_ret3_positive_rate": 57.1,
+                            "rank_ic_ret3": 0.073,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["STOCK_SELECT_RUNTIME_ROOT"] = str(runtime)
+            completed = subprocess.run(
+                [sys.executable, "-m", "ml", "model", "status", "--method", "lsh"],
+                check=True,
+                capture_output=True,
+                env=env,
+                text=True,
+            )
+
+        self.assertIn("盘中模型 (intraday)", completed.stdout)
+        self.assertIn("模型目录: " + str(intraday_dir), completed.stdout)
+        self.assertIn("产物检查: OK", completed.stdout)
+        self.assertIn("发布版本: intraday-only", completed.stdout)
+        self.assertNotIn("日终模型 (eod)", completed.stdout)
+        self.assertNotIn("按默认日终模型目录展示", completed.stdout)
+
     def test_model_maintenance_status_understands_routed_model_without_state_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

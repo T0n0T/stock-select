@@ -36,6 +36,17 @@ class MlCliTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("LightGBM ranker", stdout.getvalue())
 
+    def test_tune_lgbm_rank_help_registers_visualization_options(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            with self.assertRaises(SystemExit) as raised:
+                main(["tune", "lgbm-rank", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+        help_text = stdout.getvalue()
+        self.assertIn("--visualize", help_text)
+        self.assertIn("--visual-output-dir", help_text)
+        self.assertIn("--visual-format", help_text)
+
 
 if __name__ == "__main__":
     unittest.main()

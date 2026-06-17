@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tuning = ["optuna"]
+tuning = ["optuna", "plotly"]
 
 [project.scripts]
 stock-select-ml = "ml.cli:entrypoint"

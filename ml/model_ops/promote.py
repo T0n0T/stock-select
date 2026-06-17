@@ -301,6 +301,56 @@ def replace_target_from_source(source_dir: Path, target_dir: Path, temp_dir: Pat
     temp_dir.rename(target_dir)
 
 
+def runtime_relative_model_dir(target_dir: Path) -> str:
+    models_root = target_dir.parent
+    runtime_root = models_root.parent
+    try:
+        return str(target_dir.relative_to(runtime_root))
+    except ValueError:
+        return str(target_dir)
+
+
+def model_dir_has_artifacts(model_dir: Path) -> bool:
+    return (model_dir / "model_routing.json").exists() or (
+        (model_dir / "model.txt").exists() and (model_dir / "model_metadata.json").exists()
+    )
+
+
+def default_mode_state_for_dir(method: str, model_dir: Path, *, mode: str) -> dict[str, Any]:
+    if model_dir_has_artifacts(model_dir):
+        return {"status": "ready", "model_dir": runtime_relative_model_dir(model_dir)}
+    return {"status": "blocked", "reason": f"{mode} model is not published yet"}
+
+
+def sync_model_state_for_target(target_dir: Path, *, method: str) -> None:
+    if target_dir.parent.name != "models":
+        return
+    if target_dir.name == method:
+        mode = "eod"
+    elif target_dir.name == f"{method}_intraday":
+        mode = "intraday"
+    else:
+        return
+
+    state_dir = target_dir.parent / method
+    state_path = state_dir / "model_state.json"
+    if state_path.exists():
+        state = read_json(state_path)
+    else:
+        state = {}
+    if not isinstance(state.get("eod"), dict):
+        state["eod"] = default_mode_state_for_dir(method, state_dir, mode="eod")
+    if not isinstance(state.get("intraday"), dict):
+        state["intraday"] = default_mode_state_for_dir(
+            method,
+            target_dir.parent / f"{method}_intraday",
+            mode="intraday",
+        )
+    state[mode] = {"status": "ready", "model_dir": runtime_relative_model_dir(target_dir)}
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def build_model_card(summary: dict[str, Any]) -> dict[str, Any]:
     validation = summary.get("validation") or {}
     report = validation.get("report") or {}
@@ -445,6 +495,7 @@ def promote_model(
         shutil.move(str(target_dir), str(archive_path))
     replace_target_from_source(candidate_dir, target_dir, temp_target)
     write_model_card(target_dir, summary)
+    sync_model_state_for_target(target_dir, method=method)
     return summary
 
 
@@ -489,6 +540,7 @@ def rollback_model(
         shutil.move(str(target_dir), str(current_archive))
     replace_target_from_source(source, target_dir, temp_target)
     write_model_card(target_dir, summary)
+    sync_model_state_for_target(target_dir, method=method)
     return summary
 
 

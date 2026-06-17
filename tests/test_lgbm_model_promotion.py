@@ -355,6 +355,21 @@ class LgbmModelPromotionTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
 
+    def test_promote_mode_specific_intraday_target_updates_method_model_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = root / "candidate"
+            target = root / "runtime" / "models" / "lsh_intraday"
+            write_candidate_model(candidate, report={**passing_report(), "method": "lsh"})
+
+            promote_model(candidate, target, expected_method="lsh", now="20260617T010203Z")
+
+            state_path = root / "runtime" / "models" / "lsh" / "model_state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(state["intraday"], {"status": "ready", "model_dir": "models/lsh_intraday"})
+        self.assertEqual(state["eod"]["status"], "blocked")
+
     def test_cli_list_archives_accepts_mode_specific_target_dir_for_same_method(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

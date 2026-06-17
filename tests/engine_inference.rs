@@ -127,6 +127,34 @@ fn b2_intraday_model_resolution_uses_intraday_dir_when_ready() {
 }
 
 #[test]
+fn lsh_intraday_model_resolution_uses_intraday_dir_when_ready() {
+    let temp = tempfile::tempdir().unwrap();
+    let model_dir = temp.path().join(default_model_dir(Method::Lsh).unwrap());
+    let intraday_dir = temp.path().join("models/lsh_intraday");
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::create_dir_all(&intraday_dir).unwrap();
+    std::fs::write(intraday_dir.join("model.txt"), "tree\n").unwrap();
+    std::fs::write(intraday_dir.join("model_metadata.json"), "{}\n").unwrap();
+    std::fs::write(
+        model_dir.join("model_state.json"),
+        serde_json::json!({
+            "eod": {"status": "blocked", "reason": "eod model is not published yet"},
+            "intraday": {"status": "ready", "model_dir": "models/lsh_intraday"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolved = resolve_method_model_artifacts_for_mode(Method::Lsh, temp.path(), true).unwrap();
+
+    assert_eq!(resolved.model_path, Some(intraday_dir.join("model.txt")));
+    assert_eq!(
+        resolved.metadata_path,
+        Some(intraday_dir.join("model_metadata.json"))
+    );
+}
+
+#[test]
 fn b2_model_resolution_accepts_cli_artifact_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let model_path = temp.path().join("custom-model.txt");

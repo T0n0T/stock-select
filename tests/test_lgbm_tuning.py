@@ -11,7 +11,7 @@ from unittest.mock import patch
 from ml.cli import main
 from ml.tuning.grid import default_grid_trials
 from ml.tuning.objectives import score_trial_report
-from ml.tuning.optuna_search import require_optuna
+from ml.tuning.optuna_search import optuna_visualization_module, require_optuna
 
 
 class LgbmTuningTest(unittest.TestCase):
@@ -97,6 +97,24 @@ class LgbmTuningTest(unittest.TestCase):
         fake_optuna = types.SimpleNamespace(__version__="fixture")
         with patch.dict(sys.modules, {"optuna": fake_optuna}):
             self.assertIs(require_optuna(), fake_optuna)
+
+    def test_optuna_visualization_module_reports_missing_plotly_with_install_hint(self):
+        fake_optuna = types.SimpleNamespace(visualization=None)
+
+        with patch("importlib.import_module", side_effect=ModuleNotFoundError("No module named 'plotly'")):
+            with self.assertRaisesRegex(RuntimeError, "requires plotly") as raised:
+                optuna_visualization_module(fake_optuna)
+
+        self.assertIn("stock-select-ml[tuning]", str(raised.exception))
+
+    def test_optuna_visualization_module_preserves_unexpected_import_error_details(self):
+        fake_optuna = types.SimpleNamespace(visualization=None)
+
+        with patch("importlib.import_module", side_effect=ValueError("changed API")):
+            with self.assertRaisesRegex(RuntimeError, "ValueError: changed API") as raised:
+                optuna_visualization_module(fake_optuna)
+
+        self.assertNotIn("requires plotly", str(raised.exception))
 
     def test_cli_reports_missing_optuna_without_traceback(self):
         stderr = io.StringIO()
@@ -314,6 +332,371 @@ class LgbmTuningTest(unittest.TestCase):
         self.assertEqual(summary["trials"][0]["model_params"]["early_stopping_rounds"], 0)
         self.assertEqual(summary["trials"][0]["model_artifacts"]["model"], str(output_root / "optuna-trial-001" / "model.txt"))
 
+    def test_optuna_visualize_writes_html_files_and_summary(self):
+        class FakeTrial:
+            def __init__(self, number):
+                self.number = number
+                self.params = {}
+                self.value = None
+
+            def suggest_categorical(self, name, choices):
+                value = {
+                    "feature_set": "raw_numeric",
+                    "label_column": "rank_label_3d",
+                    "categorical_encoding": "one_hot",
+                    "boosting_type": "gbdt",
+                    "num_leaves": 5 + self.number,
+                    "min_data_in_leaf": 30,
+                    "num_boost_round": 40,
+                    "bagging_freq": 0,
+                    "early_stopping_rounds": 0,
+                    "lambdarank_truncation_level": 5,
+                }.get(name, list(choices)[0])
+                self.params[name] = value
+                return value
+
+            def suggest_float(self, name, low, high, **_kwargs):
+                value = {
+                    "learning_rate": 0.02 + self.number * 0.01,
+                    "bagging_fraction": 0.7,
+                    "feature_fraction": 0.8,
+                    "lambda_l1": 0.0,
+                    "lambda_l2": 1.0,
+                    "min_gain_to_split": 0.0,
+                }.get(name, low)
+                self.params[name] = value
+                return value
+
+            def set_user_attr(self, _name, _value):
+                return None
+
+        class FakeSampler:
+            def __init__(self, *, seed):
+                self.seed = seed
+
+        class FakeFigure:
+            def __init__(self, name):
+                self.name = name
+
+            def write_html(self, path):
+                Path(path).write_text(f"<html>{self.name}</html>", encoding="utf-8")
+
+        class FakeVisualization:
+            def __init__(self):
+                self.calls = []
+
+            def plot_optimization_history(self, study):
+                self.calls.append(("optimization_history", len(study.trials)))
+                return FakeFigure("optimization_history")
+
+            def plot_param_importances(self, study):
+                self.calls.append(("param_importances", len(study.trials)))
+                return FakeFigure("param_importances")
+
+            def plot_slice(self, study):
+                self.calls.append(("slice", len(study.trials)))
+                return FakeFigure("slice")
+
+            def plot_parallel_coordinate(self, study):
+                self.calls.append(("parallel_coordinate", len(study.trials)))
+                return FakeFigure("parallel_coordinate")
+
+        class FakeStudy:
+            study_name = "visual-study"
+
+            def __init__(self):
+                self.trials = []
+                self.best_trial = None
+                self.best_value = None
+                self.best_params = None
+
+            def optimize(self, objective, n_trials):
+                for number in range(n_trials):
+                    trial = FakeTrial(number)
+                    trial.value = objective(trial)
+                    self.trials.append(trial)
+                self.best_trial = self.trials[-1]
+                self.best_value = self.trials[-1].value
+                self.best_params = dict(self.trials[-1].params)
+
+        fake_study = FakeStudy()
+        fake_visualization = FakeVisualization()
+        fake_optuna = types.SimpleNamespace(
+            __version__="3.4.0",
+            samplers=types.SimpleNamespace(TPESampler=FakeSampler),
+            create_study=lambda **_kwargs: fake_study,
+            visualization=fake_visualization,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "tuning"
+            visual_dir = Path(temp_dir) / "custom-visualizations"
+            dataset = Path(temp_dir) / "rank_dataset.csv"
+            dataset.write_text("date,code,rank_label_3d\n", encoding="utf-8")
+
+            def fake_train_and_report(_dataset, output_dir, **_kwargs):
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return {
+                    "metrics": {
+                        "test": {
+                            "top3_ret3_le_0_rate": 20.0,
+                            "top3_ret3_positive_rate": 50.0 + len(fake_study.trials),
+                            "top3_ret3_ge_5_rate": 10.0,
+                            "rank_ic_ret3": 0.01,
+                        }
+                    },
+                    "output_dir": str(output_dir),
+                }
+
+            with patch.dict(sys.modules, {"optuna": fake_optuna}):
+                with patch("ml.tuning.optuna_search.train_lgbm_rank.train_and_report", side_effect=fake_train_and_report):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        rc = main(
+                            [
+                                "tune",
+                                "lgbm-rank",
+                                "--strategy",
+                                "optuna",
+                                "--dataset",
+                                str(dataset),
+                                "--output-root",
+                                str(output_root),
+                                "--max-trials",
+                                "2",
+                                "--visualize",
+                                "--visual-output-dir",
+                                str(visual_dir),
+                                "--skip-rf-diagnostics",
+                            ]
+                        )
+
+            tuning_summary = json.loads((output_root / "tuning_summary.json").read_text(encoding="utf-8"))
+            visual_summary = json.loads((visual_dir / "visualizations_summary.json").read_text(encoding="utf-8"))
+            optimization_history_exists = (visual_dir / "optimization_history.html").exists()
+            default_visual_dir_exists = (output_root / "visualizations").exists()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(tuning_summary["visualizations_summary_path"], str(visual_dir / "visualizations_summary.json"))
+        self.assertEqual(visual_summary["trial_count"], 2)
+        self.assertEqual(visual_summary["best_trial"], 2)
+        self.assertEqual(visual_summary["best_value"], fake_study.best_value)
+        self.assertEqual(visual_summary["target_metric"], "score_trial_report")
+        self.assertEqual(visual_summary["format"], "html")
+        self.assertEqual(visual_summary["warnings"], [])
+        self.assertEqual(
+            {Path(item["path"]).name for item in visual_summary["files"]},
+            {
+                "optimization_history.html",
+                "param_importances.html",
+                "slice.html",
+                "parallel_coordinate.html",
+            },
+        )
+        self.assertTrue(optimization_history_exists)
+        self.assertIn(("optimization_history", 2), fake_visualization.calls)
+        self.assertIn(("param_importances", 2), fake_visualization.calls)
+        self.assertIn(("slice", 2), fake_visualization.calls)
+        self.assertIn(("parallel_coordinate", 2), fake_visualization.calls)
+        self.assertFalse(default_visual_dir_exists)
+
+    def test_optuna_visualize_records_warnings_without_failing_tuning(self):
+        class FakeTrial:
+            number = 0
+            params = {}
+
+            def suggest_categorical(self, name, choices):
+                value = list(choices)[0]
+                self.params[name] = value
+                return value
+
+            def suggest_float(self, name, low, _high, **_kwargs):
+                self.params[name] = low
+                return low
+
+            def set_user_attr(self, _name, _value):
+                return None
+
+        class FakeSampler:
+            def __init__(self, *, seed):
+                self.seed = seed
+
+        class FakeVisualization:
+            def plot_optimization_history(self, _study):
+                raise RuntimeError("plotly missing")
+
+            def plot_param_importances(self, _study):
+                raise RuntimeError("importance unavailable")
+
+            def plot_slice(self, _study):
+                raise RuntimeError("slice unavailable")
+
+        class FakeStudy:
+            study_name = "warning-study"
+
+            def __init__(self):
+                self.trials = []
+                self.best_trial = None
+                self.best_value = None
+                self.best_params = None
+
+            def optimize(self, objective, n_trials):
+                trial = FakeTrial()
+                trial.value = objective(trial)
+                self.trials.append(trial)
+                self.best_trial = trial
+                self.best_value = trial.value
+                self.best_params = dict(trial.params)
+
+        fake_optuna = types.SimpleNamespace(
+            __version__="3.4.0",
+            samplers=types.SimpleNamespace(TPESampler=FakeSampler),
+            create_study=lambda **_kwargs: FakeStudy(),
+            visualization=FakeVisualization(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "tuning"
+            dataset = Path(temp_dir) / "rank_dataset.csv"
+            dataset.write_text("date,code,rank_label_3d\n", encoding="utf-8")
+
+            def fake_train_and_report(_dataset, output_dir, **_kwargs):
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return {
+                    "metrics": {
+                        "test": {
+                            "top3_ret3_le_0_rate": 20.0,
+                            "top3_ret3_positive_rate": 55.0,
+                            "top3_ret3_ge_5_rate": 15.0,
+                            "rank_ic_ret3": 0.02,
+                        }
+                    }
+                }
+
+            with patch.dict(sys.modules, {"optuna": fake_optuna}):
+                with patch("ml.tuning.optuna_search.train_lgbm_rank.train_and_report", side_effect=fake_train_and_report):
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout):
+                        rc = main(
+                            [
+                                "tune",
+                                "lgbm-rank",
+                                "--strategy",
+                                "optuna",
+                                "--dataset",
+                                str(dataset),
+                                "--output-root",
+                                str(output_root),
+                                "--max-trials",
+                                "1",
+                                "--visualize",
+                                "--skip-rf-diagnostics",
+                            ]
+                        )
+
+            visual_summary = json.loads((output_root / "visualizations" / "visualizations_summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(visual_summary["files"], [])
+        self.assertGreaterEqual(len(visual_summary["warnings"]), 3)
+        self.assertIn("warning", stdout.getvalue())
+
+    def test_optuna_visualize_setup_failure_still_writes_tuning_summary(self):
+        class FakeTrial:
+            number = 0
+            params = {}
+
+            def suggest_categorical(self, name, choices):
+                value = list(choices)[0]
+                self.params[name] = value
+                return value
+
+            def suggest_float(self, name, low, _high, **_kwargs):
+                self.params[name] = low
+                return low
+
+            def set_user_attr(self, _name, _value):
+                return None
+
+        class FakeSampler:
+            def __init__(self, *, seed):
+                self.seed = seed
+
+        class FakeStudy:
+            study_name = "setup-failure-study"
+
+            def __init__(self):
+                self.trials = []
+                self.best_trial = None
+                self.best_value = None
+                self.best_params = None
+
+            def optimize(self, objective, n_trials):
+                trial = FakeTrial()
+                trial.value = objective(trial)
+                self.trials.append(trial)
+                self.best_trial = trial
+                self.best_value = trial.value
+                self.best_params = dict(trial.params)
+
+        fake_optuna = types.SimpleNamespace(
+            __version__="3.4.0",
+            samplers=types.SimpleNamespace(TPESampler=FakeSampler),
+            create_study=lambda **_kwargs: FakeStudy(),
+            visualization=types.SimpleNamespace(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "tuning"
+            output_root.mkdir()
+            visual_output_file = output_root / "visualizations"
+            visual_output_file.write_text("not a directory", encoding="utf-8")
+            dataset = Path(temp_dir) / "rank_dataset.csv"
+            dataset.write_text("date,code,rank_label_3d\n", encoding="utf-8")
+
+            def fake_train_and_report(_dataset, output_dir, **_kwargs):
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return {
+                    "metrics": {
+                        "test": {
+                            "top3_ret3_le_0_rate": 20.0,
+                            "top3_ret3_positive_rate": 55.0,
+                            "top3_ret3_ge_5_rate": 15.0,
+                            "rank_ic_ret3": 0.02,
+                        }
+                    }
+                }
+
+            with patch.dict(sys.modules, {"optuna": fake_optuna}):
+                with patch("ml.tuning.optuna_search.train_lgbm_rank.train_and_report", side_effect=fake_train_and_report):
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout):
+                        rc = main(
+                            [
+                                "tune",
+                                "lgbm-rank",
+                                "--strategy",
+                                "optuna",
+                                "--dataset",
+                                str(dataset),
+                                "--output-root",
+                                str(output_root),
+                                "--max-trials",
+                                "1",
+                                "--visualize",
+                                "--visual-output-dir",
+                                str(visual_output_file),
+                                "--skip-rf-diagnostics",
+                            ]
+                        )
+
+            tuning_summary = json.loads((output_root / "tuning_summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(rc, 0)
+        self.assertIn("warnings", tuning_summary)
+        self.assertTrue(any("visualization" in warning for warning in tuning_summary["warnings"]))
+        self.assertTrue(any("visualizations" in warning for warning in tuning_summary["warnings"]))
+        self.assertIn("warning", stdout.getvalue())
+
     def test_grid_is_default_and_writes_summary_without_optuna(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_root = Path(temp_dir) / "tuning"
@@ -405,6 +788,51 @@ class LgbmTuningTest(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(train_and_report.call_count, 1)
+
+    def test_grid_visualize_warns_that_option_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "tuning"
+            dataset = Path(temp_dir) / "rank_dataset.csv"
+            dataset.write_text("date,code,rank_label_3d\n", encoding="utf-8")
+
+            def fake_train_and_report(_dataset, output_dir, **kwargs):
+                return {
+                    "model_params": {"boosting_type": kwargs["boosting_type"]},
+                    "metrics": {
+                        "test": {
+                            "top3_ret3_le_0_rate": 20.0,
+                            "top3_ret3_positive_rate": 55.0,
+                            "top3_ret3_ge_5_rate": 15.0,
+                            "rank_ic_ret3": 0.02,
+                        }
+                    },
+                    "output_dir": str(output_dir),
+                }
+
+            with patch.dict(sys.modules, {"optuna": None}):
+                with patch("ml.tuning.grid.train_lgbm_rank.train_and_report", side_effect=fake_train_and_report):
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout):
+                        rc = main(
+                            [
+                                "tune",
+                                "lgbm-rank",
+                                "--strategy",
+                                "grid",
+                                "--dataset",
+                                str(dataset),
+                                "--output-root",
+                                str(output_root),
+                                "--max-trials",
+                                "1",
+                                "--visualize",
+                                "--skip-rf-diagnostics",
+                            ]
+                        )
+
+        self.assertEqual(rc, 0)
+        self.assertIn("warning", stdout.getvalue())
+        self.assertIn("only applies to --strategy optuna", stdout.getvalue())
 
 
 if __name__ == "__main__":

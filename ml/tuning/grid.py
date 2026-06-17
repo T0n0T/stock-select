@@ -35,6 +35,8 @@ def default_grid_trials(max_trials: int = 12) -> list[dict[str, Any]]:
 
 
 def run_grid_search(args: argparse.Namespace) -> int:
+    if getattr(args, "visualize", False):
+        print("warning: --visualize only applies to --strategy optuna; ignoring for grid search")
     output_root = args.output_root or Path("diagnostics") / "ml" / args.method / "tuning"
     dataset = train_lgbm_rank.resolve_dataset_path(args.dataset, method=args.method)
     results = []
@@ -91,6 +93,9 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
     parser.add_argument("--rolling-train-dates", type=int, default=240)
     parser.add_argument("--rolling-test-dates", type=int, default=40)
     parser.add_argument("--skip-rf-diagnostics", action="store_true")
+    parser.add_argument("--visualize", action="store_true", help="generate Optuna visualization HTML files")
+    parser.add_argument("--visual-output-dir", type=Path, help="directory for Optuna visualization output")
+    parser.add_argument("--visual-format", choices=["html"], default="html", help="visualization output format")
     parser.set_defaults(handler=main_from_args)
     return parser
 

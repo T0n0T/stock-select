@@ -93,6 +93,16 @@ def default_routed_model_dir(model_dir: Path, manifest: dict[str, Any]) -> Path 
     return routed_child_dir(model_dir, relative_dir) if isinstance(relative_dir, str) else None
 
 
+def has_model_artifacts(model_dir: Path) -> bool:
+    if (model_dir / "model_routing.json").exists():
+        return True
+    return (model_dir / "model.txt").exists() and (model_dir / "model_metadata.json").exists()
+
+
+def inferred_mode_for_model_dir(model_dir: Path, method: str) -> str:
+    return "intraday" if model_dir.name == f"{method}_intraday" else "eod"
+
+
 def summary_metadata(model_dir: Path) -> dict[str, Any]:
     metadata = read_json(model_dir / "model_metadata.json")
     if metadata:
@@ -111,13 +121,44 @@ def routed_summary(model_dir: Path) -> str | None:
     return f"default={default_model}, 子模型 {len(models)} 个"
 
 
-def route_items(root: Path, state: dict[str, Any], default_model_dir_text: str) -> list[tuple[str, dict[str, Any]]]:
+def route_items(
+    root: Path,
+    state: dict[str, Any],
+    default_model_dir_text: str,
+    *,
+    method: str,
+    explicit_target_dir: bool = False,
+) -> list[tuple[str, dict[str, Any]]]:
     if not state:
-        item = {"status": "ready", "model_dir": default_model_dir_text}
         default_dir = resolve_model_dir(root, default_model_dir_text)
-        if not (default_dir / "model_routing.json").exists():
-            item["reason"] = "未找到 model_state.json；按默认日终模型目录展示"
-        return [("eod", item)]
+        default_mode = inferred_mode_for_model_dir(default_dir, method)
+        if explicit_target_dir:
+            item = {
+                "status": "ready" if has_model_artifacts(default_dir) else "missing",
+                "model_dir": default_model_dir_text,
+            }
+            if not (default_dir / "model_routing.json").exists():
+                item["reason"] = "未找到 model_state.json；按默认日终模型目录展示"
+            return [(default_mode, item)]
+
+        discovered: list[tuple[str, dict[str, Any]]] = []
+        if has_model_artifacts(default_dir):
+            discovered.append((default_mode, {"status": "ready", "model_dir": default_model_dir_text}))
+        intraday_dir = root / "models" / f"{method}_intraday"
+        if intraday_dir != default_dir and has_model_artifacts(intraday_dir):
+            discovered.append(("intraday", {"status": "ready", "model_dir": f"models/{method}_intraday"}))
+        if discovered:
+            return discovered
+        return [
+            (
+                "eod",
+                {
+                    "status": "missing",
+                    "model_dir": default_model_dir_text,
+                    "reason": "未找到 model_state.json；默认日终模型目录缺少模型产物",
+                },
+            )
+        ]
     output = []
     for mode in ("eod", "intraday"):
         item = state.get(mode)
@@ -230,7 +271,13 @@ def print_status(*, method: str, runtime_root: Path, target_dir: Path | None = N
     print("-" * 60)
     print(f"运行目录: {root}")
     print("说明: eod=日终收盘后模型；intraday=盘中实时可计算模型")
-    for mode, item in route_items(root, state, default_model_dir_text):
+    for mode, item in route_items(
+        root,
+        state,
+        default_model_dir_text,
+        method=method,
+        explicit_target_dir=target_dir is not None,
+    ):
         print_route(root, method, mode, item)
 
 

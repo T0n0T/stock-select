@@ -97,6 +97,95 @@ def best_trial_summary(trials: list[dict[str, Any]], best_number: int | None) ->
     return None
 
 
+def optuna_visualization_module(optuna: Any) -> Any:
+    visualization = getattr(optuna, "visualization", None)
+    if visualization is not None:
+        return visualization
+    try:
+        import importlib
+
+        return importlib.import_module("optuna.visualization")
+    except ImportError as exc:
+        raise RuntimeError("Optuna visualization requires plotly. Install with: pip install 'stock-select-ml[tuning]'") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Optuna visualization import failed: {type(exc).__name__}: {exc}") from exc
+
+
+def study_parameter_count(study: Any) -> int:
+    names: set[str] = set()
+    for trial in getattr(study, "trials", []) or []:
+        names.update((getattr(trial, "params", None) or {}).keys())
+    return len(names)
+
+
+def write_plot_html(figure: Any, path: Path) -> None:
+    write_html = getattr(figure, "write_html", None)
+    if write_html is None:
+        raise RuntimeError("Optuna visualization did not return a Plotly figure with write_html")
+    write_html(str(path))
+
+
+def write_optuna_visualizations(
+    *,
+    optuna: Any,
+    study: Any,
+    tuning_summary: dict[str, Any],
+    output_dir: Path,
+    visual_format: str,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "visualizations_summary.json"
+    visual_summary: dict[str, Any] = {
+        "format": visual_format,
+        "output_dir": str(output_dir),
+        "trial_count": len(getattr(study, "trials", []) or []),
+        "best_trial": tuning_summary.get("best_trial"),
+        "best_value": tuning_summary.get("best_score"),
+        "target_metric": "score_trial_report",
+        "files": [],
+        "warnings": [],
+    }
+
+    def add_warning(message: str) -> None:
+        visual_summary["warnings"].append(message)
+        print(f"warning: {message}")
+
+    if visual_format != "html":
+        add_warning(f"unsupported visualization format: {visual_format}")
+    else:
+        try:
+            visualization = optuna_visualization_module(optuna)
+        except RuntimeError as exc:
+            add_warning(str(exc))
+        else:
+            plots = [
+                ("optimization_history", "optimization_history.html", "plot_optimization_history"),
+                ("param_importances", "param_importances.html", "plot_param_importances"),
+                ("slice", "slice.html", "plot_slice"),
+            ]
+            if study_parameter_count(study) >= 2:
+                plots.append(("parallel_coordinate", "parallel_coordinate.html", "plot_parallel_coordinate"))
+
+            for name, filename, function_name in plots:
+                path = output_dir / filename
+                try:
+                    plot_function = getattr(visualization, function_name)
+                    figure = plot_function(study)
+                    write_plot_html(figure, path)
+                except Exception as exc:
+                    add_warning(f"{filename} generation failed: {exc}")
+                else:
+                    visual_summary["files"].append({"name": name, "path": str(path)})
+
+    summary_path.write_text(json.dumps(visual_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary_path
+
+
+def add_summary_warning(summary: dict[str, Any], message: str) -> None:
+    summary.setdefault("warnings", []).append(message)
+    print(f"warning: {message}")
+
+
 def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
     output_root = args.output_root or Path("diagnostics") / "ml" / args.method / "tuning"
     dataset = train_lgbm_rank.resolve_dataset_path(args.dataset, method=args.method)
@@ -142,7 +231,7 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
     best_value = getattr(study, "best_value", None)
     best_summary = best_trial_summary(trials, best_number)
     best_params = (best_summary or {}).get("params") or getattr(study, "best_params", None) or (getattr(best_trial, "params", {}) if best_trial is not None else {})
-    return {
+    summary = {
         "strategy": "optuna",
         "method": args.method,
         "dataset": str(dataset),
@@ -159,6 +248,21 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
         "best_report_path": (best_summary or {}).get("report_path"),
         "trials": trials,
     }
+    if getattr(args, "visualize", False):
+        visual_output_dir = args.visual_output_dir or output_root / "visualizations"
+        try:
+            visual_summary_path = write_optuna_visualizations(
+                optuna=optuna,
+                study=study,
+                tuning_summary=summary,
+                output_dir=visual_output_dir,
+                visual_format=args.visual_format,
+            )
+        except Exception as exc:
+            add_summary_warning(summary, f"visualization output failed for {visual_output_dir}: {type(exc).__name__}: {exc}")
+        else:
+            summary["visualizations_summary_path"] = str(visual_summary_path)
+    return summary
 
 
 def run_optuna_search(args: argparse.Namespace) -> int:
