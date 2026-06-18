@@ -40,40 +40,97 @@ cargo run -- run --method b2 --pick-date 2026-06-05
 cargo run -- review-list --method b2 --pick-date 2026-06-05 --limit 20
 ```
 
-## 模型维护
+## stock-select-ml 典型命令
 
-统一入口：
+`stock-select-ml` 是 Python 侧统一入口，负责历史补跑、训练集构建、模型训练/调参、评分导出和模型发布维护。
+
+查看命令树：
 
 ```bash
+uv run stock-select-ml --help
+uv run stock-select-ml backfill --help
+uv run stock-select-ml model --help
+```
+
+补历史候选、run 和 record：
+
+```bash
+# 补齐 screen 候选 artifact
+uv run stock-select-ml backfill candidates \
+  --method b2 \
+  --start-date 2026-01-01 \
+  --end-date 2026-06-04 \
+  --workers 4
+
+# 补跑历史 run artifact；默认覆盖 STOCK_SELECT_RECORD_METHODS 为空，不写 record.csv
+uv run stock-select-ml backfill runs \
+  --method b2 \
+  --start-date 2026-01-01 \
+  --end-date 2026-06-04 \
+  --workers 4
+
+# 按 STOCK_SELECT_RECORD_METHODS 或 --methods 补 runtime/record.csv
+uv run stock-select-ml backfill records \
+  --methods b2,lsh \
+  --days 10 \
+  --workers 4
+```
+
+构建训练集、训练和调参：
+
+```bash
+uv run stock-select-ml dataset build \
+  --method b2 \
+  --runtime-root runtime \
+  --source candidates \
+  --start-date 2026-01-01 \
+  --end-date 2026-06-04
+
+uv run stock-select-ml train lgbm-rank \
+  --method b2 \
+  --dataset diagnostics/ml/b2/rank_dataset.csv \
+  --output-dir diagnostics/ml/b2/model \
+  --feature-set raw_numeric \
+  --num-threads 8
+
+uv run stock-select-ml tune lgbm-rank \
+  --method b2 \
+  --dataset diagnostics/ml/b2/rank_dataset.csv \
+  --output-root diagnostics/ml/b2/tuning \
+  --strategy optuna \
+  --max-trials 30
+```
+
+导出评分、诊断和模型维护：
+
+```bash
+uv run stock-select-ml score export-lgbm \
+  --method b2 \
+  --model-output-dir diagnostics/ml/b2/model
+
+uv run stock-select-ml score evaluate-blends \
+  --method b2 \
+  --dataset diagnostics/ml/b2/rank_dataset.csv \
+  --model base=diagnostics/ml/b2/tuning/base \
+  --model aux=diagnostics/ml/b2/tuning/aux \
+  --aux-weight 0.15
+
+uv run stock-select-ml diagnostics controlled-rerank \
+  --method b3 \
+  --dataset diagnostics/ml/b3/controlled-online-window/rank_dataset.csv \
+  --model primary=diagnostics/ml/b3/tuning/primary \
+  --model risk=diagnostics/ml/b3/tuning/risk \
+  --primary-model primary \
+  --risk-model risk
+
 uv run stock-select-ml model status --method b2
 uv run stock-select-ml model archives --method b2
-uv run stock-select-ml model dry-run-promote <candidate_dir> --method b2 --require-report
-uv run stock-select-ml model promote <candidate_dir> --method b2 --require-report
+uv run stock-select-ml model dry-run-promote diagnostics/ml/b2/model --method b2 --require-report
+uv run stock-select-ml model promote diagnostics/ml/b2/model --method b2 --require-report
 uv run stock-select-ml model rollback <archive_version> --method b2
 ```
 
-这个入口会封装当前模型查看、归档浏览、发布和回滚旧归档模型。
-
-## 历史补跑
-
-批量补跑历史日期的 run 数据：
-
-```bash
-# 补跑 2026-01-01 ~ 2026-06-04 的数据
-uv run stock-select-ml backfill runs --start-date 2026-01-01 --end-date 2026-06-04
-
-# 覆盖已有的重新跑
-uv run stock-select-ml backfill runs --start-date 2026-05-01 --end-date 2026-05-31 --force
-
-# 先预览要跑的日期
-uv run stock-select-ml backfill runs --start-date 2026-05-01 --end-date 2026-05-31 --dry-run
-
-# 并发补跑（4 个 worker 同时跑，加快历史回填）
-uv run stock-select-ml backfill runs --start-date 2026-01-01 --end-date 2026-05-31 --jobs 4
-```
-
-Python CLI 直接从 DB 查询交易日历（`daily_market` 表），精确跳过非交易日；
-无 DB 连接时兜底跳过周末。支持 `--jobs N` 并发补跑（默认 4，设为 1 则串行）。
+模型维护入口封装当前模型查看、归档浏览、发布和回滚旧归档模型。历史补跑会优先从 DB 查询交易日历（`daily_market` 表），无 DB 连接时兜底跳过周末；`backfill runs` 默认跳过 record 写入，专门补 `record.csv` 时使用 `backfill records`。
 
 ## 参考
 

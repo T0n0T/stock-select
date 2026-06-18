@@ -13,8 +13,8 @@ use crate::engine::b2::{
 use crate::engine::capability::ensure_model_run_supported;
 use crate::engine::inference::{
     LightGbmRuntimeModel, ModelFeatureMetadata, ModelRoutingManifest, build_feature_vector,
-    read_model_routing_manifest, select_routed_model_key,
-    resolve_method_model_artifacts_for_mode_with_overrides,
+    read_model_routing_manifest, resolve_method_model_artifacts_for_mode_with_overrides,
+    select_routed_model_key,
 };
 use crate::engine::types::{
     DisplayRow, FactorRow, FactorValue, RankedCandidate, SelectionCandidate,
@@ -37,6 +37,7 @@ pub struct SelectionRunRequest {
     pub environment: Option<ResolvedEnvironment>,
     pub record: bool,
     pub record_window_trading_days: Option<usize>,
+    pub record_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +138,7 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
             "record": {
                 "enabled": request.record,
                 "window_trading_days": request.record_window_trading_days,
+                "limit": request.record_limit,
             },
             "rows": ranked.len(),
         }),
@@ -398,7 +400,9 @@ struct RoutedModelBundle {
 enum RuntimeRouteModel {
     LightGbm(LoadedModel),
     #[cfg(test)]
-    FactorScore { score_column: String },
+    FactorScore {
+        score_column: String,
+    },
 }
 
 impl RoutedModelBundle {
@@ -587,9 +591,10 @@ fn score_candidate(
             RuntimeModelBundle::Routed(bundle) => {
                 let context = route_context(row, intraday);
                 let model_key = select_routed_model_key(&bundle.manifest, &context);
-                let route_model = bundle.models.get(model_key).ok_or_else(|| {
-                    anyhow::anyhow!("routed model '{model_key}' was not loaded")
-                })?;
+                let route_model = bundle
+                    .models
+                    .get(model_key)
+                    .ok_or_else(|| anyhow::anyhow!("routed model '{model_key}' was not loaded"))?;
                 match route_model {
                     RuntimeRouteModel::LightGbm(model) => {
                         let (score, diagnostic) =

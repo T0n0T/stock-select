@@ -99,7 +99,7 @@ fn candidate_payload_factor_provider_uses_candidate_method_factor_profile() {
     assert_eq!(row.diagnostics["factor_profile"], "b3");
     assert_eq!(
         row.diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "b3_semantic"])
+        serde_json::json!(["raw_common", "chip_age", "b3_semantic"])
     );
 }
 
@@ -158,7 +158,7 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
         row.diagnostics
             .get("history_factor_count")
             .and_then(|value| value.as_u64()),
-        Some(80)
+        Some(82)
     );
 }
 

@@ -10,6 +10,7 @@ pub mod intraday;
 pub mod local_factors;
 pub mod macd_trends;
 pub mod model;
+pub mod record;
 pub mod review_protocol;
 pub mod review_types;
 pub mod reviewers;

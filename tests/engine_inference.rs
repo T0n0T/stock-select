@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use stock_select::engine::inference::{
     LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector, default_model_dir,
     resolve_method_model_artifacts, resolve_method_model_artifacts_for_mode,
-    resolve_method_model_artifacts_for_route,
-    resolve_method_model_artifacts_with_overrides,
+    resolve_method_model_artifacts_for_route, resolve_method_model_artifacts_with_overrides,
 };
 use stock_select::engine::types::{FactorRow, FactorValue};
 use stock_select::model::Method;
@@ -307,7 +306,10 @@ fn b3_model_resolution_accepts_routed_model_manifest_without_top_level_model() {
     let resolved = resolve_method_model_artifacts(Method::B3, temp.path()).unwrap();
 
     assert_eq!(resolved.model_dir, Some(model_dir.clone()));
-    assert_eq!(resolved.routing_path, Some(model_dir.join("model_routing.json")));
+    assert_eq!(
+        resolved.routing_path,
+        Some(model_dir.join("model_routing.json"))
+    );
     assert_eq!(resolved.model_path, None);
     assert_eq!(resolved.metadata_path, None);
 }

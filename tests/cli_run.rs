@@ -512,7 +512,7 @@ fn b3_run_uses_method_model_dir_and_factor_profile() {
     assert_eq!(factors["rows"][0]["diagnostics"]["factor_profile"], "b3");
     assert_eq!(
         factors["rows"][0]["diagnostics"]["factor_bundles"],
-        serde_json::json!(["raw_common", "b3_semantic"])
+        serde_json::json!(["raw_common", "chip_age", "b3_semantic"])
     );
 }
 
@@ -633,6 +633,208 @@ fn b2_run_accepts_old_review_control_flags_as_model_first_metadata() {
     assert_eq!(run["environment"]["reason"], "manual strong");
     assert_eq!(run["record"]["enabled"], true);
     assert_eq!(run["record"]["window_trading_days"], 7);
+}
+
+#[test]
+fn b2_eod_run_writes_record_csv_when_method_is_enabled_by_env() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env("STOCK_SELECT_RECORD_METHODS", "b2")
+        .env_remove("STOCK_SELECT_RECORD_WINDOW_TRADING_DAYS")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "strong",
+        ])
+        .assert()
+        .success();
+
+    let record = std::fs::read_to_string(temp.path().join("record.csv")).unwrap();
+    assert!(record.starts_with("code,name,method,selected_date,model_rank,model_score\n"));
+    assert!(record.contains("000001.SZ,测试一,b2,2026-05-25,1,"));
+    assert!(record.contains("000002.SZ,测试二,b2,2026-05-25,2,"));
+}
+
+#[test]
+fn b2_eod_run_record_limit_env_controls_rows_written() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env("STOCK_SELECT_RECORD_METHODS", "b2")
+        .env("STOCK_SELECT_RECORD_LIMIT", "1")
+        .env_remove("STOCK_SELECT_RECORD_WINDOW_TRADING_DAYS")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "strong",
+        ])
+        .assert()
+        .success();
+
+    let record = std::fs::read_to_string(temp.path().join("record.csv")).unwrap();
+    assert!(record.contains("000001.SZ,测试一,b2,2026-05-25,1,"));
+    assert!(!record.contains("000002.SZ,测试二,b2,2026-05-25,2,"));
+    let run: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("select/2026-05-25.b2/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(run["record"]["enabled"], true);
+    assert_eq!(run["record"]["window_trading_days"], 10);
+    assert_eq!(run["record"]["limit"], 1);
+}
+
+#[test]
+fn b2_eod_run_dotenv_record_methods_enable_record_csv() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+    std::fs::write(
+        temp.path().join(".env"),
+        "STOCK_SELECT_RECORD_METHODS=b2\nSTOCK_SELECT_RECORD_WINDOW_TRADING_DAYS=5\nSTOCK_SELECT_RECORD_LIMIT=1\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env_remove("STOCK_SELECT_RECORD_METHODS")
+        .env_remove("STOCK_SELECT_RECORD_WINDOW_TRADING_DAYS")
+        .env_remove("STOCK_SELECT_RECORD_LIMIT")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "strong",
+        ])
+        .assert()
+        .success();
+
+    let record = std::fs::read_to_string(temp.path().join("record.csv")).unwrap();
+    assert!(record.contains("000001.SZ,测试一,b2,2026-05-25,1,"));
+    assert!(!record.contains("000002.SZ,测试二,b2,2026-05-25,2,"));
+    let run: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("select/2026-05-25.b2/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(run["record"]["enabled"], true);
+    assert_eq!(run["record"]["window_trading_days"], 5);
+    assert_eq!(run["record"]["limit"], 1);
+}
+
+#[test]
+fn b2_eod_run_does_not_write_record_csv_by_default() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env_remove("STOCK_SELECT_RECORD_METHODS")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "strong",
+        ])
+        .assert()
+        .success();
+
+    assert!(!temp.path().join("record.csv").exists());
+}
+
+#[test]
+fn b2_eod_run_record_flag_writes_record_csv_without_method_env() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env_remove("STOCK_SELECT_RECORD_METHODS")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "strong",
+            "--record",
+        ])
+        .assert()
+        .success();
+
+    let record = std::fs::read_to_string(temp.path().join("record.csv")).unwrap();
+    assert!(record.contains("000001.SZ,测试一,b2,2026-05-25,1,"));
+}
+
+#[test]
+fn b2_eod_run_empty_record_methods_env_overrides_dotenv_record_methods() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+    std::fs::write(temp.path().join(".env"), "STOCK_SELECT_RECORD_METHODS=b2\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env("STOCK_SELECT_RECORD_METHODS", "")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "strong",
+        ])
+        .assert()
+        .success();
+
+    assert!(!temp.path().join("record.csv").exists());
 }
 
 #[test]
@@ -976,6 +1178,35 @@ fn b2_intraday_run_writes_intraday_scoped_artifacts() {
 }
 
 #[test]
+fn b2_intraday_run_does_not_write_record_csv_even_when_method_is_enabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env("STOCK_SELECT_RECORD_METHODS", "b2")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--intraday",
+            "--environment-state",
+            "neutral",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(!temp.path().join("record.csv").exists());
+}
+
+#[test]
 fn b2_intraday_run_warns_and_stops_when_model_state_is_blocked() {
     let temp = tempfile::tempdir().unwrap();
     let candidates_path = write_candidates(temp.path());
@@ -1178,6 +1409,46 @@ fn review_list_reads_display_after_intraday_run() {
         .assert()
         .success()
         .stdout(predicate::str::contains("1\t"));
+}
+
+#[test]
+fn review_list_record_flag_updates_record_when_it_auto_runs_selection() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    write_lightgbm_model_artifacts(temp.path());
+    write_two_code_selecting_prepared_cache(temp.path(), pick_date);
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "review-list",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+        "--environment-state",
+        "strong",
+        "--record",
+        "--record-window-trading-days",
+        "4",
+        "--limit",
+        "1",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("1\t"));
+
+    let record = std::fs::read_to_string(temp.path().join("record.csv")).unwrap();
+    assert!(record.contains("000001.SZ"));
+    assert!(record.contains("b2,2026-05-25,1,"));
+    let run: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("select/2026-05-25.b2/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(run["record"]["enabled"], true);
+    assert_eq!(run["record"]["window_trading_days"], 4);
+    assert_eq!(run["record"]["limit"], 30);
 }
 
 #[test]

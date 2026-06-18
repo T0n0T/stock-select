@@ -319,10 +319,7 @@ pub fn select_routed_model_key<'a>(
         .unwrap_or(manifest.default_model.as_str())
 }
 
-fn route_matches(
-    route: &ModelRouteManifest,
-    context: &BTreeMap<String, Option<String>>,
-) -> bool {
+fn route_matches(route: &ModelRouteManifest, context: &BTreeMap<String, Option<String>>) -> bool {
     route
         .when
         .iter()

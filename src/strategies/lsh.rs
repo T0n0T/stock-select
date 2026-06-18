@@ -35,7 +35,7 @@ pub fn run_lsh_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) -
             continue;
         };
         *stats.entry("eligible".to_string()).or_default() += 1;
-        if idx < 24 || row.ma25.is_none() {
+        if idx < 25 || row.ma25.is_none() || history[idx - 1].ma25.is_none() {
             *stats
                 .entry("fail_insufficient_history".to_string())
                 .or_default() += 1;
@@ -43,7 +43,14 @@ pub fn run_lsh_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) -
         }
 
         let ma25 = row.ma25.unwrap();
-        if !(row.low < ma25 && row.close > row.open && row.close > ma25) {
+        let previous = history[idx - 1];
+        let two_days_ago = history[idx - 2];
+        let previous_ma25 = previous.ma25.unwrap();
+        if !(previous.low < previous_ma25
+            && row.close > row.open
+            && row.close > ma25
+            && previous.volume < two_days_ago.volume)
+        {
             *stats.entry("fail_daily_shape".to_string()).or_default() += 1;
             continue;
         }
@@ -71,49 +78,66 @@ pub fn run_lsh_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) -
 }
 
 fn weekly_monthly_macd_positive(history: &[&PreparedRow]) -> bool {
-    latest_macd_hist_and_dea_positive(&period_closes_by_week(history))
-        && latest_macd_hist_and_dea_positive(&period_closes_by_month(history))
+    latest_macd_dif_and_dea_positive(&daily_view_weekly_closes(history))
+        && latest_macd_dif_and_dea_positive(&daily_view_monthly_closes(history))
 }
 
-fn latest_macd_hist_and_dea_positive(closes: &[f64]) -> bool {
+fn latest_macd_dif_and_dea_positive(closes: &[f64]) -> bool {
     if closes.is_empty() {
         return false;
     }
-    let (_dif, dea, hist) = macd(closes, 12, 26, 9);
-    hist.last()
+    let (dif, dea, _hist) = macd(closes, 12, 26, 9);
+    dif.last()
         .zip(dea.last())
-        .is_some_and(|(hist, dea)| hist.is_finite() && dea.is_finite() && *hist > 0.0 && *dea > 0.0)
+        .is_some_and(|(dif, dea)| dif.is_finite() && dea.is_finite() && *dif > 0.0 && *dea > 0.0)
 }
 
-fn period_closes_by_week(history: &[&PreparedRow]) -> Vec<f64> {
-    let mut closes = BTreeMap::<(i32, u32), f64>::new();
+fn daily_view_weekly_closes(history: &[&PreparedRow]) -> Vec<f64> {
+    let mut closes = Vec::with_capacity(history.len());
+    let mut current_week_close = None;
+    let mut previous_weekday = None;
     for row in history {
-        let week = row.trade_date.iso_week();
-        closes.insert((week.year(), week.week()), row.close);
+        let weekday = row.trade_date.weekday().number_from_monday();
+        if current_week_close.is_none()
+            || previous_weekday.is_some_and(|previous| weekday < previous)
+        {
+            current_week_close = Some(row.close);
+        }
+        closes.push(current_week_close.unwrap_or(row.close));
+        previous_weekday = Some(weekday);
     }
-    closes.into_values().collect()
+    closes
 }
 
-fn period_closes_by_month(history: &[&PreparedRow]) -> Vec<f64> {
-    let mut closes = BTreeMap::<(i32, u32), f64>::new();
+fn daily_view_monthly_closes(history: &[&PreparedRow]) -> Vec<f64> {
+    let mut closes = Vec::with_capacity(history.len());
+    let mut current_month_close = None;
+    let mut previous_month = None;
     for row in history {
-        closes.insert((row.trade_date.year(), row.trade_date.month()), row.close);
+        let month = (row.trade_date.year(), row.trade_date.month());
+        if current_month_close.is_none() || previous_month != Some(month) {
+            current_month_close = Some(row.close);
+        }
+        closes.push(current_month_close.unwrap_or(row.close));
+        previous_month = Some(month);
     }
-    closes.into_values().collect()
+    closes
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, NaiveDate};
 
+    use crate::indicators::macd;
     use crate::model::PreparedRow;
     use crate::strategies::lsh::run_lsh_strategy;
 
     #[test]
-    fn lsh_strategy_selects_pullback_reclaim_with_positive_weekly_and_monthly_macd() {
+    fn lsh_strategy_selects_previous_day_pullback_reclaim_with_previous_volume_shrink() {
         let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let pick_date = first_date + Duration::days(429);
-        let rows = rows(first_date, 430, true);
+        let mut rows = rows(first_date, 430, true);
+        satisfy_lsh_daily_formula(&mut rows);
 
         let output = run_lsh_strategy(&rows, pick_date);
 
@@ -124,10 +148,11 @@ mod tests {
     }
 
     #[test]
-    fn lsh_strategy_rejects_when_weekly_or_monthly_macd_hist_is_not_positive() {
+    fn lsh_strategy_rejects_when_weekly_or_monthly_macd_dif_or_dea_is_not_positive() {
         let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let pick_date = first_date + Duration::days(429);
-        let rows = rows(first_date, 430, false);
+        let mut rows = rows(first_date, 430, false);
+        satisfy_lsh_daily_formula(&mut rows);
 
         let output = run_lsh_strategy(&rows, pick_date);
 
@@ -136,17 +161,57 @@ mod tests {
     }
 
     #[test]
-    fn lsh_strategy_rejects_when_daily_ma25_reclaim_shape_is_missing() {
+    fn lsh_strategy_rejects_when_previous_day_ma25_pullback_is_missing() {
         let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let pick_date = first_date + Duration::days(429);
         let mut rows = rows(first_date, 430, true);
-        let latest = rows.last_mut().unwrap();
-        latest.low = latest.ma25.unwrap() + 0.1;
+        satisfy_lsh_daily_formula(&mut rows);
+        let len = rows.len();
+        rows[len - 2].low = rows[len - 2].ma25.unwrap() + 0.1;
+        rows[len - 1].low = rows[len - 1].ma25.unwrap() - 0.1;
 
         let output = run_lsh_strategy(&rows, pick_date);
 
         assert!(output.candidates.is_empty());
         assert_eq!(output.stats["fail_daily_shape"], 1);
+    }
+
+    #[test]
+    fn lsh_strategy_rejects_when_previous_day_volume_does_not_shrink() {
+        let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let pick_date = first_date + Duration::days(429);
+        let mut rows = rows(first_date, 430, true);
+        satisfy_lsh_daily_formula(&mut rows);
+        let len = rows.len();
+        rows[len - 2].volume = rows[len - 3].volume;
+        rows[len - 1].low = rows[len - 1].ma25.unwrap() - 0.1;
+
+        let output = run_lsh_strategy(&rows, pick_date);
+
+        assert!(output.candidates.is_empty());
+        assert_eq!(output.stats["fail_daily_shape"], 1);
+    }
+
+    #[test]
+    fn lsh_macd_condition_accepts_positive_dif_and_dea_even_when_histogram_is_negative() {
+        let closes = (0..30)
+            .map(|idx| 10.0 + idx as f64 * 0.2)
+            .chain((1..=5).map(|idx| 15.8 - idx as f64 * 0.01))
+            .collect::<Vec<_>>();
+        let (dif, dea, hist) = macd(&closes, 12, 26, 9);
+        assert!(dif.last().is_some_and(|value| *value > 0.0));
+        assert!(dea.last().is_some_and(|value| *value > 0.0));
+        assert!(hist.last().is_some_and(|value| *value < 0.0));
+
+        assert!(super::latest_macd_dif_and_dea_positive(&closes));
+    }
+
+    fn satisfy_lsh_daily_formula(rows: &mut [PreparedRow]) {
+        let len = rows.len();
+        rows[len - 3].volume = 1200.0;
+        rows[len - 2].low = rows[len - 2].ma25.unwrap() - 0.1;
+        rows[len - 2].volume = 900.0;
+        rows[len - 1].low = rows[len - 1].ma25.unwrap() + 0.1;
     }
 
     fn rows(
