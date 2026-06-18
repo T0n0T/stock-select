@@ -21,6 +21,8 @@ from typing import Any, Sequence
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METHOD = "b2"
 RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
+EXPECTED_FACTOR_ARTIFACT_VERSION = 2
+EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v3"
 
 
 IDENTITY_COLUMNS = ["date", "code", "name", "env", "method"]
@@ -130,6 +132,43 @@ RAW_FACTOR_COLUMNS = [
     "market_net_mf_to_amount_pct",
     "market_approx_limit_up_count",
     "market_approx_limit_down_count",
+    "market_sse_ret5_pct",
+    "market_sse_ret20_pct",
+    "market_sse_ma20_bias_pct",
+    "market_sse_volatility20_pct",
+    "market_cn2000_ret5_pct",
+    "market_cn2000_ret20_pct",
+    "market_cn2000_ma20_bias_pct",
+    "market_cn2000_volatility20_pct",
+    "market_broad_ret5_pct",
+    "market_broad_ret20_pct",
+    "market_broad_ma20_bias_pct",
+    "market_broad_volatility20_pct",
+    "sw_l2_ret5_pct",
+    "sw_l2_ret20_pct",
+    "sw_l2_ma20_bias_pct",
+    "sw_l2_volatility20_pct",
+    "sw_l2_ret5_rank_pct",
+    "sw_l2_ret20_rank_pct",
+    "sw_l2_vs_market_ret5_pct",
+    "sw_l2_vs_market_ret20_pct",
+    "stock_vs_sw_l2_ret5_pct",
+    "stock_vs_sw_l2_ret20_pct",
+    "sw_l2_up_ratio",
+    "sw_l2_ge5_ratio",
+    "sw_l2_limit_up_ratio",
+    "sw_l2_limit_down_ratio",
+    "sw_l2_amount_share_pct",
+    "sw_l2_amount_share_rank_pct",
+    "sw_l2_amount_share_ma5_ratio",
+    "sw_l2_top1_amount_share_pct",
+    "sw_l2_top3_amount_share_pct",
+    "sw_l2_top5_amount_share_pct",
+    "sw_l2_net_mf_to_amount_pct",
+    "sw_l2_net_mf_market_share_pct",
+    "sw_l2_net_mf_rank_pct",
+    "stock_amount_to_sw_l2_amount_pct",
+    "stock_net_mf_to_sw_l2_amount_pct",
     "cyq_winner_rate",
     "cyq_cost_50_to_close_pct",
     "cyq_cost_85_to_close_pct",
@@ -157,7 +196,7 @@ B2_RDAGENT_RAW_FACTOR_COLUMNS = [
     "b2_yang_engulf_ma25_vol_ratio",
     "b2_yang_engulf_ma25_strength",
 ]
-B2_CHIP_AGE_RAW_FACTOR_COLUMNS = [
+CHIP_AGE_RAW_FACTOR_COLUMNS = [
     "total_mass",
     "chip_age_layer_sum",
     "chip_age_ultrashort_ratio",
@@ -171,7 +210,7 @@ B2_CHIP_AGE_RAW_FACTOR_COLUMNS = [
     "chip_concentration",
     *[f"chip_age_l{layer}_b{bin_index:02}" for layer in range(4) for bin_index in range(32)],
 ]
-B2_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + B2_RDAGENT_RAW_FACTOR_COLUMNS + B2_CHIP_AGE_RAW_FACTOR_COLUMNS
+B2_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + CHIP_AGE_RAW_FACTOR_COLUMNS + B2_RDAGENT_RAW_FACTOR_COLUMNS
 B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_volume_shrink_ratio",
     "b3_amplitude_pct",
@@ -182,7 +221,7 @@ B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_prev_b2_flag",
     "b3_plus_flag",
 ]
-B3_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + B3_SPECIFIC_RAW_FACTOR_COLUMNS
+B3_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + CHIP_AGE_RAW_FACTOR_COLUMNS + B3_SPECIFIC_RAW_FACTOR_COLUMNS
 LSH_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "lsh_daily_macd_wave_index",
     "lsh_weekly_macd_wave_index",
@@ -201,7 +240,7 @@ LSH_EXCLUDED_RAW_FACTOR_COLUMNS = {
 }
 LSH_RAW_FACTOR_COLUMNS = [
     column for column in RAW_FACTOR_COLUMNS if column not in LSH_EXCLUDED_RAW_FACTOR_COLUMNS
-] + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
+] + CHIP_AGE_RAW_FACTOR_COLUMNS + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
 LABEL_COLUMNS = [
     "ret3",
     "ret5",
@@ -313,7 +352,12 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
     current = [row for row in history if str(row.get("trade_date")) <= pick_date]
     if not current:
         return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
-    entry_close = as_float(current[-1].get("close"))
+    entry_adj_factor = valid_adj_factor(current[-1].get("adj_factor"))
+    entry_close = adjusted_price(
+        current[-1].get("close"),
+        current[-1].get("adj_factor"),
+        entry_adj_factor,
+    )
     if entry_close is None or entry_close == 0.0:
         return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
     future = [row for row in history if str(row.get("trade_date")) > pick_date]
@@ -322,9 +366,17 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
         index = position - 1
         if len(future) <= index:
             return None
-        return round4(pct_change(as_float(future[index].get("close")), entry_close))
+        close = adjusted_price(
+            future[index].get("close"),
+            future[index].get("adj_factor"),
+            entry_adj_factor,
+        )
+        return round4(pct_change(close, entry_close))
 
-    lows = [as_float(row.get("low")) for row in future[:5]]
+    lows = [
+        adjusted_price(row.get("low"), row.get("adj_factor"), entry_adj_factor)
+        for row in future[:5]
+    ]
     valid_lows = [value for value in lows if value is not None]
     drawdown = round4(pct_change(min(valid_lows), entry_close)) if valid_lows else None
     return {
@@ -333,6 +385,23 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
         "ret10": ret_at(10),
         "max_drawdown_5d": drawdown,
     }
+
+
+def valid_adj_factor(value: Any) -> float | None:
+    parsed = as_float(value)
+    if parsed is None or parsed <= 0.0:
+        return None
+    return parsed
+
+
+def adjusted_price(value: Any, adj_factor: Any, base_adj_factor: float | None) -> float | None:
+    price = as_float(value)
+    if price is None:
+        return None
+    current_factor = valid_adj_factor(adj_factor)
+    if current_factor is None or base_adj_factor is None:
+        return price
+    return price * current_factor / base_adj_factor
 
 
 def median(values: Sequence[float]) -> float | None:
@@ -425,6 +494,17 @@ def factor_artifact_key_for_date(pick_date: str, *, intraday: bool = False) -> s
     return f"{pick_date}.intraday" if intraday else pick_date
 
 
+def validate_factor_artifact_contract(payload: dict[str, Any], *, method: str, artifact_key: str) -> str | None:
+    artifact_version = payload.get("artifact_version")
+    library_version = payload.get("factor_library_version")
+    if artifact_version == EXPECTED_FACTOR_ARTIFACT_VERSION and library_version == EXPECTED_FACTOR_LIBRARY_VERSION:
+        return None
+    return (
+        f"stale_factor_artifact:{artifact_key}.{method}:"
+        f"artifact_version={artifact_version}:factor_library_version={library_version}"
+    )
+
+
 def load_factor_artifact_rows(runtime_root: Path, *, method: str, artifact_key: str) -> tuple[dict[str, dict[str, Any]], list[str]]:
     path = runtime_root / "factors" / f"{artifact_key}.{method}" / "factors.json"
     if not path.exists():
@@ -432,6 +512,9 @@ def load_factor_artifact_rows(runtime_root: Path, *, method: str, artifact_key: 
     payload = read_json(path)
     if payload is None:
         return {}, [f"invalid_factor_artifact:{path}"]
+    stale_warning = validate_factor_artifact_contract(payload, method=method, artifact_key=artifact_key)
+    if stale_warning is not None:
+        return {}, [stale_warning]
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         return {}, [f"invalid_factor_rows:{path}"]
@@ -740,7 +823,11 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
         return {}
     query = """
         SELECT ts_code, trade_date, open::double precision, close::double precision, high::double precision, low::double precision,
-               vol::double precision, turnover_rate::double precision, pct_chg::double precision
+               vol::double precision, turnover_rate::double precision, pct_chg::double precision,
+               CASE
+                   WHEN extra_market_jsonb ? 'adj_factor'
+                   THEN (extra_market_jsonb->>'adj_factor')::double precision
+               END AS adj_factor
         FROM daily_market
         WHERE ts_code = ANY(%s)
           AND trade_date >= %s
@@ -752,7 +839,7 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
     with psycopg.connect(dsn) as connection:
         with connection.cursor() as cursor:
             cursor.execute(query, (list(symbols), start_date, end_date))
-            for ts_code, trade_date, open_price, close, high, low, vol, turnover_rate, pct_chg in cursor.fetchall():
+            for ts_code, trade_date, open_price, close, high, low, vol, turnover_rate, pct_chg, adj_factor in cursor.fetchall():
                 grouped[str(ts_code)].append(
                     {
                         "trade_date": trade_date.isoformat() if hasattr(trade_date, "isoformat") else str(trade_date),
@@ -763,6 +850,7 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
                         "vol": as_float(vol),
                         "turnover_rate": as_float(turnover_rate),
                         "pct_chg": as_float(pct_chg),
+                        "adj_factor": as_float(adj_factor),
                     }
                 )
     return dict(grouped)
@@ -864,8 +952,56 @@ def write_dataset(
     )
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build offline review ranking dataset.")
+FATAL_FACTOR_WARNING_PREFIXES = (
+    "missing_factor_artifact:",
+    "stale_factor_artifact:",
+    "invalid_factor_artifact:",
+    "invalid_factor_rows:",
+    "empty_factor_artifact:",
+)
+
+
+def factor_artifact_label_from_warning(warning: str, *, method: str) -> str:
+    details = warning.split(":", 1)[1] if ":" in warning else warning
+    token = details.split(":", 1)[0]
+    path = Path(token)
+    candidates = [token, path.parent.name]
+    suffix = f".{method}"
+    for candidate in candidates:
+        if candidate.endswith(suffix):
+            return candidate
+    return token
+
+
+def rerun_factor_artifact_hint(label: str, *, method: str) -> str:
+    suffix = f".{method}"
+    artifact_key = label.removesuffix(suffix) if label.endswith(suffix) else label
+    if artifact_key.endswith(".intraday"):
+        pick_date = artifact_key.removesuffix(".intraday")
+    else:
+        pick_date = artifact_key
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", pick_date):
+        return f"stock-select-rs screen --method {method} --pick-date {pick_date} --export-factors"
+    return f"stock-select-rs screen --method {method} --pick-date <date> --export-factors"
+
+
+def fatal_factor_warning_message(warnings: Sequence[str], *, method: str, limit: int = 10) -> str | None:
+    fatal = [warning for warning in warnings if warning.startswith(FATAL_FACTOR_WARNING_PREFIXES)]
+    if not fatal:
+        return None
+    labels = [factor_artifact_label_from_warning(warning, method=method) for warning in fatal]
+    unique_labels = list(dict.fromkeys(labels))
+    shown_labels = unique_labels[:limit]
+    hints = list(dict.fromkeys(rerun_factor_artifact_hint(label, method=method) for label in shown_labels))
+    return (
+        "fatal runtime factor artifact warnings: "
+        f"{', '.join(fatal[:limit])}. Affected artifacts: {', '.join(shown_labels)}. "
+        f"Rerun: {'; '.join(hints)}. "
+        "Or rerun candidate backfill with factor export enabled."
+    )
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--dsn")
     parser.add_argument("--method", default=DEFAULT_METHOD)
@@ -882,11 +1018,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Optional local feature CSV(s), joined by date plus code/symbol/ts_code.",
     )
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build rank dataset for offline review ranking.")
+    add_arguments(parser)
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+def main_from_args(args: argparse.Namespace) -> int:
     output_dir = resolve_output_dir(args.output_dir, method=args.method)
     runtime_root = resolve_runtime_root(args.runtime_root, env_runtime_root=os.getenv(RUNTIME_ROOT_ENV))
     if not runtime_root.exists():
@@ -900,14 +1040,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         training_input_rows, warnings = load_candidate_rows(
             runtime_root, method=args.method, start_date=args.start_date, end_date=args.end_date
         )
-    missing_factor_artifacts = [warning for warning in warnings if warning.startswith("missing_factor_artifact:")]
-    if missing_factor_artifacts:
-        missing = ", ".join(item.removeprefix("missing_factor_artifact:") for item in missing_factor_artifacts[:10])
-        raise SystemExit(
-            "missing runtime factor artifacts: "
-            f"{missing}. Run stock-select-rs screen --method {args.method} --pick-date <date> --export-factors "
-            "for each missing EOD date, or rerun candidate backfill with factor export enabled."
-        )
+    fatal_factor_message = fatal_factor_warning_message(warnings, method=args.method)
+    if fatal_factor_message is not None:
+        raise SystemExit(fatal_factor_message)
     symbols = sorted({str(row.get("code")) for row in training_input_rows if row.get("code")})
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()
@@ -932,6 +1067,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"wrote {len(rows)} rows to {output_dir / 'rank_dataset.csv'}")
     return 0
+
+
+def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("build", description="Build rank dataset for offline review ranking.")
+    add_arguments(parser)
+    parser.set_defaults(handler=main_from_args)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    return main_from_args(parse_args(argv))
 
 
 if __name__ == "__main__":

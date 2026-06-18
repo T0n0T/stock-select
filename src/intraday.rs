@@ -216,6 +216,27 @@ pub fn build_intraday_market_rows(
         .iter()
         .map(|row| row.ts_code.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let latest_adj_factor_by_code = history
+        .iter()
+        .filter(|row| row.trade_date <= trade_date)
+        .filter_map(|row| {
+            row.adj_factor
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| (row.ts_code.clone(), (row.trade_date, value)))
+        })
+        .fold(
+            BTreeMap::<String, (NaiveDate, f64)>::new(),
+            |mut acc, item| {
+                let (code, (date, value)) = item;
+                if acc
+                    .get(code.as_str())
+                    .is_none_or(|(current_date, _)| date > *current_date)
+                {
+                    acc.insert(code, (date, value));
+                }
+                acc
+            },
+        );
     let mut rows = history
         .into_iter()
         .filter(|row| {
@@ -236,6 +257,9 @@ pub fn build_intraday_market_rows(
             close: row.close,
             vol: row.vol,
             turnover_rate: None,
+            adj_factor: latest_adj_factor_by_code
+                .get(row.ts_code.as_str())
+                .map(|(_date, value)| *value),
             db_factors,
         }
     }));

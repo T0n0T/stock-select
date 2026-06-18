@@ -106,6 +106,97 @@ fn screen_prepare_matches_old_indicator_basics() {
 }
 
 #[test]
+fn screen_prepare_front_adjusts_ohlc_indicators_and_preserves_raw_turnover_basis() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 2).unwrap();
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+        let mut first = market_row_with_open_delta(1, 10.0, 10.0, 0.5);
+        first.adj_factor = Some(0.5);
+        let mut latest = market_row_with_open_delta(2, 6.0, 20.0, 0.5);
+        latest.adj_factor = Some(1.0);
+        Ok(vec![first, latest])
+    })
+    .unwrap();
+    let prepared = load_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        NaiveDate::from_ymd_opt(2025, 5, 1).unwrap(),
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(prepared[0].open, 4.75);
+    assert_eq!(prepared[0].high, 5.0);
+    assert_eq!(prepared[0].low, 4.5);
+    assert_eq!(prepared[0].close, 5.0);
+    assert_eq!(prepared[1].close, 6.0);
+    assert!((prepared[1].chg_d.unwrap() - 20.0).abs() < 1e-9);
+    assert_eq!(prepared[0].turnover_n, 97.5);
+    assert_eq!(prepared[1].turnover_n, 97.5 + 115.0);
+    assert!(!prepared[1].db_factors.contains_key("adj_factor"));
+}
+
+#[test]
+fn screen_prepare_front_adjusts_local_qfq_factor_fallbacks() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    let pick_date = first_date + Duration::days(12);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+        Ok((0..13)
+            .map(|offset| {
+                let mut row = market_row_at_date(
+                    first_date + Duration::days(offset),
+                    if offset < 12 { 10.0 } else { 6.0 },
+                    100.0,
+                );
+                row.adj_factor = Some(if offset < 12 { 0.5 } else { 1.0 });
+                row
+            })
+            .collect())
+    })
+    .unwrap();
+    let prepared = load_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        pick_date - Duration::days(366),
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = prepared.last().unwrap();
+
+    assert!((latest.db_factors["roc_qfq"] - 20.0).abs() < 1e-9);
+    assert!((latest.db_factors["mtm_qfq"] - 1.0).abs() < 1e-9);
+}
+
+#[test]
 fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
@@ -180,6 +271,7 @@ fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting
                     close,
                     vol: 1000.0 + offset as f64,
                     turnover_rate: Some(1.0 + offset as f64 / 10.0),
+                    adj_factor: None,
                     db_factors: Default::default(),
                 };
                 if offset == 24 {
@@ -681,6 +773,62 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
 }
 
 #[test]
+fn screen_export_factors_derives_environment_from_prepared_cross_section() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 5, 3).unwrap();
+    let mut rows = vec![
+        prepared_row("000001.SZ", 1, 10.0, 1000.0, 30.0),
+        prepared_row("000001.SZ", 2, 10.1, 900.0, 35.0),
+        prepared_row("000001.SZ", 3, 10.6, 1200.0, 45.0),
+        prepared_row("000001.SZ", 4, 10.7, 600.0, 46.0),
+        prepared_row("000002.SZ", 3, 20.0, 1000.0, 35.0),
+        prepared_row("000002.SZ", 4, 21.0, 1000.0, 40.0),
+        prepared_row("000003.SZ", 3, 30.0, 1000.0, 35.0),
+        prepared_row("000003.SZ", 4, 31.5, 1000.0, 40.0),
+    ];
+    for row in rows.iter_mut().filter(|row| row.trade_date == pick_date) {
+        row.chg_d = Some(5.0);
+    }
+    write_prepared_cache(
+        temp.path(),
+        Method::B3,
+        pick_date,
+        start_date,
+        pick_date,
+        &rows,
+    )
+    .unwrap();
+
+    run_screen_with_loader(
+        ScreenRequest {
+            method: Method::B3,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: true,
+            environment_state: None,
+        },
+        |_dsn, _start_date, _end_date| {
+            panic!("environment export test should reuse prepared cache")
+        },
+    )
+    .unwrap();
+
+    let factors: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("factors/2026-05-04.b3/factors.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!temp.path().join("environment/history.jsonl").exists());
+    assert!(!factors["rows"].as_array().unwrap().is_empty());
+    assert_eq!(factors["rows"][0]["factors"]["env"], "strong");
+}
+
+#[test]
 fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -732,6 +880,7 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
                 close: 10.1,
                 vol: 1000.0,
                 turnover_rate: Some(1.0),
+                adj_factor: None,
                 db_factors: Default::default(),
             }])
         },
@@ -831,6 +980,7 @@ fn intraday_screen_export_factors_runs_through_local_factor_fill() {
                         close,
                         vol: 1000.0 + offset as f64,
                         turnover_rate: Some(1.0),
+                        adj_factor: None,
                         db_factors: Default::default(),
                     }
                 })
@@ -914,6 +1064,7 @@ fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
                 close: 10.1,
                 vol: 1000.0,
                 turnover_rate: Some(1.0),
+                adj_factor: None,
                 db_factors: Default::default(),
             }])
         },
@@ -935,6 +1086,7 @@ fn market_row_with_open_delta(day: u32, close: f64, vol: f64, open_delta: f64) -
         close,
         vol,
         turnover_rate: Some(vol / 100.0),
+        adj_factor: None,
         db_factors: Default::default(),
     }
 }
@@ -949,6 +1101,7 @@ fn market_row_at_date(trade_date: NaiveDate, close: f64, vol: f64) -> MarketRow 
         close,
         vol,
         turnover_rate: Some(vol / 100.0),
+        adj_factor: None,
         db_factors: Default::default(),
     }
 }

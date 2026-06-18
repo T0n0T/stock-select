@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
+from .runtime import RUNTIME_ROOT_ENV, resolve_default_target_dir, resolve_runtime_root
 
-RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
 DEFAULT_METHOD = "b2"
 REQUIRED_METADATA_KEYS = {
     "feature_names",
@@ -36,57 +36,6 @@ def read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def load_dotenv_value(env_path: Path, key: str) -> str | None:
-    if not env_path.exists():
-        return None
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line.removeprefix("export ").strip()
-        if "=" not in line:
-            continue
-        candidate_key, candidate_value = line.split("=", 1)
-        if candidate_key.strip() != key:
-            continue
-        value = candidate_value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        return value or None
-    return None
-
-
-def resolve_runtime_root(
-    cli_runtime_root: Path | None = None,
-    *,
-    env_runtime_root: str | None = None,
-    dotenv_path: Path = Path(".env"),
-) -> Path:
-    if cli_runtime_root is not None:
-        return cli_runtime_root
-    dotenv_value = load_dotenv_value(dotenv_path, RUNTIME_ROOT_ENV)
-    if dotenv_value:
-        return Path(dotenv_value)
-    if env_runtime_root and env_runtime_root.strip():
-        return Path(env_runtime_root.strip())
-    raise ValueError(f"默认发布目标需要当前目录 .env 配置 {RUNTIME_ROOT_ENV}，或显式传 --runtime-root")
-
-
-def resolve_default_target_dir(
-    cli_runtime_root: Path | None = None,
-    *,
-    method: str = DEFAULT_METHOD,
-    env_runtime_root: str | None = None,
-    dotenv_path: Path = Path(".env"),
-) -> Path:
-    return resolve_runtime_root(
-        cli_runtime_root,
-        env_runtime_root=env_runtime_root,
-        dotenv_path=dotenv_path,
-    ) / "models" / method
-
-
 def file_hash(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -108,6 +57,8 @@ def validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     numeric_columns = metadata.get("numeric_columns")
     categorical_columns = metadata.get("categorical_columns")
     categorical_levels = metadata.get("categorical_levels")
+    categorical_encoding = str(metadata.get("categorical_encoding") or "one_hot")
+    categorical_code_maps = metadata.get("categorical_code_maps") or {}
     model_params = metadata.get("model_params")
     label_column = metadata.get("label_column")
 
@@ -119,10 +70,26 @@ def validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("model_metadata.json categorical_columns 必须是字符串数组")
     if not isinstance(categorical_levels, dict):
         raise ValueError("model_metadata.json categorical_levels 必须是对象")
+    if categorical_encoding not in {"one_hot", "native"}:
+        raise ValueError("model_metadata.json categorical_encoding 必须是 one_hot 或 native")
     for column in categorical_columns:
         levels = categorical_levels.get(column)
         if not isinstance(levels, list) or not all(isinstance(value, str) for value in levels):
             raise ValueError(f"model_metadata.json categorical_levels.{column} 必须是字符串数组")
+    if categorical_encoding == "native":
+        if not isinstance(categorical_code_maps, dict):
+            raise ValueError("model_metadata.json categorical_code_maps 必须是对象")
+        expected_feature_names = list(numeric_columns) + list(categorical_columns)
+        if feature_names != expected_feature_names:
+            raise ValueError("native categorical 模型 feature_names 必须等于 numeric_columns + categorical_columns")
+        for column in categorical_columns:
+            code_map = categorical_code_maps.get(column)
+            levels = categorical_levels.get(column) or []
+            if not isinstance(code_map, dict):
+                raise ValueError(f"model_metadata.json categorical_code_maps.{column} 必须是对象")
+            expected_map = {str(level): index for index, level in enumerate(levels)}
+            if code_map != expected_map:
+                raise ValueError(f"model_metadata.json categorical_code_maps.{column} 必须覆盖 categorical_levels 且从 0 连续编码")
     if not isinstance(label_column, str) or not label_column:
         raise ValueError("model_metadata.json label_column 必须是非空字符串")
     if not isinstance(model_params, dict) or not model_params:
@@ -132,6 +99,7 @@ def validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "feature_count": len(feature_names),
         "numeric_count": len(numeric_columns),
         "categorical_count": len(categorical_columns),
+        "categorical_encoding": categorical_encoding,
         "label_column": label_column,
         "train_window": f"{metadata.get('train_start')}..{metadata.get('train_end')}",
         "score_window": f"{metadata.get('score_start')}..{metadata.get('score_end')}",
@@ -179,6 +147,98 @@ def validate_report(report_path: Path, *, expected_method: str | None = None) ->
     }
 
 
+def validate_model_routing_manifest(candidate_dir: Path) -> dict[str, Any]:
+    routing_path = candidate_dir / "model_routing.json"
+    routing = read_json(routing_path)
+    default_model = routing.get("default_model")
+    models = routing.get("models")
+    routes = routing.get("routes") or []
+    if not isinstance(default_model, str) or not default_model:
+        raise ValueError("model_routing.json default_model 必须是非空字符串")
+    if not isinstance(models, dict) or not models:
+        raise ValueError("model_routing.json models 必须是非空对象")
+    if default_model not in models:
+        raise ValueError(f"model_routing.json default_model 未在 models 中定义: {default_model}")
+    if not isinstance(routes, list):
+        raise ValueError("model_routing.json routes 必须是数组")
+    for route in routes:
+        if not isinstance(route, dict):
+            raise ValueError("model_routing.json routes 每项必须是对象")
+        model = route.get("model")
+        if model not in models:
+            raise ValueError(f"model_routing.json route 引用未知模型: {model}")
+        when = route.get("when", {})
+        if not isinstance(when, dict):
+            raise ValueError("model_routing.json route.when 必须是对象")
+    for model_key, relative_dir in models.items():
+        if not isinstance(model_key, str) or not model_key:
+            raise ValueError("model_routing.json models key 必须是非空字符串")
+        if not isinstance(relative_dir, str) or not relative_dir:
+            raise ValueError(f"model_routing.json models.{model_key} 必须是非空字符串路径")
+        if Path(relative_dir).is_absolute() or ".." in Path(relative_dir).parts:
+            raise ValueError(f"model_routing.json models.{model_key} 必须是候选目录内相对路径")
+    return {
+        "routing_path": str(routing_path),
+        "default_model": default_model,
+        "models": dict(sorted(models.items())),
+        "routes": routes,
+    }
+
+
+def validate_routed_model_artifacts(
+    candidate_dir: Path,
+    *,
+    report_path: Path | None = None,
+    require_report: bool = False,
+    expected_method: str | None = None,
+) -> dict[str, Any]:
+    routing = validate_model_routing_manifest(candidate_dir)
+    child_validations: dict[str, dict[str, Any]] = {}
+    for model_key, relative_dir in routing["models"].items():
+        child_dir = candidate_dir / str(relative_dir)
+        child_validations[model_key] = validate_model_artifacts(
+            child_dir,
+            require_report=False,
+            expected_method=expected_method,
+        )
+
+    resolved_report = find_report(candidate_dir, report_path)
+    report_summary = None
+    if resolved_report is None and require_report:
+        raise ValueError("发布前要求训练报告，但候选目录未找到 lgbm_rank_report*.json")
+    if resolved_report is not None:
+        report_summary = validate_report(resolved_report, expected_method=expected_method)
+
+    default_validation = child_validations[str(routing["default_model"])]
+    decision = "allow"
+    if report_summary is not None:
+        decision = str(report_summary.get("decision") or "allow")
+    return {
+        "artifact_type": "routed",
+        "candidate_dir": str(candidate_dir),
+        "routing": {
+            "routing_path": routing["routing_path"],
+            "default_model": routing["default_model"],
+            "models": sorted(routing["models"].keys()),
+            "model_count": len(routing["models"]),
+            "route_count": len(routing["routes"]),
+        },
+        "child_models": child_validations,
+        "feature_count": default_validation.get("feature_count"),
+        "numeric_count": default_validation.get("numeric_count"),
+        "categorical_count": default_validation.get("categorical_count"),
+        "categorical_encoding": default_validation.get("categorical_encoding"),
+        "label_column": default_validation.get("label_column"),
+        "train_window": default_validation.get("train_window"),
+        "score_window": default_validation.get("score_window"),
+        "model_params": default_validation.get("model_params"),
+        "model_sha256": None,
+        "metadata_sha256": None,
+        "report": report_summary,
+        "decision": decision,
+    }
+
+
 def validate_model_artifacts(
     candidate_dir: Path,
     *,
@@ -186,6 +246,14 @@ def validate_model_artifacts(
     require_report: bool = False,
     expected_method: str | None = None,
 ) -> dict[str, Any]:
+    if (candidate_dir / "model_routing.json").exists():
+        return validate_routed_model_artifacts(
+            candidate_dir,
+            report_path=report_path,
+            require_report=require_report,
+            expected_method=expected_method,
+        )
+
     model_path = candidate_dir / "model.txt"
     metadata_path = candidate_dir / "model_metadata.json"
     if not model_path.exists():
@@ -206,6 +274,7 @@ def validate_model_artifacts(
     if report_summary is not None:
         decision = str(report_summary.get("decision") or "allow")
     return {
+        "artifact_type": "single",
         **metadata_summary,
         "candidate_dir": str(candidate_dir),
         "model_path": str(model_path),
@@ -232,6 +301,56 @@ def replace_target_from_source(source_dir: Path, target_dir: Path, temp_dir: Pat
     temp_dir.rename(target_dir)
 
 
+def runtime_relative_model_dir(target_dir: Path) -> str:
+    models_root = target_dir.parent
+    runtime_root = models_root.parent
+    try:
+        return str(target_dir.relative_to(runtime_root))
+    except ValueError:
+        return str(target_dir)
+
+
+def model_dir_has_artifacts(model_dir: Path) -> bool:
+    return (model_dir / "model_routing.json").exists() or (
+        (model_dir / "model.txt").exists() and (model_dir / "model_metadata.json").exists()
+    )
+
+
+def default_mode_state_for_dir(method: str, model_dir: Path, *, mode: str) -> dict[str, Any]:
+    if model_dir_has_artifacts(model_dir):
+        return {"status": "ready", "model_dir": runtime_relative_model_dir(model_dir)}
+    return {"status": "blocked", "reason": f"{mode} model is not published yet"}
+
+
+def sync_model_state_for_target(target_dir: Path, *, method: str) -> None:
+    if target_dir.parent.name != "models":
+        return
+    if target_dir.name == method:
+        mode = "eod"
+    elif target_dir.name == f"{method}_intraday":
+        mode = "intraday"
+    else:
+        return
+
+    state_dir = target_dir.parent / method
+    state_path = state_dir / "model_state.json"
+    if state_path.exists():
+        state = read_json(state_path)
+    else:
+        state = {}
+    if not isinstance(state.get("eod"), dict):
+        state["eod"] = default_mode_state_for_dir(method, state_dir, mode="eod")
+    if not isinstance(state.get("intraday"), dict):
+        state["intraday"] = default_mode_state_for_dir(
+            method,
+            target_dir.parent / f"{method}_intraday",
+            mode="intraday",
+        )
+    state[mode] = {"status": "ready", "model_dir": runtime_relative_model_dir(target_dir)}
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def build_model_card(summary: dict[str, Any]) -> dict[str, Any]:
     validation = summary.get("validation") or {}
     report = validation.get("report") or {}
@@ -242,6 +361,8 @@ def build_model_card(summary: dict[str, Any]) -> dict[str, Any]:
         "target": summary.get("target"),
         "method": summary.get("method"),
         "archive_path": summary.get("archive_path") or summary.get("current_archive_path"),
+        "artifact_type": validation.get("artifact_type"),
+        "routing": validation.get("routing"),
         "promotion_decision": validation.get("decision"),
         "feature_count": validation.get("feature_count"),
         "label_column": validation.get("label_column"),
@@ -374,6 +495,7 @@ def promote_model(
         shutil.move(str(target_dir), str(archive_path))
     replace_target_from_source(candidate_dir, target_dir, temp_target)
     write_model_card(target_dir, summary)
+    sync_model_state_for_target(target_dir, method=method)
     return summary
 
 
@@ -418,6 +540,7 @@ def rollback_model(
         shutil.move(str(target_dir), str(current_archive))
     replace_target_from_source(source, target_dir, temp_target)
     write_model_card(target_dir, summary)
+    sync_model_state_for_target(target_dir, method=method)
     return summary
 
 
@@ -476,6 +599,74 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--list-archives", action="store_true", help="列出可切换的归档模型")
     parser.add_argument("--rollback", help="回滚到 runtime archive 下的指定版本")
     return parser.parse_args(argv)
+
+
+def add_dry_run_promote_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("dry-run-promote", description="dry-run 发布候选模型")
+    add_promote_parser_arguments(parser)
+    parser.set_defaults(handler=main_from_dry_run_promote_args)
+    return parser
+
+
+def add_promote_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("promote", description="正式发布候选模型")
+    add_promote_parser_arguments(parser)
+    parser.set_defaults(handler=main_from_promote_args)
+    return parser
+
+
+def add_rollback_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("rollback", description="回滚到归档版本")
+    parser.add_argument("archive_version")
+    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--runtime-root", type=Path)
+    parser.add_argument("--target-dir", type=Path)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.set_defaults(handler=main_from_rollback_args)
+    return parser
+
+
+def add_promote_parser_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("candidate_dir", type=Path)
+    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--runtime-root", type=Path)
+    parser.add_argument("--target-dir", type=Path)
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--require-report", action="store_true")
+
+
+def main_from_dry_run_promote_args(args: argparse.Namespace) -> int:
+    args.dry_run = True
+    return main_from_promote_args(args)
+
+
+def main_from_promote_args(args: argparse.Namespace) -> int:
+    try:
+        target_dir = args.target_dir or resolve_default_target_dir(args.runtime_root, method=args.method)
+        summary = promote_model(
+            args.candidate_dir,
+            target_dir,
+            report_path=args.report,
+            dry_run=bool(getattr(args, "dry_run", False)),
+            require_report=args.require_report,
+            expected_method=args.method,
+        )
+        print_chinese_summary(summary)
+        return 0
+    except ValueError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
+
+
+def main_from_rollback_args(args: argparse.Namespace) -> int:
+    try:
+        target_dir = args.target_dir or resolve_default_target_dir(args.runtime_root, method=args.method)
+        summary = rollback_model(target_dir, args.archive_version, dry_run=args.dry_run, expected_method=args.method)
+        print_chinese_summary(summary)
+        return 0
+    except ValueError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
 
 
 def main(argv: Sequence[str] | None = None) -> int:

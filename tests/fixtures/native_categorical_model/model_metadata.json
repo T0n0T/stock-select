@@ -1,0 +1,40 @@
+{
+  "numeric_columns": [
+    "x"
+  ],
+  "categorical_columns": [
+    "env"
+  ],
+  "categorical_levels": {
+    "env": [
+      "weak",
+      "neutral",
+      "strong"
+    ]
+  },
+  "categorical_encoding": "native",
+  "categorical_code_maps": {
+    "env": {
+      "weak": 0,
+      "neutral": 1,
+      "strong": 2
+    }
+  },
+  "feature_names": [
+    "x",
+    "env"
+  ],
+  "lightgbm_feature_names": [
+    "x",
+    "env"
+  ],
+  "label_column": "label",
+  "train_start": "fixture",
+  "train_end": "fixture",
+  "score_start": "fixture",
+  "score_end": "fixture",
+  "model_params": {
+    "objective": "binary",
+    "num_boost_round": 4
+  }
+}

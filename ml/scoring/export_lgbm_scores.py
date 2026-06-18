@@ -10,26 +10,22 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from scripts.ml.train_rank_lgbm import (
-    as_float,
-    build_model_metadata,
-    DEFAULT_LABEL_GAIN,
-    grouped_by_date,
+from ml.paths import PROJECT_ROOT
+from ml.training.artifacts import build_model_metadata, write_model_artifacts as persist_model_artifacts
+from ml.training.evaluation import grouped_by_date
+from ml.training.features import (
+    CATEGORICAL_ENCODINGS,
+    DEFAULT_CATEGORICAL_ENCODING,
+    load_feature_manifest_encoding,
     load_feature_manifest_with_levels,
-    parse_label_gain,
-    read_dataset,
-    rows_for_dates,
-    train_model_result,
-    write_model_artifacts,
 )
+from ml.training.labels import as_float, rows_for_dates
+from ml.training.lgbm_ranker import DEFAULT_LABEL_GAIN, train_model_result
+from ml.training.train_lgbm_rank import parse_label_gain, read_dataset
+from ml.training.trial_params import LIGHTGBM_RANKING_DEFAULTS, trial_report_defaults
 
 
 DEFAULT_METHOD = "b2"
@@ -129,9 +125,23 @@ def export_scores(
     num_threads: int,
     label_gain: Sequence[int] | None = None,
     lambdarank_truncation_level: int = 0,
+    boosting_type: str = "gbdt",
+    bagging_fraction: float = 1.0,
+    bagging_freq: int = 0,
+    feature_fraction: float = 1.0,
+    lambda_l1: float = 0.0,
+    lambda_l2: float = 0.0,
+    min_gain_to_split: float = 0.0,
+    eval_at: Sequence[int] | None = None,
+    early_stopping_rounds: int = 0,
+    seed: int = 17,
     label_column: str = "rank_label_3d",
     method: str = DEFAULT_METHOD,
+    categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
+    write_model_artifacts: bool = False,
 ) -> dict[str, Any]:
+    if categorical_encoding not in CATEGORICAL_ENCODINGS:
+        raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
     rows = read_dataset(dataset)
     if not rows:
         raise ValueError("dataset is empty")
@@ -145,6 +155,7 @@ def export_scores(
     if not score_rows:
         raise ValueError("no score rows after applying score date filter")
     resolved_label_gain = list(label_gain or DEFAULT_LABEL_GAIN)
+    resolved_eval_at = [int(value) for value in (eval_at or LIGHTGBM_RANKING_DEFAULTS["eval_at"])]
 
     numeric_columns, categorical_columns, fixed_categorical_levels = load_feature_manifest_with_levels(
         feature_manifest,
@@ -164,20 +175,41 @@ def export_scores(
         num_threads=num_threads,
         label_gain=resolved_label_gain,
         lambdarank_truncation_level=lambdarank_truncation_level,
+        boosting_type=boosting_type,
+        bagging_fraction=bagging_fraction,
+        bagging_freq=bagging_freq,
+        feature_fraction=feature_fraction,
+        lambda_l1=lambda_l1,
+        lambda_l2=lambda_l2,
+        min_gain_to_split=min_gain_to_split,
+        eval_at=resolved_eval_at,
+        early_stopping_rounds=early_stopping_rounds,
+        seed=seed,
         fixed_categorical_levels=fixed_categorical_levels,
+        categorical_encoding=categorical_encoding,
     )
     score_scored = model_result.test_scored
 
     csv_rows = export_rows(score_scored)
     write_csv(output, csv_rows)
     model_params = {
+        "boosting_type": boosting_type,
         "num_leaves": num_leaves,
         "min_data_in_leaf": min_data_in_leaf,
         "num_boost_round": num_boost_round,
         "learning_rate": learning_rate,
+        "bagging_fraction": bagging_fraction,
+        "bagging_freq": bagging_freq,
+        "feature_fraction": feature_fraction,
+        "lambda_l1": lambda_l1,
+        "lambda_l2": lambda_l2,
+        "min_gain_to_split": min_gain_to_split,
         "num_threads": num_threads,
         "label_gain": resolved_label_gain,
         "lambdarank_truncation_level": lambdarank_truncation_level,
+        "eval_at": resolved_eval_at,
+        "early_stopping_rounds": early_stopping_rounds,
+        "seed": seed,
     }
     metadata = build_model_metadata(
         feature_manifest=str(feature_manifest),
@@ -191,8 +223,15 @@ def export_scores(
         label_column=label_column,
         model_params=model_params,
         feature_selection=load_trial_feature_selection(model_output_dir),
+        categorical_encoding=categorical_encoding,
+        categorical_code_maps=model_result.categorical_code_maps,
     )
-    model_artifacts = write_model_artifacts(model_result.model, metadata, model_output_dir)
+    model_artifacts = {
+        "model": str(model_output_dir / "model.txt"),
+        "metadata": str(model_output_dir / "model_metadata.json"),
+    }
+    if write_model_artifacts:
+        model_artifacts = persist_model_artifacts(model_result.model, metadata, model_output_dir)
     summary = {
         "dataset": str(dataset),
         "feature_manifest": str(feature_manifest),
@@ -208,6 +247,7 @@ def export_scores(
         "score_date_count": len({row["date"] for row in score_rows}),
         "score_row_count": len(score_rows),
         "feature_count": model_result.feature_count,
+        "categorical_encoding": categorical_encoding,
         "model_params": model_params,
         "top_features": model_result.top_features[:20],
         "columns": EXPORT_COLUMNS,
@@ -218,32 +258,17 @@ def export_scores(
 
 
 def load_trial_report_defaults(model_output_dir: Path | None) -> dict[str, Any]:
-    if model_output_dir is None:
-        return {}
-    reports = sorted(model_output_dir.glob("lgbm_rank_report*.json"))
-    if not reports:
-        return {}
-    payload = json.loads(reports[0].read_text(encoding="utf-8"))
-    params = payload.get("model_params") or {}
-    result: dict[str, Any] = {}
-    for key in [
-        "num_leaves",
-        "min_data_in_leaf",
-        "num_boost_round",
-        "learning_rate",
-        "num_threads",
-        "label_gain",
-        "lambdarank_truncation_level",
-    ]:
-        if key in params:
-            result[key] = params[key]
-    if payload.get("label_column"):
-        result["label_column"] = str(payload["label_column"])
-    return result
+    feature_manifest = model_output_dir / "feature_manifest.json" if model_output_dir is not None else None
+    return trial_report_defaults(model_output_dir, feature_manifest=feature_manifest)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export LightGBM model scores for Rust ranking layer consumption.")
+    add_parser_arguments(parser)
+    return parser.parse_args(argv)
+
+
+def add_parser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--method", default=DEFAULT_METHOD)
     parser.add_argument("--dataset", type=Path)
     parser.add_argument("--feature-manifest", type=Path)
@@ -261,16 +286,43 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--label-column")
     parser.add_argument("--label-gain", type=parse_label_gain)
     parser.add_argument("--lambdarank-truncation-level", type=int)
-    return parser.parse_args(argv)
+    parser.add_argument("--boosting-type", choices=["gbdt", "dart"])
+    parser.add_argument("--bagging-fraction", type=float)
+    parser.add_argument("--bagging-freq", type=int)
+    parser.add_argument("--feature-fraction", type=float)
+    parser.add_argument("--lambda-l1", type=float)
+    parser.add_argument("--lambda-l2", type=float)
+    parser.add_argument("--min-gain-to-split", type=float)
+    parser.add_argument("--eval-at", type=parse_label_gain)
+    parser.add_argument("--early-stopping-rounds", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--categorical-encoding", choices=sorted(CATEGORICAL_ENCODINGS))
+    parser.add_argument("--write-model-artifacts", action="store_true", help="rewrite model.txt/model_metadata.json; default only exports scores and summary")
+
+
+def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser("export-lgbm", description="Export LightGBM model scores for Rust ranking layer consumption.")
+    add_parser_arguments(parser)
+    parser.set_defaults(handler=main_from_args)
+    return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+    return main_from_args(parse_args(argv))
+
+
+def main_from_args(args: argparse.Namespace) -> int:
     defaults = resolve_default_paths(args.method, model_output_dir=args.model_output_dir)
     report_defaults = load_trial_report_defaults(args.model_output_dir)
+    feature_manifest = args.feature_manifest or defaults["feature_manifest"]
+    categorical_encoding = (
+        args.categorical_encoding
+        or report_defaults.get("categorical_encoding")
+        or load_feature_manifest_encoding(feature_manifest)
+    )
     summary = export_scores(
         dataset=args.dataset or defaults["dataset"],
-        feature_manifest=args.feature_manifest or defaults["feature_manifest"],
+        feature_manifest=feature_manifest,
         output=args.output or defaults["output"],
         summary_output=args.summary_output or defaults["summary_output"],
         model_output_dir=defaults["model_output_dir"],
@@ -284,8 +336,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         num_threads=args.num_threads if args.num_threads is not None else int(report_defaults.get("num_threads", 4)),
         label_gain=args.label_gain if args.label_gain is not None else report_defaults.get("label_gain", DEFAULT_LABEL_GAIN),
         lambdarank_truncation_level=args.lambdarank_truncation_level if args.lambdarank_truncation_level is not None else int(report_defaults.get("lambdarank_truncation_level", 0)),
+        boosting_type=args.boosting_type or str(report_defaults.get("boosting_type", LIGHTGBM_RANKING_DEFAULTS["boosting_type"])),
+        bagging_fraction=args.bagging_fraction if args.bagging_fraction is not None else float(report_defaults.get("bagging_fraction", LIGHTGBM_RANKING_DEFAULTS["bagging_fraction"])),
+        bagging_freq=args.bagging_freq if args.bagging_freq is not None else int(report_defaults.get("bagging_freq", LIGHTGBM_RANKING_DEFAULTS["bagging_freq"])),
+        feature_fraction=args.feature_fraction if args.feature_fraction is not None else float(report_defaults.get("feature_fraction", LIGHTGBM_RANKING_DEFAULTS["feature_fraction"])),
+        lambda_l1=args.lambda_l1 if args.lambda_l1 is not None else float(report_defaults.get("lambda_l1", LIGHTGBM_RANKING_DEFAULTS["lambda_l1"])),
+        lambda_l2=args.lambda_l2 if args.lambda_l2 is not None else float(report_defaults.get("lambda_l2", LIGHTGBM_RANKING_DEFAULTS["lambda_l2"])),
+        min_gain_to_split=args.min_gain_to_split if args.min_gain_to_split is not None else float(report_defaults.get("min_gain_to_split", LIGHTGBM_RANKING_DEFAULTS["min_gain_to_split"])),
+        eval_at=args.eval_at if args.eval_at is not None else report_defaults.get("eval_at", LIGHTGBM_RANKING_DEFAULTS["eval_at"]),
+        early_stopping_rounds=args.early_stopping_rounds if args.early_stopping_rounds is not None else int(report_defaults.get("early_stopping_rounds", LIGHTGBM_RANKING_DEFAULTS["early_stopping_rounds"])),
+        seed=args.seed if args.seed is not None else int(report_defaults.get("seed", LIGHTGBM_RANKING_DEFAULTS["seed"])),
         label_column=args.label_column or str(report_defaults.get("label_column", "rank_label_3d")),
         method=args.method,
+        categorical_encoding=str(categorical_encoding),
+        write_model_artifacts=bool(args.write_model_artifacts),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

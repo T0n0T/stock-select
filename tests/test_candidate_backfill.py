@@ -1,15 +1,20 @@
+import contextlib
+import io
+import signal
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ml.backfill_candidates import (
+from ml.backfill import candidates as backfill_candidates
+from ml.backfill.candidates import (
     BackfillConfig,
-    build_screen_command,
     parse_args,
     run_backfill,
     select_missing_dates,
 )
+from ml.backfill.commands import build_screen_command
+from ml.subprocesses import format_returncode
 
 
 class CandidateBackfillTest(unittest.TestCase):
@@ -134,3 +139,55 @@ class CandidateBackfillTest(unittest.TestCase):
         self.assertEqual(len(result.failures), 1)
         self.assertEqual(result.failures[0].pick_date, "2026-06-02")
         self.assertIn("screen failed", result.failures[0].stderr)
+
+    def test_format_returncode_labels_negative_signal_exit(self):
+        self.assertEqual(format_returncode(-signal.SIGKILL), "signal=SIGKILL")
+
+    def test_run_backfill_prints_signal_name_for_killed_subprocess(self):
+        def fake_runner(command, **_kwargs):
+            return subprocess.CompletedProcess(command, -signal.SIGKILL, stdout="", stderr="")
+
+        config = BackfillConfig(
+            binary=Path("stock-select-rs"),
+            runtime_root=Path("/tmp/runtime"),
+            method="b3",
+            workers=1,
+            quiet=False,
+        )
+
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            result = run_backfill(["2026-06-01"], config=config, runner=fake_runner)
+
+        self.assertEqual(len(result.failures), 1)
+        self.assertIn("2026-06-01 failed signal=SIGKILL", stream.getvalue())
+
+    def test_main_returns_130_without_traceback_on_keyboard_interrupt(self):
+        def interrupting_run_backfill(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        original_run_backfill = backfill_candidates.run_backfill
+        backfill_candidates.run_backfill = interrupting_run_backfill
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                dates_file = Path(temp_dir) / "dates.txt"
+                dates_file.write_text("2026-06-01\n", encoding="utf-8")
+                stream = io.StringIO()
+                with contextlib.redirect_stdout(stream):
+                    rc = backfill_candidates.main(
+                        [
+                            "--start-date",
+                            "2026-06-01",
+                            "--end-date",
+                            "2026-06-01",
+                            "--runtime-root",
+                            temp_dir,
+                            "--dates-file",
+                            str(dates_file),
+                        ]
+                    )
+        finally:
+            backfill_candidates.run_backfill = original_run_backfill
+
+        self.assertEqual(rc, 130)
+        self.assertIn("backfill interrupted", stream.getvalue())

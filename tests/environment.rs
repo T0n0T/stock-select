@@ -175,6 +175,7 @@ fn index_history(
                 close,
                 vol: 1_000_000.0,
                 turnover_rate: None,
+                adj_factor: None,
                 db_factors: Default::default(),
             }
         })

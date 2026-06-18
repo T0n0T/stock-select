@@ -91,6 +91,8 @@ pub struct MarketRow {
     pub close: f64,
     pub vol: f64,
     pub turnover_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adj_factor: Option<f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub db_factors: BTreeMap<String, f64>,
 }

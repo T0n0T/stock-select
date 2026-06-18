@@ -12,7 +12,8 @@ use crate::engine::b2::{
 };
 use crate::engine::capability::ensure_model_run_supported;
 use crate::engine::inference::{
-    LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector,
+    LightGbmRuntimeModel, ModelFeatureMetadata, ModelRoutingManifest, build_feature_vector,
+    read_model_routing_manifest, select_routed_model_key,
     resolve_method_model_artifacts_for_mode_with_overrides,
 };
 use crate::engine::types::{
@@ -62,10 +63,7 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         request.model_path.as_deref(),
         request.model_feature_metadata_path.as_deref(),
     )?;
-    let model = load_model(
-        model_artifacts.model_path.as_deref(),
-        model_artifacts.metadata_path.as_deref(),
-    )?;
+    let model = load_runtime_model_bundle(&model_artifacts)?;
     let mut candidates =
         read_candidates(&request.candidates_path, request.pick_date, request.method)?;
     inject_environment_factor(&mut candidates, request.environment.as_ref());
@@ -110,7 +108,8 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         &factors,
         Some(&request.candidates_path),
     )?;
-    let (ranked, feature_vectors) = rank_candidates(&candidates, &factors, model.as_ref())?;
+    let (ranked, feature_vectors) =
+        rank_candidates(&candidates, &factors, model.as_ref(), request.intraday)?;
     eprintln!(
         "[selection] ranked rows={} feature_vectors={}",
         ranked.len(),
@@ -386,39 +385,126 @@ struct LoadedModel {
     metadata: ModelFeatureMetadata,
 }
 
+enum RuntimeModelBundle {
+    Single(LoadedModel),
+    Routed(RoutedModelBundle),
+}
+
+struct RoutedModelBundle {
+    manifest: ModelRoutingManifest,
+    models: BTreeMap<String, RuntimeRouteModel>,
+}
+
+enum RuntimeRouteModel {
+    LightGbm(LoadedModel),
+    #[cfg(test)]
+    FactorScore { score_column: String },
+}
+
+impl RoutedModelBundle {
+    #[cfg(test)]
+    fn from_factor_score_routes(
+        routes: Vec<(&str, &str, Option<&str>, &str)>,
+        default_model: &str,
+    ) -> Self {
+        let mut models = BTreeMap::new();
+        let mut model_paths = BTreeMap::new();
+        let mut route_manifests = Vec::new();
+        for (model_key, condition_key, condition_value, score_column) in routes {
+            models.insert(
+                model_key.to_string(),
+                RuntimeRouteModel::FactorScore {
+                    score_column: score_column.to_string(),
+                },
+            );
+            model_paths.insert(model_key.to_string(), model_key.to_string());
+            route_manifests.push(crate::engine::inference::ModelRouteManifest {
+                when: BTreeMap::from([(
+                    condition_key.to_string(),
+                    condition_value
+                        .map(|value| Value::String(value.to_string()))
+                        .unwrap_or(Value::Null),
+                )]),
+                model: model_key.to_string(),
+            });
+        }
+        Self {
+            manifest: ModelRoutingManifest {
+                version: 1,
+                default_model: default_model.to_string(),
+                models: model_paths,
+                routes: route_manifests,
+            },
+            models,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 struct FeatureVectorDiagnostic {
     code: String,
+    model_key: Option<String>,
     feature_names: Vec<String>,
     values: Vec<f64>,
     missing_numeric_features: Vec<String>,
 }
 
-fn load_model(
-    model_path: Option<&Path>,
-    metadata_path: Option<&Path>,
-) -> anyhow::Result<Option<LoadedModel>> {
-    match (model_path, metadata_path) {
-        (Some(model_path), Some(metadata_path)) => {
-            let metadata = read_model_metadata(Some(metadata_path))?
-                .ok_or_else(|| anyhow::anyhow!("model metadata was not loaded"))?;
-            let model_path_text = model_path.to_str().ok_or_else(|| {
-                anyhow::anyhow!("model path is not valid UTF-8: {}", model_path.display())
-            })?;
-            Ok(Some(LoadedModel {
-                runtime_model: LightGbmRuntimeModel::from_file(model_path_text)?,
-                metadata,
-            }))
-        }
-        (None, None) => Ok(None),
+fn load_runtime_model_bundle(
+    artifacts: &crate::engine::inference::ResolvedMethodModelArtifacts,
+) -> anyhow::Result<Option<RuntimeModelBundle>> {
+    match (
+        artifacts.model_path.as_deref(),
+        artifacts.metadata_path.as_deref(),
+        artifacts.model_dir.as_deref(),
+        artifacts.routing_path.as_deref(),
+    ) {
+        (Some(model_path), Some(metadata_path), _, None) => Ok(Some(RuntimeModelBundle::Single(
+            load_lightgbm_model(model_path, metadata_path)?,
+        ))),
+        (None, None, Some(model_dir), Some(routing_path)) => Ok(Some(RuntimeModelBundle::Routed(
+            load_routed_model_bundle(model_dir, routing_path)?,
+        ))),
+        (None, None, None, None) => Ok(None),
         _ => anyhow::bail!("incomplete model artifact resolution"),
     }
+}
+
+fn load_lightgbm_model(model_path: &Path, metadata_path: &Path) -> anyhow::Result<LoadedModel> {
+    let metadata = read_model_metadata(Some(metadata_path))?
+        .ok_or_else(|| anyhow::anyhow!("model metadata was not loaded"))?;
+    let model_path_text = model_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!("model path is not valid UTF-8: {}", model_path.display())
+    })?;
+    Ok(LoadedModel {
+        runtime_model: LightGbmRuntimeModel::from_file(model_path_text)?,
+        metadata,
+    })
+}
+
+fn load_routed_model_bundle(
+    model_dir: &Path,
+    routing_path: &Path,
+) -> anyhow::Result<RoutedModelBundle> {
+    let manifest = read_model_routing_manifest(routing_path)?;
+    let mut models = BTreeMap::new();
+    for (model_key, relative_dir) in &manifest.models {
+        let child_dir = model_dir.join(relative_dir);
+        models.insert(
+            model_key.clone(),
+            RuntimeRouteModel::LightGbm(load_lightgbm_model(
+                &child_dir.join("model.txt"),
+                &child_dir.join("model_metadata.json"),
+            )?),
+        );
+    }
+    Ok(RoutedModelBundle { manifest, models })
 }
 
 fn rank_candidates(
     candidates: &[SelectionCandidate],
     factors: &[FactorRow],
-    model: Option<&LoadedModel>,
+    model: Option<&RuntimeModelBundle>,
+    intraday: bool,
 ) -> anyhow::Result<(Vec<RankedCandidate>, Vec<FeatureVectorDiagnostic>)> {
     let factor_by_code = factors
         .iter()
@@ -431,7 +517,7 @@ fn rank_candidates(
             .get(candidate.code.as_str())
             .copied()
             .ok_or_else(|| anyhow::anyhow!("missing factors for {}", candidate.code))?;
-        let (score, diagnostic) = score_candidate(&candidate.code, row, model)?;
+        let (score, diagnostic) = score_candidate(&candidate.code, row, model, intraday)?;
         if let Some(diagnostic) = diagnostic {
             feature_vectors.push(diagnostic);
         }
@@ -478,7 +564,9 @@ fn rank_candidates(
             code,
             model_score,
             model_rank: index + 1,
-            feature_vector_path: model.map(|_| FEATURE_VECTORS_ARTIFACT.to_string()),
+            feature_vector_path: model
+                .is_some()
+                .then(|| FEATURE_VECTORS_ARTIFACT.to_string()),
         })
         .collect();
     Ok((ranked, feature_vectors))
@@ -487,25 +575,76 @@ fn rank_candidates(
 fn score_candidate(
     code: &str,
     row: &FactorRow,
-    model: Option<&LoadedModel>,
+    model: Option<&RuntimeModelBundle>,
+    intraday: bool,
 ) -> anyhow::Result<(f64, Option<FeatureVectorDiagnostic>)> {
     if let Some(model) = model {
-        let vector = build_feature_vector(row, &model.metadata)?;
-        let score = model.runtime_model.predict(&vector.values)?;
-        return Ok((
-            score,
-            Some(FeatureVectorDiagnostic {
-                code: code.to_string(),
-                feature_names: vector.feature_names,
-                values: vector.values,
-                missing_numeric_features: vector.missing_numeric_features,
-            }),
-        ));
+        match model {
+            RuntimeModelBundle::Single(model) => {
+                let (score, diagnostic) = score_with_lightgbm(code, row, model, None)?;
+                return Ok((score, Some(diagnostic)));
+            }
+            RuntimeModelBundle::Routed(bundle) => {
+                let context = route_context(row, intraday);
+                let model_key = select_routed_model_key(&bundle.manifest, &context);
+                let route_model = bundle.models.get(model_key).ok_or_else(|| {
+                    anyhow::anyhow!("routed model '{model_key}' was not loaded")
+                })?;
+                match route_model {
+                    RuntimeRouteModel::LightGbm(model) => {
+                        let (score, diagnostic) =
+                            score_with_lightgbm(code, row, model, Some(model_key))?;
+                        return Ok((score, Some(diagnostic)));
+                    }
+                    #[cfg(test)]
+                    RuntimeRouteModel::FactorScore { score_column } => {
+                        let Some(FactorValue::Number(score)) = row.factors.get(score_column) else {
+                            anyhow::bail!("missing routed factor score column {score_column}");
+                        };
+                        return Ok((*score, None));
+                    }
+                }
+            }
+        }
     }
     if let Some(FactorValue::Number(score)) = row.factors.get("model_score") {
         return Ok((*score, None));
     }
     Ok((0.0, None))
+}
+
+fn score_with_lightgbm(
+    code: &str,
+    row: &FactorRow,
+    model: &LoadedModel,
+    model_key: Option<&str>,
+) -> anyhow::Result<(f64, FeatureVectorDiagnostic)> {
+    let vector = build_feature_vector(row, &model.metadata)?;
+    let score = model.runtime_model.predict(&vector.values)?;
+    Ok((
+        score,
+        FeatureVectorDiagnostic {
+            code: code.to_string(),
+            model_key: model_key.map(str::to_string),
+            feature_names: vector.feature_names,
+            values: vector.values,
+            missing_numeric_features: vector.missing_numeric_features,
+        },
+    ))
+}
+
+fn route_context(row: &FactorRow, intraday: bool) -> BTreeMap<String, Option<String>> {
+    let mut context = BTreeMap::from([("intraday".to_string(), Some(intraday.to_string()))]);
+    for (key, value) in &row.factors {
+        let value = match value {
+            FactorValue::Category(value) => Some(value.clone()),
+            FactorValue::Bool(value) => Some(value.to_string()),
+            FactorValue::Number(value) => Some(value.to_string()),
+            FactorValue::Missing => None,
+        };
+        context.insert(key.clone(), value);
+    }
+    context
 }
 
 fn display_rows(
@@ -584,11 +723,43 @@ mod tests {
             factors.push(row);
         }
 
-        let (ranked, feature_vectors) = rank_candidates(&candidates, &factors, None).unwrap();
+        let (ranked, feature_vectors) =
+            rank_candidates(&candidates, &factors, None, false).unwrap();
 
         assert!(feature_vectors.is_empty());
         assert_eq!(ranked[0].code, "000002.SZ");
         assert_eq!(ranked[0].model_rank, 1);
         assert!((ranked[1].model_score - 0.86).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rank_candidates_routes_scores_by_env_when_model_bundle_is_routed() {
+        let candidates = vec![candidate("000001.SZ"), candidate("000002.SZ")];
+        let mut strong = factor_row("000001.SZ", "strong", 0.1);
+        strong
+            .factors
+            .insert("strong_score".to_string(), FactorValue::Number(0.9));
+        strong
+            .factors
+            .insert("weak_score".to_string(), FactorValue::Number(0.1));
+        let mut weak = factor_row("000002.SZ", "weak", 0.1);
+        weak.factors
+            .insert("strong_score".to_string(), FactorValue::Number(0.1));
+        weak.factors
+            .insert("weak_score".to_string(), FactorValue::Number(0.8));
+        let bundle = RuntimeModelBundle::Routed(RoutedModelBundle::from_factor_score_routes(
+            vec![
+                ("strong", "env", Some("strong"), "strong_score"),
+                ("weak", "env", Some("weak"), "weak_score"),
+            ],
+            "weak",
+        ));
+
+        let (ranked, feature_vectors) =
+            rank_candidates(&candidates, &[strong, weak], Some(&bundle), false).unwrap();
+
+        assert!(feature_vectors.is_empty());
+        assert_eq!(ranked[0].code, "000001.SZ");
+        assert_eq!(ranked[1].code, "000002.SZ");
     }
 }

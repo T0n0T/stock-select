@@ -98,7 +98,7 @@ TRAIN_END=2026-06-04
 nproc
 
 # 2. 补齐历史候选（如果缺失）
-uv run scripts/ml/backfill_candidates.py \
+uv run stock-select-ml backfill candidates \
   --method "$METHOD" \
   --start-date "$TRAIN_START" \
   --end-date "$TRAIN_END" \
@@ -108,7 +108,7 @@ uv run scripts/ml/backfill_candidates.py \
 # 对缺失日期的候选执行 screen --export-factors
 
 # 4. 构建训练集
-uv run scripts/ml/build_rank_dataset.py \
+uv run stock-select-ml dataset build \
   --method "$METHOD" \
   --runtime-root runtime \
   --source candidates \
@@ -116,7 +116,7 @@ uv run scripts/ml/build_rank_dataset.py \
   --end-date "$TRAIN_END"
 
 # 5. 训练
-uv run scripts/ml/train_rank_lgbm.py \
+uv run stock-select-ml train lgbm-rank \
   --method "$METHOD" \
   --dataset "diagnostics/ml/$METHOD/rank_dataset.csv" \
   --output-dir "diagnostics/ml/$METHOD/model" \
@@ -132,14 +132,18 @@ uv run scripts/ml/train_rank_lgbm.py \
 # 6. 查看训练 report 评估效果
 
 # 7. 导出并发布
-uv run scripts/ml/export_lgbm_scores.py \
+uv run stock-select-ml score export-lgbm \
   --method "$METHOD" \
   --model-output-dir "diagnostics/ml/$METHOD/model"
 
-scripts/model_maintenance.sh --method "$METHOD" dry-run-promote "diagnostics/ml/$METHOD/model"
+uv run stock-select-ml model dry-run-promote "diagnostics/ml/$METHOD/model" \
+  --method "$METHOD" \
+  --require-report
 
 # 确认无误后正式发布
-scripts/model_maintenance.sh --method "$METHOD" promote "diagnostics/ml/$METHOD/model"
+uv run stock-select-ml model promote "diagnostics/ml/$METHOD/model" \
+  --method "$METHOD" \
+  --require-report
 ```
 
 `METHOD=b3` 可维护并发布到 `runtime/models/b3/`；生产 `run/review` 是否可直接使用 b3，仍取决于 Rust CLI 对 b3 的 capability。
@@ -148,19 +152,19 @@ scripts/model_maintenance.sh --method "$METHOD" promote "diagnostics/ml/$METHOD/
 
 ```bash
 # 全量补跑（自动跳过已有）
-scripts/backfill_run.py \
+uv run stock-select-ml backfill runs \
   --start-date 2026-01-01 \
   --end-date 2026-06-04 \
-  --jobs 4
+  --workers 4
 
 # 覆盖重跑
-scripts/backfill_run.py \
+uv run stock-select-ml backfill runs \
   --start-date 2026-01-01 \
   --end-date 2026-06-04 \
-  --force
+  --no-skip-existing
 
 # 只补某个月
-scripts/backfill_run.py \
+uv run stock-select-ml backfill runs \
   --start-date 2026-05-01 \
   --end-date 2026-05-31
 ```
@@ -297,8 +301,8 @@ stock-select-rs review \
 cargo fmt --check
 cargo test --quiet
 
-# Python 脚本检查
-python3 -m py_compile scripts/ml/*.py
+# Python CLI 检查
+uv run python -m py_compile $(find ml -name '*.py' -print)
 
 # 模型训练测试
 uv run python3 -m unittest \

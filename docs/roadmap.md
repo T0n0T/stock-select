@@ -25,7 +25,7 @@
 
 - [ ] `src/factors/registry.rs` 中从 `PreparedRow` / `FactorInputRow` 传递 KDJ 值到因子输出
 - [ ] 新建 `src/factors/extra.rs` 或扩展 `volume.rs`，从 `PreparedRow` 引入 `extra_factors` JSONB 数据，解析 OBV、BIAS 等因子
-- [ ] 更新 `build_rank_dataset.py` 确保训练集包含新增因子
+- [ ] 更新 `stock-select-ml dataset build` 确保训练集包含新增因子
 - [ ] 更新 `model_metadata.json` 的 `numeric_columns` 列表
 - [ ] 回归验证：新加入因子后模型排序效果不劣化
 
@@ -84,7 +84,7 @@ B3 形态特征：
 
 ### 短期
 
-- [ ] `backfill_run.py` 合并到 `scripts/model_maintenance.sh` 统一入口
+- [x] 历史 run 补跑合并到 `stock-select-ml backfill runs` 统一入口
 - [ ] run 命令支持 `--skip-factors` 跳过因子重算（增量模式）
 - [ ] 补充 `chart` 命令的批量模式（多日期批量出图）
 - [ ] 补充 LLM 复盘结果统计（`review-list` 增加 `--stats` 汇总模式）

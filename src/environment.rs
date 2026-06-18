@@ -12,6 +12,7 @@ use serde_json::json;
 
 use crate::engine::artifacts::write_selection_json;
 use crate::model::MarketRow;
+use crate::model::PreparedRow;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnvironmentEvaluation {
@@ -171,6 +172,30 @@ pub fn resolve_market_environment(
         })
 }
 
+pub fn persist_prepared_market_environment(
+    runtime_root: &Path,
+    pick_date: NaiveDate,
+    state: String,
+    reason: String,
+) -> anyhow::Result<ResolvedEnvironment> {
+    let normalized = normalize_environment_state(&state)?;
+    let record = EnvironmentRecord {
+        pick_date,
+        state: normalized.clone(),
+        score_based_state: normalized.clone(),
+        rule_based_state: normalized.clone(),
+        vote_based_state: normalized,
+        evaluate_date: pick_date,
+        source: "prepared_market_state".to_string(),
+        reason,
+        total_score: 0.0,
+        score_based_total: 0.0,
+        manual_override: false,
+    };
+    upsert_environment_record(runtime_root, record)?;
+    resolve_market_environment(runtime_root, pick_date)
+}
+
 pub fn ensure_market_environment_for_test<F>(
     runtime_root: &Path,
     pick_date: NaiveDate,
@@ -250,6 +275,38 @@ pub fn evaluate_market_environment(
         total_score,
         score_based_total: total_score,
     })
+}
+
+pub fn prepared_market_state<'a>(
+    rows: impl IntoIterator<Item = &'a PreparedRow>,
+    pick_date: NaiveDate,
+) -> Option<String> {
+    let mut has_pick_date_rows = false;
+    let mut pct_changes = Vec::new();
+    for row in rows {
+        if row.trade_date != pick_date {
+            continue;
+        }
+        has_pick_date_rows = true;
+        if let Some(value) = row.chg_d.filter(|value| value.is_finite()) {
+            pct_changes.push(value);
+        }
+    }
+    if pct_changes.is_empty() {
+        return has_pick_date_rows.then(|| "neutral".to_string());
+    }
+    let total = pct_changes.len() as f64;
+    let up_ratio = pct_changes.iter().filter(|value| **value > 0.0).count() as f64 / total;
+    let ge5_ratio = pct_changes.iter().filter(|value| **value >= 5.0).count() as f64 / total;
+    let le_minus5_ratio = pct_changes.iter().filter(|value| **value <= -5.0).count() as f64 / total;
+    let median = median_f64(pct_changes)?;
+    if up_ratio >= 0.62 || ge5_ratio >= 0.12 || median >= 1.2 {
+        Some("strong".to_string())
+    } else if up_ratio <= 0.38 || le_minus5_ratio >= 0.12 || median <= -1.2 {
+        Some("weak".to_string())
+    } else {
+        Some("neutral".to_string())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -473,7 +530,7 @@ fn build_intervals(records: &[EnvironmentRecord]) -> Vec<EnvironmentInterval> {
     intervals
 }
 
-fn normalize_environment_state(value: &str) -> anyhow::Result<String> {
+pub fn normalize_environment_state(value: &str) -> anyhow::Result<String> {
     let normalized = value.trim().to_ascii_lowercase();
     if matches!(normalized.as_str(), "weak" | "neutral" | "strong") {
         Ok(normalized)
@@ -607,6 +664,19 @@ fn round2(value: f64) -> f64 {
 
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
+}
+
+fn median_f64(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        Some((values[mid - 1] + values[mid]) / 2.0)
+    } else {
+        Some(values[mid])
+    }
 }
 
 fn environment_dir(runtime_root: &Path) -> PathBuf {

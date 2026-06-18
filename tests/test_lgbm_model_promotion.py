@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ml.promote_lgbm_model import (
+from ml.model_ops.promote import (
     describe_current_model,
     list_archived_models,
     main,
@@ -37,6 +37,31 @@ def write_candidate_model(path: Path, *, report: dict | None = None) -> None:
         (path / "lgbm_rank_report_raw_numeric.json").write_text(json.dumps(report), encoding="utf-8")
 
 
+def write_routed_candidate_model(path: Path, *, report: dict | None = None) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "model_routing.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "default_model": "neutral_rf",
+                "models": {
+                    "strong_sw4": "models/strong_sw4",
+                    "neutral_rf": "models/neutral_rf",
+                },
+                "routes": [
+                    {"when": {"env": "strong"}, "model": "strong_sw4"},
+                    {"when": {"env": ["neutral", "unknown", None]}, "model": "neutral_rf"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_candidate_model(path / "models" / "strong_sw4")
+    write_candidate_model(path / "models" / "neutral_rf")
+    if report is not None:
+        (path / "lgbm_rank_report_raw_numeric.json").write_text(json.dumps(report), encoding="utf-8")
+
+
 def passing_report() -> dict:
     return {
         "method": "b2",
@@ -55,16 +80,17 @@ def passing_report() -> dict:
 
 
 class LgbmModelPromotionTest(unittest.TestCase):
-    def test_default_target_dir_uses_dotenv_runtime_root_and_current_model_dir(self):
+    def test_default_target_dir_prefers_shell_env_over_dotenv_runtime_root(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            runtime = root / "runtime"
+            dotenv_runtime = root / "dotenv-runtime"
+            shell_runtime = root / "shell-runtime"
             dotenv = root / ".env"
-            dotenv.write_text(f"STOCK_SELECT_RUNTIME_ROOT={runtime}\n", encoding="utf-8")
+            dotenv.write_text(f"STOCK_SELECT_RUNTIME_ROOT={dotenv_runtime}\n", encoding="utf-8")
 
-            target = resolve_default_target_dir(method="b1", dotenv_path=dotenv, env_runtime_root="/tmp/ignored-shell-runtime")
+            target = resolve_default_target_dir(method="b1", dotenv_path=dotenv, env_runtime_root=str(shell_runtime))
 
-        self.assertEqual(target, runtime / "models" / "b1")
+        self.assertEqual(target, shell_runtime / "models" / "b1")
 
     def test_default_target_dir_requires_runtime_root_without_home_fallback(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -83,6 +109,92 @@ class LgbmModelPromotionTest(unittest.TestCase):
             self.assertEqual(summary["feature_count"], 3)
             self.assertEqual(summary["label_column"], "rank_label_3d")
             self.assertEqual(summary["decision"], "allow")
+
+    def test_validate_model_artifacts_accepts_routed_candidate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = Path(temp_dir) / "candidate"
+            write_routed_candidate_model(candidate, report={**passing_report(), "method": "b3"})
+
+            summary = validate_model_artifacts(candidate, expected_method="b3")
+
+        self.assertEqual(summary["routing"]["default_model"], "neutral_rf")
+        self.assertEqual(summary["routing"]["model_count"], 2)
+        self.assertEqual(summary["routing"]["route_count"], 2)
+        self.assertEqual(summary["artifact_type"], "routed")
+
+    def test_promote_routed_candidate_writes_model_card_routing_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = root / "candidate"
+            target = root / "runtime" / "models" / "b3"
+            write_routed_candidate_model(candidate, report={**passing_report(), "method": "b3"})
+
+            promote_model(candidate, target, expected_method="b3", now="20260616T230000Z")
+
+            card = json.loads((target / "model_card.json").read_text(encoding="utf-8"))
+            self.assertEqual(card["artifact_type"], "routed")
+            self.assertEqual(card["routing"]["default_model"], "neutral_rf")
+            self.assertEqual(card["routing"]["models"], ["neutral_rf", "strong_sw4"])
+            self.assertTrue((target / "models" / "strong_sw4" / "model.txt").exists())
+
+    def test_validate_model_artifacts_accepts_native_categorical_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = Path(temp_dir) / "candidate"
+            write_candidate_model(candidate, report=passing_report())
+            metadata_path = candidate / "model_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update(
+                {
+                    "categorical_encoding": "native",
+                    "categorical_code_maps": {"env": {"weak": 0, "strong": 1}},
+                    "feature_names": ["close_to_zxdkx_pct", "env"],
+                    "lightgbm_feature_names": ["close_to_zxdkx_pct", "env"],
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            summary = validate_model_artifacts(candidate)
+
+        self.assertEqual(summary["feature_count"], 2)
+        self.assertEqual(summary["categorical_encoding"], "native")
+
+    def test_validate_model_artifacts_rejects_native_categorical_without_code_map(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = Path(temp_dir) / "candidate"
+            write_candidate_model(candidate, report=passing_report())
+            metadata_path = candidate / "model_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update(
+                {
+                    "categorical_encoding": "native",
+                    "categorical_code_maps": {},
+                    "feature_names": ["close_to_zxdkx_pct", "env"],
+                    "lightgbm_feature_names": ["close_to_zxdkx_pct", "env"],
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "categorical_code_maps.env"):
+                validate_model_artifacts(candidate)
+
+    def test_validate_model_artifacts_rejects_native_categorical_feature_order_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = Path(temp_dir) / "candidate"
+            write_candidate_model(candidate, report=passing_report())
+            metadata_path = candidate / "model_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update(
+                {
+                    "categorical_encoding": "native",
+                    "categorical_code_maps": {"env": {"weak": 0, "strong": 1}},
+                    "feature_names": ["env", "close_to_zxdkx_pct"],
+                    "lightgbm_feature_names": ["env", "close_to_zxdkx_pct"],
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "numeric_columns"):
+                validate_model_artifacts(candidate)
 
     def test_promote_archives_existing_current_model_and_replaces_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -242,6 +354,21 @@ class LgbmModelPromotionTest(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
+
+    def test_promote_mode_specific_intraday_target_updates_method_model_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate = root / "candidate"
+            target = root / "runtime" / "models" / "lsh_intraday"
+            write_candidate_model(candidate, report={**passing_report(), "method": "lsh"})
+
+            promote_model(candidate, target, expected_method="lsh", now="20260617T010203Z")
+
+            state_path = root / "runtime" / "models" / "lsh" / "model_state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(state["intraday"], {"status": "ready", "model_dir": "models/lsh_intraday"})
+        self.assertEqual(state["eod"]["status"], "blocked")
 
     def test_cli_list_archives_accepts_mode_specific_target_dir_for_same_method(self):
         with tempfile.TemporaryDirectory() as temp_dir:

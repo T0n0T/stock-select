@@ -234,6 +234,7 @@ fn build_intraday_market_rows_replaces_existing_same_day_snapshot_rows() {
             close: 10.1,
             vol: 100.0,
             turnover_rate: Some(1.0),
+            adj_factor: None,
             db_factors: Default::default(),
         },
         MarketRow {
@@ -245,6 +246,7 @@ fn build_intraday_market_rows_replaces_existing_same_day_snapshot_rows() {
             close: 10.2,
             vol: 200.0,
             turnover_rate: Some(2.0),
+            adj_factor: None,
             db_factors: Default::default(),
         },
     ];
@@ -272,4 +274,59 @@ fn build_intraday_market_rows_replaces_existing_same_day_snapshot_rows() {
     assert_eq!(rows[1].vol, 12345.67);
     let expected_vwap = 152300.0 * 10.0 / 12345.67;
     assert!((rows[1].db_factors["chip_vwap"] - expected_vwap).abs() < 1e-9);
+}
+
+#[test]
+fn build_intraday_market_rows_uses_pick_date_adj_factor_for_snapshot_rows() {
+    let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
+    let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+    let history = vec![
+        MarketRow {
+            ts_code: "000001.SZ".to_string(),
+            trade_date: previous_date,
+            open: 10.0,
+            high: 10.2,
+            low: 9.9,
+            close: 10.1,
+            vol: 100.0,
+            turnover_rate: Some(1.0),
+            adj_factor: Some(0.5),
+            db_factors: Default::default(),
+        },
+        MarketRow {
+            ts_code: "000001.SZ".to_string(),
+            trade_date,
+            open: 5.0,
+            high: 5.2,
+            low: 4.9,
+            close: 5.1,
+            vol: 200.0,
+            turnover_rate: Some(2.0),
+            adj_factor: Some(1.0),
+            db_factors: Default::default(),
+        },
+    ];
+    let snapshot = normalize_rt_k_rows(
+        vec![RawRtKRow::from_value(json!({
+            "ts_code": "000001.SZ",
+            "name": "平安银行",
+            "open": 5.1,
+            "high": 5.4,
+            "low": 5.0,
+            "close": 5.3,
+            "vol": 1234567,
+            "amount": 152300000.0
+        }))],
+        trade_date,
+        "10:00:00",
+    )
+    .unwrap();
+
+    let rows = build_intraday_market_rows(history, &snapshot, trade_date);
+
+    let snapshot_row = rows
+        .iter()
+        .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
+        .unwrap();
+    assert_eq!(snapshot_row.adj_factor, Some(1.0));
 }

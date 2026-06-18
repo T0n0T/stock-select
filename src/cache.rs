@@ -9,7 +9,11 @@ use serde_json::{Value, json};
 use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 5;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 8;
+const LEGACY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRBIN1";
+const DICTIONARY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRDIC2";
+const ZSTD_FRAME_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
+const PREPARED_CACHE_ZSTD_LEVEL: i32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedCachePaths {
@@ -37,6 +41,10 @@ pub struct PreparedCacheMetadata {
     pub run_id: Option<String>,
     #[serde(default)]
     pub previous_trade_date: Option<NaiveDate>,
+    #[serde(default)]
+    pub compression: Option<String>,
+    #[serde(default)]
+    pub encoding: Option<String>,
 }
 
 pub fn prepared_cache_data_path(runtime_root: &Path, pick_date: NaiveDate) -> PathBuf {
@@ -56,9 +64,20 @@ pub fn prepared_cache_paths(
     let base_name = format!("{}{}", pick_date.format("%Y-%m-%d"), suffix);
     let dir = runtime_root.join("prepared");
     PreparedCachePaths {
-        data_path: dir.join(format!("{base_name}.bin")),
+        data_path: dir.join(format!("{base_name}.bin.zst")),
         meta_path: dir.join(format!("{base_name}.meta.json")),
     }
+}
+
+fn legacy_prepared_cache_data_path(
+    runtime_root: &Path,
+    pick_date: NaiveDate,
+    intraday: bool,
+) -> PathBuf {
+    let suffix = if intraday { ".intraday" } else { "" };
+    runtime_root
+        .join("prepared")
+        .join(format!("{}{}.bin", pick_date.format("%Y-%m-%d"), suffix))
 }
 
 pub fn candidate_output_path(runtime_root: &Path, pick_date: NaiveDate, method: Method) -> PathBuf {
@@ -140,100 +159,190 @@ fn build_metadata(
         source: intraday.then(|| "tushare_rt_k".to_string()),
         run_id: None,
         previous_trade_date: None,
+        compression: Some("zstd".to_string()),
+        encoding: Some("dictionary_v2".to_string()),
     }
 }
 
 fn encode_prepared_cache_rows(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
+    let payload = encode_prepared_cache_rows_dictionary(rows)?;
+    Ok(zstd::stream::encode_all(
+        Cursor::new(payload),
+        PREPARED_CACHE_ZSTD_LEVEL,
+    )?)
+}
+
+fn encode_prepared_cache_rows_dictionary(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
+    let factor_keys = collect_factor_keys(rows);
+    let mut factor_key_ids = BTreeMap::<&str, u16>::new();
+    for (idx, key) in factor_keys.iter().enumerate() {
+        factor_key_ids.insert(key.as_str(), u16::try_from(idx)?);
+    }
+
     let mut out = Vec::new();
-    out.extend_from_slice(b"SSPRBIN1");
+    out.extend_from_slice(DICTIONARY_PREPARED_CACHE_MAGIC);
+    write_u64(&mut out, factor_keys.len() as u64);
+    for key in &factor_keys {
+        write_string(&mut out, key)?;
+    }
     write_u64(&mut out, rows.len() as u64);
     for row in rows {
-        write_string(&mut out, &row.ts_code)?;
-        write_i32(&mut out, row.trade_date.num_days_from_ce());
-        for value in [
-            row.open,
-            row.high,
-            row.low,
-            row.close,
-            row.volume,
-            row.turnover_n,
-        ] {
-            write_f64(&mut out, value);
+        write_prepared_row_core(&mut out, row)?;
+        write_u64(&mut out, row.db_factors.len() as u64);
+        for (key, value) in &row.db_factors {
+            let id = factor_key_ids
+                .get(key.as_str())
+                .ok_or_else(|| anyhow::anyhow!("missing prepared cache factor key id: {key}"))?;
+            write_u16(&mut out, *id);
+            write_f64(&mut out, *value);
         }
-        write_option_f64(&mut out, row.turnover_rate);
-        for value in [row.k, row.d, row.j] {
-            write_f64(&mut out, value);
-        }
-        write_option_f64(&mut out, row.zxdq);
-        write_option_f64(&mut out, row.zxdkx);
-        for value in [row.dif, row.dea, row.macd_hist] {
-            write_f64(&mut out, value);
-        }
-        write_option_f64(&mut out, row.ma25);
-        write_option_f64(&mut out, row.ma60);
-        write_option_f64(&mut out, row.ma144);
-        write_option_f64(&mut out, row.chg_d);
-        for value in [
-            row.weekly_ma_bull,
-            row.max_vol_not_bearish,
-            row.v_shrink,
-            row.safe_mode,
-            row.lt_filter,
-            row.yellow_b1,
-        ] {
-            write_bool(&mut out, value);
-        }
-        write_factor_map(&mut out, &row.db_factors)?;
     }
     Ok(out)
 }
 
+fn collect_factor_keys(rows: &[PreparedRow]) -> Vec<String> {
+    rows.iter()
+        .flat_map(|row| row.db_factors.keys().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn write_prepared_row_core(out: &mut Vec<u8>, row: &PreparedRow) -> anyhow::Result<()> {
+    write_string(out, &row.ts_code)?;
+    write_i32(out, row.trade_date.num_days_from_ce());
+    for value in [
+        row.open,
+        row.high,
+        row.low,
+        row.close,
+        row.volume,
+        row.turnover_n,
+    ] {
+        write_f64(out, value);
+    }
+    write_option_f64(out, row.turnover_rate);
+    for value in [row.k, row.d, row.j] {
+        write_f64(out, value);
+    }
+    write_option_f64(out, row.zxdq);
+    write_option_f64(out, row.zxdkx);
+    for value in [row.dif, row.dea, row.macd_hist] {
+        write_f64(out, value);
+    }
+    write_option_f64(out, row.ma25);
+    write_option_f64(out, row.ma60);
+    write_option_f64(out, row.ma144);
+    write_option_f64(out, row.chg_d);
+    for value in [
+        row.weekly_ma_bull,
+        row.max_vol_not_bearish,
+        row.v_shrink,
+        row.safe_mode,
+        row.lt_filter,
+        row.yellow_b1,
+    ] {
+        write_bool(out, value);
+    }
+    Ok(())
+}
+
 pub fn decode_prepared_cache_rows(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRow>> {
+    if bytes.starts_with(ZSTD_FRAME_MAGIC) {
+        let payload = zstd::stream::decode_all(Cursor::new(bytes))?;
+        return decode_prepared_cache_rows_dictionary(&payload);
+    }
+
     let mut cursor = Cursor::new(bytes);
     let mut magic = [0_u8; 8];
     cursor.read_exact(&mut magic)?;
-    if &magic != b"SSPRBIN1" {
-        anyhow::bail!("invalid prepared cache magic");
+    if &magic == LEGACY_PREPARED_CACHE_MAGIC {
+        return decode_prepared_cache_rows_legacy(cursor);
+    }
+
+    anyhow::bail!("invalid prepared cache magic");
+}
+
+fn decode_prepared_cache_rows_dictionary(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRow>> {
+    let mut cursor = Cursor::new(bytes);
+    let mut magic = [0_u8; 8];
+    cursor.read_exact(&mut magic)?;
+    if &magic != DICTIONARY_PREPARED_CACHE_MAGIC {
+        anyhow::bail!("invalid prepared cache dictionary magic");
+    }
+
+    let factor_key_count = read_u64(&mut cursor)? as usize;
+    let mut factor_keys = Vec::with_capacity(factor_key_count);
+    for _ in 0..factor_key_count {
+        factor_keys.push(read_string(&mut cursor)?);
     }
 
     let count = read_u64(&mut cursor)? as usize;
     let mut rows = Vec::with_capacity(count);
     for _ in 0..count {
-        let ts_code = read_string(&mut cursor)?;
-        let trade_date = NaiveDate::from_num_days_from_ce_opt(read_i32(&mut cursor)?)
-            .ok_or_else(|| anyhow::anyhow!("invalid cached trade_date"))?;
-        rows.push(PreparedRow {
-            ts_code,
-            trade_date,
-            open: read_f64(&mut cursor)?,
-            high: read_f64(&mut cursor)?,
-            low: read_f64(&mut cursor)?,
-            close: read_f64(&mut cursor)?,
-            volume: read_f64(&mut cursor)?,
-            turnover_n: read_f64(&mut cursor)?,
-            turnover_rate: read_option_f64(&mut cursor)?,
-            k: read_f64(&mut cursor)?,
-            d: read_f64(&mut cursor)?,
-            j: read_f64(&mut cursor)?,
-            zxdq: read_option_f64(&mut cursor)?,
-            zxdkx: read_option_f64(&mut cursor)?,
-            dif: read_f64(&mut cursor)?,
-            dea: read_f64(&mut cursor)?,
-            macd_hist: read_f64(&mut cursor)?,
-            ma25: read_option_f64(&mut cursor)?,
-            ma60: read_option_f64(&mut cursor)?,
-            ma144: read_option_f64(&mut cursor)?,
-            chg_d: read_option_f64(&mut cursor)?,
-            weekly_ma_bull: read_bool(&mut cursor)?,
-            max_vol_not_bearish: read_bool(&mut cursor)?,
-            v_shrink: read_bool(&mut cursor)?,
-            safe_mode: read_bool(&mut cursor)?,
-            lt_filter: read_bool(&mut cursor)?,
-            yellow_b1: read_bool(&mut cursor)?,
-            db_factors: read_factor_map(&mut cursor)?,
-        });
+        let mut row = read_prepared_row_core(&mut cursor)?;
+        let factor_count = read_u64(&mut cursor)? as usize;
+        let mut factors = BTreeMap::new();
+        for _ in 0..factor_count {
+            let key_id = read_u16(&mut cursor)? as usize;
+            let key = factor_keys
+                .get(key_id)
+                .ok_or_else(|| anyhow::anyhow!("invalid prepared cache factor key id"))?;
+            factors.insert(key.clone(), read_f64(&mut cursor)?);
+        }
+        row.db_factors = factors;
+        rows.push(row);
     }
     Ok(rows)
+}
+
+fn decode_prepared_cache_rows_legacy(
+    mut cursor: Cursor<&[u8]>,
+) -> anyhow::Result<Vec<PreparedRow>> {
+    let count = read_u64(&mut cursor)? as usize;
+    let mut rows = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut row = read_prepared_row_core(&mut cursor)?;
+        row.db_factors = read_factor_map(&mut cursor)?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn read_prepared_row_core(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<PreparedRow> {
+    let ts_code = read_string(cursor)?;
+    let trade_date = NaiveDate::from_num_days_from_ce_opt(read_i32(cursor)?)
+        .ok_or_else(|| anyhow::anyhow!("invalid cached trade_date"))?;
+    Ok(PreparedRow {
+        ts_code,
+        trade_date,
+        open: read_f64(cursor)?,
+        high: read_f64(cursor)?,
+        low: read_f64(cursor)?,
+        close: read_f64(cursor)?,
+        volume: read_f64(cursor)?,
+        turnover_n: read_f64(cursor)?,
+        turnover_rate: read_option_f64(cursor)?,
+        k: read_f64(cursor)?,
+        d: read_f64(cursor)?,
+        j: read_f64(cursor)?,
+        zxdq: read_option_f64(cursor)?,
+        zxdkx: read_option_f64(cursor)?,
+        dif: read_f64(cursor)?,
+        dea: read_f64(cursor)?,
+        macd_hist: read_f64(cursor)?,
+        ma25: read_option_f64(cursor)?,
+        ma60: read_option_f64(cursor)?,
+        ma144: read_option_f64(cursor)?,
+        chg_d: read_option_f64(cursor)?,
+        weekly_ma_bull: read_bool(cursor)?,
+        max_vol_not_bearish: read_bool(cursor)?,
+        v_shrink: read_bool(cursor)?,
+        safe_mode: read_bool(cursor)?,
+        lt_filter: read_bool(cursor)?,
+        yellow_b1: read_bool(cursor)?,
+        db_factors: BTreeMap::new(),
+    })
 }
 
 pub fn load_prepared_cache(
@@ -255,16 +364,25 @@ pub fn load_prepared_cache_for_mode(
     intraday: bool,
 ) -> anyhow::Result<Option<Vec<PreparedRow>>> {
     let paths = prepared_cache_paths(runtime_root, pick_date, intraday);
-    if !paths.data_path.exists() || !paths.meta_path.exists() {
+    if !paths.meta_path.exists() {
         return Ok(None);
     }
+    let data_path = if paths.data_path.exists() {
+        paths.data_path
+    } else {
+        let legacy_path = legacy_prepared_cache_data_path(runtime_root, pick_date, intraday);
+        if !legacy_path.exists() {
+            return Ok(None);
+        }
+        legacy_path
+    };
 
     let metadata: PreparedCacheMetadata =
         serde_json::from_slice(&std::fs::read(&paths.meta_path)?)?;
     if !metadata_matches(&metadata, method, pick_date, start_date, end_date) {
         return Ok(None);
     }
-    let rows = decode_prepared_cache_rows(&std::fs::read(paths.data_path)?)?;
+    let rows = decode_prepared_cache_rows(&std::fs::read(data_path)?)?;
     if rows.len() != metadata.row_count {
         return Ok(None);
     }
@@ -283,13 +401,17 @@ fn metadata_matches(
     end_date: NaiveDate,
 ) -> bool {
     metadata.artifact_version == PREPARED_CACHE_ARTIFACT_VERSION
-        && metadata.schema_version == PREPARED_CACHE_SCHEMA_VERSION
+        && metadata_schema_matches(metadata.schema_version)
         && metadata_method_matches(metadata, method)
         && metadata.pick_date == pick_date
         && (metadata.start_date == start_date
             || metadata.mode.as_deref() == Some("intraday_snapshot"))
         && metadata.end_date == end_date
         && metadata.source_table == "daily_market"
+}
+
+fn metadata_schema_matches(schema_version: u32) -> bool {
+    schema_version == PREPARED_CACHE_SCHEMA_VERSION
 }
 
 fn metadata_method_matches(metadata: &PreparedCacheMetadata, method: Method) -> bool {
@@ -452,19 +574,14 @@ fn write_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+fn write_u16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
 fn write_i32(out: &mut Vec<u8>, value: i32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
 fn write_f64(out: &mut Vec<u8>, value: f64) {
     out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn write_factor_map(out: &mut Vec<u8>, factors: &BTreeMap<String, f64>) -> anyhow::Result<()> {
-    write_u64(out, factors.len() as u64);
-    for (key, value) in factors {
-        write_string(out, key)?;
-        write_f64(out, *value);
-    }
-    Ok(())
 }
