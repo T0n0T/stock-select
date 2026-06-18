@@ -1175,14 +1175,29 @@ fn lsh_prepared_rows(
             } else {
                 base_close
             };
+            let ma25 = if is_latest { close - 0.7 } else { close - 0.5 };
+            let is_previous = offset + 2 == len;
+            let is_two_before = offset + 3 == len;
             PreparedRow {
                 ts_code: code.to_string(),
                 trade_date,
                 open: if is_latest { close - 0.5 } else { close - 0.1 },
                 high: close + 0.2,
-                low: if is_latest { close - 1.5 } else { close - 0.2 },
+                low: if is_previous {
+                    ma25 - 0.1
+                } else if is_latest {
+                    ma25 + 0.1
+                } else {
+                    close - 0.2
+                },
                 close,
-                volume: 1000.0,
+                volume: if is_two_before {
+                    1200.0
+                } else if is_previous {
+                    900.0
+                } else {
+                    1000.0
+                },
                 turnover_n: 1000.0 * close,
                 turnover_rate: Some(1.0),
                 k: 50.0,
@@ -1193,7 +1208,7 @@ fn lsh_prepared_rows(
                 dif: 0.3,
                 dea: 0.2,
                 macd_hist: 0.1,
-                ma25: Some(if is_latest { close - 0.7 } else { close - 0.5 }),
+                ma25: Some(ma25),
                 ma60: Some(close - 1.0),
                 ma144: Some(close - 1.5),
                 chg_d: None,

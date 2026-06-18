@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from . import __version__
 from .backfill import candidates as backfill_candidates
+from .backfill import record as backfill_record
 from .backfill import runs as backfill_runs
 from .dataset import rank_dataset
 from .diagnostics import controlled_rerank
@@ -25,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     backfill = subparsers.add_parser("backfill")
     backfill_subparsers = backfill.add_subparsers(dest="command")
     backfill_candidates.add_parser(backfill_subparsers)
+    backfill_record.add_parser(backfill_subparsers)
     backfill_runs.add_parser(backfill_subparsers)
 
     dataset = subparsers.add_parser("dataset")

@@ -25,11 +25,12 @@ use stock_select::engine::run::{SelectionRunRequest, run_selection};
 use stock_select::engine::types::{DisplayRow, LlmAnnotation};
 use stock_select::environment::{
     ResolvedEnvironment, ensure_market_environment, normalize_environment_state,
-    persist_prepared_market_environment, prepared_market_state, resolve_intraday_market_environment,
-    resolve_market_environment,
+    persist_prepared_market_environment, prepared_market_state,
+    resolve_intraday_market_environment, resolve_market_environment,
 };
 use stock_select::intraday::TushareRestProvider;
 use stock_select::model::{InstrumentInfo, MarketRow, Method, PreparedRow};
+use stock_select::record::{RunRecordConfig, update_run_record};
 use stock_select::screening::{
     PoolSource, ScreenRequest, run_intraday_screen_with_loaders, run_screen_with_loader,
 };
@@ -139,6 +140,12 @@ struct ReviewListArgs {
 
     #[arg(long)]
     environment_reason: Option<String>,
+
+    #[arg(long)]
+    record: bool,
+
+    #[arg(long)]
+    record_window_trading_days: Option<usize>,
 }
 
 #[derive(Debug, Args)]
@@ -212,6 +219,7 @@ struct ReviewTaskMetadata {
     model_feature_metadata_path: Option<PathBuf>,
     record: bool,
     record_window_trading_days: Option<usize>,
+    record_limit: Option<usize>,
 }
 
 const REVIEW_TASK_INSTRUCTION: &str = "读取本行股票和 chart_path 日线图，按 A 股游资/短线复盘口径给出 annotation。重点看题材辨识度、龙虎榜/游资痕迹、涨停或连板接力潜力、量价承接、情绪周期、长上影/放量滞涨/高位派发等风险。只输出 KEEP/CAUTION/REJECT，不改变 model_rank；llm_comment 写一句中文短线结论；详细分析写入 llm_raw 对应 JSON，review-merge 会汇总为 HTML 报告。";
@@ -439,6 +447,15 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         args.environment_state.clone(),
         args.environment_reason.clone(),
     )?;
+    let record_config = if args.method.intraday {
+        None
+    } else {
+        RunRecordConfig::for_run(
+            args.method.method,
+            args.record,
+            args.record_window_trading_days,
+        )?
+    };
     let result = run_selection(SelectionRunRequest {
         method: args.method.method,
         pick_date,
@@ -448,8 +465,11 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         model_path: args.model_path.clone(),
         model_feature_metadata_path: args.model_feature_metadata_path.clone(),
         environment: Some(environment.clone()),
-        record: args.record,
-        record_window_trading_days: args.record_window_trading_days,
+        record: record_config.is_some(),
+        record_window_trading_days: record_config
+            .as_ref()
+            .map(|config| config.window_trading_days),
+        record_limit: record_config.as_ref().map(|config| config.record_limit),
     })?;
     let artifact_args = ArtifactCommandArgs {
         method: MethodArgs {
@@ -463,6 +483,14 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
     };
     let artifact_key = artifact_key_for_run(pick_date, args.method.intraday);
     let paths = SelectionRunPaths::new(&runtime_root, args.method.method, &artifact_key);
+    maybe_update_run_record(
+        &runtime_root,
+        &paths,
+        args.method.method,
+        pick_date,
+        args.method.intraday,
+        record_config.as_ref(),
+    )?;
     if artifact_args.limit.is_some() {
         eprintln!("[run] chart start");
         match write_chart_artifacts(
@@ -495,8 +523,11 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
                 environment_interval_end: environment.interval_end,
                 model_path: args.model_path.clone(),
                 model_feature_metadata_path: args.model_feature_metadata_path.clone(),
-                record: args.record,
-                record_window_trading_days: args.record_window_trading_days,
+                record: record_config.is_some(),
+                record_window_trading_days: record_config
+                    .as_ref()
+                    .map(|config| config.window_trading_days),
+                record_limit: record_config.as_ref().map(|config| config.record_limit),
             },
         )?;
         eprintln!("[run] review task done rows={rows}");
@@ -515,8 +546,11 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
                 environment_interval_end: environment.interval_end,
                 model_path: args.model_path,
                 model_feature_metadata_path: args.model_feature_metadata_path,
-                record: args.record,
-                record_window_trading_days: args.record_window_trading_days,
+                record: record_config.is_some(),
+                record_window_trading_days: record_config
+                    .as_ref()
+                    .map(|config| config.window_trading_days),
+                record_limit: record_config.as_ref().map(|config| config.record_limit),
             },
         )?;
     }
@@ -530,6 +564,33 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         result.rows,
         result.artifact_key
     );
+    Ok(())
+}
+
+fn maybe_update_run_record(
+    runtime_root: &Path,
+    paths: &SelectionRunPaths,
+    method: Method,
+    pick_date: NaiveDate,
+    intraday: bool,
+    record_config: Option<&RunRecordConfig>,
+) -> anyhow::Result<()> {
+    if intraday {
+        return Ok(());
+    }
+    let Some(config) = record_config else {
+        return Ok(());
+    };
+    let rows = read_display_rows(paths)?;
+    let count = update_run_record(
+        runtime_root,
+        method,
+        pick_date,
+        &rows,
+        config.window_trading_days,
+        config.record_limit,
+    )?;
+    eprintln!("[run] record updated rows={count}");
     Ok(())
 }
 
@@ -927,6 +988,7 @@ fn run_review_command(args: ReviewArgs) -> anyhow::Result<()> {
             model_feature_metadata_path: args.model_feature_metadata_path,
             record: args.record,
             record_window_trading_days: args.record_window_trading_days,
+            record_limit: None,
         },
     )?;
     let tasks_path = paths.llm_tasks_path();
@@ -993,6 +1055,7 @@ fn write_review_task_artifacts(
             "record": {
                 "enabled": metadata.record,
                 "window_trading_days": metadata.record_window_trading_days,
+                "limit": metadata.record_limit,
             },
             "rows": task_rows,
         }),
@@ -1033,6 +1096,7 @@ fn write_empty_review_task_artifacts(
             "record": {
                 "enabled": metadata.record,
                 "window_trading_days": metadata.record_window_trading_days,
+                "limit": metadata.record_limit,
             },
             "rows": [],
         }),
@@ -1461,6 +1525,11 @@ where
         args.environment_state.clone(),
         args.environment_reason.clone(),
     )?;
+    let record_config = if intraday {
+        None
+    } else {
+        RunRecordConfig::for_run(method, args.record, args.record_window_trading_days)?
+    };
 
     run_selection(SelectionRunRequest {
         method,
@@ -1471,9 +1540,20 @@ where
         model_path: args.model_path.clone(),
         model_feature_metadata_path: args.model_feature_metadata_path.clone(),
         environment: Some(environment),
-        record: false,
-        record_window_trading_days: None,
+        record: record_config.is_some(),
+        record_window_trading_days: record_config
+            .as_ref()
+            .map(|config| config.window_trading_days),
+        record_limit: record_config.as_ref().map(|config| config.record_limit),
     })?;
+    maybe_update_run_record(
+        &runtime_root,
+        &paths,
+        method,
+        pick_date,
+        intraday,
+        record_config.as_ref(),
+    )?;
 
     // Read and display results from the now-existing artifact
     let payload = read_selection_json(&display_path)?;
@@ -1569,6 +1649,8 @@ mod tests {
             model_feature_metadata_path: None,
             environment_state: None,
             environment_reason: None,
+            record: false,
+            record_window_trading_days: None,
         };
 
         run_review_list_with_name_loader(args, |dsn, codes| {

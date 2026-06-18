@@ -14,6 +14,7 @@ from ml.backfill.runs import RunConfig, main_from_args, parse_args, run_single_q
 class RunBackfillTest(unittest.TestCase):
     def test_run_single_quiet_passes_runtime_root_to_cli(self):
         captured_commands = []
+        captured_envs = []
         config = RunConfig(
             binary=Path("target/debug/stock-select-rs"),
             runtime_root=Path("/tmp/runtime"),
@@ -25,8 +26,9 @@ class RunBackfillTest(unittest.TestCase):
             pool_source="turnover-top",
         )
 
-        def fake_run(command, **_kwargs):
+        def fake_run(command, **kwargs):
             captured_commands.append(command)
+            captured_envs.append(kwargs.get("env"))
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
         original_run = backfill_run.subprocess.run
@@ -45,6 +47,9 @@ class RunBackfillTest(unittest.TestCase):
         self.assertIn("--runtime-root", command)
         self.assertIn("/tmp/runtime", command)
         self.assertIn("--recompute", command)
+        self.assertNotIn("--no-record", command)
+        self.assertIsNotNone(captured_envs[0])
+        self.assertEqual(captured_envs[0]["STOCK_SELECT_RECORD_METHODS"], "")
 
     def test_parse_args_uses_candidate_backfill_parameter_names(self):
         with contextlib.redirect_stderr(io.StringIO()):

@@ -89,9 +89,10 @@ class MlDocumentationTests(unittest.TestCase):
             "当前成交量不超过前一日的 `90%`",
             "`B3+`：在 `B3` 基础上",
             "`lsh`",
-            "当日最低价跌破 `MA25`",
+            "昨日最低价低于昨日 `MA25`",
             "当日收盘价高于 `MA25`",
-            "周线和月线最新 MACD 柱值与 DEA 都大于 0",
+            "昨日成交量低于前一日成交量",
+            "周线和月线最新 DIF 与 DEA 都大于 0",
             "`run` 阶段不再增加硬过滤",
         ]
         for fragment in expected_fragments:

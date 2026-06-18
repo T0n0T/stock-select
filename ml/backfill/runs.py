@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -96,7 +97,8 @@ def command_for_date(date_str: str, config: RunConfig) -> list[str]:
 
 def run_single_result(date_str: str, config: RunConfig, *, print_output: bool = False) -> tuple[str, subprocess.CompletedProcess[str]]:
     command = command_for_date(date_str, config)
-    proc = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    env = {**os.environ, "STOCK_SELECT_RECORD_METHODS": ""}
+    proc = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True, env=env)
     if print_output:
         for line in (proc.stdout or "").splitlines():
             if line.strip():

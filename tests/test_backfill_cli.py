@@ -66,6 +66,44 @@ class BackfillCliTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("run --method b3 --pick-date 2026-06-01", stdout.getvalue())
 
+    def test_backfill_records_dry_run_prints_record_run_command(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            rc = main(
+                [
+                    "backfill",
+                    "records",
+                    "--methods",
+                    "b2,lsh",
+                    "--dates",
+                    "2026-06-01,2026-06-02",
+                    "--runtime-root",
+                    "/tmp/runtime",
+                    "--binary",
+                    "stock-select-rs",
+                    "--dry-run",
+                ]
+            )
+
+        self.assertEqual(rc, 0)
+        output = stdout.getvalue()
+        self.assertIn("run --method b2 --pick-date 2026-06-01", output)
+        self.assertIn("run --method lsh --pick-date 2026-06-02", output)
+        self.assertIn("--record", output)
+
+    def test_backfill_help_lists_only_records_command(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as exit_context:
+                main(["backfill", "-h"])
+
+        self.assertEqual(exit_context.exception.code, 0)
+        help_text = stdout.getvalue()
+
+        self.assertIn("records", help_text)
+        self.assertNotIn("record,records", help_text)
+
 
 if __name__ == "__main__":
     unittest.main()
