@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .configs import training_kwargs_from_trial
-from .objectives import score_trial_report
+from .objectives import resolve_objective
 from ml.training import train_lgbm_rank
 
 
@@ -27,7 +27,7 @@ def suggest_trial_params(trial: Any) -> dict[str, Any]:
             "feature_set",
             ["raw_numeric", "raw_plus_signal", "raw_plus_signal_macd"],
         ),
-        "label_column": trial.suggest_categorical("label_column", ["rank_label_3d", "rank_label_5d"]),
+        "label_column": trial.suggest_categorical("label_column", ["rank_label_3d", "rank_label_5d", "rank_label_10d"]),
         "categorical_encoding": trial.suggest_categorical("categorical_encoding", ["one_hot", "native"]),
         "boosting_type": trial.suggest_categorical("boosting_type", ["gbdt", "dart"]),
         "num_leaves": trial.suggest_categorical("num_leaves", [5, 9, 15]),
@@ -132,6 +132,7 @@ def write_optuna_visualizations(
     tuning_summary: dict[str, Any],
     output_dir: Path,
     visual_format: str,
+    objective_name: str,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = output_dir / "visualizations_summary.json"
@@ -141,7 +142,7 @@ def write_optuna_visualizations(
         "trial_count": len(getattr(study, "trials", []) or []),
         "best_trial": tuning_summary.get("best_trial"),
         "best_value": tuning_summary.get("best_score"),
-        "target_metric": "score_trial_report",
+        "target_metric": objective_name,
         "files": [],
         "warnings": [],
     }
@@ -187,6 +188,7 @@ def add_summary_warning(summary: dict[str, Any], message: str) -> None:
 
 
 def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
+    objective_fn = resolve_objective(args.objective)
     output_root = args.output_root or Path("diagnostics") / "ml" / args.method / "tuning"
     dataset = train_lgbm_rank.resolve_dataset_path(args.dataset, method=args.method)
     trials: list[dict[str, Any]] = []
@@ -196,6 +198,8 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
         output_dir = trial_output_dir(output_root, int(trial.number))
         kwargs = training_kwargs_from_trial(params)
         kwargs.setdefault("seed", args.seed)
+        if getattr(args, "num_threads", 0):
+            kwargs.setdefault("num_threads", args.num_threads)
         report = train_lgbm_rank.train_and_report(
             dataset,
             output_dir,
@@ -207,7 +211,7 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
             rf_diagnostics=not args.skip_rf_diagnostics,
             **kwargs,
         )
-        score = score_trial_report(report)
+        score = objective_fn(report)
         summary = trial_summary(
             trial_number=int(trial.number) + 1,
             output_dir=output_dir,
@@ -234,6 +238,7 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
     summary = {
         "strategy": "optuna",
         "method": args.method,
+        "objective": args.objective,
         "dataset": str(dataset),
         "output_root": str(output_root),
         "seed": args.seed,
@@ -257,6 +262,7 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
                 tuning_summary=summary,
                 output_dir=visual_output_dir,
                 visual_format=args.visual_format,
+                objective_name=args.objective,
             )
         except Exception as exc:
             add_summary_warning(summary, f"visualization output failed for {visual_output_dir}: {type(exc).__name__}: {exc}")

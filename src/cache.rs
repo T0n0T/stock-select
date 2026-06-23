@@ -10,10 +10,27 @@ use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
 pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 8;
+pub const DEFAULT_PREPARED_CACHE_RETENTION_LIMIT: usize = 30;
+pub const PREPARED_CACHE_RETENTION_LIMIT_ENV: &str = "STOCK_SELECT_PREPARED_CACHE_LIMIT";
 const LEGACY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRBIN1";
 const DICTIONARY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRDIC2";
 const ZSTD_FRAME_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
 const PREPARED_CACHE_ZSTD_LEVEL: i32 = 1;
+
+pub fn prepared_cache_start_date(end_date: NaiveDate) -> NaiveDate {
+    date_years_before(end_date, 3)
+}
+
+fn date_years_before(date: NaiveDate, years: i32) -> NaiveDate {
+    let target_year = date.year() - years;
+    let mut day = date.day();
+    loop {
+        if let Some(value) = NaiveDate::from_ymd_opt(target_year, date.month(), day) {
+            return value;
+        }
+        day -= 1;
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedCachePaths {
@@ -116,13 +133,103 @@ pub fn write_prepared_cache_for_mode(
     intraday: bool,
     rows: &[PreparedRow],
 ) -> anyhow::Result<()> {
+    let retention_limit = if intraday {
+        None
+    } else {
+        Some(prepared_cache_retention_limit()?)
+    };
     let paths = prepared_cache_paths(runtime_root, pick_date, intraday);
     write_binary(&paths.data_path, &encode_prepared_cache_rows(rows)?)?;
     write_json(
         &paths.meta_path,
         &build_metadata(method, pick_date, start_date, end_date, intraday, rows),
     )?;
+    if let Some(limit) = retention_limit {
+        prune_eod_prepared_cache_to_limit(runtime_root, limit)?;
+    }
     Ok(())
+}
+
+pub fn prepared_cache_retention_limit() -> anyhow::Result<usize> {
+    let env_value = std::env::var(PREPARED_CACHE_RETENTION_LIMIT_ENV).ok();
+    let dotenv = std::fs::read_to_string(".env").unwrap_or_default();
+    prepared_cache_retention_limit_from_sources(env_value.as_deref(), &dotenv)
+}
+
+pub fn prepared_cache_retention_limit_from_sources(
+    env_value: Option<&str>,
+    dotenv_content: &str,
+) -> anyhow::Result<usize> {
+    let value = crate::config::resolve_config_value_from(
+        None,
+        env_value,
+        dotenv_content,
+        PREPARED_CACHE_RETENTION_LIMIT_ENV,
+    );
+    let Some(value) = value else {
+        return Ok(DEFAULT_PREPARED_CACHE_RETENTION_LIMIT);
+    };
+    let limit = value.parse::<usize>().map_err(|err| {
+        anyhow::anyhow!("{PREPARED_CACHE_RETENTION_LIMIT_ENV} must be a positive integer: {err}")
+    })?;
+    if limit == 0 {
+        anyhow::bail!("{PREPARED_CACHE_RETENTION_LIMIT_ENV} must be a positive integer");
+    }
+    Ok(limit)
+}
+
+pub fn prune_eod_prepared_cache_to_limit(
+    runtime_root: &Path,
+    limit: usize,
+) -> anyhow::Result<usize> {
+    let prepared_dir = runtime_root.join("prepared");
+    if !prepared_dir.exists() {
+        return Ok(0);
+    }
+    let mut artifacts = Vec::new();
+    for entry in std::fs::read_dir(&prepared_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with(".meta.json") || file_name.contains(".intraday.") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(metadata) = serde_json::from_slice::<PreparedCacheMetadata>(&bytes) else {
+            continue;
+        };
+        if metadata.mode.as_deref() == Some("intraday_snapshot") {
+            continue;
+        }
+        artifacts.push((metadata.pick_date, path));
+    }
+    artifacts.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+
+    let mut removed = 0;
+    for (pick_date, meta_path) in artifacts.into_iter().skip(limit) {
+        let paths = prepared_cache_paths(runtime_root, pick_date, false);
+        remove_file_if_exists(&paths.data_path)?;
+        remove_file_if_exists(&legacy_prepared_cache_data_path(
+            runtime_root,
+            pick_date,
+            false,
+        ))?;
+        remove_file_if_exists(&meta_path)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+fn remove_file_if_exists(path: &Path) -> anyhow::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn build_metadata(

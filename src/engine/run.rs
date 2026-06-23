@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use chrono::{Duration, NaiveDate};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 
-use crate::cache::{history_payload_for_code, load_prepared_cache_for_mode};
+use crate::cache::{
+    history_payload_for_code, load_prepared_cache_for_mode, prepared_cache_start_date,
+};
 use crate::engine::artifacts::{SelectionRunPaths, write_selection_json};
 use crate::engine::b2::{
     B2FactorProvider, CandidatePayloadFactorProvider, adjust_b2_cyq_post_rerank_score,
@@ -262,7 +264,7 @@ fn inject_prepared_history_if_available(
         return Ok(());
     }
 
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let Some(rows) = load_prepared_cache_for_mode(
         runtime_root,
         method,
@@ -304,7 +306,7 @@ fn factor_rows_from_prepared_cache(
     environment_state: Option<&str>,
     candidates: &[SelectionCandidate],
 ) -> anyhow::Result<Option<Vec<FactorRow>>> {
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let Some(rows) = load_prepared_cache_for_mode(
         runtime_root,
         method,

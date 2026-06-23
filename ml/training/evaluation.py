@@ -60,12 +60,13 @@ def evaluate_model(
     resolved_top_k = sorted({int(value) for value in (top_k if top_k is not None else [top_n or 3]) if int(value) > 0})
     resolved_ndcg_at = sorted({int(value) for value in (ndcg_at or []) if int(value) > 0})
     ordered_by_date = grouped_by_date(rows)
+    return_thresholds = (("ret3", 5.0, "ge_5"), ("ret5", 5.0, "ge_5"), ("ret10", 10.0, "ge_10"))
     for k in resolved_top_k:
         for _date, day_rows in ordered_by_date.items():
             ordered = sorted(day_rows, key=lambda row: (-(as_float(row.get("model_score")) or 0.0), str(row.get("code"))))
             result.setdefault("_ordered_by_date", {})[_date] = ordered
-        for return_column in ("ret3", "ret5"):
-            positive = ge5 = le0 = total = captured_ge5 = total_ge5 = 0
+        for return_column, threshold, threshold_key in return_thresholds:
+            positive = ge_threshold = le0 = total = captured_ge_threshold = total_ge_threshold = 0
             ic_values: list[float] = []
             for _date, day_rows in ordered_by_date.items():
                 ordered = result["_ordered_by_date"][_date]
@@ -74,13 +75,13 @@ def evaluate_model(
                 good = [
                     row
                     for row in day_rows
-                    if (as_float(row.get(return_column)) is not None and as_float(row.get(return_column)) >= 5.0)
+                    if (as_float(row.get(return_column)) is not None and as_float(row.get(return_column)) >= threshold)
                 ]
-                total_ge5 += len(good)
-                captured_ge5 += sum(1 for row in good if str(row.get("code")) in top_codes)
+                total_ge_threshold += len(good)
+                captured_ge_threshold += sum(1 for row in good if str(row.get("code")) in top_codes)
                 values = [as_float(row.get(return_column)) for row in top_rows if as_float(row.get(return_column)) is not None]
                 positive += sum(1 for value in values if value is not None and value > 0.0)
-                ge5 += sum(1 for value in values if value is not None and value >= 5.0)
+                ge_threshold += sum(1 for value in values if value is not None and value >= threshold)
                 le0 += sum(1 for value in values if value is not None and value <= 0.0)
                 total += len(values)
                 ic = rank_ic(ordered, return_column)
@@ -90,9 +91,9 @@ def evaluate_model(
             result.update(
                 {
                     f"{prefix}_positive_rate": pct(positive, total),
-                    f"{prefix}_ge_5_rate": pct(ge5, total),
+                    f"{prefix}_{threshold_key}_rate": pct(ge_threshold, total),
                     f"{prefix}_le_0_rate": pct(le0, total),
-                    f"{prefix}_ge_5_capture_rate": pct(captured_ge5, total_ge5),
+                    f"{prefix}_{threshold_key}_capture_rate": pct(captured_ge_threshold, total_ge_threshold),
                     f"rank_ic_{return_column}": round(sum(ic_values) / len(ic_values), 4) if ic_values else None,
                 }
             )

@@ -2,7 +2,9 @@ use assert_cmd::Command;
 use chrono::NaiveDate;
 use predicates::prelude::*;
 use serde_json::{Value, json};
-use stock_select::cache::{write_prepared_cache, write_prepared_cache_for_mode};
+use stock_select::cache::{
+    prepared_cache_start_date, write_prepared_cache, write_prepared_cache_for_mode,
+};
 use stock_select::model::{Method, PreparedRow};
 
 fn write_fake_chart_renderer(temp: &std::path::Path) -> std::path::PathBuf {
@@ -61,7 +63,7 @@ fn write_display(runtime: &std::path::Path) -> std::path::PathBuf {
 
 fn write_chart_prepared_cache(runtime: &std::path::Path) {
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-    let start_date = pick_date - chrono::Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let rows = vec![
         prepared_row("000001.SZ", 23, 10.0),
         prepared_row("000001.SZ", 24, 11.5),
@@ -93,7 +95,7 @@ fn write_intraday_display(runtime: &std::path::Path) -> std::path::PathBuf {
 fn write_intraday_chart_prepared_cache(runtime: &std::path::Path) {
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
-    let start_date = previous_trade_date - chrono::Duration::days(366);
+    let start_date = prepared_cache_start_date(previous_trade_date);
     let rows = vec![
         prepared_row("000001.SZ", 22, 10.0),
         prepared_row("000001.SZ", 25, 13.75),

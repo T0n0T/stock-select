@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 
-use crate::indicators::macd;
 use crate::model::{Candidate, PreparedRow};
-use crate::strategies::{StrategyOutput, group_refs_by_symbol, sort_candidates};
+use crate::strategies::{
+    StrategyOutput, group_refs_by_symbol, latest_macd_dif_and_dea_positive, monthly_asof_closes,
+    sort_candidates, weekly_asof_closes,
+};
 
 pub fn run_lsh_strategy(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
     let refs = rows.iter().collect::<Vec<_>>();
@@ -78,50 +80,8 @@ pub fn run_lsh_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) -
 }
 
 fn weekly_monthly_macd_positive(history: &[&PreparedRow]) -> bool {
-    latest_macd_dif_and_dea_positive(&daily_view_weekly_closes(history))
-        && latest_macd_dif_and_dea_positive(&daily_view_monthly_closes(history))
-}
-
-fn latest_macd_dif_and_dea_positive(closes: &[f64]) -> bool {
-    if closes.is_empty() {
-        return false;
-    }
-    let (dif, dea, _hist) = macd(closes, 12, 26, 9);
-    dif.last()
-        .zip(dea.last())
-        .is_some_and(|(dif, dea)| dif.is_finite() && dea.is_finite() && *dif > 0.0 && *dea > 0.0)
-}
-
-fn daily_view_weekly_closes(history: &[&PreparedRow]) -> Vec<f64> {
-    let mut closes = Vec::with_capacity(history.len());
-    let mut current_week_close = None;
-    let mut previous_weekday = None;
-    for row in history {
-        let weekday = row.trade_date.weekday().number_from_monday();
-        if current_week_close.is_none()
-            || previous_weekday.is_some_and(|previous| weekday < previous)
-        {
-            current_week_close = Some(row.close);
-        }
-        closes.push(current_week_close.unwrap_or(row.close));
-        previous_weekday = Some(weekday);
-    }
-    closes
-}
-
-fn daily_view_monthly_closes(history: &[&PreparedRow]) -> Vec<f64> {
-    let mut closes = Vec::with_capacity(history.len());
-    let mut current_month_close = None;
-    let mut previous_month = None;
-    for row in history {
-        let month = (row.trade_date.year(), row.trade_date.month());
-        if current_month_close.is_none() || previous_month != Some(month) {
-            current_month_close = Some(row.close);
-        }
-        closes.push(current_month_close.unwrap_or(row.close));
-        previous_month = Some(month);
-    }
-    closes
+    latest_macd_dif_and_dea_positive(&weekly_asof_closes(history))
+        && latest_macd_dif_and_dea_positive(&monthly_asof_closes(history))
 }
 
 #[cfg(test)]

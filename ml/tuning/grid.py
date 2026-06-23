@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .configs import training_kwargs_from_trial
-from .objectives import score_trial_report
+from .objectives import resolve_objective
 from ml.training import train_lgbm_rank
 
 
@@ -37,6 +37,7 @@ def default_grid_trials(max_trials: int = 12) -> list[dict[str, Any]]:
 def run_grid_search(args: argparse.Namespace) -> int:
     if getattr(args, "visualize", False):
         print("warning: --visualize only applies to --strategy optuna; ignoring for grid search")
+    objective_fn = resolve_objective(args.objective)
     output_root = args.output_root or Path("diagnostics") / "ml" / args.method / "tuning"
     dataset = train_lgbm_rank.resolve_dataset_path(args.dataset, method=args.method)
     results = []
@@ -44,6 +45,8 @@ def run_grid_search(args: argparse.Namespace) -> int:
         output_dir = output_root / f"trial_{index:03d}"
         kwargs = training_kwargs_from_trial(trial)
         kwargs.setdefault("seed", args.seed)
+        if getattr(args, "num_threads", 0):
+            kwargs.setdefault("num_threads", args.num_threads)
         report = train_lgbm_rank.train_and_report(
             dataset,
             output_dir,
@@ -57,7 +60,7 @@ def run_grid_search(args: argparse.Namespace) -> int:
             rf_diagnostics=not args.skip_rf_diagnostics,
             **kwargs,
         )
-        results.append({"trial": index, "output_dir": str(output_dir), "score": score_trial_report(report), "params": trial})
+        results.append({"trial": index, "output_dir": str(output_dir), "score": objective_fn(report), "params": trial})
     output_root.mkdir(parents=True, exist_ok=True)
     summary_path = output_root / "tuning_summary.json"
     summary_path.write_text(
@@ -65,6 +68,7 @@ def run_grid_search(args: argparse.Namespace) -> int:
             {
                 "strategy": "grid",
                 "method": args.method,
+                "objective": args.objective,
                 "dataset": str(dataset),
                 "output_root": str(output_root),
                 "trials": results,
@@ -93,6 +97,13 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
     parser.add_argument("--rolling-train-dates", type=int, default=240)
     parser.add_argument("--rolling-test-dates", type=int, default=40)
     parser.add_argument("--skip-rf-diagnostics", action="store_true")
+    parser.add_argument("--num-threads", type=int, default=0, help="LightGBM num_threads; 0 lets LightGBM pick")
+    parser.add_argument(
+        "--objective",
+        choices=["default", "top3_ret10_ge_10"],
+        default="default",
+        help="Optuna/grid objective used to rank trials",
+    )
     parser.add_argument("--visualize", action="store_true", help="generate Optuna visualization HTML files")
     parser.add_argument("--visual-output-dir", type=Path, help="directory for Optuna visualization output")
     parser.add_argument("--visual-format", choices=["html"], default="html", help="visualization output format")
