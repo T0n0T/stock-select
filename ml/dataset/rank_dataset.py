@@ -250,6 +250,7 @@ LABEL_COLUMNS = [
     "win5_vs_day_median",
     "rank_label_3d",
     "rank_label_5d",
+    "rank_label_10d",
 ]
 METHOD_RAW_FACTOR_COLUMNS = {
     "b2": B2_RAW_FACTOR_COLUMNS,
@@ -439,6 +440,8 @@ def add_day_relative_labels(rows: Sequence[dict[str, Any]]) -> list[dict[str, An
         valid_ret3 = [value for value in valid_ret3 if value is not None]
         valid_ret5 = [as_float(row.get("ret5")) for row in day_rows]
         valid_ret5 = [value for value in valid_ret5 if value is not None]
+        valid_ret10 = [as_float(row.get("ret10")) for row in day_rows]
+        valid_ret10 = [value for value in valid_ret10 if value is not None]
         ret3_median = median(valid_ret3)
         ret5_median = median(valid_ret5)
         ret3_labels = quartile_labels(
@@ -447,14 +450,19 @@ def add_day_relative_labels(rows: Sequence[dict[str, Any]]) -> list[dict[str, An
         ret5_labels = quartile_labels(
             {str(row["code"]): as_float(row.get("ret5")) for row in day_rows if as_float(row.get("ret5")) is not None}
         )
+        ret10_labels = quartile_labels(
+            {str(row["code"]): as_float(row.get("ret10")) for row in day_rows if as_float(row.get("ret10")) is not None}
+        )
 
         for row in day_rows:
             ret3 = as_float(row.get("ret3"))
             ret5 = as_float(row.get("ret5"))
+            ret10 = as_float(row.get("ret10"))
             row["win3_vs_day_median"] = "" if ret3 is None or ret3_median is None else int(ret3 > ret3_median)
             row["win5_vs_day_median"] = "" if ret5 is None or ret5_median is None else int(ret5 > ret5_median)
             row["rank_label_3d"] = ret3_labels.get(str(row.get("code")), "")
             row["rank_label_5d"] = ret5_labels.get(str(row.get("code")), "")
+            row["rank_label_10d"] = ret10_labels.get(str(row.get("code")), "")
             output.append(row)
     return output
 
@@ -895,7 +903,7 @@ def dataset_summary(
         env_counts[normalize_env(row.get("env"))] += 1
     label_counts = {
         label: sum(1 for row in rows if format_csv_value(row.get(label)) != "")
-        for label in ["ret3", "ret5", "ret10", "max_drawdown_5d"]
+        for label in ["ret3", "ret5", "ret10", "max_drawdown_5d", "rank_label_3d", "rank_label_5d", "rank_label_10d"]
     }
     return {
         "method": method,

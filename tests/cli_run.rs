@@ -1,8 +1,8 @@
 use assert_cmd::Command;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use predicates::prelude::*;
 use serde_json::{Value, json};
-use stock_select::cache::PREPARED_CACHE_SCHEMA_VERSION;
+use stock_select::cache::{PREPARED_CACHE_SCHEMA_VERSION, prepared_cache_start_date};
 
 const B2_MODEL_FIXTURE_DIR: &str = "tests/fixtures/b2_model";
 
@@ -124,9 +124,9 @@ fn write_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
             "artifact_version": 1,
             "method": "b2",
             "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": "2026-05-25",
-            "start_date": "2025-05-24",
-            "end_date": "2026-05-25",
+            "pick_date": pick_date,
+            "start_date": prepared_cache_start_date(pick_date),
+            "end_date": pick_date,
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 25,
             "symbol_count": 1,
@@ -167,9 +167,9 @@ fn write_intraday_prepared_cache_metadata(root: &std::path::Path, pick_date: Nai
             "artifact_version": 1,
             "method": "b2",
             "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": "2026-05-25",
-            "start_date": "2025-05-24",
-            "end_date": "2026-05-25",
+            "pick_date": pick_date,
+            "start_date": prepared_cache_start_date(pick_date),
+            "end_date": pick_date,
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 25,
             "symbol_count": 1,
@@ -187,22 +187,9 @@ fn write_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) 
     std::fs::create_dir_all(&prepared_dir).unwrap();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"SSPRBIN1");
-    write_u64(&mut bytes, 3);
-    let rows = [
-        (
-            NaiveDate::from_ymd_opt(2026, 5, 23).unwrap(),
-            10.0,
-            1000.0,
-            45.0,
-        ),
-        (
-            NaiveDate::from_ymd_opt(2026, 5, 24).unwrap(),
-            10.2,
-            1000.0,
-            30.0,
-        ),
-        (pick_date, 10.6, 1300.0, 42.0),
-    ];
+    let rows = selecting_rows(pick_date, 10.0);
+    let row_count = rows.len();
+    write_u64(&mut bytes, row_count as u64);
     for (trade_date, close, volume, j) in rows {
         write_selecting_prepared_row(&mut bytes, "000001.SZ", trade_date, close, volume, j);
     }
@@ -217,11 +204,11 @@ fn write_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) 
             "artifact_version": 1,
             "method": "b2",
             "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": "2026-05-25",
-            "start_date": "2025-05-24",
-            "end_date": "2026-05-25",
+            "pick_date": pick_date,
+            "start_date": prepared_cache_start_date(pick_date),
+            "end_date": pick_date,
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
-            "row_count": 3,
+            "row_count": row_count,
             "symbol_count": 1,
             "source_table": "daily_market"
         }))
@@ -235,23 +222,16 @@ fn write_two_code_selecting_prepared_cache(root: &std::path::Path, pick_date: Na
     std::fs::create_dir_all(&prepared_dir).unwrap();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"SSPRBIN1");
-    write_u64(&mut bytes, 6);
-    for (code, base) in [("000001.SZ", 10.0), ("000002.SZ", 20.0)] {
-        let rows = [
-            (
-                NaiveDate::from_ymd_opt(2026, 5, 23).unwrap(),
-                base,
-                1000.0,
-                45.0,
-            ),
-            (
-                NaiveDate::from_ymd_opt(2026, 5, 24).unwrap(),
-                base + 0.2,
-                1000.0,
-                30.0,
-            ),
-            (pick_date, base + 1.0, 1300.0, 42.0),
-        ];
+    let rows_by_code = [
+        ("000001.SZ", selecting_rows(pick_date, 10.0)),
+        ("000002.SZ", selecting_rows(pick_date, 20.0)),
+    ];
+    let row_count = rows_by_code
+        .iter()
+        .map(|(_, rows)| rows.len())
+        .sum::<usize>();
+    write_u64(&mut bytes, row_count as u64);
+    for (code, rows) in rows_by_code {
         for (trade_date, close, volume, j) in rows {
             write_selecting_prepared_row(&mut bytes, code, trade_date, close, volume, j);
         }
@@ -267,17 +247,43 @@ fn write_two_code_selecting_prepared_cache(root: &std::path::Path, pick_date: Na
             "artifact_version": 1,
             "method": "b2",
             "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": "2026-05-25",
-            "start_date": "2025-05-24",
-            "end_date": "2026-05-25",
+            "pick_date": pick_date,
+            "start_date": prepared_cache_start_date(pick_date),
+            "end_date": pick_date,
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
-            "row_count": 6,
+            "row_count": row_count,
             "symbol_count": 2,
             "source_table": "daily_market"
         }))
         .unwrap(),
     )
     .unwrap();
+}
+
+fn selecting_rows(pick_date: NaiveDate, base_close: f64) -> Vec<(NaiveDate, f64, f64, f64)> {
+    let len = 90;
+    let first_date = pick_date - Duration::days((len - 1) as i64);
+    let mut rows = (0..len)
+        .map(|offset| {
+            (
+                first_date + Duration::days(offset as i64),
+                base_close + offset as f64 * 0.03,
+                1000.0,
+                25.0,
+            )
+        })
+        .collect::<Vec<_>>();
+    let prev2 = len - 3;
+    let prev = len - 2;
+    let latest = len - 1;
+    rows[prev2].1 = rows[prev].1 - 0.05;
+    rows[prev2].3 = 28.0;
+    rows[prev].1 = rows[prev2].1 + 0.10;
+    rows[prev].3 = 32.0;
+    rows[latest].1 = rows[prev].1 * 1.04;
+    rows[latest].2 = rows[prev].2 + 500.0;
+    rows[latest].3 = 45.0;
+    rows
 }
 
 fn write_selecting_prepared_row(

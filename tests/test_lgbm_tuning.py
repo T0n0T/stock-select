@@ -480,7 +480,7 @@ class LgbmTuningTest(unittest.TestCase):
         self.assertEqual(visual_summary["trial_count"], 2)
         self.assertEqual(visual_summary["best_trial"], 2)
         self.assertEqual(visual_summary["best_value"], fake_study.best_value)
-        self.assertEqual(visual_summary["target_metric"], "score_trial_report")
+        self.assertEqual(visual_summary["target_metric"], "default")
         self.assertEqual(visual_summary["format"], "html")
         self.assertEqual(visual_summary["warnings"], [])
         self.assertEqual(

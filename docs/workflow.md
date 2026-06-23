@@ -84,6 +84,8 @@ stock-select-rs clean-intraday
 
 `clean-intraday` 只清理 `candidates/`、`prepared/`、`factors/`、`charts/`、`select/` 下文件名或目录名包含 `.intraday.` 的条目，不扫描或删除 `runtime/models/` 下的模型产物。
 
+EOD prepared cache 默认只保留最近 30 个交易日 artifact，以减少 `runtime/prepared/` 的磁盘占用；可在当前目录 `.env` 或 shell 环境中设置 `STOCK_SELECT_PREPARED_CACHE_LIMIT=<正整数>` 调整。这个限制只作用于 EOD cache，盘中 `.intraday.` cache 不计入也不会被自动删除。
+
 ## 场景三：模型更新
 
 当需要重新训练或更新模型时：
@@ -231,6 +233,12 @@ EOD run 自动评分：
 - 读取 `daily_market` 获取上证指数和国证 2000 数据
 - 评估市场状态：`weak` / `neutral` / `strong`
 - 写入 `runtime/environment/daily/<date>.json`
+
+run record 相关环境变量：
+
+- `STOCK_SELECT_RECORD_METHODS`：开启自动写 `record.csv` 的方法列表，例如 `b2,lsh`。
+- `STOCK_SELECT_RECORD_WINDOW_TRADING_DAYS`：`record.csv` 保留最近 N 个入选交易日，默认 10。
+- `STOCK_SELECT_RECORD_LIMIT`：每次 `update_run_record` 最多写入排名前 N 条，默认 30；`run --record` 和 `review-list --record` 自动补跑都会使用。
 
 盘中模式：
 

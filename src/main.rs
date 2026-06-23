@@ -9,7 +9,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use serde::Serialize;
 use serde_json::json;
-use stock_select::cache::load_prepared_cache_for_mode;
+use stock_select::cache::{load_prepared_cache_for_mode, prepared_cache_start_date};
 use stock_select::config::{resolve_config_value, resolve_runtime_root};
 use stock_select::db::{fetch_daily_window, fetch_instrument_info, resolve_previous_trade_date};
 use stock_select::engine::artifacts::{
@@ -713,7 +713,7 @@ fn resolve_prepared_market_environment(
     runtime_root: &Path,
     pick_date: NaiveDate,
 ) -> anyhow::Result<ResolvedEnvironment> {
-    let start_date = pick_date - chrono::Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let Some(rows) = load_prepared_cache_for_mode(
         runtime_root,
         Method::B2,
@@ -1421,7 +1421,7 @@ fn load_chart_histories(
     pick_date: NaiveDate,
     intraday: bool,
 ) -> anyhow::Result<BTreeMap<String, Vec<PreparedRow>>> {
-    let start_date = pick_date - chrono::Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let prepared = load_prepared_cache_for_mode(
         runtime_root,
         method,

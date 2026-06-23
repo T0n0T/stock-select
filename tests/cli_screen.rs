@@ -1,8 +1,8 @@
 use assert_cmd::Command;
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use predicates::prelude::*;
 use serde_json::Value;
-use stock_select::cache::write_prepared_cache;
+use stock_select::cache::{prepared_cache_start_date, write_prepared_cache};
 use stock_select::model::{Method, PreparedRow};
 
 #[test]
@@ -51,22 +51,7 @@ fn b3_screen_export_factors_without_cached_environment_reaches_daily_loader() {
 fn b2_screen_accepts_pool_file_for_custom_pool() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-    write_prepared_cache(
-        temp.path(),
-        Method::B2,
-        pick_date,
-        NaiveDate::from_ymd_opt(2025, 5, 24).unwrap(),
-        pick_date,
-        &[
-            prepared_row("000001.SZ", 23, 10.0, 1000.0, 45.0),
-            prepared_row("000001.SZ", 24, 10.2, 1000.0, 30.0),
-            prepared_row("000001.SZ", 25, 10.6, 1300.0, 42.0),
-            prepared_row("000002.SZ", 23, 20.0, 1000.0, 45.0),
-            prepared_row("000002.SZ", 24, 20.2, 1000.0, 30.0),
-            prepared_row("000002.SZ", 25, 21.0, 1300.0, 42.0),
-        ],
-    )
-    .unwrap();
+    write_two_code_cache(temp.path(), pick_date);
     let pool_file = temp.path().join("pool.txt");
     std::fs::write(&pool_file, "000002").unwrap();
 
@@ -158,28 +143,72 @@ fn b2_screen_pool_source_custom_uses_stock_select_pool_file() {
 }
 
 fn write_two_code_cache(root: &std::path::Path, pick_date: NaiveDate) {
+    let rows = [
+        b2_positive_monthly_rows("000001.SZ", pick_date, 10.0),
+        b2_positive_monthly_rows("000002.SZ", pick_date, 20.0),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
     write_prepared_cache(
         root,
         Method::B2,
         pick_date,
-        NaiveDate::from_ymd_opt(2025, 5, 24).unwrap(),
+        prepared_cache_start_date(pick_date),
         pick_date,
-        &[
-            prepared_row("000001.SZ", 23, 10.0, 1000.0, 45.0),
-            prepared_row("000001.SZ", 24, 10.2, 1000.0, 30.0),
-            prepared_row("000001.SZ", 25, 10.6, 1300.0, 42.0),
-            prepared_row("000002.SZ", 23, 20.0, 1000.0, 45.0),
-            prepared_row("000002.SZ", 24, 20.2, 1000.0, 30.0),
-            prepared_row("000002.SZ", 25, 21.0, 1300.0, 42.0),
-        ],
+        &rows,
     )
     .unwrap();
 }
 
-fn prepared_row(code: &str, day: u32, close: f64, volume: f64, j: f64) -> PreparedRow {
+fn b2_positive_monthly_rows(code: &str, pick_date: NaiveDate, base_close: f64) -> Vec<PreparedRow> {
+    let len = 90;
+    let first_date = pick_date - Duration::days((len - 1) as i64);
+    let mut rows = (0..len)
+        .map(|offset| {
+            let close = base_close + offset as f64 * 0.03;
+            prepared_row_at_date(
+                code,
+                first_date + Duration::days(offset as i64),
+                close,
+                1000.0,
+                25.0,
+            )
+        })
+        .collect::<Vec<_>>();
+    let prev2 = len - 3;
+    let prev = len - 2;
+    let latest = len - 1;
+    rows[prev2].close = rows[prev].close - 0.05;
+    rows[prev2].open = rows[prev2].close - 0.2;
+    rows[prev2].high = rows[prev2].close;
+    rows[prev2].low = rows[prev2].close - 0.3;
+    rows[prev2].j = 28.0;
+    rows[prev].close = rows[prev2].close + 0.10;
+    rows[prev].open = rows[prev].close - 0.2;
+    rows[prev].high = rows[prev].close;
+    rows[prev].low = rows[prev].close - 0.3;
+    rows[prev].j = 32.0;
+    rows[latest].close = rows[prev].close * 1.04;
+    rows[latest].open = rows[latest].close - 0.8;
+    rows[latest].high = rows[latest].close;
+    rows[latest].low = rows[latest].close - 0.3;
+    rows[latest].volume = rows[prev].volume + 500.0;
+    rows[latest].turnover_n = rows[latest].volume * rows[latest].close;
+    rows[latest].j = 45.0;
+    rows
+}
+
+fn prepared_row_at_date(
+    code: &str,
+    trade_date: NaiveDate,
+    close: f64,
+    volume: f64,
+    j: f64,
+) -> PreparedRow {
     PreparedRow {
         ts_code: code.to_string(),
-        trade_date: NaiveDate::from_ymd_opt(2026, 5, day).unwrap(),
+        trade_date,
         open: close - 0.2,
         high: close + 0.1,
         low: close - 0.3,

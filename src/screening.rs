@@ -6,7 +6,9 @@ use chrono::{Duration, NaiveDate};
 use serde_json::json;
 
 use crate::cache::{
-    candidate_output_path, load_prepared_cache, write_prepared_cache, write_prepared_cache_for_mode,
+    candidate_output_path, load_prepared_cache,
+    prepared_cache_start_date as cache_prepared_cache_start_date, write_prepared_cache,
+    write_prepared_cache_for_mode,
 };
 use crate::environment::{normalize_environment_state, prepared_market_state};
 use crate::factors::registry::{
@@ -62,7 +64,11 @@ pub struct ScreenRequest {
 }
 
 pub fn screen_window(pick_date: NaiveDate) -> (NaiveDate, NaiveDate) {
-    (pick_date - Duration::days(366), pick_date)
+    (prepared_cache_start_date(pick_date), pick_date)
+}
+
+pub fn prepared_cache_start_date(pick_date: NaiveDate) -> NaiveDate {
+    cache_prepared_cache_start_date(pick_date)
 }
 
 pub fn intraday_candidate_output_path(
@@ -190,7 +196,7 @@ where
 {
     ensure_screen_supported(request.method)?;
     let previous_trade_date = previous_trade_date_loader(&request.dsn, request.pick_date)?;
-    let start_date = previous_trade_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(previous_trade_date);
     let snapshot = fetch_rt_k_snapshot(provider, request.pick_date, fallback_trade_time)?;
     let history = history_loader(&request.dsn, start_date, previous_trade_date)?;
     if history.is_empty() {

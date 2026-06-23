@@ -138,6 +138,8 @@ CLI 参数  >  shell 环境变量  >  当前目录 .env
 | `STOCK_SELECT_RUNTIME_ROOT` | runtime 根目录 |
 | `POSTGRES_DSN` | PostgreSQL 连接串 |
 | `TUSHARE_TOKEN` | Tushare API token |
+| `STOCK_SELECT_PREPARED_CACHE_LIMIT` | EOD prepared cache 最多保留数量，默认 30；盘中 cache 不计入 |
+| `STOCK_SELECT_RECORD_LIMIT` | 每次 `update_run_record` 最多写入排名前 N 条，默认 30 |
 | `STOCK_SELECT_BIN` | 二进制路径（用于脚本） |
 
 ## Runtime 目录布局
@@ -193,7 +195,7 @@ flowchart TD
     SCR --> POOL{"pool_source"}
     POOL -->|turnover-top| TOP["fetch turnover_top N<br/>from PostgreSQL"]
     POOL -->|custom| POOLF["读取 pool_file"]
-    TOP --> WINDOW["fetch_daily_window()<br/>366 天行情窗口<br/>src/db.rs"]
+    TOP --> WINDOW["fetch_daily_window()<br/>3 年行情窗口<br/>src/db.rs"]
     POOLF --> WINDOW
     WINDOW --> LOCAL["enrich_local_market_factors()<br/>boll_width / bias / roc / mtm / psy / wr"]
     LOCAL --> IND["计算技术指标<br/>KDJ / MACD / Bollinger / ZX"]

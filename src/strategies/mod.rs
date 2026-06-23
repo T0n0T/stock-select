@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+use chrono::Datelike;
+
+use crate::indicators::macd;
 use crate::model::{Candidate, PreparedRow};
 
 pub mod b2;
@@ -32,4 +35,68 @@ pub(crate) fn group_refs_by_symbol<'a>(
 
 pub(crate) fn sort_candidates(candidates: &mut [Candidate]) {
     candidates.sort_by(|left, right| left.code.cmp(&right.code));
+}
+
+pub(crate) fn latest_monthly_macd_dea_positive(history: &[&PreparedRow]) -> bool {
+    latest_macd_dea_positive(&monthly_asof_closes(history))
+}
+
+pub(crate) fn latest_macd_dea_positive(closes: &[f64]) -> bool {
+    if closes.is_empty() {
+        return false;
+    }
+    let (_dif, dea, _hist) = macd(closes, 12, 26, 9);
+    dea.last().is_some_and(|dea| dea.is_finite() && *dea > 0.0)
+}
+
+pub(crate) fn latest_macd_dif_and_dea_positive(closes: &[f64]) -> bool {
+    if closes.is_empty() {
+        return false;
+    }
+    let (dif, dea, _hist) = macd(closes, 12, 26, 9);
+    dif.last()
+        .zip(dea.last())
+        .is_some_and(|(dif, dea)| dif.is_finite() && dea.is_finite() && *dif > 0.0 && *dea > 0.0)
+}
+
+pub(crate) fn weekly_asof_closes(history: &[&PreparedRow]) -> Vec<f64> {
+    period_asof_closes(history, PeriodKind::Weekly)
+}
+
+pub(crate) fn monthly_asof_closes(history: &[&PreparedRow]) -> Vec<f64> {
+    period_asof_closes(history, PeriodKind::Monthly)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeriodKind {
+    Weekly,
+    Monthly,
+}
+
+fn period_asof_closes(history: &[&PreparedRow], kind: PeriodKind) -> Vec<f64> {
+    let mut closes = Vec::new();
+    let mut current_key: Option<i64> = None;
+    for (idx, row) in history.iter().enumerate() {
+        let key = period_key(row, kind);
+        if current_key.is_some_and(|current| current != key) {
+            closes.push(history[idx - 1].close);
+        }
+        current_key = Some(key);
+    }
+    if let Some(latest) = history.last() {
+        closes.push(latest.close);
+    }
+    closes
+}
+
+fn period_key(row: &PreparedRow, kind: PeriodKind) -> i64 {
+    match kind {
+        PeriodKind::Weekly => {
+            let week = row.trade_date.iso_week();
+            i64::from(week.year()) * 100 + i64::from(week.week())
+        }
+        PeriodKind::Monthly => {
+            i64::from(row.trade_date.year()) * 100 + i64::from(row.trade_date.month())
+        }
+    }
 }

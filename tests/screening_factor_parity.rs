@@ -3,14 +3,16 @@ use stock_select::cache::load_prepared_cache;
 use stock_select::factors::registry::{build_candidate_factor_rows, factor_profile_for_method};
 use stock_select::factors::types::FactorValue;
 use stock_select::model::{Candidate, MarketRow, Method, PreparedRow};
-use stock_select::screening::{PoolSource, ScreenRequest, run_screen_with_loader};
+use stock_select::screening::{
+    PoolSource, ScreenRequest, prepared_cache_start_date, run_screen_with_loader,
+};
 
 #[test]
 fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(129);
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let request = ScreenRequest {
         method: Method::B2,
         pick_date,
@@ -164,7 +166,7 @@ fn db_factor_extras_flow_from_screen_loader_into_candidate_factors() {
     })
     .unwrap();
 
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let prepared = load_prepared_cache(temp.path(), Method::B2, pick_date, start_date, pick_date)
         .unwrap()
         .unwrap();
@@ -400,7 +402,7 @@ fn market_amount_ma5_ratio_uses_raw_price_basis_after_qfq_prepare() {
         temp.path(),
         Method::B2,
         pick_date,
-        pick_date - Duration::days(366),
+        prepared_cache_start_date(pick_date),
         pick_date,
     )
     .unwrap()

@@ -4,7 +4,7 @@ import math
 from typing import Any, Sequence
 
 
-TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "ret3_ge5_label", "ret5_ge5_label"}
+TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "rank_label_10d", "ret3_ge5_label", "ret5_ge5_label"}
 
 
 def as_float(value: Any) -> float | None:

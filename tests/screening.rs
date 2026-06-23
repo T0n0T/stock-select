@@ -1,4 +1,4 @@
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use stock_select::cache::{
     load_prepared_cache, load_prepared_cache_for_mode, prepared_cache_data_path,
     prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
@@ -7,9 +7,23 @@ use stock_select::cache::{
 use stock_select::intraday::{RawRtKRow, StaticRtKProvider};
 use stock_select::model::{MarketRow, Method, PreparedRow};
 use stock_select::screening::{
-    PoolSource, ScreenRequest, run_intraday_screen_with_loaders, run_intraday_screen_with_provider,
-    run_screen_with_loader,
+    PoolSource, ScreenRequest, prepared_cache_start_date, run_intraday_screen_with_loaders,
+    run_intraday_screen_with_provider, run_screen_with_loader, screen_window,
 };
+
+#[test]
+fn screen_window_uses_three_year_prepared_history() {
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 23).unwrap();
+
+    assert_eq!(
+        screen_window(pick_date),
+        (NaiveDate::from_ymd_opt(2023, 6, 23).unwrap(), pick_date)
+    );
+    assert_eq!(
+        prepared_cache_start_date(pick_date),
+        NaiveDate::from_ymd_opt(2023, 6, 23).unwrap()
+    );
+}
 
 #[test]
 fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
@@ -29,7 +43,7 @@ fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
 
     let output_path = run_screen_with_loader(request, |dsn, start_date, end_date| {
         assert_eq!(dsn, "postgresql://fixture");
-        assert_eq!(start_date, NaiveDate::from_ymd_opt(2025, 5, 2).unwrap());
+        assert_eq!(start_date, prepared_cache_start_date(pick_date));
         assert_eq!(end_date, pick_date);
         Ok(vec![
             market_row(1, 10.0, 100.0),
@@ -49,7 +63,7 @@ fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
         temp.path(),
         Method::B2,
         pick_date,
-        NaiveDate::from_ymd_opt(2025, 5, 2).unwrap(),
+        prepared_cache_start_date(pick_date),
         pick_date,
     )
     .unwrap()
@@ -91,7 +105,7 @@ fn screen_prepare_matches_old_indicator_basics() {
         temp.path(),
         Method::B2,
         pick_date,
-        NaiveDate::from_ymd_opt(2025, 5, 1).unwrap(),
+        prepared_cache_start_date(pick_date),
         pick_date,
     )
     .unwrap()
@@ -133,7 +147,7 @@ fn screen_prepare_front_adjusts_ohlc_indicators_and_preserves_raw_turnover_basis
         temp.path(),
         Method::B2,
         pick_date,
-        NaiveDate::from_ymd_opt(2025, 5, 1).unwrap(),
+        prepared_cache_start_date(pick_date),
         pick_date,
     )
     .unwrap()
@@ -185,7 +199,7 @@ fn screen_prepare_front_adjusts_local_qfq_factor_fallbacks() {
         temp.path(),
         Method::B2,
         pick_date,
-        pick_date - Duration::days(366),
+        prepared_cache_start_date(pick_date),
         pick_date,
     )
     .unwrap()
@@ -231,7 +245,7 @@ fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
         temp.path(),
         Method::B2,
         pick_date,
-        pick_date - Duration::days(366),
+        prepared_cache_start_date(pick_date),
         pick_date,
     )
     .unwrap()
@@ -287,7 +301,7 @@ fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting
         temp.path(),
         Method::B2,
         pick_date,
-        pick_date - Duration::days(366),
+        prepared_cache_start_date(pick_date),
         pick_date,
     )
     .unwrap()
@@ -309,7 +323,7 @@ fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting
 fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-    let start_date = NaiveDate::from_ymd_opt(2025, 5, 24).unwrap();
+    let start_date = prepared_cache_start_date(pick_date);
     write_prepared_cache(
         temp.path(),
         Method::B2,
@@ -317,13 +331,10 @@ fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
         start_date,
         pick_date,
         &[
-            prepared_row("000001.SZ", 23, 10.0, 1000.0, 45.0),
-            prepared_row("000001.SZ", 24, 10.2, 1000.0, 30.0),
-            prepared_row("000001.SZ", 25, 10.6, 1300.0, 42.0),
-            prepared_row("000002.SZ", 23, 20.0, 1000.0, 45.0),
-            prepared_row("000002.SZ", 24, 20.2, 1000.0, 30.0),
-            prepared_row("000002.SZ", 25, 21.0, 1300.0, 42.0),
-        ],
+            b2_positive_monthly_rows("000001.SZ", pick_date - Duration::days(89), 90, 10.0),
+            b2_positive_monthly_rows("000002.SZ", pick_date - Duration::days(89), 90, 20.0),
+        ]
+        .concat(),
     )
     .unwrap();
     let pool_file = temp.path().join("pool.txt");
@@ -357,7 +368,7 @@ fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
 fn screen_missing_pick_date_rows_reports_latest_cached_date() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     write_prepared_cache_for_mode(
         temp.path(),
         Method::B2,
@@ -408,7 +419,7 @@ fn screen_missing_pick_date_rows_reports_latest_cached_date() {
 fn screen_b3_writes_b3_candidate_artifact() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
-    let start_date = NaiveDate::from_ymd_opt(2025, 5, 3).unwrap();
+    let start_date = prepared_cache_start_date(pick_date);
     write_prepared_cache(
         temp.path(),
         Method::B3,
@@ -460,7 +471,7 @@ fn screen_lsh_writes_lsh_candidate_artifact() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(429);
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let mut rows = lsh_prepared_rows("000001.SZ", first_date, 430, true);
     let latest = rows.last_mut().unwrap();
     latest.ma60 = latest.ma25.map(|ma25| ma25 + 1.0);
@@ -507,7 +518,7 @@ fn screen_lsh_writes_lsh_candidate_artifact() {
 fn screen_b2_does_not_repeat_signal_in_same_j_turn_up_cycle() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
-    let start_date = NaiveDate::from_ymd_opt(2025, 5, 4).unwrap();
+    let start_date = prepared_cache_start_date(pick_date);
     write_prepared_cache(
         temp.path(),
         Method::B2,
@@ -551,7 +562,7 @@ fn screen_b2_requires_close_above_long_term_reference_after_new_stock_window() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(114);
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let mut rows = Vec::new();
     for offset in 0..112 {
         rows.push(prepared_row_at_date(
@@ -620,7 +631,7 @@ fn screen_b2_golden_fixture_selects_mature_trend_start() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(114);
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let mut rows = Vec::new();
     for offset in 0..112 {
         rows.push(prepared_row_at_date(
@@ -696,7 +707,7 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(114);
-    let start_date = pick_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(pick_date);
     let mut rows = Vec::new();
     for offset in 0..112 {
         rows.push(prepared_row_at_date(
@@ -776,7 +787,7 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
 fn screen_export_factors_derives_environment_from_prepared_cross_section() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
-    let start_date = NaiveDate::from_ymd_opt(2025, 5, 3).unwrap();
+    let start_date = prepared_cache_start_date(pick_date);
     let mut rows = vec![
         prepared_row("000001.SZ", 1, 10.0, 1000.0, 30.0),
         prepared_row("000001.SZ", 2, 10.1, 900.0, 35.0),
@@ -833,7 +844,7 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
-    let start_date = previous_trade_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(previous_trade_date);
     let provider = StaticRtKProvider::new([
         ("*.SH", vec![]),
         (
@@ -920,10 +931,9 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
 #[test]
 fn intraday_screen_export_factors_runs_through_local_factor_fill() {
     let temp = tempfile::tempdir().unwrap();
-    let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
-    let start_date = previous_trade_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(previous_trade_date);
     let pool_file = temp.path().join("pool.txt");
     std::fs::write(&pool_file, "000001.SZ").unwrap();
     let provider = StaticRtKProvider::new([
@@ -964,27 +974,10 @@ fn intraday_screen_export_factors_runs_through_local_factor_fill() {
             assert_eq!(dsn, "postgresql://fixture");
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
-            Ok((0..24)
-                .map(|offset| {
-                    let close = if offset < 23 {
-                        30.0 - offset as f64 * 0.1
-                    } else {
-                        27.3
-                    };
-                    MarketRow {
-                        ts_code: "000001.SZ".to_string(),
-                        trade_date: first_date + Duration::days(offset),
-                        open: close + 0.1,
-                        high: close + 0.2,
-                        low: close - 0.2,
-                        close,
-                        vol: 1000.0 + offset as f64,
-                        turnover_rate: Some(1.0),
-                        adj_factor: None,
-                        db_factors: Default::default(),
-                    }
-                })
-                .collect())
+            Ok(intraday_b2_positive_monthly_market_rows(
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                previous_trade_date,
+            ))
         },
     )
     .unwrap();
@@ -1008,12 +1001,43 @@ fn intraday_screen_export_factors_runs_through_local_factor_fill() {
     assert!(row_factors["turnover_rate_f"].is_null());
 }
 
+fn intraday_b2_positive_monthly_market_rows(
+    first_date: NaiveDate,
+    previous_trade_date: NaiveDate,
+) -> Vec<MarketRow> {
+    let days = (previous_trade_date - first_date).num_days() + 1;
+    (0..days)
+        .map(|offset| {
+            let trade_date = first_date + Duration::days(offset);
+            let close = if trade_date.month() < 5 {
+                20.0 + offset as f64 * 0.08
+            } else if trade_date == previous_trade_date {
+                27.3
+            } else {
+                30.0 - (trade_date.day() as f64 - 1.0) * 0.1
+            };
+            MarketRow {
+                ts_code: "000001.SZ".to_string(),
+                trade_date,
+                open: close + 0.1,
+                high: close + 0.2,
+                low: close - 0.2,
+                close,
+                vol: 1000.0 + offset as f64,
+                turnover_rate: Some(1.0),
+                adj_factor: None,
+                db_factors: Default::default(),
+            }
+        })
+        .collect()
+}
+
 #[test]
 fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
-    let start_date = previous_trade_date - Duration::days(366);
+    let start_date = prepared_cache_start_date(previous_trade_date);
     let provider = StaticRtKProvider::new([
         ("*.SH", vec![]),
         (
@@ -1153,6 +1177,47 @@ fn prepared_row_at_date(
         yellow_b1: false,
         db_factors: Default::default(),
     }
+}
+
+fn b2_positive_monthly_rows(
+    code: &str,
+    first_date: NaiveDate,
+    len: usize,
+    base_close: f64,
+) -> Vec<PreparedRow> {
+    let mut rows = (0..len)
+        .map(|offset| {
+            let close = base_close + offset as f64 * 0.03;
+            prepared_row_at_date(
+                code,
+                first_date + Duration::days(offset as i64),
+                close,
+                1000.0,
+                25.0,
+            )
+        })
+        .collect::<Vec<_>>();
+    let prev2 = len - 3;
+    let prev = len - 2;
+    let latest = len - 1;
+    rows[prev2].close = rows[prev].close - 0.05;
+    rows[prev2].open = rows[prev2].close - 0.2;
+    rows[prev2].high = rows[prev2].close;
+    rows[prev2].low = rows[prev2].close - 0.3;
+    rows[prev2].j = 28.0;
+    rows[prev].close = rows[prev2].close + 0.10;
+    rows[prev].open = rows[prev].close - 0.2;
+    rows[prev].high = rows[prev].close;
+    rows[prev].low = rows[prev].close - 0.3;
+    rows[prev].j = 32.0;
+    rows[latest].close = rows[prev].close * 1.04;
+    rows[latest].open = rows[latest].close - 0.8;
+    rows[latest].high = rows[latest].close;
+    rows[latest].low = rows[latest].close - 0.3;
+    rows[latest].volume = rows[prev].volume + 500.0;
+    rows[latest].turnover_n = rows[latest].volume * rows[latest].close;
+    rows[latest].j = 45.0;
+    rows
 }
 
 fn lsh_prepared_rows(

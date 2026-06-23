@@ -4,7 +4,9 @@ use chrono::NaiveDate;
 
 use crate::indicators::{barslast, count_dynamic, ema, rolling_mean, rolling_sum};
 use crate::model::{Candidate, PreparedRow};
-use crate::strategies::{StrategyOutput, group_refs_by_symbol, sort_candidates};
+use crate::strategies::{
+    StrategyOutput, group_refs_by_symbol, latest_monthly_macd_dea_positive, sort_candidates,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct B2SignalSeries {
@@ -28,6 +30,7 @@ pub fn run_b2_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) ->
         ("fail_no_pick_date".to_string(), 0),
         ("fail_insufficient_history".to_string(), 0),
         ("fail_no_signal".to_string(), 0),
+        ("fail_monthly_macd_dea".to_string(), 0),
         ("selected".to_string(), 0),
         ("selected_b2".to_string(), 0),
     ]);
@@ -52,6 +55,12 @@ pub fn run_b2_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) ->
         let active_history = &history[..=idx];
         let signals = build_b2_signal_series(active_history);
         if signals.cur_b2[idx] {
+            if !latest_monthly_macd_dea_positive(active_history) {
+                *stats
+                    .entry("fail_monthly_macd_dea".to_string())
+                    .or_default() += 1;
+                continue;
+            }
             candidates.push(Candidate {
                 code: code.to_string(),
                 pick_date,
@@ -255,12 +264,9 @@ mod tests {
 
     #[test]
     fn b2_strategy_returns_structured_output_with_b2_only_stats() {
-        let pick = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
-        let rows = vec![
-            row(1, 10.0, 100.0, 30.0),
-            row(2, 10.1, 90.0, 35.0),
-            row(3, 10.6, 120.0, 45.0),
-        ];
+        let first = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let pick = first + chrono::Duration::days(89);
+        let rows = monthly_macd_rows(first, true);
 
         let output = run_b2_strategy(&rows, pick);
 
@@ -270,6 +276,32 @@ mod tests {
         assert_eq!(output.stats["selected_b2"], 1);
         assert!(!output.stats.contains_key("selected_b3"));
         assert!(!output.stats.contains_key("selected_b3_plus"));
+    }
+
+    #[test]
+    fn b2_strategy_rejects_signal_when_monthly_macd_dea_is_not_positive() {
+        let first = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let pick = first + chrono::Duration::days(89);
+        let rows = monthly_macd_rows(first, false);
+
+        let output = run_b2_strategy(&rows, pick);
+
+        assert!(output.candidates.is_empty());
+        assert_eq!(output.stats["selected_b2"], 0);
+        assert_eq!(output.stats["fail_no_signal"], 0);
+        assert_eq!(output.stats["fail_monthly_macd_dea"], 1);
+    }
+
+    #[test]
+    fn b2_strategy_accepts_signal_when_monthly_macd_dea_is_positive() {
+        let first = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let pick = first + chrono::Duration::days(89);
+        let rows = monthly_macd_rows(first, true);
+
+        let output = run_b2_strategy(&rows, pick);
+
+        assert_eq!(output.candidates.len(), 1);
+        assert_eq!(output.candidates[0].signal.as_deref(), Some("B2"));
     }
 
     #[test]
@@ -304,5 +336,53 @@ mod tests {
         assert_eq!(signals.raw_b2, vec![false, false, true, false, true]);
         assert_eq!(signals.raw_b2_count[4], 2.0);
         assert_eq!(signals.cur_b2, vec![false, false, true, false, false]);
+    }
+
+    fn monthly_macd_rows(first: NaiveDate, constructive_monthly: bool) -> Vec<PreparedRow> {
+        let len = 90;
+        let mut rows = (0..len)
+            .map(|offset| {
+                let close = if constructive_monthly {
+                    10.0 + offset as f64 * 0.03
+                } else {
+                    20.0 - offset as f64 * 0.03
+                };
+                row_at_date(
+                    first + chrono::Duration::days(offset as i64),
+                    close,
+                    1000.0,
+                    25.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        let prev2 = len - 3;
+        let prev = len - 2;
+        let latest = len - 1;
+        rows[prev2].close = rows[prev].close - 0.05;
+        rows[prev2].high = rows[prev2].close;
+        rows[prev2].open = rows[prev2].close - 0.2;
+        rows[prev2].j = 28.0;
+        rows[prev].close = rows[prev2].close + 0.10;
+        rows[prev].high = rows[prev].close;
+        rows[prev].open = rows[prev].close - 0.2;
+        rows[prev].j = 32.0;
+        rows[latest].close = rows[prev].close * 1.04;
+        rows[latest].high = rows[latest].close;
+        rows[latest].open = rows[latest].close - 0.8;
+        rows[latest].volume = rows[prev].volume + 500.0;
+        rows[latest].j = 45.0;
+        rows
+    }
+
+    fn row_at_date(trade_date: NaiveDate, close: f64, volume: f64, j: f64) -> PreparedRow {
+        PreparedRow {
+            trade_date,
+            close,
+            high: close,
+            open: close - 0.8,
+            low: close - 1.0,
+            volume,
+            ..row(1, close, volume, j)
+        }
     }
 }

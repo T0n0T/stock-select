@@ -3,8 +3,8 @@ use serde_json::json;
 use stock_select::cache::{
     PREPARED_CACHE_SCHEMA_VERSION, decode_prepared_cache_rows, history_payload_for_code,
     load_prepared_cache, load_prepared_cache_for_mode, prepared_cache_data_path,
-    prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
-    write_prepared_cache_for_mode,
+    prepared_cache_meta_path, prepared_cache_paths, prepared_cache_retention_limit_from_sources,
+    prune_eod_prepared_cache_to_limit, write_prepared_cache, write_prepared_cache_for_mode,
 };
 use stock_select::model::{Method, PreparedRow};
 
@@ -51,6 +51,167 @@ fn prepared_cache_paths_support_intraday_layout_without_overwriting_eod() {
     assert_eq!(
         intraday.meta_path,
         root.path().join("prepared/2026-05-25.intraday.meta.json")
+    );
+}
+
+#[test]
+fn prepared_cache_retention_limit_defaults_to_30_and_reads_sources() {
+    assert_eq!(
+        prepared_cache_retention_limit_from_sources(None, "").unwrap(),
+        30
+    );
+    assert_eq!(
+        prepared_cache_retention_limit_from_sources(
+            Some("2"),
+            "STOCK_SELECT_PREPARED_CACHE_LIMIT=5\n"
+        )
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        prepared_cache_retention_limit_from_sources(None, "STOCK_SELECT_PREPARED_CACHE_LIMIT=7\n")
+            .unwrap(),
+        7
+    );
+    assert!(prepared_cache_retention_limit_from_sources(Some("0"), "").is_err());
+}
+
+#[test]
+fn prune_eod_prepared_cache_to_limit_keeps_newest_eod_and_ignores_intraday() {
+    let root = tempfile::tempdir().unwrap();
+    for day in 1..=4 {
+        let pick_date = NaiveDate::from_ymd_opt(2026, 5, day).unwrap();
+        write_prepared_cache(
+            root.path(),
+            Method::B2,
+            pick_date,
+            NaiveDate::from_ymd_opt(2023, 5, day).unwrap(),
+            pick_date,
+            &[prepared_row("000001.SZ", pick_date, 10.0 + f64::from(day))],
+        )
+        .unwrap();
+    }
+    let intraday_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    write_prepared_cache_for_mode(
+        root.path(),
+        Method::B2,
+        intraday_date,
+        NaiveDate::from_ymd_opt(2023, 5, 1).unwrap(),
+        intraday_date,
+        true,
+        &[prepared_row("000001.SZ", intraday_date, 99.0)],
+    )
+    .unwrap();
+
+    let removed = prune_eod_prepared_cache_to_limit(root.path(), 2).unwrap();
+
+    assert_eq!(removed, 2);
+    assert!(
+        !prepared_cache_paths(
+            root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            false
+        )
+        .meta_path
+        .exists()
+    );
+    assert!(
+        !prepared_cache_paths(
+            root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 2).unwrap(),
+            false
+        )
+        .data_path
+        .exists()
+    );
+    assert!(
+        prepared_cache_paths(
+            root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 3).unwrap(),
+            false
+        )
+        .meta_path
+        .exists()
+    );
+    assert!(
+        prepared_cache_paths(
+            root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(),
+            false
+        )
+        .data_path
+        .exists()
+    );
+    assert!(
+        prepared_cache_paths(root.path(), intraday_date, true)
+            .meta_path
+            .exists()
+    );
+    assert!(
+        prepared_cache_paths(root.path(), intraday_date, true)
+            .data_path
+            .exists()
+    );
+}
+
+#[test]
+fn write_prepared_cache_prunes_eod_cache_to_default_limit_without_touching_intraday() {
+    let root = tempfile::tempdir().unwrap();
+    for day in 1..=31 {
+        let pick_date = NaiveDate::from_ymd_opt(2026, 5, day).unwrap();
+        write_prepared_cache(
+            root.path(),
+            Method::B2,
+            pick_date,
+            NaiveDate::from_ymd_opt(2023, 5, 1).unwrap(),
+            pick_date,
+            &[prepared_row("000001.SZ", pick_date, 10.0 + f64::from(day))],
+        )
+        .unwrap();
+    }
+    let intraday_date = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+    write_prepared_cache_for_mode(
+        root.path(),
+        Method::B2,
+        intraday_date,
+        NaiveDate::from_ymd_opt(2023, 4, 30).unwrap(),
+        intraday_date,
+        true,
+        &[prepared_row("000001.SZ", intraday_date, 99.0)],
+    )
+    .unwrap();
+
+    assert!(
+        !prepared_cache_paths(
+            root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+            false
+        )
+        .meta_path
+        .exists()
+    );
+    assert!(
+        prepared_cache_paths(
+            root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 2).unwrap(),
+            false
+        )
+        .meta_path
+        .exists()
+    );
+    assert!(
+        prepared_cache_paths(
+            root.path(),
+            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+            false
+        )
+        .data_path
+        .exists()
+    );
+    assert!(
+        prepared_cache_paths(root.path(), intraday_date, true)
+            .meta_path
+            .exists()
     );
 }
 
