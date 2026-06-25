@@ -1,5 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 use serde_json::json;
+use std::thread::sleep;
+use std::time::Duration;
 use stock_select::cache::{
     PREPARED_CACHE_SCHEMA_VERSION, decode_prepared_cache_rows, history_payload_for_code,
     load_prepared_cache, load_prepared_cache_for_mode, prepared_cache_data_path,
@@ -150,6 +152,46 @@ fn prune_eod_prepared_cache_to_limit_keeps_newest_eod_and_ignores_intraday() {
     assert!(
         prepared_cache_paths(root.path(), intraday_date, true)
             .data_path
+            .exists()
+    );
+}
+
+#[test]
+fn prune_eod_prepared_cache_to_limit_keeps_newest_artifacts_by_file_time() {
+    let root = tempfile::tempdir().unwrap();
+    let old_pick_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+    let newer_pick_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    let newest_pick_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+
+    for pick_date in [newer_pick_date, newest_pick_date, old_pick_date] {
+        write_prepared_cache(
+            root.path(),
+            Method::B2,
+            pick_date,
+            NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+            pick_date,
+            &[prepared_row("000001.SZ", pick_date, 10.0)],
+        )
+        .unwrap();
+        sleep(Duration::from_millis(20));
+    }
+
+    let removed = prune_eod_prepared_cache_to_limit(root.path(), 2).unwrap();
+
+    assert_eq!(removed, 1);
+    assert!(
+        prepared_cache_paths(root.path(), old_pick_date, false)
+            .meta_path
+            .exists()
+    );
+    assert!(
+        prepared_cache_paths(root.path(), newest_pick_date, false)
+            .meta_path
+            .exists()
+    );
+    assert!(
+        !prepared_cache_paths(root.path(), newer_pick_date, false)
+            .meta_path
             .exists()
     );
 }

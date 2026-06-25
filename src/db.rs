@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use postgres::{Client, NoTls};
+use postgres::{Client, NoTls, fallible_iterator::FallibleIterator};
 use std::collections::BTreeMap;
 
 use crate::model::{InstrumentInfo, MarketRow};
@@ -577,238 +577,242 @@ pub fn fetch_daily_window(
 ) -> anyhow::Result<Vec<MarketRow>> {
     let mut client = Client::connect(dsn, NoTls)?;
     configure_daily_window_session(&mut client)?;
-    let rows = client.query(DAILY_WINDOW_QUERY, &[&start_date, &end_date])?;
-    rows.into_iter()
-        .map(|row| {
-            Ok(MarketRow {
-                ts_code: row.try_get("ts_code")?,
-                trade_date: row.try_get("trade_date")?,
-                open: optional_f64(&row, "open")?,
-                high: optional_f64(&row, "high")?,
-                low: optional_f64(&row, "low")?,
-                close: optional_f64(&row, "close")?,
-                vol: optional_f64(&row, "vol")?,
-                turnover_rate: optional_option_f64(&row, "turnover_rate")?,
-                adj_factor: optional_option_f64(&row, "adj_factor")?,
-                db_factors: db_factor_values([
-                    ("chip_vwap", optional_option_f64(&row, "chip_vwap")?),
-                    ("chip_turnover", optional_option_f64(&row, "chip_turnover")?),
-                    (
-                        "turnover_rate_f",
-                        optional_option_f64(&row, "turnover_rate_f")?,
-                    ),
-                    (
-                        "boll_width_pct",
-                        optional_option_f64(&row, "boll_width_pct")?,
-                    ),
-                    ("dmi_adxr_qfq", optional_option_f64(&row, "dmi_adxr_qfq")?),
-                    ("dmi_adx_qfq", optional_option_f64(&row, "dmi_adx_qfq")?),
-                    ("dmi_pdi_qfq", optional_option_f64(&row, "dmi_pdi_qfq")?),
-                    ("dmi_mdi_qfq", optional_option_f64(&row, "dmi_mdi_qfq")?),
-                    (
-                        "dmi_pdi_mdi_spread_qfq",
-                        optional_option_f64(&row, "dmi_pdi_mdi_spread_qfq")?,
-                    ),
-                    (
-                        "dmi_adx_adxr_gap_qfq",
-                        optional_option_f64(&row, "dmi_adx_adxr_gap_qfq")?,
-                    ),
-                    ("wr_qfq", optional_option_f64(&row, "wr_qfq")?),
-                    ("mtm_qfq", optional_option_f64(&row, "mtm_qfq")?),
-                    ("roc_qfq", optional_option_f64(&row, "roc_qfq")?),
-                    ("trix_qfq", optional_option_f64(&row, "trix_qfq")?),
-                    ("obv_qfq", optional_option_f64(&row, "obv_qfq")?),
-                    ("vr_qfq", optional_option_f64(&row, "vr_qfq")?),
-                    ("psy_qfq", optional_option_f64(&row, "psy_qfq")?),
-                    ("bias1_qfq", optional_option_f64(&row, "bias1_qfq")?),
-                    (
-                        "dist_to_up_limit_pct",
-                        optional_option_f64(&row, "dist_to_up_limit_pct")?,
-                    ),
-                    (
-                        "dist_to_down_limit_pct",
-                        optional_option_f64(&row, "dist_to_down_limit_pct")?,
-                    ),
-                    (
-                        "net_mf_amount_to_amount_pct",
-                        optional_option_f64(&row, "net_mf_amount_to_amount_pct")?,
-                    ),
-                    (
-                        "large_net_amount_to_amount_pct",
-                        optional_option_f64(&row, "large_net_amount_to_amount_pct")?,
-                    ),
-                    (
-                        "small_net_amount_to_amount_pct",
-                        optional_option_f64(&row, "small_net_amount_to_amount_pct")?,
-                    ),
-                    (
-                        "cyq_winner_rate",
-                        optional_option_f64(&row, "cyq_winner_rate")?,
-                    ),
-                    (
-                        "cyq_cost_50_to_close_pct",
-                        optional_option_f64(&row, "cyq_cost_50_to_close_pct")?,
-                    ),
-                    (
-                        "cyq_cost_85_to_close_pct",
-                        optional_option_f64(&row, "cyq_cost_85_to_close_pct")?,
-                    ),
-                    (
-                        "cyq_weight_avg_to_close_pct",
-                        optional_option_f64(&row, "cyq_weight_avg_to_close_pct")?,
-                    ),
-                    (
-                        "cyq_cost_70_width_pct",
-                        optional_option_f64(&row, "cyq_cost_70_width_pct")?,
-                    ),
-                    (
-                        "cyq_cost_90_width_pct",
-                        optional_option_f64(&row, "cyq_cost_90_width_pct")?,
-                    ),
-                    (
-                        "market_sse_ret5_pct",
-                        optional_option_f64(&row, "market_sse_ret5_pct")?,
-                    ),
-                    (
-                        "market_sse_ret20_pct",
-                        optional_option_f64(&row, "market_sse_ret20_pct")?,
-                    ),
-                    (
-                        "market_sse_ma20_bias_pct",
-                        optional_option_f64(&row, "market_sse_ma20_bias_pct")?,
-                    ),
-                    (
-                        "market_sse_volatility20_pct",
-                        optional_option_f64(&row, "market_sse_volatility20_pct")?,
-                    ),
-                    (
-                        "market_cn2000_ret5_pct",
-                        optional_option_f64(&row, "market_cn2000_ret5_pct")?,
-                    ),
-                    (
-                        "market_cn2000_ret20_pct",
-                        optional_option_f64(&row, "market_cn2000_ret20_pct")?,
-                    ),
-                    (
-                        "market_cn2000_ma20_bias_pct",
-                        optional_option_f64(&row, "market_cn2000_ma20_bias_pct")?,
-                    ),
-                    (
-                        "market_cn2000_volatility20_pct",
-                        optional_option_f64(&row, "market_cn2000_volatility20_pct")?,
-                    ),
-                    (
-                        "market_broad_ret5_pct",
-                        optional_option_f64(&row, "market_broad_ret5_pct")?,
-                    ),
-                    (
-                        "market_broad_ret20_pct",
-                        optional_option_f64(&row, "market_broad_ret20_pct")?,
-                    ),
-                    (
-                        "market_broad_ma20_bias_pct",
-                        optional_option_f64(&row, "market_broad_ma20_bias_pct")?,
-                    ),
-                    (
-                        "market_broad_volatility20_pct",
-                        optional_option_f64(&row, "market_broad_volatility20_pct")?,
-                    ),
-                    (
-                        "sw_l2_ret5_pct",
-                        optional_option_f64(&row, "sw_l2_ret5_pct")?,
-                    ),
-                    (
-                        "sw_l2_ret20_pct",
-                        optional_option_f64(&row, "sw_l2_ret20_pct")?,
-                    ),
-                    (
-                        "sw_l2_ma20_bias_pct",
-                        optional_option_f64(&row, "sw_l2_ma20_bias_pct")?,
-                    ),
-                    (
-                        "sw_l2_volatility20_pct",
-                        optional_option_f64(&row, "sw_l2_volatility20_pct")?,
-                    ),
-                    (
-                        "sw_l2_ret5_rank_pct",
-                        optional_option_f64(&row, "sw_l2_ret5_rank_pct")?,
-                    ),
-                    (
-                        "sw_l2_ret20_rank_pct",
-                        optional_option_f64(&row, "sw_l2_ret20_rank_pct")?,
-                    ),
-                    (
-                        "sw_l2_vs_market_ret5_pct",
-                        optional_option_f64(&row, "sw_l2_vs_market_ret5_pct")?,
-                    ),
-                    (
-                        "sw_l2_vs_market_ret20_pct",
-                        optional_option_f64(&row, "sw_l2_vs_market_ret20_pct")?,
-                    ),
-                    (
-                        "sw_l2_up_ratio",
-                        optional_option_f64(&row, "sw_l2_up_ratio")?,
-                    ),
-                    (
-                        "sw_l2_ge5_ratio",
-                        optional_option_f64(&row, "sw_l2_ge5_ratio")?,
-                    ),
-                    (
-                        "sw_l2_limit_up_ratio",
-                        optional_option_f64(&row, "sw_l2_limit_up_ratio")?,
-                    ),
-                    (
-                        "sw_l2_limit_down_ratio",
-                        optional_option_f64(&row, "sw_l2_limit_down_ratio")?,
-                    ),
-                    (
-                        "sw_l2_amount_share_pct",
-                        optional_option_f64(&row, "sw_l2_amount_share_pct")?,
-                    ),
-                    (
-                        "sw_l2_amount_share_rank_pct",
-                        optional_option_f64(&row, "sw_l2_amount_share_rank_pct")?,
-                    ),
-                    (
-                        "sw_l2_amount_share_ma5_ratio",
-                        optional_option_f64(&row, "sw_l2_amount_share_ma5_ratio")?,
-                    ),
-                    (
-                        "sw_l2_top1_amount_share_pct",
-                        optional_option_f64(&row, "sw_l2_top1_amount_share_pct")?,
-                    ),
-                    (
-                        "sw_l2_top3_amount_share_pct",
-                        optional_option_f64(&row, "sw_l2_top3_amount_share_pct")?,
-                    ),
-                    (
-                        "sw_l2_top5_amount_share_pct",
-                        optional_option_f64(&row, "sw_l2_top5_amount_share_pct")?,
-                    ),
-                    (
-                        "sw_l2_net_mf_to_amount_pct",
-                        optional_option_f64(&row, "sw_l2_net_mf_to_amount_pct")?,
-                    ),
-                    (
-                        "sw_l2_net_mf_market_share_pct",
-                        optional_option_f64(&row, "sw_l2_net_mf_market_share_pct")?,
-                    ),
-                    (
-                        "sw_l2_net_mf_rank_pct",
-                        optional_option_f64(&row, "sw_l2_net_mf_rank_pct")?,
-                    ),
-                    (
-                        "stock_amount_to_sw_l2_amount_pct",
-                        optional_option_f64(&row, "stock_amount_to_sw_l2_amount_pct")?,
-                    ),
-                    (
-                        "stock_net_mf_to_sw_l2_amount_pct",
-                        optional_option_f64(&row, "stock_net_mf_to_sw_l2_amount_pct")?,
-                    ),
-                ]),
-            })
-        })
-        .collect()
+    let mut rows = client.query_raw(DAILY_WINDOW_QUERY, &[&start_date, &end_date])?;
+    let mut market_rows = Vec::new();
+    while let Some(row) = rows.next()? {
+        market_rows.push(market_row_from_db_row(row)?);
+    }
+    Ok(market_rows)
+}
+
+fn market_row_from_db_row(row: postgres::Row) -> anyhow::Result<MarketRow> {
+    Ok(MarketRow {
+        ts_code: row.try_get("ts_code")?,
+        trade_date: row.try_get("trade_date")?,
+        open: optional_f64(&row, "open")?,
+        high: optional_f64(&row, "high")?,
+        low: optional_f64(&row, "low")?,
+        close: optional_f64(&row, "close")?,
+        vol: optional_f64(&row, "vol")?,
+        turnover_rate: optional_option_f64(&row, "turnover_rate")?,
+        adj_factor: optional_option_f64(&row, "adj_factor")?,
+        db_factors: db_factor_values([
+            ("chip_vwap", optional_option_f64(&row, "chip_vwap")?),
+            ("chip_turnover", optional_option_f64(&row, "chip_turnover")?),
+            (
+                "turnover_rate_f",
+                optional_option_f64(&row, "turnover_rate_f")?,
+            ),
+            (
+                "boll_width_pct",
+                optional_option_f64(&row, "boll_width_pct")?,
+            ),
+            ("dmi_adxr_qfq", optional_option_f64(&row, "dmi_adxr_qfq")?),
+            ("dmi_adx_qfq", optional_option_f64(&row, "dmi_adx_qfq")?),
+            ("dmi_pdi_qfq", optional_option_f64(&row, "dmi_pdi_qfq")?),
+            ("dmi_mdi_qfq", optional_option_f64(&row, "dmi_mdi_qfq")?),
+            (
+                "dmi_pdi_mdi_spread_qfq",
+                optional_option_f64(&row, "dmi_pdi_mdi_spread_qfq")?,
+            ),
+            (
+                "dmi_adx_adxr_gap_qfq",
+                optional_option_f64(&row, "dmi_adx_adxr_gap_qfq")?,
+            ),
+            ("wr_qfq", optional_option_f64(&row, "wr_qfq")?),
+            ("mtm_qfq", optional_option_f64(&row, "mtm_qfq")?),
+            ("roc_qfq", optional_option_f64(&row, "roc_qfq")?),
+            ("trix_qfq", optional_option_f64(&row, "trix_qfq")?),
+            ("obv_qfq", optional_option_f64(&row, "obv_qfq")?),
+            ("vr_qfq", optional_option_f64(&row, "vr_qfq")?),
+            ("psy_qfq", optional_option_f64(&row, "psy_qfq")?),
+            ("bias1_qfq", optional_option_f64(&row, "bias1_qfq")?),
+            (
+                "dist_to_up_limit_pct",
+                optional_option_f64(&row, "dist_to_up_limit_pct")?,
+            ),
+            (
+                "dist_to_down_limit_pct",
+                optional_option_f64(&row, "dist_to_down_limit_pct")?,
+            ),
+            (
+                "net_mf_amount_to_amount_pct",
+                optional_option_f64(&row, "net_mf_amount_to_amount_pct")?,
+            ),
+            (
+                "large_net_amount_to_amount_pct",
+                optional_option_f64(&row, "large_net_amount_to_amount_pct")?,
+            ),
+            (
+                "small_net_amount_to_amount_pct",
+                optional_option_f64(&row, "small_net_amount_to_amount_pct")?,
+            ),
+            (
+                "cyq_winner_rate",
+                optional_option_f64(&row, "cyq_winner_rate")?,
+            ),
+            (
+                "cyq_cost_50_to_close_pct",
+                optional_option_f64(&row, "cyq_cost_50_to_close_pct")?,
+            ),
+            (
+                "cyq_cost_85_to_close_pct",
+                optional_option_f64(&row, "cyq_cost_85_to_close_pct")?,
+            ),
+            (
+                "cyq_weight_avg_to_close_pct",
+                optional_option_f64(&row, "cyq_weight_avg_to_close_pct")?,
+            ),
+            (
+                "cyq_cost_70_width_pct",
+                optional_option_f64(&row, "cyq_cost_70_width_pct")?,
+            ),
+            (
+                "cyq_cost_90_width_pct",
+                optional_option_f64(&row, "cyq_cost_90_width_pct")?,
+            ),
+            (
+                "market_sse_ret5_pct",
+                optional_option_f64(&row, "market_sse_ret5_pct")?,
+            ),
+            (
+                "market_sse_ret20_pct",
+                optional_option_f64(&row, "market_sse_ret20_pct")?,
+            ),
+            (
+                "market_sse_ma20_bias_pct",
+                optional_option_f64(&row, "market_sse_ma20_bias_pct")?,
+            ),
+            (
+                "market_sse_volatility20_pct",
+                optional_option_f64(&row, "market_sse_volatility20_pct")?,
+            ),
+            (
+                "market_cn2000_ret5_pct",
+                optional_option_f64(&row, "market_cn2000_ret5_pct")?,
+            ),
+            (
+                "market_cn2000_ret20_pct",
+                optional_option_f64(&row, "market_cn2000_ret20_pct")?,
+            ),
+            (
+                "market_cn2000_ma20_bias_pct",
+                optional_option_f64(&row, "market_cn2000_ma20_bias_pct")?,
+            ),
+            (
+                "market_cn2000_volatility20_pct",
+                optional_option_f64(&row, "market_cn2000_volatility20_pct")?,
+            ),
+            (
+                "market_broad_ret5_pct",
+                optional_option_f64(&row, "market_broad_ret5_pct")?,
+            ),
+            (
+                "market_broad_ret20_pct",
+                optional_option_f64(&row, "market_broad_ret20_pct")?,
+            ),
+            (
+                "market_broad_ma20_bias_pct",
+                optional_option_f64(&row, "market_broad_ma20_bias_pct")?,
+            ),
+            (
+                "market_broad_volatility20_pct",
+                optional_option_f64(&row, "market_broad_volatility20_pct")?,
+            ),
+            (
+                "sw_l2_ret5_pct",
+                optional_option_f64(&row, "sw_l2_ret5_pct")?,
+            ),
+            (
+                "sw_l2_ret20_pct",
+                optional_option_f64(&row, "sw_l2_ret20_pct")?,
+            ),
+            (
+                "sw_l2_ma20_bias_pct",
+                optional_option_f64(&row, "sw_l2_ma20_bias_pct")?,
+            ),
+            (
+                "sw_l2_volatility20_pct",
+                optional_option_f64(&row, "sw_l2_volatility20_pct")?,
+            ),
+            (
+                "sw_l2_ret5_rank_pct",
+                optional_option_f64(&row, "sw_l2_ret5_rank_pct")?,
+            ),
+            (
+                "sw_l2_ret20_rank_pct",
+                optional_option_f64(&row, "sw_l2_ret20_rank_pct")?,
+            ),
+            (
+                "sw_l2_vs_market_ret5_pct",
+                optional_option_f64(&row, "sw_l2_vs_market_ret5_pct")?,
+            ),
+            (
+                "sw_l2_vs_market_ret20_pct",
+                optional_option_f64(&row, "sw_l2_vs_market_ret20_pct")?,
+            ),
+            (
+                "sw_l2_up_ratio",
+                optional_option_f64(&row, "sw_l2_up_ratio")?,
+            ),
+            (
+                "sw_l2_ge5_ratio",
+                optional_option_f64(&row, "sw_l2_ge5_ratio")?,
+            ),
+            (
+                "sw_l2_limit_up_ratio",
+                optional_option_f64(&row, "sw_l2_limit_up_ratio")?,
+            ),
+            (
+                "sw_l2_limit_down_ratio",
+                optional_option_f64(&row, "sw_l2_limit_down_ratio")?,
+            ),
+            (
+                "sw_l2_amount_share_pct",
+                optional_option_f64(&row, "sw_l2_amount_share_pct")?,
+            ),
+            (
+                "sw_l2_amount_share_rank_pct",
+                optional_option_f64(&row, "sw_l2_amount_share_rank_pct")?,
+            ),
+            (
+                "sw_l2_amount_share_ma5_ratio",
+                optional_option_f64(&row, "sw_l2_amount_share_ma5_ratio")?,
+            ),
+            (
+                "sw_l2_top1_amount_share_pct",
+                optional_option_f64(&row, "sw_l2_top1_amount_share_pct")?,
+            ),
+            (
+                "sw_l2_top3_amount_share_pct",
+                optional_option_f64(&row, "sw_l2_top3_amount_share_pct")?,
+            ),
+            (
+                "sw_l2_top5_amount_share_pct",
+                optional_option_f64(&row, "sw_l2_top5_amount_share_pct")?,
+            ),
+            (
+                "sw_l2_net_mf_to_amount_pct",
+                optional_option_f64(&row, "sw_l2_net_mf_to_amount_pct")?,
+            ),
+            (
+                "sw_l2_net_mf_market_share_pct",
+                optional_option_f64(&row, "sw_l2_net_mf_market_share_pct")?,
+            ),
+            (
+                "sw_l2_net_mf_rank_pct",
+                optional_option_f64(&row, "sw_l2_net_mf_rank_pct")?,
+            ),
+            (
+                "stock_amount_to_sw_l2_amount_pct",
+                optional_option_f64(&row, "stock_amount_to_sw_l2_amount_pct")?,
+            ),
+            (
+                "stock_net_mf_to_sw_l2_amount_pct",
+                optional_option_f64(&row, "stock_net_mf_to_sw_l2_amount_pct")?,
+            ),
+        ]),
+    })
 }
 
 fn configure_daily_window_session(client: &mut Client) -> anyhow::Result<()> {
@@ -1160,6 +1164,21 @@ mod tests {
             .next()
             .unwrap_or_default();
         assert!(!final_where.contains("ORDER BY"));
+    }
+
+    #[test]
+    fn fetch_daily_window_streams_rows_through_helper() {
+        let source = include_str!("db.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default();
+
+        assert!(source.contains("fn market_row_from_db_row("));
+        assert!(
+            source.contains("client.query_raw(DAILY_WINDOW_QUERY, &[&start_date, &end_date])?")
+        );
+        assert!(source.contains("market_row_from_db_row(row)?"));
+        assert!(!source.contains("client.query(DAILY_WINDOW_QUERY, &[&start_date, &end_date])?"));
     }
 
     #[test]

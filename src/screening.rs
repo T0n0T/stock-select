@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Instant;
 
 use chrono::{Duration, NaiveDate};
 use serde_json::json;
@@ -364,6 +365,7 @@ where
     if !prepared.iter().any(|row| row.trade_date == end_date) {
         return Ok(prepared);
     }
+    let write_cache_started = Instant::now();
     write_prepared_cache(
         &request.runtime_root,
         request.method,
@@ -372,6 +374,11 @@ where
         end_date,
         &prepared,
     )?;
+    eprintln!(
+        "[screen] prepared cache wrote rows={} elapsed={:.3}s",
+        prepared.len(),
+        write_cache_started.elapsed().as_secs_f64()
+    );
     Ok(prepared)
 }
 
