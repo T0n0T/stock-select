@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Read};
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -139,7 +140,7 @@ pub fn write_prepared_cache_for_mode(
         Some(prepared_cache_retention_limit()?)
     };
     let paths = prepared_cache_paths(runtime_root, pick_date, intraday);
-    write_binary(&paths.data_path, &encode_prepared_cache_rows(rows)?)?;
+    write_prepared_cache_rows_file(&paths.data_path, rows)?;
     write_json(
         &paths.meta_path,
         &build_metadata(method, pick_date, start_date, end_date, intraday, rows),
@@ -205,12 +206,19 @@ pub fn prune_eod_prepared_cache_to_limit(
         if metadata.mode.as_deref() == Some("intraday_snapshot") {
             continue;
         }
-        artifacts.push((metadata.pick_date, path));
+        let created_at = prepared_cache_artifact_time(&path)?;
+        artifacts.push((created_at, metadata.pick_date, path));
     }
-    artifacts.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    artifacts.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| right.2.cmp(&left.2))
+    });
 
     let mut removed = 0;
-    for (pick_date, meta_path) in artifacts.into_iter().skip(limit) {
+    for (_created_at, pick_date, meta_path) in artifacts.into_iter().skip(limit) {
         let paths = prepared_cache_paths(runtime_root, pick_date, false);
         remove_file_if_exists(&paths.data_path)?;
         remove_file_if_exists(&legacy_prepared_cache_data_path(
@@ -222,6 +230,10 @@ pub fn prune_eod_prepared_cache_to_limit(
         removed += 1;
     }
     Ok(removed)
+}
+
+fn prepared_cache_artifact_time(path: &Path) -> anyhow::Result<SystemTime> {
+    Ok(std::fs::metadata(path)?.modified()?)
 }
 
 fn remove_file_if_exists(path: &Path) -> anyhow::Result<()> {
@@ -271,40 +283,58 @@ fn build_metadata(
     }
 }
 
-fn encode_prepared_cache_rows(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
-    let payload = encode_prepared_cache_rows_dictionary(rows)?;
-    Ok(zstd::stream::encode_all(
-        Cursor::new(payload),
-        PREPARED_CACHE_ZSTD_LEVEL,
-    )?)
+fn write_prepared_cache_rows_file(path: &Path, rows: &[PreparedRow]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::File::create(path)?;
+    encode_prepared_cache_rows_to_writer(rows, &mut file)?;
+    file.flush()?;
+    Ok(())
 }
 
-fn encode_prepared_cache_rows_dictionary(rows: &[PreparedRow]) -> anyhow::Result<Vec<u8>> {
+fn encode_prepared_cache_rows_to_writer<W: Write>(
+    rows: &[PreparedRow],
+    out: W,
+) -> anyhow::Result<()> {
+    let mut encoder = zstd::stream::Encoder::new(out, PREPARED_CACHE_ZSTD_LEVEL)?;
+    encode_prepared_cache_rows_dictionary_to_writer(rows, &mut encoder)?;
+    encoder.finish()?;
+    Ok(())
+}
+
+fn encode_prepared_cache_rows_dictionary_to_writer<W: Write>(
+    rows: &[PreparedRow],
+    out: &mut W,
+) -> anyhow::Result<()> {
     let factor_keys = collect_factor_keys(rows);
     let mut factor_key_ids = BTreeMap::<&str, u16>::new();
     for (idx, key) in factor_keys.iter().enumerate() {
         factor_key_ids.insert(key.as_str(), u16::try_from(idx)?);
     }
 
-    let mut out = Vec::new();
-    out.extend_from_slice(DICTIONARY_PREPARED_CACHE_MAGIC);
-    write_u64(&mut out, factor_keys.len() as u64);
+    out.write_all(DICTIONARY_PREPARED_CACHE_MAGIC)?;
+    write_u64(out, factor_keys.len() as u64)?;
     for key in &factor_keys {
-        write_string(&mut out, key)?;
+        write_string(out, key)?;
     }
-    write_u64(&mut out, rows.len() as u64);
+    write_u64(out, rows.len() as u64)?;
+    let mut row_buffer = Vec::new();
     for row in rows {
-        write_prepared_row_core(&mut out, row)?;
-        write_u64(&mut out, row.db_factors.len() as u64);
+        row_buffer.clear();
+        row_buffer.reserve(prepared_row_encoded_capacity_hint(row));
+        write_prepared_row_core(&mut row_buffer, row)?;
+        write_u64(&mut row_buffer, row.db_factors.len() as u64)?;
         for (key, value) in &row.db_factors {
             let id = factor_key_ids
                 .get(key.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing prepared cache factor key id: {key}"))?;
-            write_u16(&mut out, *id);
-            write_f64(&mut out, *value);
+            write_u16(&mut row_buffer, *id)?;
+            write_f64(&mut row_buffer, *value)?;
         }
+        out.write_all(&row_buffer)?;
     }
-    Ok(out)
+    Ok(())
 }
 
 fn collect_factor_keys(rows: &[PreparedRow]) -> Vec<String> {
@@ -315,9 +345,18 @@ fn collect_factor_keys(rows: &[PreparedRow]) -> Vec<String> {
         .collect()
 }
 
-fn write_prepared_row_core(out: &mut Vec<u8>, row: &PreparedRow) -> anyhow::Result<()> {
+fn prepared_row_encoded_capacity_hint(row: &PreparedRow) -> usize {
+    const PREPARED_ROW_CORE_FIXED_BYTES: usize = 177;
+    const PREPARED_ROW_FACTOR_BYTES: usize = 10;
+
+    2 + row.ts_code.len()
+        + PREPARED_ROW_CORE_FIXED_BYTES
+        + row.db_factors.len() * PREPARED_ROW_FACTOR_BYTES
+}
+
+fn write_prepared_row_core<W: Write>(out: &mut W, row: &PreparedRow) -> anyhow::Result<()> {
     write_string(out, &row.ts_code)?;
-    write_i32(out, row.trade_date.num_days_from_ce());
+    write_i32(out, row.trade_date.num_days_from_ce())?;
     for value in [
         row.open,
         row.high,
@@ -326,21 +365,21 @@ fn write_prepared_row_core(out: &mut Vec<u8>, row: &PreparedRow) -> anyhow::Resu
         row.volume,
         row.turnover_n,
     ] {
-        write_f64(out, value);
+        write_f64(out, value)?;
     }
-    write_option_f64(out, row.turnover_rate);
+    write_option_f64(out, row.turnover_rate)?;
     for value in [row.k, row.d, row.j] {
-        write_f64(out, value);
+        write_f64(out, value)?;
     }
-    write_option_f64(out, row.zxdq);
-    write_option_f64(out, row.zxdkx);
+    write_option_f64(out, row.zxdq)?;
+    write_option_f64(out, row.zxdkx)?;
     for value in [row.dif, row.dea, row.macd_hist] {
-        write_f64(out, value);
+        write_f64(out, value)?;
     }
-    write_option_f64(out, row.ma25);
-    write_option_f64(out, row.ma60);
-    write_option_f64(out, row.ma144);
-    write_option_f64(out, row.chg_d);
+    write_option_f64(out, row.ma25)?;
+    write_option_f64(out, row.ma60)?;
+    write_option_f64(out, row.ma144)?;
+    write_option_f64(out, row.chg_d)?;
     for value in [
         row.weekly_ma_bull,
         row.max_vol_not_bearish,
@@ -349,29 +388,35 @@ fn write_prepared_row_core(out: &mut Vec<u8>, row: &PreparedRow) -> anyhow::Resu
         row.lt_filter,
         row.yellow_b1,
     ] {
-        write_bool(out, value);
+        write_bool(out, value)?;
     }
     Ok(())
 }
 
 pub fn decode_prepared_cache_rows(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRow>> {
-    if bytes.starts_with(ZSTD_FRAME_MAGIC) {
-        let payload = zstd::stream::decode_all(Cursor::new(bytes))?;
-        return decode_prepared_cache_rows_dictionary(&payload);
+    decode_prepared_cache_rows_from_reader(Cursor::new(bytes))
+}
+
+fn decode_prepared_cache_rows_from_reader<R: Read>(reader: R) -> anyhow::Result<Vec<PreparedRow>> {
+    let mut reader = BufReader::new(reader);
+    if reader.fill_buf()?.starts_with(ZSTD_FRAME_MAGIC) {
+        let decoder = zstd::stream::Decoder::new(reader)?;
+        return decode_prepared_cache_rows_dictionary_from_reader(decoder);
     }
 
-    let mut cursor = Cursor::new(bytes);
     let mut magic = [0_u8; 8];
-    cursor.read_exact(&mut magic)?;
+    reader.read_exact(&mut magic)?;
     if &magic == LEGACY_PREPARED_CACHE_MAGIC {
-        return decode_prepared_cache_rows_legacy(cursor);
+        return decode_prepared_cache_rows_legacy(reader);
     }
 
     anyhow::bail!("invalid prepared cache magic");
 }
 
-fn decode_prepared_cache_rows_dictionary(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRow>> {
-    let mut cursor = Cursor::new(bytes);
+fn decode_prepared_cache_rows_dictionary_from_reader<R: Read>(
+    reader: R,
+) -> anyhow::Result<Vec<PreparedRow>> {
+    let mut cursor = BufReader::new(reader);
     let mut magic = [0_u8; 8];
     cursor.read_exact(&mut magic)?;
     if &magic != DICTIONARY_PREPARED_CACHE_MAGIC {
@@ -403,9 +448,7 @@ fn decode_prepared_cache_rows_dictionary(bytes: &[u8]) -> anyhow::Result<Vec<Pre
     Ok(rows)
 }
 
-fn decode_prepared_cache_rows_legacy(
-    mut cursor: Cursor<&[u8]>,
-) -> anyhow::Result<Vec<PreparedRow>> {
+fn decode_prepared_cache_rows_legacy(mut cursor: impl Read) -> anyhow::Result<Vec<PreparedRow>> {
     let count = read_u64(&mut cursor)? as usize;
     let mut rows = Vec::with_capacity(count);
     for _ in 0..count {
@@ -416,7 +459,7 @@ fn decode_prepared_cache_rows_legacy(
     Ok(rows)
 }
 
-fn read_prepared_row_core(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<PreparedRow> {
+fn read_prepared_row_core(cursor: &mut impl Read) -> anyhow::Result<PreparedRow> {
     let ts_code = read_string(cursor)?;
     let trade_date = NaiveDate::from_num_days_from_ce_opt(read_i32(cursor)?)
         .ok_or_else(|| anyhow::anyhow!("invalid cached trade_date"))?;
@@ -489,7 +532,7 @@ pub fn load_prepared_cache_for_mode(
     if !metadata_matches(&metadata, method, pick_date, start_date, end_date) {
         return Ok(None);
     }
-    let rows = decode_prepared_cache_rows(&std::fs::read(data_path)?)?;
+    let rows = decode_prepared_cache_rows_from_reader(std::fs::File::open(data_path)?)?;
     if rows.len() != metadata.row_count {
         return Ok(None);
     }
@@ -586,20 +629,20 @@ fn prepared_history_row_has_required_values(row: &PreparedRow) -> bool {
     .all(f64::is_finite)
 }
 
-fn read_string(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<String> {
+fn read_string(cursor: &mut impl Read) -> anyhow::Result<String> {
     let len = read_u16(cursor)? as usize;
     let mut bytes = vec![0_u8; len];
     cursor.read_exact(&mut bytes)?;
     Ok(String::from_utf8(bytes)?)
 }
 
-fn read_bool(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<bool> {
+fn read_bool(cursor: &mut impl Read) -> anyhow::Result<bool> {
     let mut bytes = [0_u8; 1];
     cursor.read_exact(&mut bytes)?;
     Ok(bytes[0] != 0)
 }
 
-fn read_option_f64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<Option<f64>> {
+fn read_option_f64(cursor: &mut impl Read) -> anyhow::Result<Option<f64>> {
     if read_bool(cursor)? {
         Ok(Some(read_f64(cursor)?))
     } else {
@@ -607,31 +650,31 @@ fn read_option_f64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<Option<f64>> {
     }
 }
 
-fn read_u16(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<u16> {
+fn read_u16(cursor: &mut impl Read) -> anyhow::Result<u16> {
     let mut bytes = [0_u8; 2];
     cursor.read_exact(&mut bytes)?;
     Ok(u16::from_le_bytes(bytes))
 }
 
-fn read_u64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<u64> {
+fn read_u64(cursor: &mut impl Read) -> anyhow::Result<u64> {
     let mut bytes = [0_u8; 8];
     cursor.read_exact(&mut bytes)?;
     Ok(u64::from_le_bytes(bytes))
 }
 
-fn read_i32(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<i32> {
+fn read_i32(cursor: &mut impl Read) -> anyhow::Result<i32> {
     let mut bytes = [0_u8; 4];
     cursor.read_exact(&mut bytes)?;
     Ok(i32::from_le_bytes(bytes))
 }
 
-fn read_f64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<f64> {
+fn read_f64(cursor: &mut impl Read) -> anyhow::Result<f64> {
     let mut bytes = [0_u8; 8];
     cursor.read_exact(&mut bytes)?;
     Ok(f64::from_le_bytes(bytes))
 }
 
-fn read_factor_map(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<BTreeMap<String, f64>> {
+fn read_factor_map(cursor: &mut impl Read) -> anyhow::Result<BTreeMap<String, f64>> {
     let count = read_u64(cursor)? as usize;
     let mut factors = BTreeMap::new();
     for _ in 0..count {
@@ -648,47 +691,209 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn write_binary(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, bytes)?;
-    Ok(())
-}
-
-fn write_string(out: &mut Vec<u8>, value: &str) -> anyhow::Result<()> {
+fn write_string(out: &mut impl Write, value: &str) -> anyhow::Result<()> {
     let len = u16::try_from(value.len())?;
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(value.as_bytes());
+    out.write_all(&len.to_le_bytes())?;
+    out.write_all(value.as_bytes())?;
     Ok(())
 }
 
-fn write_bool(out: &mut Vec<u8>, value: bool) {
-    out.push(u8::from(value));
+fn write_bool(out: &mut impl Write, value: bool) -> anyhow::Result<()> {
+    out.write_all(&[u8::from(value)])?;
+    Ok(())
 }
 
-fn write_option_f64(out: &mut Vec<u8>, value: Option<f64>) {
+fn write_option_f64(out: &mut impl Write, value: Option<f64>) -> anyhow::Result<()> {
     match value {
         Some(value) => {
-            write_bool(out, true);
-            write_f64(out, value);
+            write_bool(out, true)?;
+            write_f64(out, value)?;
         }
-        None => write_bool(out, false),
+        None => write_bool(out, false)?,
     }
+    Ok(())
 }
 
-fn write_u64(out: &mut Vec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_le_bytes());
+fn write_u64(out: &mut impl Write, value: u64) -> anyhow::Result<()> {
+    out.write_all(&value.to_le_bytes())?;
+    Ok(())
 }
 
-fn write_u16(out: &mut Vec<u8>, value: u16) {
-    out.extend_from_slice(&value.to_le_bytes());
+fn write_u16(out: &mut impl Write, value: u16) -> anyhow::Result<()> {
+    out.write_all(&value.to_le_bytes())?;
+    Ok(())
 }
 
-fn write_i32(out: &mut Vec<u8>, value: i32) {
-    out.extend_from_slice(&value.to_le_bytes());
+fn write_i32(out: &mut impl Write, value: i32) -> anyhow::Result<()> {
+    out.write_all(&value.to_le_bytes())?;
+    Ok(())
 }
 
-fn write_f64(out: &mut Vec<u8>, value: f64) {
-    out.extend_from_slice(&value.to_le_bytes());
+fn write_f64(out: &mut impl Write, value: f64) -> anyhow::Result<()> {
+    out.write_all(&value.to_le_bytes())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::io;
+
+    #[test]
+    fn prepared_cache_zstd_writer_stream_round_trips_rows() {
+        let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        let rows = vec![
+            prepared_row_with_factors(
+                "000001.SZ",
+                pick_date,
+                10.0,
+                &[("boll_width_pct", 12.3), ("wr_qfq", -87.5)],
+            ),
+            prepared_row_with_factors(
+                "000002.SZ",
+                pick_date,
+                20.0,
+                &[("boll_width_pct", 8.8), ("wr_qfq", -50.0)],
+            ),
+        ];
+
+        let mut bytes = Vec::new();
+        encode_prepared_cache_rows_to_writer(&rows, &mut bytes).unwrap();
+
+        assert_eq!(&bytes[..4], ZSTD_FRAME_MAGIC);
+        assert_eq!(decode_prepared_cache_rows(&bytes).unwrap(), rows);
+    }
+
+    #[test]
+    fn prepared_cache_zstd_reader_stream_decodes_rows() {
+        let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        let rows = vec![prepared_row_with_factors(
+            "000001.SZ",
+            pick_date,
+            10.0,
+            &[("boll_width_pct", 12.3), ("wr_qfq", -87.5)],
+        )];
+        let mut bytes = Vec::new();
+        encode_prepared_cache_rows_to_writer(&rows, &mut bytes).unwrap();
+
+        let decoded = decode_prepared_cache_rows_from_reader(Cursor::new(bytes)).unwrap();
+
+        assert_eq!(decoded, rows);
+    }
+
+    #[test]
+    fn prepared_cache_dictionary_writer_writes_one_payload_chunk_per_row() {
+        let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        let rows = vec![
+            prepared_row_with_factors(
+                "000001.SZ",
+                pick_date,
+                10.0,
+                &[
+                    ("boll_width_pct", 12.3),
+                    ("wr_qfq", -87.5),
+                    ("market_value", 12345.6),
+                ],
+            ),
+            prepared_row_with_factors(
+                "000002.SZ",
+                pick_date,
+                20.0,
+                &[("boll_width_pct", 8.8), ("wr_qfq", -50.0)],
+            ),
+        ];
+        let mut out = RowWriteCounting::new(dictionary_header_len(&rows));
+
+        encode_prepared_cache_rows_dictionary_to_writer(&rows, &mut out).unwrap();
+
+        assert_eq!(out.payload_writes, rows.len());
+        assert_eq!(
+            decode_prepared_cache_rows_dictionary_from_reader(Cursor::new(out.bytes)).unwrap(),
+            rows
+        );
+    }
+
+    fn dictionary_header_len(rows: &[PreparedRow]) -> usize {
+        DICTIONARY_PREPARED_CACHE_MAGIC.len()
+            + std::mem::size_of::<u64>()
+            + collect_factor_keys(rows)
+                .iter()
+                .map(|key| std::mem::size_of::<u16>() + key.len())
+                .sum::<usize>()
+            + std::mem::size_of::<u64>()
+    }
+
+    struct RowWriteCounting {
+        bytes: Vec<u8>,
+        payload_offset: usize,
+        payload_writes: usize,
+    }
+
+    impl RowWriteCounting {
+        fn new(payload_offset: usize) -> Self {
+            Self {
+                bytes: Vec::new(),
+                payload_offset,
+                payload_writes: 0,
+            }
+        }
+    }
+
+    impl Write for RowWriteCounting {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.bytes.len() >= self.payload_offset
+                || self.bytes.len().saturating_add(buf.len()) > self.payload_offset
+            {
+                self.payload_writes += 1;
+            }
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn prepared_row_with_factors(
+        code: &str,
+        trade_date: NaiveDate,
+        close: f64,
+        factors: &[(&str, f64)],
+    ) -> PreparedRow {
+        PreparedRow {
+            ts_code: code.to_string(),
+            trade_date,
+            open: close - 0.5,
+            high: close + 1.0,
+            low: close - 1.0,
+            close,
+            volume: 1000.0,
+            turnover_n: 12.0,
+            turnover_rate: Some(1.5),
+            k: 50.0,
+            d: 40.0,
+            j: 60.0,
+            zxdq: Some(10.2),
+            zxdkx: Some(10.1),
+            dif: 0.3,
+            dea: 0.2,
+            macd_hist: 0.1,
+            ma25: Some(10.0),
+            ma60: Some(9.8),
+            ma144: None,
+            chg_d: Some(1.2),
+            weekly_ma_bull: true,
+            max_vol_not_bearish: false,
+            v_shrink: true,
+            safe_mode: false,
+            lt_filter: true,
+            yellow_b1: false,
+            db_factors: factors
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), *value))
+                .collect::<BTreeMap<_, _>>(),
+        }
+    }
 }

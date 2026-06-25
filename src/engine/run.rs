@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use chrono::NaiveDate;
 use serde_json::{Value, json};
@@ -83,6 +84,7 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         request.intraday,
     )?;
     eprintln!("[selection] prepared history injection checked");
+    let factor_started = Instant::now();
     let factors = match factor_rows_from_prepared_cache(
         &request.runtime_root,
         request.method,
@@ -103,7 +105,11 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
                 .collect::<anyhow::Result<Vec<_>>>()?
         }
     };
-    eprintln!("[selection] computed factors rows={}", factors.len());
+    eprintln!(
+        "[selection] computed factors rows={} elapsed={:.3}s",
+        factors.len(),
+        factor_started.elapsed().as_secs_f64()
+    );
     write_factor_artifact(
         &request.runtime_root,
         request.method,

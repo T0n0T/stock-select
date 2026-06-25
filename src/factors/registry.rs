@@ -1,7 +1,12 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
+use serde::Serialize;
+use serde::ser::{SerializeMap, SerializeSeq};
 use serde_json::{Value, json};
 
 use crate::factors::abnormal_volume::push_abnormal_volume_event_factors;
@@ -23,6 +28,8 @@ use crate::model::{Candidate, Method, PreparedRow};
 pub const FACTOR_ARTIFACT_VERSION: u32 = 2;
 pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v3";
 pub(crate) const RAW_MARKET_AMOUNT_FACTOR: &str = "_raw_market_amount";
+
+const HISTORY_DB_FACTOR_KEYS: &[&str] = &["chip_vwap", "chip_turnover", RAW_MARKET_AMOUNT_FACTOR];
 
 const B2_FACTOR_BUNDLES: &[FactorBundle] = &[
     FactorBundle::RawCommon,
@@ -406,40 +413,12 @@ pub fn build_candidate_factor_rows_from_refs(
     method: Method,
     environment_state: Option<&str>,
 ) -> Vec<FactorRow> {
-    let candidate_codes = candidates
+    let candidate_pick_dates = candidates
         .iter()
-        .map(|candidate| candidate.code.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut rows_by_code: BTreeMap<&str, Vec<FactorInputRow>> = BTreeMap::new();
+        .map(|candidate| (candidate.code.as_str(), candidate.pick_date))
+        .collect::<BTreeMap<_, _>>();
+    let rows_by_code = candidate_history_rows_by_code(prepared_rows, &candidate_pick_dates);
     let market_state_by_date = market_state_factors_by_date(prepared_rows);
-    for row in prepared_rows.iter().copied() {
-        if !candidate_codes.contains(row.ts_code.as_str()) {
-            continue;
-        }
-        rows_by_code
-            .entry(row.ts_code.as_str())
-            .or_default()
-            .push(FactorInputRow {
-                trade_date: Some(row.trade_date),
-                open: row.open,
-                high: row.high,
-                low: row.low,
-                close: row.close,
-                volume: row.volume,
-                turnover_n: row.turnover_n,
-                turnover_rate: row.turnover_rate,
-                d: Some(row.d),
-                j: Some(row.j),
-                ma25: row.ma25,
-                ma60: row.ma60,
-                zxdkx: row.zxdkx,
-                zxdq: row.zxdq,
-                dif: Some(row.dif),
-                dea: Some(row.dea),
-                macd_hist: Some(row.macd_hist),
-                db_factors: row.db_factors.clone(),
-            });
-    }
 
     candidates
         .iter()
@@ -502,26 +481,130 @@ pub fn build_candidate_factor_rows_from_refs(
         .collect()
 }
 
-fn market_state_factors_by_date(rows: &[&PreparedRow]) -> BTreeMap<NaiveDate, FactorList> {
-    let mut rows_by_date: BTreeMap<NaiveDate, Vec<&PreparedRow>> = BTreeMap::new();
-    for row in rows.iter().copied() {
-        rows_by_date.entry(row.trade_date).or_default().push(row);
+fn candidate_history_rows_by_code<'a>(
+    prepared_rows: &[&'a PreparedRow],
+    candidate_pick_dates: &BTreeMap<&'a str, NaiveDate>,
+) -> BTreeMap<&'a str, Vec<FactorInputRow>> {
+    let mut prepared_by_code: BTreeMap<&str, Vec<&PreparedRow>> = BTreeMap::new();
+    for row in prepared_rows.iter().copied() {
+        let Some(pick_date) = candidate_pick_dates.get(row.ts_code.as_str()).copied() else {
+            continue;
+        };
+        if row.trade_date > pick_date {
+            continue;
+        }
+        prepared_by_code
+            .entry(row.ts_code.as_str())
+            .or_default()
+            .push(row);
     }
-    let amount_ma5_by_date = market_amount_ma5_ratio_by_date(&rows_by_date);
-    rows_by_date
-        .iter()
-        .map(|(trade_date, rows)| {
-            let mut factors = Vec::new();
-            let pct_changes = rows
+
+    prepared_by_code
+        .into_iter()
+        .map(|(code, rows)| {
+            let pick_date = candidate_pick_dates[code];
+            let history = rows
                 .iter()
-                .filter_map(|row| row.chg_d.filter(|value| value.is_finite()))
-                .collect::<Vec<_>>();
-            let count = pct_changes.len() as f64;
+                .map(|row| FactorInputRow {
+                    trade_date: Some(row.trade_date),
+                    open: row.open,
+                    high: row.high,
+                    low: row.low,
+                    close: row.close,
+                    volume: row.volume,
+                    turnover_n: row.turnover_n,
+                    turnover_rate: row.turnover_rate,
+                    d: Some(row.d),
+                    j: Some(row.j),
+                    ma25: row.ma25,
+                    ma60: row.ma60,
+                    zxdkx: row.zxdkx,
+                    zxdq: row.zxdq,
+                    dif: Some(row.dif),
+                    dea: Some(row.dea),
+                    macd_hist: Some(row.macd_hist),
+                    db_factors: if row.trade_date == pick_date {
+                        row.db_factors.clone()
+                    } else {
+                        required_history_db_factors(row)
+                    },
+                })
+                .collect();
+            (code, history)
+        })
+        .collect()
+}
+
+fn required_history_db_factors(row: &PreparedRow) -> BTreeMap<String, f64> {
+    HISTORY_DB_FACTOR_KEYS
+        .iter()
+        .filter_map(|key| {
+            row.db_factors
+                .get(*key)
+                .copied()
+                .map(|value| ((*key).to_string(), value))
+        })
+        .collect()
+}
+
+fn market_state_factors_by_date(rows: &[&PreparedRow]) -> BTreeMap<NaiveDate, FactorList> {
+    market_state_factors_by_date_with_accumulators(rows)
+}
+
+#[derive(Default)]
+struct MarketStateAccumulator {
+    pct_changes: Vec<f64>,
+    amount_total: f64,
+    net_mf_total: f64,
+    net_mf_count: usize,
+    approx_limit_up_count: usize,
+    approx_limit_down_count: usize,
+}
+
+fn market_state_factors_by_date_with_accumulators(
+    rows: &[&PreparedRow],
+) -> BTreeMap<NaiveDate, FactorList> {
+    let mut accumulators: BTreeMap<NaiveDate, MarketStateAccumulator> = BTreeMap::new();
+    for row in rows.iter().copied() {
+        let entry = accumulators.entry(row.trade_date).or_default();
+        if let Some(pct_change) = row.chg_d.filter(|value| value.is_finite()) {
+            entry.pct_changes.push(pct_change);
+        }
+        if let Some(amount) = market_amount(row).filter(|value| value.is_finite()) {
+            entry.amount_total += amount;
+        }
+        if let Some(net_mf) = row
+            .db_factors
+            .get("net_mf_amount_to_amount_pct")
+            .copied()
+            .filter(|value| value.is_finite())
+        {
+            entry.net_mf_total += net_mf;
+            entry.net_mf_count += 1;
+        }
+        if near_limit_factor(row, "dist_to_up_limit_pct") {
+            entry.approx_limit_up_count += 1;
+        }
+        if near_limit_factor(row, "dist_to_down_limit_pct") {
+            entry.approx_limit_down_count += 1;
+        }
+    }
+
+    let amount_ma5_by_date = market_amount_ma5_ratio_by_date(&accumulators);
+    accumulators
+        .iter()
+        .map(|(trade_date, accumulator)| {
+            let mut factors = Vec::new();
+            let count = accumulator.pct_changes.len() as f64;
             push_number(
                 &mut factors,
                 "market_up_ratio",
                 ratio_count(
-                    pct_changes.iter().filter(|value| **value > 0.0).count(),
+                    accumulator
+                        .pct_changes
+                        .iter()
+                        .filter(|value| **value > 0.0)
+                        .count(),
                     count,
                 ),
             );
@@ -529,7 +612,11 @@ fn market_state_factors_by_date(rows: &[&PreparedRow]) -> BTreeMap<NaiveDate, Fa
                 &mut factors,
                 "market_ge5_ratio",
                 ratio_count(
-                    pct_changes.iter().filter(|value| **value >= 5.0).count(),
+                    accumulator
+                        .pct_changes
+                        .iter()
+                        .filter(|value| **value >= 5.0)
+                        .count(),
                     count,
                 ),
             );
@@ -537,11 +624,19 @@ fn market_state_factors_by_date(rows: &[&PreparedRow]) -> BTreeMap<NaiveDate, Fa
                 &mut factors,
                 "market_le_minus5_ratio",
                 ratio_count(
-                    pct_changes.iter().filter(|value| **value <= -5.0).count(),
+                    accumulator
+                        .pct_changes
+                        .iter()
+                        .filter(|value| **value <= -5.0)
+                        .count(),
                     count,
                 ),
             );
-            push_number(&mut factors, "market_median_pct_chg", median(pct_changes));
+            push_number(
+                &mut factors,
+                "market_median_pct_chg",
+                median(accumulator.pct_changes.clone()),
+            );
             push_number(
                 &mut factors,
                 "market_amount_ma5_ratio",
@@ -550,30 +645,17 @@ fn market_state_factors_by_date(rows: &[&PreparedRow]) -> BTreeMap<NaiveDate, Fa
             push_number(
                 &mut factors,
                 "market_net_mf_to_amount_pct",
-                mean(rows.iter().filter_map(|row| {
-                    row.db_factors
-                        .get("net_mf_amount_to_amount_pct")
-                        .copied()
-                        .filter(|value| value.is_finite())
-                })),
+                mean_totals(accumulator.net_mf_total, accumulator.net_mf_count),
             );
             push_number(
                 &mut factors,
                 "market_approx_limit_up_count",
-                Some(
-                    rows.iter()
-                        .filter(|row| near_limit_factor(row, "dist_to_up_limit_pct"))
-                        .count() as f64,
-                ),
+                Some(accumulator.approx_limit_up_count as f64),
             );
             push_number(
                 &mut factors,
                 "market_approx_limit_down_count",
-                Some(
-                    rows.iter()
-                        .filter(|row| near_limit_factor(row, "dist_to_down_limit_pct"))
-                        .count() as f64,
-                ),
+                Some(accumulator.approx_limit_down_count as f64),
             );
             (*trade_date, factors)
         })
@@ -581,19 +663,11 @@ fn market_state_factors_by_date(rows: &[&PreparedRow]) -> BTreeMap<NaiveDate, Fa
 }
 
 fn market_amount_ma5_ratio_by_date(
-    rows_by_date: &BTreeMap<NaiveDate, Vec<&PreparedRow>>,
+    accumulators: &BTreeMap<NaiveDate, MarketStateAccumulator>,
 ) -> BTreeMap<NaiveDate, Option<f64>> {
-    let daily_amounts = rows_by_date
+    let daily_amounts = accumulators
         .iter()
-        .map(|(trade_date, rows)| {
-            (
-                *trade_date,
-                rows.iter()
-                    .filter_map(|row| market_amount(row))
-                    .filter(|value| value.is_finite())
-                    .sum::<f64>(),
-            )
-        })
+        .map(|(trade_date, accumulator)| (*trade_date, accumulator.amount_total))
         .collect::<Vec<_>>();
     let mut ratios = BTreeMap::new();
     for idx in 0..daily_amounts.len() {
@@ -637,14 +711,8 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     }
 }
 
-fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
-    let mut count = 0.0;
-    let mut total = 0.0;
-    for value in values {
-        total += value;
-        count += 1.0;
-    }
-    (count > 0.0).then_some(total / count)
+fn mean_totals(total: f64, count: usize) -> Option<f64> {
+    (count > 0).then_some(total / count as f64)
 }
 
 fn near_limit_factor(row: &PreparedRow, key: &str) -> bool {
@@ -664,27 +732,445 @@ pub fn write_factor_artifact(
     std::fs::create_dir_all(&dir)?;
     let factors_path = dir.join("factors.json");
     let manifest_path = dir.join("manifest.json");
-    std::fs::write(
+    write_pretty_json_file(
         &factors_path,
-        serde_json::to_vec_pretty(&json!({
-            "artifact_version": FACTOR_ARTIFACT_VERSION,
-            "method": method.as_str(),
-            "artifact_key": artifact_key,
-            "factor_library_version": FACTOR_LIBRARY_VERSION,
-            "rows": rows,
-        }))?,
+        &FactorArtifactFile {
+            artifact_version: FACTOR_ARTIFACT_VERSION,
+            method: method.as_str(),
+            artifact_key,
+            factor_library_version: FACTOR_LIBRARY_VERSION,
+            rows,
+        },
     )?;
-    std::fs::write(
+    write_pretty_json_file(
         &manifest_path,
-        serde_json::to_vec_pretty(&json!({
-            "artifact_version": FACTOR_ARTIFACT_VERSION,
-            "method": method.as_str(),
-            "artifact_key": artifact_key,
-            "factor_library_version": FACTOR_LIBRARY_VERSION,
-            "factor_source": "rust_factor_library",
-            "candidate_artifact": candidate_artifact.map(|path| path.to_string_lossy().to_string()),
-            "row_count": rows.len(),
-        }))?,
+        &FactorManifestFile {
+            artifact_version: FACTOR_ARTIFACT_VERSION,
+            method: method.as_str(),
+            artifact_key,
+            factor_library_version: FACTOR_LIBRARY_VERSION,
+            factor_source: "rust_factor_library",
+            candidate_artifact: candidate_artifact.map(|path| path.to_string_lossy()),
+            row_count: rows.len(),
+        },
     )?;
     Ok(dir)
+}
+
+fn write_pretty_json_file<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
+    let file = File::create(path)?;
+    let writer = BufWriter::new(file);
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
+    let mut serializer = serde_json::Serializer::with_formatter(writer, formatter);
+    value.serialize(&mut serializer)?;
+    serializer.into_inner().flush()?;
+    Ok(())
+}
+
+struct FactorArtifactFile<'a> {
+    artifact_version: u32,
+    method: &'a str,
+    artifact_key: &'a str,
+    factor_library_version: &'static str,
+    rows: &'a [FactorRow],
+}
+
+struct FactorManifestFile<'a> {
+    artifact_version: u32,
+    method: &'a str,
+    artifact_key: &'a str,
+    factor_library_version: &'static str,
+    factor_source: &'static str,
+    candidate_artifact: Option<Cow<'a, str>>,
+    row_count: usize,
+}
+
+struct SortedFactorRows<'a>(&'a [FactorRow]);
+
+struct SortedFactorRow<'a>(&'a FactorRow);
+
+impl Serialize for FactorArtifactFile<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(5))?;
+        map.serialize_entry("artifact_key", self.artifact_key)?;
+        map.serialize_entry("artifact_version", &self.artifact_version)?;
+        map.serialize_entry("factor_library_version", self.factor_library_version)?;
+        map.serialize_entry("method", self.method)?;
+        map.serialize_entry("rows", &SortedFactorRows(self.rows))?;
+        map.end()
+    }
+}
+
+impl Serialize for FactorManifestFile<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(7))?;
+        map.serialize_entry("artifact_key", self.artifact_key)?;
+        map.serialize_entry("artifact_version", &self.artifact_version)?;
+        map.serialize_entry("candidate_artifact", &self.candidate_artifact)?;
+        map.serialize_entry("factor_library_version", self.factor_library_version)?;
+        map.serialize_entry("factor_source", self.factor_source)?;
+        map.serialize_entry("method", self.method)?;
+        map.serialize_entry("row_count", &self.row_count)?;
+        map.end()
+    }
+}
+
+impl Serialize for SortedFactorRows<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        for row in self.0 {
+            seq.serialize_element(&SortedFactorRow(row))?;
+        }
+        seq.end()
+    }
+}
+
+impl Serialize for SortedFactorRow<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let row = self.0;
+        let mut map = serializer.serialize_map(Some(4))?;
+        map.serialize_entry("code", &row.code)?;
+        map.serialize_entry("diagnostics", &row.diagnostics)?;
+        map.serialize_entry("factors", &row.factors)?;
+        map.serialize_entry("method", &row.method)?;
+        map.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, NaiveDate};
+
+    fn test_prepared_row(
+        ts_code: &str,
+        trade_date: NaiveDate,
+        close: f64,
+        volume: f64,
+        chg_d: Option<f64>,
+    ) -> PreparedRow {
+        PreparedRow {
+            ts_code: ts_code.to_string(),
+            trade_date,
+            open: close - 0.5,
+            high: close + 1.0,
+            low: close - 1.0,
+            close,
+            volume,
+            turnover_n: 12.0,
+            turnover_rate: Some(0.2),
+            k: 50.0,
+            d: 40.0,
+            j: 60.0,
+            zxdq: Some(close - 0.2),
+            zxdkx: Some(close - 0.4),
+            dif: 0.3,
+            dea: 0.2,
+            macd_hist: 0.1,
+            ma25: Some(close - 0.5),
+            ma60: Some(close - 1.0),
+            ma144: Some(close - 1.5),
+            chg_d,
+            weekly_ma_bull: true,
+            max_vol_not_bearish: true,
+            v_shrink: true,
+            safe_mode: true,
+            lt_filter: true,
+            yellow_b1: false,
+            db_factors: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn write_factor_artifact_preserves_pretty_json_payloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let candidate_artifact = temp.path().join("select/2026-06-23.b2/candidates.json");
+        let mut row = FactorRow::new("000001.SZ", Method::B2);
+        row.factors
+            .insert("close".to_string(), FactorValue::Number(12.34));
+        row.factors.insert(
+            "signal".to_string(),
+            FactorValue::Category("B2".to_string()),
+        );
+        row.diagnostics.insert(
+            "factor_source".to_string(),
+            Value::String("rust_factor_library".to_string()),
+        );
+        let rows = vec![row];
+
+        let dir = write_factor_artifact(
+            temp.path(),
+            Method::B2,
+            "2026-06-23",
+            &rows,
+            Some(candidate_artifact.as_path()),
+        )
+        .unwrap();
+
+        let factors = std::fs::read_to_string(dir.join("factors.json")).unwrap();
+        let manifest = std::fs::read_to_string(dir.join("manifest.json")).unwrap();
+
+        let expected_factors = serde_json::to_string_pretty(&json!({
+            "artifact_version": FACTOR_ARTIFACT_VERSION,
+            "method": "b2",
+            "artifact_key": "2026-06-23",
+            "factor_library_version": FACTOR_LIBRARY_VERSION,
+            "rows": rows,
+        }))
+        .unwrap();
+        let expected_manifest = serde_json::to_string_pretty(&json!({
+            "artifact_version": FACTOR_ARTIFACT_VERSION,
+            "method": "b2",
+            "artifact_key": "2026-06-23",
+            "factor_library_version": FACTOR_LIBRARY_VERSION,
+            "factor_source": "rust_factor_library",
+            "candidate_artifact": candidate_artifact.to_string_lossy(),
+            "row_count": 1,
+        }))
+        .unwrap();
+
+        assert_eq!(factors, expected_factors);
+        assert_eq!(manifest, expected_manifest);
+    }
+
+    #[test]
+    fn candidate_history_keeps_only_required_historical_db_factors_and_latest_exports_all() {
+        let pick_date = NaiveDate::from_ymd_opt(2026, 6, 23).unwrap();
+        let mut prepared = (0..3)
+            .map(|offset| {
+                let trade_date = pick_date - Duration::days(2 - offset);
+                let mut db_factors = BTreeMap::new();
+                db_factors.insert("chip_vwap".to_string(), 10.0 + offset as f64);
+                db_factors.insert("chip_turnover".to_string(), 0.2);
+                db_factors.insert(RAW_MARKET_AMOUNT_FACTOR.to_string(), 1_000_000.0);
+                db_factors.insert(format!("history_big_{offset}"), 9_999.0 + offset as f64);
+                if offset == 2 {
+                    db_factors.insert("latest_export_factor".to_string(), 42.0);
+                }
+                PreparedRow {
+                    ts_code: "000001.SZ".to_string(),
+                    trade_date,
+                    open: 10.0 + offset as f64,
+                    high: 10.5 + offset as f64,
+                    low: 9.5 + offset as f64,
+                    close: 10.2 + offset as f64,
+                    volume: 1_000.0 + offset as f64,
+                    turnover_n: 12.0,
+                    turnover_rate: Some(0.2),
+                    k: 50.0,
+                    d: 40.0,
+                    j: 60.0,
+                    zxdq: Some(9.8 + offset as f64),
+                    zxdkx: Some(9.6 + offset as f64),
+                    dif: 0.3,
+                    dea: 0.2,
+                    macd_hist: 0.1,
+                    ma25: Some(9.7 + offset as f64),
+                    ma60: Some(9.0 + offset as f64),
+                    ma144: Some(8.5 + offset as f64),
+                    chg_d: Some(1.0),
+                    weekly_ma_bull: true,
+                    max_vol_not_bearish: true,
+                    v_shrink: true,
+                    safe_mode: true,
+                    lt_filter: true,
+                    yellow_b1: false,
+                    db_factors,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut future_row = prepared[2].clone();
+        future_row.trade_date = pick_date + Duration::days(1);
+        future_row.close += 1.0;
+        future_row
+            .db_factors
+            .insert("future_export_factor".to_string(), 77.0);
+        prepared.push(future_row);
+        let prepared_refs = prepared.iter().collect::<Vec<_>>();
+        let candidate_pick_dates = [("000001.SZ", pick_date)].into_iter().collect();
+
+        let history = candidate_history_rows_by_code(&prepared_refs, &candidate_pick_dates)
+            .remove("000001.SZ")
+            .unwrap();
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(
+            history[0].db_factors.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                RAW_MARKET_AMOUNT_FACTOR.to_string(),
+                "chip_turnover".to_string(),
+                "chip_vwap".to_string(),
+            ]
+        );
+        assert_eq!(
+            history[1].db_factors.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                RAW_MARKET_AMOUNT_FACTOR.to_string(),
+                "chip_turnover".to_string(),
+                "chip_vwap".to_string(),
+            ]
+        );
+        assert!(history[2].db_factors.contains_key("history_big_2"));
+        assert!(history[2].db_factors.contains_key("latest_export_factor"));
+        assert!(
+            !history
+                .iter()
+                .any(|row| row.db_factors.contains_key("future_export_factor"))
+        );
+
+        let candidate = Candidate {
+            code: "000001.SZ".to_string(),
+            pick_date,
+            close: prepared[2].close,
+            turnover_n: prepared[2].turnover_n,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        };
+        let rows =
+            build_candidate_factor_rows_from_refs(&[candidate], &prepared_refs, Method::B2, None);
+
+        assert_eq!(
+            rows[0].factors.get("latest_export_factor"),
+            Some(&FactorValue::Number(42.0))
+        );
+        assert!(!rows[0].factors.contains_key("future_export_factor"));
+        assert!(rows[0].factors.contains_key("chip_entropy"));
+    }
+
+    #[test]
+    fn market_state_factors_match_expected_cross_section_with_amount_ma5_series() {
+        let day1 = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let day2 = day1 + Duration::days(1);
+        let day3 = day1 + Duration::days(2);
+        let day4 = day1 + Duration::days(3);
+        let day5 = day1 + Duration::days(4);
+        let day6 = day1 + Duration::days(5);
+
+        let mut rows = Vec::new();
+        for (idx, (trade_date, changes, amounts, net_mf, up_count, down_count)) in [
+            (
+                day1,
+                [1.0, -1.0, 0.0],
+                [100.0, 200.0, 300.0],
+                [1.0, 2.0, 3.0],
+                0,
+                0,
+            ),
+            (
+                day2,
+                [2.0, 2.0, -2.0],
+                [100.0, 100.0, 100.0],
+                [2.0, 4.0, 6.0],
+                0,
+                0,
+            ),
+            (
+                day3,
+                [3.0, -3.0, 6.0],
+                [300.0, 300.0, 300.0],
+                [3.0, 6.0, 9.0],
+                1,
+                0,
+            ),
+            (
+                day4,
+                [4.0, -4.0, 8.0],
+                [400.0, 400.0, 400.0],
+                [4.0, 8.0, 12.0],
+                0,
+                1,
+            ),
+            (
+                day5,
+                [5.0, -6.0, 10.0],
+                [500.0, 500.0, 500.0],
+                [5.0, 10.0, 15.0],
+                1,
+                1,
+            ),
+            (
+                day6,
+                [10.0, 0.0, -5.0],
+                [600.0, 300.0, 300.0],
+                [6.0, 12.0, 18.0],
+                1,
+                1,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for row_idx in 0..3 {
+                let code = format!("{idx:02}{row_idx:02}.SZ");
+                let mut row = test_prepared_row(
+                    &code,
+                    trade_date,
+                    10.0 + idx as f64 + row_idx as f64,
+                    1_000.0 + row_idx as f64,
+                    Some(changes[row_idx]),
+                );
+                row.db_factors
+                    .insert(RAW_MARKET_AMOUNT_FACTOR.to_string(), amounts[row_idx]);
+                row.db_factors
+                    .insert("net_mf_amount_to_amount_pct".to_string(), net_mf[row_idx]);
+                if row_idx < up_count {
+                    row.db_factors
+                        .insert("dist_to_up_limit_pct".to_string(), 0.1);
+                }
+                if row_idx < down_count {
+                    row.db_factors
+                        .insert("dist_to_down_limit_pct".to_string(), 0.1);
+                }
+                rows.push(row);
+            }
+        }
+
+        let row_refs = rows.iter().collect::<Vec<_>>();
+        let market_state = market_state_factors_by_date_with_accumulators(&row_refs);
+        let day6_factors = market_state.get(&day6).unwrap();
+
+        assert_eq!(
+            day6_factors,
+            &vec![
+                ("market_up_ratio".to_string(), FactorValue::Number(0.3333)),
+                ("market_ge5_ratio".to_string(), FactorValue::Number(0.3333)),
+                (
+                    "market_le_minus5_ratio".to_string(),
+                    FactorValue::Number(0.3333)
+                ),
+                (
+                    "market_median_pct_chg".to_string(),
+                    FactorValue::Number(0.0)
+                ),
+                (
+                    "market_amount_ma5_ratio".to_string(),
+                    FactorValue::Number(1.1765)
+                ),
+                (
+                    "market_net_mf_to_amount_pct".to_string(),
+                    FactorValue::Number(12.0)
+                ),
+                (
+                    "market_approx_limit_up_count".to_string(),
+                    FactorValue::Number(1.0)
+                ),
+                (
+                    "market_approx_limit_down_count".to_string(),
+                    FactorValue::Number(1.0)
+                ),
+            ]
+        );
+    }
 }
