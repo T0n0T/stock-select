@@ -3,16 +3,17 @@ use serde_json::json;
 use std::thread::sleep;
 use std::time::Duration;
 use stock_select::cache::{
-    PREPARED_CACHE_SCHEMA_VERSION, decode_prepared_cache_rows, history_payload_for_code,
-    load_prepared_cache, load_prepared_cache_for_mode, prepared_cache_data_path,
-    prepared_cache_meta_path, prepared_cache_paths, prepared_cache_retention_limit_from_sources,
-    prune_eod_prepared_cache_to_limit, write_prepared_cache, write_prepared_cache_for_mode,
+    LOCAL_DERIVED_PREPARED_CACHE_SOURCE, PREPARED_CACHE_SCHEMA_VERSION, decode_prepared_cache_rows,
+    history_payload_for_code, load_prepared_cache, load_prepared_cache_for_mode,
+    prepared_cache_data_path, prepared_cache_meta_path, prepared_cache_paths,
+    prepared_cache_retention_limit_from_sources, prune_eod_prepared_cache_to_limit,
+    write_db_native_prepared_cache, write_prepared_cache, write_prepared_cache_for_mode,
 };
 use stock_select::model::{Method, PreparedRow};
 
 #[test]
-fn prepared_cache_schema_version_requires_market_industry_factor_refresh() {
-    assert_eq!(PREPARED_CACHE_SCHEMA_VERSION, 8);
+fn prepared_cache_schema_version_rejects_pre_db_native_cache() {
+    assert_eq!(PREPARED_CACHE_SCHEMA_VERSION, 11);
 }
 
 #[test]
@@ -210,6 +211,7 @@ fn write_prepared_cache_prunes_eod_cache_to_default_limit_without_touching_intra
             &[prepared_row("000001.SZ", pick_date, 10.0 + f64::from(day))],
         )
         .unwrap();
+        sleep(Duration::from_millis(2));
     }
     let intraday_date = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
     write_prepared_cache_for_mode(
@@ -223,33 +225,18 @@ fn write_prepared_cache_prunes_eod_cache_to_default_limit_without_touching_intra
     )
     .unwrap();
 
-    assert!(
-        !prepared_cache_paths(
-            root.path(),
-            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-            false
-        )
-        .meta_path
-        .exists()
-    );
-    assert!(
-        prepared_cache_paths(
-            root.path(),
-            NaiveDate::from_ymd_opt(2026, 5, 2).unwrap(),
-            false
-        )
-        .meta_path
-        .exists()
-    );
-    assert!(
-        prepared_cache_paths(
-            root.path(),
-            NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
-            false
-        )
-        .data_path
-        .exists()
-    );
+    prune_eod_prepared_cache_to_limit(root.path(), 30).unwrap();
+
+    let eod_meta_count = std::fs::read_dir(root.path().join("prepared"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            file_name.ends_with(".meta.json") && !file_name.contains(".intraday.")
+        })
+        .count();
+    assert_eq!(eod_meta_count, 30);
     assert!(
         prepared_cache_paths(root.path(), intraday_date, true)
             .meta_path
@@ -277,7 +264,7 @@ fn load_prepared_cache_falls_back_to_legacy_bin_path() {
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 1,
             "symbol_count": 1,
-            "source_table": "daily_market"
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
         }))
         .unwrap(),
     )
@@ -308,6 +295,38 @@ fn load_prepared_cache_rejects_legacy_bin_with_stale_schema_version() {
             "start_date": "2025-05-24",
             "end_date": "2026-05-25",
             "schema_version": 5,
+            "row_count": 1,
+            "symbol_count": 1,
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let rows =
+        load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date).unwrap();
+
+    assert!(rows.is_none());
+}
+
+#[test]
+fn load_prepared_cache_rejects_current_schema_daily_market_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 5, 24).unwrap();
+    let data_path = root.path().join("prepared/2026-05-25.bin.zst");
+    std::fs::create_dir_all(data_path.parent().unwrap()).unwrap();
+    std::fs::write(&data_path, prepared_cache_bytes()).unwrap();
+    std::fs::write(
+        prepared_cache_meta_path(root.path(), pick_date),
+        serde_json::to_vec_pretty(&json!({
+            "artifact_version": 1,
+            "method": "b2",
+            "shared_methods": ["b1", "b2", "dribull"],
+            "pick_date": "2026-05-25",
+            "start_date": "2025-05-24",
+            "end_date": "2026-05-25",
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 1,
             "symbol_count": 1,
             "source_table": "daily_market"
@@ -393,7 +412,7 @@ fn load_prepared_cache_prefers_zstd_path_over_legacy_bin_path() {
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 1,
             "symbol_count": 1,
-            "source_table": "daily_market"
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
         }))
         .unwrap(),
     )
@@ -500,7 +519,7 @@ fn load_prepared_cache_requires_matching_metadata() {
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 1,
             "symbol_count": 1,
-            "source_table": "daily_market"
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
         }))
         .unwrap(),
     )
@@ -574,6 +593,105 @@ fn prepared_cache_round_trips_db_factor_extras() {
 }
 
 #[test]
+fn write_db_native_prepared_cache_records_source_window_and_calc_versions() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 13).unwrap();
+    let rows = db_native_window_rows("000001.SZ", start_date, pick_date, 235);
+
+    write_db_native_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        252,
+        &rows,
+    )
+    .unwrap();
+
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(root.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["schema_version"], PREPARED_CACHE_SCHEMA_VERSION);
+    assert_eq!(metadata["source_table"], "stock-cache-db-native");
+    assert_eq!(metadata["source"], "stock-cache-db-native");
+    assert_eq!(metadata["start_date"], start_date.to_string());
+    assert_eq!(metadata["end_date"], pick_date.to_string());
+    assert_eq!(metadata["window_trading_days"], 235);
+    assert_eq!(metadata["window_start_date"], start_date.to_string());
+    assert_eq!(metadata["window_end_date"], pick_date.to_string());
+    assert_eq!(metadata["calc_versions"]["macd"], "macd_qfq_12_26_9_v1");
+    assert_eq!(metadata["calc_versions"]["rolling"], "rolling_qfq_v1");
+    assert_eq!(metadata["calc_versions"]["left_peak"], "left_peak_qfq_v1");
+    assert_eq!(
+        metadata["membership_sources"]["ths"],
+        "current_index_ths_member"
+    );
+
+    let loaded = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.len(), rows.len());
+}
+
+#[test]
+fn load_prepared_cache_rejects_db_native_cache_with_short_decoded_window() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 15).unwrap();
+    let mut row = prepared_row("000001.SZ", pick_date, 10.0);
+    row.db_factors.insert("macd_daily_hist".to_string(), 0.1234);
+    write_db_native_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        pick_date,
+        pick_date,
+        252,
+        &[row],
+    )
+    .unwrap();
+    std::fs::write(
+        prepared_cache_meta_path(root.path(), pick_date),
+        serde_json::to_vec_pretty(&json!({
+            "artifact_version": 1,
+            "method": "b2",
+            "shared_methods": ["b1", "b2", "b3", "lsh", "dribull"],
+            "pick_date": pick_date,
+            "start_date": start_date,
+            "end_date": pick_date,
+            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
+            "row_count": 1,
+            "symbol_count": 1,
+            "source_table": "stock-cache-db-native",
+            "source": "stock-cache-db-native",
+            "compression": "zstd",
+            "encoding": "dictionary_v2",
+            "window_trading_days": 252,
+            "window_start_date": start_date,
+            "window_end_date": pick_date,
+            "calc_versions": {
+                "macd": "macd_qfq_12_26_9_v1",
+                "rolling": "rolling_qfq_v1",
+                "left_peak": "left_peak_qfq_v1"
+            },
+            "membership_sources": {
+                "ths": "current_index_ths_member"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let loaded = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
+        .unwrap();
+
+    assert!(loaded.is_none());
+}
+
+#[test]
 fn write_prepared_cache_uses_compressed_dictionary_payload() {
     let root = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -613,6 +731,7 @@ fn write_prepared_cache_uses_compressed_dictionary_payload() {
     .unwrap();
     assert_eq!(metadata["compression"], "zstd");
     assert_eq!(metadata["encoding"], "dictionary_v2");
+    assert_ne!(metadata["source_table"], "daily_market");
 
     let loaded = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
         .unwrap()
@@ -793,7 +912,7 @@ fn lsh_can_read_legacy_shared_prepared_cache_without_lsh_metadata_entry() {
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 1,
             "symbol_count": 1,
-            "source_table": "daily_market"
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
         }))
         .unwrap(),
     )
@@ -848,6 +967,26 @@ fn history_payload_skips_rows_with_non_finite_required_prices() {
 
 fn prepared_row(code: &str, trade_date: NaiveDate, close: f64) -> PreparedRow {
     prepared_row_with_factors(code, trade_date, close, &[("boll_width_pct", 11.0)])
+}
+
+fn db_native_window_rows(
+    code: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    trading_days: usize,
+) -> Vec<PreparedRow> {
+    assert!(trading_days >= 2);
+    let mut rows = (0..(trading_days - 1))
+        .map(|offset| {
+            prepared_row(
+                code,
+                start_date + chrono::Duration::days(offset as i64),
+                10.0 + offset as f64 * 0.01,
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.push(prepared_row(code, end_date, 12.0));
+    rows
 }
 
 fn prepared_row_with_factors(

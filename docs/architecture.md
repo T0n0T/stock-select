@@ -191,14 +191,14 @@ flowchart TD
     end
 
     %% ── screen 子命令 ──
-    SCREEN --> SCR["run_screen_with_loader()<br/>src/screening.rs"]
+    SCREEN --> SCR["run_db_native_screen_with_loader()<br/>src/screening.rs"]
     SCR --> POOL{"pool_source"}
     POOL -->|turnover-top| TOP["fetch turnover_top N<br/>from PostgreSQL"]
     POOL -->|custom| POOLF["读取 pool_file"]
-    TOP --> WINDOW["fetch_daily_window()<br/>3 年行情窗口<br/>src/db.rs"]
+    TOP --> WINDOW["fetch_db_native_daily_window()<br/>stock-cache DB-native<br/>约 252 个交易日窗口<br/>src/db.rs"]
     POOLF --> WINDOW
     WINDOW --> LOCAL["enrich_local_market_factors()<br/>boll_width / bias / roc / mtm / psy / wr"]
-    LOCAL --> IND["计算技术指标<br/>KDJ / MACD / Bollinger / ZX"]
+    LOCAL --> IND["映射 DB 指标并补必要本地序列<br/>KDJ / MACD / rolling / left-peak / ZX"]
     IND --> PREP["write_prepared_cache()<br/>→ runtime/prepared/"]
     PREP --> STRAT{"策略筛选"}
     STRAT -->|b2| B2STRAT["run_b2_strategy_from_refs()<br/>src/strategies/b2.rs"]
@@ -241,11 +241,10 @@ flowchart TD
 
         subgraph FACTORS["Factor Registry"]
             FACTROW --> BUNDLE{"method → FactorBundle"}
-            BUNDLE -->|b2| B2F["RawCommon + B2ChipAge + B2Semantic"]
+            BUNDLE -->|b2| B2F["RawCommon + B2Semantic"]
             BUNDLE -->|b3| B3F["RawCommon + B3Semantic"]
             BUNDLE -->|lsh| LSHF["RawCommon + LshSemantic"]
             B2F --> COMMON["RawCommon 因子<br/>macd / ma_support / volume_turnover<br/>price_position / bar_shape<br/>range_compression / zx_pullback<br/>abnormal_volume / volume_shrink"]
-            B2F --> CHIP["B2ChipAge<br/>chip_age_summary"]
             B2F --> B2SEM["B2Semantic<br/>语义因子"]
             B3F --> COMMON
             B3F --> B3SEM["B3Semantic<br/>语义因子"]
@@ -287,7 +286,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    PG[("PostgreSQL<br/>daily_market")] --> SC["screening"]
+    PG[("PostgreSQL<br/>stock-cache DB-native")] --> SC["screening"]
     SC --> CJ["candidates JSON"]
 
     CJ --> CPI["inject prepared history"]

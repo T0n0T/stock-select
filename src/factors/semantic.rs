@@ -7,7 +7,7 @@ use crate::factors::price_position::{
     latest_bar_position_ratio, push_b2_hl90_position_factors, push_latest_upper_shadow_factor,
 };
 use crate::factors::series::{
-    FactorList, pct_change, push_category, push_number, rolling_mean_series,
+    pct_change, push_category, push_number, rolling_mean_series, FactorList,
 };
 use crate::factors::types::{FactorInputRow, FactorValue};
 use crate::factors::zx::zx_lines;
@@ -345,6 +345,8 @@ pub fn push_b3_signal_context_factors(
     history: &[FactorInputRow],
     signal: Option<&str>,
 ) {
+    push_b3_schema_structure_factors(factors, history);
+
     let latest_j = history.last().and_then(|row| row.j);
     let previous_j = history.iter().rev().nth(1).and_then(|row| row.j);
     push_number(
@@ -365,6 +367,80 @@ pub fn push_b3_signal_context_factors(
     };
     push_bool(factors, "b3_prev_b2_flag", previous_b2);
     push_bool(factors, "b3_plus_flag", matches!(signal, Some("B3+")));
+}
+
+fn push_b3_schema_structure_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
+    let setup_end = history.len().saturating_sub(1).max(1).min(history.len());
+    let setup_history = &history[..setup_end];
+    let close = setup_history
+        .iter()
+        .map(|row| row.close)
+        .collect::<Vec<_>>();
+    let high = setup_history.iter().map(|row| row.high).collect::<Vec<_>>();
+    let low = setup_history.iter().map(|row| row.low).collect::<Vec<_>>();
+    let latest = setup_history.last();
+    let previous = setup_history.iter().rev().nth(1);
+    let latest_close = close.last().copied();
+
+    let high_90 = max_tail(&high, 90).or_else(|| high.iter().copied().reduce(f64::max));
+    let low_90 = min_tail(&low, 90).or_else(|| low.iter().copied().reduce(f64::min));
+    let range_90 = high_90.zip(low_90).map(|(high, low)| high - low);
+    let mid_90 = high_90.zip(low_90).map(|(high, low)| (high + low) / 2.0);
+    push_number(
+        factors,
+        "structure_hl90_position",
+        match (latest_close, low_90, range_90) {
+            (Some(close), Some(low), Some(width)) if width != 0.0 => Some((close - low) / width),
+            _ => None,
+        },
+    );
+    push_number(
+        factors,
+        "structure_hl90_range_pct",
+        match (range_90, mid_90) {
+            (Some(width), Some(mid)) if mid != 0.0 => Some(width / mid * 100.0),
+            _ => None,
+        },
+    );
+    push_number(
+        factors,
+        "bar_upper_shadow_pct",
+        latest.and_then(|row| {
+            (row.close != 0.0).then_some((row.high - row.close) / row.close * 100.0)
+        }),
+    );
+
+    let bullish_engulf = latest.zip(previous).is_some_and(|(latest, previous)| {
+        previous.close < previous.open
+            && latest.close > latest.open
+            && latest.open <= previous.close
+            && latest.close >= previous.open
+    });
+    let volume_ratio = latest.zip(previous).and_then(|(latest, previous)| {
+        (previous.volume > 0.0).then_some(latest.volume / previous.volume)
+    });
+    let volume_bullish_engulf = bullish_engulf && volume_ratio.is_some_and(|ratio| ratio > 1.0);
+    let latest_ma25 = latest.and_then(|row| row.ma25).or_else(|| {
+        rolling_mean_series(&close, 25, 25)
+            .last()
+            .copied()
+            .flatten()
+    });
+    let above_ma25 = latest
+        .zip(latest_ma25)
+        .is_some_and(|(latest, ma25)| latest.close > ma25);
+
+    push_bool(
+        factors,
+        "signal_bullish_engulf_prev_bearish_flag",
+        bullish_engulf,
+    );
+    push_number(factors, "signal_bullish_engulf_volume_ratio", volume_ratio);
+    push_bool(
+        factors,
+        "signal_yang_engulf_ma25_flag",
+        volume_bullish_engulf && above_ma25,
+    );
 }
 
 fn push_b2_family_semantic_factors(

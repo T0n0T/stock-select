@@ -230,7 +230,7 @@ stock-select-rs review-merge \
 
 EOD run 自动评分：
 
-- 读取 `daily_market` 获取上证指数和国证 2000 数据
+- 读取 DB-native stock-cache 覆盖窗口和环境因子输入
 - 评估市场状态：`weak` / `neutral` / `strong`
 - 写入 `runtime/environment/daily/<date>.json`
 

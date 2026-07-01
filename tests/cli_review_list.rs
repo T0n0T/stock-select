@@ -103,6 +103,41 @@ fn review_list_prefers_selection_display_artifact() {
 }
 
 #[test]
+fn review_list_recompute_ignores_existing_display_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let display_dir = temp.path().join("select/2026-05-25.b2");
+    std::fs::create_dir_all(&display_dir).unwrap();
+    std::fs::write(
+        display_dir.join("display.json"),
+        serde_json::to_vec_pretty(&json!({
+            "rows": [
+                {"code": "000099.SZ", "name": "旧缓存", "model_rank": 1, "model_score": 0.7, "llm_action": null, "llm_risk_flags": []}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path())
+        .env_remove("POSTGRES_DSN")
+        .args([
+            "review-list",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--recompute",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("A database DSN is required."));
+}
+
+#[test]
 fn review_list_uses_old_default_runtime_root_when_omitted() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");

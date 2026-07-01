@@ -21,14 +21,15 @@ def require_optuna() -> Any:
     return optuna
 
 
-def suggest_trial_params(trial: Any) -> dict[str, Any]:
+def suggest_trial_params(trial: Any, *, allow_native_categorical: bool = False) -> dict[str, Any]:
+    categorical_encoding_choices = ["one_hot", "native"] if allow_native_categorical else ["one_hot"]
     params = {
         "feature_set": trial.suggest_categorical(
             "feature_set",
             ["raw_numeric", "raw_plus_signal", "raw_plus_signal_macd"],
         ),
         "label_column": trial.suggest_categorical("label_column", ["rank_label_3d", "rank_label_5d", "rank_label_10d"]),
-        "categorical_encoding": trial.suggest_categorical("categorical_encoding", ["one_hot", "native"]),
+        "categorical_encoding": trial.suggest_categorical("categorical_encoding", categorical_encoding_choices),
         "boosting_type": trial.suggest_categorical("boosting_type", ["gbdt", "dart"]),
         "num_leaves": trial.suggest_categorical("num_leaves", [5, 9, 15]),
         "min_data_in_leaf": trial.suggest_categorical("min_data_in_leaf", [30, 60, 120, 240]),
@@ -194,7 +195,10 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
     trials: list[dict[str, Any]] = []
 
     def objective(trial: Any) -> float:
-        params = suggest_trial_params(trial)
+        params = suggest_trial_params(
+            trial,
+            allow_native_categorical=getattr(args, "allow_native_categorical", False),
+        )
         output_dir = trial_output_dir(output_root, int(trial.number))
         kwargs = training_kwargs_from_trial(params)
         kwargs.setdefault("seed", args.seed)
@@ -246,6 +250,7 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
         "sampler": "TPESampler",
         "study_name": getattr(study, "study_name", None),
         "direction": direction,
+        "allow_native_categorical": getattr(args, "allow_native_categorical", False),
         "best_trial": best_number,
         "best_score": best_value,
         "best_params": best_params,

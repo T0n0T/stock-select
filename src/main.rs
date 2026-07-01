@@ -11,12 +11,18 @@ use serde::Serialize;
 use serde_json::json;
 use stock_select::cache::{load_prepared_cache_for_mode, prepared_cache_start_date};
 use stock_select::config::{resolve_config_value, resolve_runtime_root};
-use stock_select::db::{fetch_daily_window, fetch_instrument_info, resolve_previous_trade_date};
+use stock_select::db::{
+    fetch_db_native_daily_window, fetch_instrument_info, fetch_stock_period_macd_states,
+    resolve_previous_trade_date,
+};
 use stock_select::engine::artifacts::{
     SelectionRunPaths, read_selection_json, write_selection_json,
 };
 use stock_select::engine::b2::artifact_key_for_run;
 use stock_select::engine::capability::ensure_model_run_supported;
+use stock_select::engine::inference::{
+    LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector,
+};
 use stock_select::engine::presentation::{
     fill_missing_display_instrument_info, format_display_lines, limit_display_rows,
     review_signal_symbol,
@@ -32,7 +38,8 @@ use stock_select::intraday::TushareRestProvider;
 use stock_select::model::{InstrumentInfo, MarketRow, Method, PreparedRow};
 use stock_select::record::{RunRecordConfig, update_run_record};
 use stock_select::screening::{
-    PoolSource, ScreenRequest, run_intraday_screen_with_loaders, run_screen_with_loader,
+    PoolSource, ScreenRequest, run_db_native_intraday_screen_with_loaders,
+    run_db_native_screen_with_loader,
 };
 
 #[derive(Debug, Parser)]
@@ -52,6 +59,7 @@ enum Commands {
     ReviewMerge(ArtifactCommandArgs),
     ReviewList(ReviewListArgs),
     Run(RunArgs),
+    ModelPredict(ModelPredictArgs),
     Completions(CompletionsArgs),
 }
 
@@ -232,6 +240,18 @@ struct CompletionsArgs {
 }
 
 #[derive(Debug, Args)]
+struct ModelPredictArgs {
+    #[arg(long)]
+    model_path: PathBuf,
+
+    #[arg(long)]
+    model_feature_metadata_path: PathBuf,
+
+    #[arg(long)]
+    rows: PathBuf,
+}
+
+#[derive(Debug, Args)]
 struct RunArgs {
     #[command(flatten)]
     method: MethodArgs,
@@ -323,6 +343,7 @@ fn main() -> anyhow::Result<()> {
         Commands::ReviewMerge(args) => run_review_merge_command(args),
         Commands::ReviewList(args) => run_review_list(args),
         Commands::Run(args) => run_selection_command(args),
+        Commands::ModelPredict(args) => run_model_predict_command(args),
         Commands::Completions(args) => {
             let mut command = Cli::command();
             generate(
@@ -334,6 +355,35 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+fn run_model_predict_command(args: ModelPredictArgs) -> anyhow::Result<()> {
+    let model_path = args.model_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "model path is not valid UTF-8: {}",
+            args.model_path.display()
+        )
+    })?;
+    let model = LightGbmRuntimeModel::from_file(model_path)?;
+    let metadata: ModelFeatureMetadata =
+        serde_json::from_slice(&std::fs::read(&args.model_feature_metadata_path)?)?;
+    let rows: Vec<stock_select::engine::types::FactorRow> =
+        serde_json::from_slice(&std::fs::read(&args.rows)?)?;
+    let mut predictions = Vec::with_capacity(rows.len());
+    for row in rows {
+        let vector = build_feature_vector(&row, &metadata)?;
+        let score = model.predict(&vector.values)?;
+        predictions.push(json!({
+            "code": row.code,
+            "score": score,
+            "missing_numeric_features": vector.missing_numeric_features,
+        }));
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({ "predictions": predictions }))?
+    );
+    Ok(())
 }
 
 fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
@@ -364,15 +414,9 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
         let token = resolve_config_value(args.tushare_token.as_deref(), "TUSHARE_TOKEN")
             .ok_or_else(|| anyhow::anyhow!("A Tushare token is required for intraday mode."))?;
         let provider = TushareRestProvider::new(token)?;
-        run_intraday_screen_with_loaders(
-            request,
-            &provider,
-            "15:00:00",
-            resolve_previous_trade_date,
-            fetch_daily_window_if_dsn,
-        )?
+        run_db_native_intraday_screen(request, &provider)?
     } else {
-        run_screen_with_loader(request, fetch_daily_window_if_dsn)?
+        run_db_native_screen_with_loader(request, fetch_db_native_daily_window_if_dsn)?
     };
     let display_path = path.strip_prefix(&runtime_root).unwrap_or(&path);
     println!("screen complete: {}", display_path.display());
@@ -420,15 +464,9 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
                         anyhow::anyhow!("A Tushare token is required for intraday mode.")
                     })?;
                 let provider = TushareRestProvider::new(token)?;
-                run_intraday_screen_with_loaders(
-                    request,
-                    &provider,
-                    "15:00:00",
-                    resolve_previous_trade_date,
-                    fetch_daily_window_if_dsn,
-                )?
+                run_db_native_intraday_screen(request, &provider)?
             } else {
-                run_screen_with_loader(request, fetch_daily_window_if_dsn)?
+                run_db_native_screen_with_loader(request, fetch_db_native_daily_window_if_dsn)?
             };
             let display_path = path.strip_prefix(&runtime_root).unwrap_or(&path);
             eprintln!(
@@ -1467,7 +1505,7 @@ where
     let display_path = paths.display_path();
 
     // Try reading from cache first
-    if display_path.exists() {
+    if display_path.exists() && !args.recompute {
         let payload = read_selection_json(&display_path)?;
         let rows: Vec<DisplayRow> = serde_json::from_value(
             payload
@@ -1505,15 +1543,9 @@ where
             let token = resolve_config_value(args.tushare_token.as_deref(), "TUSHARE_TOKEN")
                 .ok_or_else(|| anyhow::anyhow!("A Tushare token is required for intraday mode."))?;
             let provider = TushareRestProvider::new(token)?;
-            run_intraday_screen_with_loaders(
-                request,
-                &provider,
-                "15:00:00",
-                resolve_previous_trade_date,
-                fetch_daily_window_if_dsn,
-            )?
+            run_db_native_intraday_screen(request, &provider)?
         } else {
-            run_screen_with_loader(request, fetch_daily_window_if_dsn)?
+            run_db_native_screen_with_loader(request, fetch_db_native_daily_window_if_dsn)?
         }
     };
 
@@ -1598,7 +1630,7 @@ where
     Ok(())
 }
 
-fn fetch_daily_window_if_dsn(
+fn fetch_db_native_daily_window_if_dsn(
     dsn: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
@@ -1606,7 +1638,21 @@ fn fetch_daily_window_if_dsn(
     if dsn.trim().is_empty() {
         anyhow::bail!("A database DSN is required.");
     }
-    fetch_daily_window(dsn, start_date, end_date)
+    fetch_db_native_daily_window(dsn, start_date, end_date)
+}
+
+fn run_db_native_intraday_screen(
+    request: ScreenRequest,
+    provider: &TushareRestProvider,
+) -> anyhow::Result<PathBuf> {
+    run_db_native_intraday_screen_with_loaders(
+        request,
+        provider,
+        "15:00:00",
+        resolve_previous_trade_date,
+        fetch_db_native_daily_window_if_dsn,
+        fetch_stock_period_macd_states,
+    )
 }
 
 #[cfg(test)]

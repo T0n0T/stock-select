@@ -12,19 +12,26 @@ def build_screen_command(
     recompute: bool,
     pool_source: str,
     export_factors: bool,
+    intraday: bool = False,
 ) -> list[str]:
     command = [
         str(binary),
         "screen",
         "--method",
         method,
-        "--pick-date",
-        pick_date,
-        "--runtime-root",
-        str(runtime_root),
-        "--pool-source",
-        pool_source,
     ]
+    if intraday:
+        command.append("--intraday")
+    command.extend(
+        [
+            "--pick-date",
+            pick_date,
+            "--runtime-root",
+            str(runtime_root),
+            "--pool-source",
+            pool_source,
+        ]
+    )
     if recompute:
         command.append("--recompute")
     if export_factors:

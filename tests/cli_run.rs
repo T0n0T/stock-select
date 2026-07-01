@@ -2,7 +2,9 @@ use assert_cmd::Command;
 use chrono::{Datelike, Duration, NaiveDate};
 use predicates::prelude::*;
 use serde_json::{Value, json};
-use stock_select::cache::{PREPARED_CACHE_SCHEMA_VERSION, prepared_cache_start_date};
+use stock_select::cache::{
+    LOCAL_DERIVED_PREPARED_CACHE_SOURCE, PREPARED_CACHE_SCHEMA_VERSION, prepared_cache_start_date,
+};
 
 const B2_MODEL_FIXTURE_DIR: &str = "tests/fixtures/b2_model";
 
@@ -130,7 +132,7 @@ fn write_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 25,
             "symbol_count": 1,
-            "source_table": "daily_market"
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
         }))
         .unwrap(),
     )
@@ -173,7 +175,7 @@ fn write_intraday_prepared_cache_metadata(root: &std::path::Path, pick_date: Nai
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": 25,
             "symbol_count": 1,
-            "source_table": "daily_market",
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE,
             "mode": "intraday_snapshot",
             "source": "tushare_rt_k"
         }))
@@ -210,7 +212,7 @@ fn write_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) 
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": row_count,
             "symbol_count": 1,
-            "source_table": "daily_market"
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
         }))
         .unwrap(),
     )
@@ -253,7 +255,7 @@ fn write_two_code_selecting_prepared_cache(root: &std::path::Path, pick_date: Na
             "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
             "row_count": row_count,
             "symbol_count": 2,
-            "source_table": "daily_market"
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
         }))
         .unwrap(),
     )
@@ -518,7 +520,7 @@ fn b3_run_uses_method_model_dir_and_factor_profile() {
     assert_eq!(factors["rows"][0]["diagnostics"]["factor_profile"], "b3");
     assert_eq!(
         factors["rows"][0]["diagnostics"]["factor_bundles"],
-        serde_json::json!(["raw_common", "chip_age", "b3_semantic"])
+        serde_json::json!(["raw_common", "b3_semantic"])
     );
 }
 
@@ -1425,25 +1427,27 @@ fn review_list_record_flag_updates_record_when_it_auto_runs_selection() {
     write_two_code_selecting_prepared_cache(temp.path(), pick_date);
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
-    cmd.args([
-        "review-list",
-        "--runtime-root",
-        temp.path().to_str().unwrap(),
-        "--pick-date",
-        "2026-05-25",
-        "--method",
-        "b2",
-        "--environment-state",
-        "strong",
-        "--record",
-        "--record-window-trading-days",
-        "4",
-        "--limit",
-        "1",
-    ])
-    .assert()
-    .success()
-    .stdout(predicate::str::contains("1\t"));
+    cmd.current_dir(temp.path())
+        .env_remove("POSTGRES_DSN")
+        .args([
+            "review-list",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--environment-state",
+            "strong",
+            "--record",
+            "--record-window-trading-days",
+            "4",
+            "--limit",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1\t"));
 
     let record = std::fs::read_to_string(temp.path().join("record.csv")).unwrap();
     assert!(record.contains("000001.SZ"));

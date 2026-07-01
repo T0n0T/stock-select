@@ -145,7 +145,7 @@ class LgbmTuningTest(unittest.TestCase):
                     "feature_set": "raw_plus_signal",
                     "label_column": "rank_label_5d",
                     "boosting_type": "dart",
-                    "categorical_encoding": "native",
+                    "categorical_encoding": "one_hot",
                     "num_leaves": 9,
                     "min_data_in_leaf": 120,
                     "num_boost_round": 80,
@@ -293,7 +293,7 @@ class LgbmTuningTest(unittest.TestCase):
         self.assertEqual(kwargs["feature_set"], "raw_plus_signal")
         self.assertEqual(kwargs["label_column"], "rank_label_5d")
         self.assertEqual(kwargs["boosting_type"], "dart")
-        self.assertEqual(kwargs["categorical_encoding"], "native")
+        self.assertEqual(kwargs["categorical_encoding"], "one_hot")
         self.assertEqual(kwargs["num_boost_round"], 80)
         self.assertEqual(kwargs["learning_rate"], 0.035)
         self.assertEqual(kwargs["early_stopping_rounds"], 0)
@@ -303,7 +303,7 @@ class LgbmTuningTest(unittest.TestCase):
         self.assertIsInstance(captured_study_kwargs["sampler"], FakeSampler)
         self.assertEqual(captured_study_kwargs["sampler"].seed, 29)
         self.assertIn(("categorical", "feature_set", ["raw_numeric", "raw_plus_signal", "raw_plus_signal_macd"]), fake_study.trials[0].suggest_calls)
-        self.assertIn(("categorical", "categorical_encoding", ["one_hot", "native"]), fake_study.trials[0].suggest_calls)
+        self.assertIn(("categorical", "categorical_encoding", ["one_hot"]), fake_study.trials[0].suggest_calls)
         self.assertIn(("categorical", "num_boost_round", [40, 60, 80, 120, 160]), fake_study.trials[0].suggest_calls)
         self.assertIn(("categorical", "early_stopping_rounds", [0, 10, 20, 40]), fake_study.trials[0].suggest_calls)
         self.assertTrue(any(call[0] == "float" and call[1] == "learning_rate" for call in fake_study.trials[0].suggest_calls))
@@ -331,6 +331,120 @@ class LgbmTuningTest(unittest.TestCase):
         self.assertEqual(summary["trials"][0]["rolling_summary"]["test_avg"]["top3_ret3_positive_rate"], 60.0)
         self.assertEqual(summary["trials"][0]["model_params"]["early_stopping_rounds"], 0)
         self.assertEqual(summary["trials"][0]["model_artifacts"]["model"], str(output_root / "optuna-trial-001" / "model.txt"))
+
+    def test_optuna_strategy_requires_explicit_flag_to_search_native_categorical(self):
+        class FakeTrial:
+            number = 0
+
+            def __init__(self):
+                self.params = {}
+                self.suggest_calls = []
+
+            def suggest_categorical(self, name, choices):
+                self.suggest_calls.append(("categorical", name, list(choices)))
+                value = {
+                    "feature_set": "raw_numeric",
+                    "label_column": "rank_label_3d",
+                    "categorical_encoding": "native",
+                    "boosting_type": "gbdt",
+                    "num_leaves": 5,
+                    "min_data_in_leaf": 30,
+                    "num_boost_round": 40,
+                    "bagging_freq": 0,
+                    "early_stopping_rounds": 0,
+                    "lambdarank_truncation_level": 5,
+                }.get(name, list(choices)[0])
+                self.params[name] = value
+                return value
+
+            def suggest_float(self, name, low, _high, **_kwargs):
+                self.params[name] = low
+                return low
+
+            def set_user_attr(self, _name, _value):
+                return None
+
+        class FakeSampler:
+            def __init__(self, *, seed):
+                self.seed = seed
+
+        class FakeStudy:
+            study_name = "fixture-study"
+
+            def __init__(self):
+                self.trials = []
+                self.best_trial = None
+                self.best_value = None
+                self.best_params = None
+
+            def optimize(self, objective, n_trials):
+                for _index in range(n_trials):
+                    trial = FakeTrial()
+                    trial.value = objective(trial)
+                    self.trials.append(trial)
+                self.best_trial = self.trials[0]
+                self.best_value = self.trials[0].value
+                self.best_params = dict(self.trials[0].params)
+
+        fake_study = FakeStudy()
+        fake_optuna = types.SimpleNamespace(
+            __version__="3.4.0",
+            samplers=types.SimpleNamespace(TPESampler=FakeSampler),
+            create_study=lambda **_kwargs: fake_study,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "tuning"
+            dataset = Path(temp_dir) / "rank_dataset.csv"
+            dataset.write_text("date,code,rank_label_3d\n", encoding="utf-8")
+
+            def fake_train_and_report(_dataset, output_dir, **kwargs):
+                report = {
+                    "feature_set": kwargs["feature_set"],
+                    "label_column": kwargs["label_column"],
+                    "model_params": {"categorical_encoding": kwargs["categorical_encoding"]},
+                    "metrics": {
+                        "test": {
+                            "top3_ret3_le_0_rate": 12.0,
+                            "top3_ret3_positive_rate": 62.0,
+                            "top3_ret3_ge_5_rate": 32.0,
+                            "rank_ic_ret3": 0.12,
+                        }
+                    },
+                    "output_dir": str(output_dir),
+                }
+                output_dir.mkdir(parents=True, exist_ok=True)
+                (output_dir / "lgbm_rank_report_raw_numeric.json").write_text(
+                    json.dumps(report),
+                    encoding="utf-8",
+                )
+                return report
+
+            with patch.dict(sys.modules, {"optuna": fake_optuna}):
+                with patch("ml.tuning.optuna_search.train_lgbm_rank.train_and_report", side_effect=fake_train_and_report) as train_and_report:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        rc = main(
+                            [
+                                "tune",
+                                "lgbm-rank",
+                                "--strategy",
+                                "optuna",
+                                "--method",
+                                "b2",
+                                "--dataset",
+                                str(dataset),
+                                "--output-root",
+                                str(output_root),
+                                "--max-trials",
+                                "1",
+                                "--allow-native-categorical",
+                                "--skip-rf-diagnostics",
+                            ]
+                        )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(train_and_report.call_args.kwargs["categorical_encoding"], "native")
+        self.assertIn(("categorical", "categorical_encoding", ["one_hot", "native"]), fake_study.trials[0].suggest_calls)
 
     def test_optuna_visualize_writes_html_files_and_summary(self):
         class FakeTrial:

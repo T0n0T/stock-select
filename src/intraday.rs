@@ -28,6 +28,44 @@ pub struct IntradaySnapshotRow {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MacdPeriodState {
+    pub ts_code: String,
+    pub period_type: String,
+    pub ema12: f64,
+    pub ema26: f64,
+    pub dea: f64,
+    pub period_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveMacdValue {
+    pub ts_code: String,
+    pub period_type: String,
+    pub dif: f64,
+    pub dea: f64,
+    pub hist: f64,
+    pub period_count: i32,
+}
+
+pub fn derive_live_macd_from_period_state(
+    state: &MacdPeriodState,
+    price_live_qfq: f64,
+) -> LiveMacdValue {
+    let ema12 = state.ema12 * (11.0 / 13.0) + price_live_qfq * (2.0 / 13.0);
+    let ema26 = state.ema26 * (25.0 / 27.0) + price_live_qfq * (2.0 / 27.0);
+    let dif = ema12 - ema26;
+    let dea = state.dea * 0.8 + dif * 0.2;
+    LiveMacdValue {
+        ts_code: state.ts_code.clone(),
+        period_type: state.period_type.clone(),
+        dif,
+        dea,
+        hist: dif - dea,
+        period_count: state.period_count + 1,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct RawRtKRow {
     fields: BTreeMap<String, Value>,
 }
@@ -212,6 +250,15 @@ pub fn build_intraday_market_rows(
     snapshot: &[IntradaySnapshotRow],
     trade_date: NaiveDate,
 ) -> Vec<MarketRow> {
+    build_intraday_market_rows_with_macd_states(history, snapshot, trade_date, &[])
+}
+
+pub fn build_intraday_market_rows_with_macd_states(
+    history: Vec<MarketRow>,
+    snapshot: &[IntradaySnapshotRow],
+    trade_date: NaiveDate,
+    macd_states: &[MacdPeriodState],
+) -> Vec<MarketRow> {
     let snapshot_codes = snapshot
         .iter()
         .map(|row| row.ts_code.as_str())
@@ -237,6 +284,32 @@ pub fn build_intraday_market_rows(
                 acc
             },
         );
+    let latest_structure_factors_by_code = history
+        .iter()
+        .filter(|row| row.trade_date < trade_date)
+        .fold(
+            BTreeMap::<String, (NaiveDate, BTreeMap<String, f64>)>::new(),
+            |mut acc, row| {
+                let structure_factors = previous_eod_structure_factors(row);
+                if structure_factors.is_empty() {
+                    return acc;
+                }
+                if acc
+                    .get(row.ts_code.as_str())
+                    .is_none_or(|(current_date, _)| row.trade_date > *current_date)
+                {
+                    acc.insert(row.ts_code.clone(), (row.trade_date, structure_factors));
+                }
+                acc
+            },
+        );
+    let macd_states_by_code = macd_states.iter().fold(
+        BTreeMap::<&str, Vec<&MacdPeriodState>>::new(),
+        |mut acc, state| {
+            acc.entry(state.ts_code.as_str()).or_default().push(state);
+            acc
+        },
+    );
     let mut rows = history
         .into_iter()
         .filter(|row| {
@@ -244,9 +317,34 @@ pub fn build_intraday_market_rows(
         })
         .collect::<Vec<_>>();
     rows.extend(snapshot.iter().map(|row| {
-        let mut db_factors = BTreeMap::new();
+        let mut db_factors = latest_structure_factors_by_code
+            .get(row.ts_code.as_str())
+            .map(|(_date, factors)| factors.clone())
+            .unwrap_or_default();
+        if !db_factors.is_empty() {
+            db_factors.insert("intraday_structure_source_previous_eod".to_string(), 1.0);
+        }
         if row.vol != 0.0 {
             db_factors.insert("chip_vwap".to_string(), row.amount * 10.0 / row.vol);
+        }
+        let adj_factor = latest_adj_factor_by_code
+            .get(row.ts_code.as_str())
+            .map(|(_date, value)| *value);
+        if let Some(adj_factor) = adj_factor.filter(|value| value.is_finite() && *value > 0.0) {
+            let price_live_qfq = row.close * adj_factor;
+            db_factors.insert("intraday_price_live_qfq".to_string(), price_live_qfq);
+            if let Some(states) = macd_states_by_code.get(row.ts_code.as_str()) {
+                for state in states {
+                    let live = derive_live_macd_from_period_state(state, price_live_qfq);
+                    db_factors.insert(format!("macd_{}_dif", live.period_type), live.dif);
+                    db_factors.insert(format!("macd_{}_dea", live.period_type), live.dea);
+                    db_factors.insert(format!("macd_{}_hist", live.period_type), live.hist);
+                    db_factors.insert(
+                        format!("macd_{}_period_count", live.period_type),
+                        f64::from(live.period_count),
+                    );
+                }
+            }
         }
         MarketRow {
             ts_code: row.ts_code.clone(),
@@ -257,9 +355,7 @@ pub fn build_intraday_market_rows(
             close: row.close,
             vol: row.vol,
             turnover_rate: None,
-            adj_factor: latest_adj_factor_by_code
-                .get(row.ts_code.as_str())
-                .map(|(_date, value)| *value),
+            adj_factor,
             db_factors,
         }
     }));
@@ -269,6 +365,21 @@ pub fn build_intraday_market_rows(
             .then(left.trade_date.cmp(&right.trade_date))
     });
     rows
+}
+
+fn previous_eod_structure_factors(row: &MarketRow) -> BTreeMap<String, f64> {
+    row.db_factors
+        .iter()
+        .filter(|(key, value)| {
+            value.is_finite()
+                && (key.starts_with("rolling_")
+                    || key.starts_with("left_peak_")
+                    || key.starts_with("ths_")
+                    || key.starts_with("stock_vs_ths_")
+                    || key.starts_with("stock_env_"))
+        })
+        .map(|(key, value)| (key.clone(), *value))
+        .collect()
 }
 
 fn normalize_rt_k_row(

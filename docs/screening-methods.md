@@ -8,7 +8,7 @@
 
 ## 公共流程
 
-`screen` 会读取从 `pick_date` 往前 3 年同日到 `pick_date` 的行情窗口，并在进入具体策略前先完成预处理和股票池裁剪。EOD prepared cache 写入后会按日期保留最近 30 个 EOD artifact；可用 `STOCK_SELECT_PREPARED_CACHE_LIMIT` 调整保留数量。盘中 prepared cache 不计入这个保留数量，也不会被该策略清理。
+`screen` 以 stock-cache DB-native 日线窗口为主路径，读取截至 `pick_date` 的约 252 个交易日预计算行情和指标，并在进入具体策略前先完成预处理和股票池裁剪。EOD prepared cache 写入后会按日期保留最近 30 个 EOD artifact；可用 `STOCK_SELECT_PREPARED_CACHE_LIMIT` 调整保留数量。盘中 prepared cache 不计入这个保留数量，也不会被该策略清理。
 
 ### 预处理字段
 

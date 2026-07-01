@@ -40,6 +40,24 @@ class CandidateBackfillTest(unittest.TestCase):
 
         self.assertEqual(missing, ["2026-06-04"])
 
+    def test_select_missing_dates_can_target_intraday_candidates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime_root = Path(temp_dir)
+            candidate_dir = runtime_root / "candidates"
+            candidate_dir.mkdir()
+            (candidate_dir / "2026-06-03.b2.json").write_text("{}", encoding="utf-8")
+            (candidate_dir / "2026-06-04.intraday.b2.json").write_text("{}", encoding="utf-8")
+
+            missing = select_missing_dates(
+                ["2026-06-03", "2026-06-04"],
+                runtime_root=runtime_root,
+                method="b2",
+                skip_existing=True,
+                intraday=True,
+            )
+
+        self.assertEqual(missing, ["2026-06-03"])
+
     def test_select_missing_dates_requires_factor_artifacts_when_exporting_factors(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime_root = Path(temp_dir)
@@ -93,6 +111,21 @@ class CandidateBackfillTest(unittest.TestCase):
             export_factors=True,
         )
 
+        self.assertIn("--export-factors", command)
+
+    def test_build_screen_command_can_request_intraday_runtime_factor_export(self):
+        command = build_screen_command(
+            binary=Path("target/debug/stock-select-rs"),
+            pick_date="2026-06-03",
+            runtime_root=Path("/tmp/runtime"),
+            method="b2",
+            recompute=False,
+            pool_source="turnover-top",
+            export_factors=True,
+            intraday=True,
+        )
+
+        self.assertIn("--intraday", command)
         self.assertIn("--export-factors", command)
 
     def test_run_backfill_dry_run_does_not_call_runner(self):

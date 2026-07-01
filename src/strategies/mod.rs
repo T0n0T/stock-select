@@ -38,7 +38,32 @@ pub(crate) fn sort_candidates(candidates: &mut [Candidate]) {
 }
 
 pub(crate) fn latest_monthly_macd_dea_positive(history: &[&PreparedRow]) -> bool {
+    if let Some(value) = latest_db_factor(history, "macd_monthly_dea") {
+        return value > 0.0;
+    }
     latest_macd_dea_positive(&monthly_asof_closes(history))
+}
+
+pub(crate) fn latest_period_macd_dif_and_dea_positive(
+    history: &[&PreparedRow],
+    dif_key: &str,
+    dea_key: &str,
+    fallback_closes: &[f64],
+) -> bool {
+    match (
+        latest_db_factor(history, dif_key),
+        latest_db_factor(history, dea_key),
+    ) {
+        (Some(dif), Some(dea)) => dif > 0.0 && dea > 0.0,
+        _ => latest_macd_dif_and_dea_positive(fallback_closes),
+    }
+}
+
+fn latest_db_factor(history: &[&PreparedRow], key: &str) -> Option<f64> {
+    history
+        .last()
+        .and_then(|row| row.db_factors.get(key).copied())
+        .filter(|value| value.is_finite())
 }
 
 pub(crate) fn latest_macd_dea_positive(closes: &[f64]) -> bool {

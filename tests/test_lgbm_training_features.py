@@ -80,6 +80,30 @@ class LgbmTrainingFeaturesTest(unittest.TestCase):
         finally:
             rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
+    def test_select_feature_columns_skips_unstable_zero_coverage_raw_factors(self):
+        columns = [
+            "date",
+            "code",
+            "close_to_zxdkx_pct",
+            "cyq_winner_rate",
+            "cyq_cost_50_to_close_pct",
+            "cyq_cost_85_to_close_pct",
+            "cyq_weight_avg_to_close_pct",
+            "cyq_cost_70_width_pct",
+            "cyq_cost_90_width_pct",
+            "bar_lower_shadow_pct",
+            "bar_amplitude_pct",
+            "bar_body_pct",
+            "signal_prev_b2_flag",
+            "signal_b3_plus_flag",
+            "rank_label_3d",
+        ]
+
+        numeric, categorical = select_feature_columns(columns, feature_set="raw_numeric", method="b2")
+
+        self.assertEqual(numeric, ["close_to_zxdkx_pct"])
+        self.assertEqual(categorical, [])
+
     def test_validate_selected_feature_coverage_fails_zero_coverage_feature(self):
         rows = [
             {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "b3_volume_shrink_ratio": ""},

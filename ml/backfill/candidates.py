@@ -33,6 +33,7 @@ class BackfillConfig:
     pool_source: str = DEFAULT_POOL_SOURCE
     dry_run: bool = False
     quiet: bool = True
+    intraday: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ def select_missing_dates(
     method: str,
     skip_existing: bool = True,
     require_factor_artifact: bool = False,
+    intraday: bool = False,
 ) -> list[str]:
     dates = sorted(dict.fromkeys(validate_date(item) for item in trade_dates))
     if not skip_existing:
@@ -66,8 +68,11 @@ def select_missing_dates(
     return [
         pick_date
         for pick_date in dates
-        if not candidate_path(runtime_root, pick_date, method).exists()
-        or (require_factor_artifact and not factor_artifact_path(runtime_root, pick_date, method).exists())
+        if not candidate_path(runtime_root, pick_date, method, intraday=intraday).exists()
+        or (
+            require_factor_artifact
+            and not factor_artifact_path(runtime_root, pick_date, method, intraday=intraday).exists()
+        )
     ]
 
 
@@ -85,6 +90,7 @@ def _run_one(
         recompute=config.recompute,
         pool_source=config.pool_source,
         export_factors=config.export_factors,
+        intraday=config.intraday,
     )
     completed = runner(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
     return pick_date, completed
@@ -121,6 +127,7 @@ def run_backfill(
                 recompute=config.recompute,
                 pool_source=config.pool_source,
                 export_factors=config.export_factors,
+                intraday=config.intraday,
             )
             completed_count += 1
             try:
@@ -173,6 +180,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dates-file", type=Path)
     parser.add_argument("--recompute", action="store_true")
     parser.add_argument("--export-factors", action="store_true")
+    parser.add_argument("--intraday", action="store_true")
     parser.add_argument("--no-skip-existing", action="store_true")
     parser.add_argument("--force", action="store_true", dest="no_skip_existing", help="Compatibility alias for --no-skip-existing.")
     parser.add_argument("--dry-run", action="store_true")
@@ -212,6 +220,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         method=args.method,
         skip_existing=not args.no_skip_existing,
         require_factor_artifact=args.export_factors,
+        intraday=args.intraday,
     )
     skipped_count = len(trade_dates) - len(selected_dates)
     print(
@@ -229,6 +238,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         pool_source=args.pool_source,
         dry_run=args.dry_run,
         quiet=args.quiet,
+        intraday=args.intraday,
     )
     if args.dry_run:
         for pick_date in selected_dates:
@@ -240,6 +250,7 @@ def main_from_args(args: argparse.Namespace) -> int:
                 recompute=config.recompute,
                 pool_source=config.pool_source,
                 export_factors=config.export_factors,
+                intraday=config.intraday,
             )
             print(shlex.join(command))
     try:

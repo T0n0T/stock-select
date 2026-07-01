@@ -107,6 +107,41 @@ def validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_native_parity_report(
+    candidate_dir: Path,
+    *,
+    model_sha256: str,
+    metadata_sha256: str,
+) -> dict[str, Any]:
+    path = candidate_dir / "native_parity_report.json"
+    if not path.exists():
+        raise ValueError(f"native categorical 模型发布前必须提供 native_parity_report.json: {path}")
+    report = read_json(path)
+    status = str(report.get("status") or "")
+    if status != "passed":
+        raise ValueError(f"native parity report status 必须是 passed: {path}")
+    if report.get("model_sha256") != model_sha256:
+        raise ValueError("native parity report model_sha256 与当前 model.txt 不一致")
+    if report.get("metadata_sha256") != metadata_sha256:
+        raise ValueError("native parity report metadata_sha256 与当前 model_metadata.json 不一致")
+    sample_count = report.get("sample_count")
+    if not isinstance(sample_count, int) or sample_count <= 0:
+        raise ValueError("native parity report sample_count 必须为正整数")
+    max_abs_diff = report.get("max_abs_diff")
+    tolerance = report.get("tolerance")
+    if not isinstance(max_abs_diff, (int, float)) or not isinstance(tolerance, (int, float)):
+        raise ValueError("native parity report max_abs_diff/tolerance 必须是数字")
+    if float(max_abs_diff) > float(tolerance):
+        raise ValueError("native parity report max_abs_diff 超过 tolerance")
+    return {
+        "path": str(path),
+        "status": status,
+        "sample_count": sample_count,
+        "max_abs_diff": float(max_abs_diff),
+        "tolerance": float(tolerance),
+    }
+
+
 def find_report(candidate_dir: Path, explicit_report: Path | None = None) -> Path | None:
     if explicit_report is not None:
         return explicit_report
@@ -262,6 +297,15 @@ def validate_model_artifacts(
         raise ValueError(f"候选模型缺少 model_metadata.json: {metadata_path}")
     metadata = read_json(metadata_path)
     metadata_summary = validate_metadata(metadata)
+    model_sha256 = file_hash(model_path)
+    metadata_sha256 = file_hash(metadata_path)
+    native_parity = None
+    if metadata_summary.get("categorical_encoding") == "native":
+        native_parity = validate_native_parity_report(
+            candidate_dir,
+            model_sha256=model_sha256,
+            metadata_sha256=metadata_sha256,
+        )
 
     resolved_report = find_report(candidate_dir, report_path)
     report_summary = None
@@ -279,8 +323,9 @@ def validate_model_artifacts(
         "candidate_dir": str(candidate_dir),
         "model_path": str(model_path),
         "metadata_path": str(metadata_path),
-        "model_sha256": file_hash(model_path),
-        "metadata_sha256": file_hash(metadata_path),
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "native_parity": native_parity,
         "report": report_summary,
         "decision": decision,
     }
@@ -440,13 +485,20 @@ def list_archived_models(target_dir: Path | None = None, *, expected_method: str
     method = expected_method or target_dir.name
     rows: list[dict[str, Any]] = []
     for path in archive_dirs_for_target(target_dir):
+        try:
+            validation = validate_model_artifacts(path, expected_method=method)
+        except ValueError as exc:
+            validation = {
+                "decision": "blocked",
+                "error": str(exc),
+            }
         rows.append(
             {
                 "mode": "list-archives",
                 "version": path.name,
                 "source": str(path),
                 "target": str(target_dir),
-                "validation": validate_model_artifacts(path, expected_method=method),
+                "validation": validation,
             }
         )
     return rows
@@ -561,6 +613,15 @@ def print_chinese_summary(summary: dict[str, Any]) -> None:
     print(f"打分窗口: {validation.get('score_window')}")
     print(f"model_sha256: {validation.get('model_sha256')}")
     print(f"metadata_sha256: {validation.get('metadata_sha256')}")
+    native_parity = validation.get("native_parity")
+    if native_parity:
+        print(
+            "native parity: "
+            f"status={native_parity.get('status')} "
+            f"samples={native_parity.get('sample_count')} "
+            f"max_abs_diff={native_parity.get('max_abs_diff')} "
+            f"tolerance={native_parity.get('tolerance')}"
+        )
     if report:
         print(f"训练报告: {report.get('report_path')}")
         print(f"rolling 折数: {report.get('rolling_fold_count')}")

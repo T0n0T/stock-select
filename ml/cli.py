@@ -11,6 +11,7 @@ from .backfill import runs as backfill_runs
 from .dataset import rank_dataset
 from .diagnostics import controlled_rerank
 from .model_ops import archive as model_archive
+from .model_ops import native_parity as model_native_parity
 from .model_ops import promote as model_promote
 from .model_ops import status as model_status
 from .scoring import export_lgbm_scores, score_blends
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     model_promote.add_dry_run_promote_parser(model_subparsers)
     model_promote.add_promote_parser(model_subparsers)
     model_promote.add_rollback_parser(model_subparsers)
+    model_native_parity.add_native_parity_parser(model_subparsers)
     return parser
 
 

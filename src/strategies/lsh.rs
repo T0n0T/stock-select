@@ -4,8 +4,8 @@ use chrono::NaiveDate;
 
 use crate::model::{Candidate, PreparedRow};
 use crate::strategies::{
-    StrategyOutput, group_refs_by_symbol, latest_macd_dif_and_dea_positive, monthly_asof_closes,
-    sort_candidates, weekly_asof_closes,
+    StrategyOutput, group_refs_by_symbol, latest_period_macd_dif_and_dea_positive,
+    monthly_asof_closes, sort_candidates, weekly_asof_closes,
 };
 
 pub fn run_lsh_strategy(rows: &[PreparedRow], pick_date: NaiveDate) -> StrategyOutput {
@@ -80,8 +80,17 @@ pub fn run_lsh_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) -
 }
 
 fn weekly_monthly_macd_positive(history: &[&PreparedRow]) -> bool {
-    latest_macd_dif_and_dea_positive(&weekly_asof_closes(history))
-        && latest_macd_dif_and_dea_positive(&monthly_asof_closes(history))
+    latest_period_macd_dif_and_dea_positive(
+        history,
+        "macd_weekly_dif",
+        "macd_weekly_dea",
+        &weekly_asof_closes(history),
+    ) && latest_period_macd_dif_and_dea_positive(
+        history,
+        "macd_monthly_dif",
+        "macd_monthly_dea",
+        &monthly_asof_closes(history),
+    )
 }
 
 #[cfg(test)]
@@ -113,6 +122,32 @@ mod tests {
         let pick_date = first_date + Duration::days(429);
         let mut rows = rows(first_date, 430, false);
         satisfy_lsh_daily_formula(&mut rows);
+
+        let output = run_lsh_strategy(&rows, pick_date);
+
+        assert!(output.candidates.is_empty());
+        assert_eq!(output.stats["fail_macd"], 1);
+    }
+
+    #[test]
+    fn lsh_strategy_prefers_db_weekly_monthly_macd_when_available() {
+        let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let pick_date = first_date + Duration::days(429);
+        let mut rows = rows(first_date, 430, true);
+        satisfy_lsh_daily_formula(&mut rows);
+        let latest = rows.last_mut().unwrap();
+        latest
+            .db_factors
+            .insert("macd_weekly_dif".to_string(), 0.4);
+        latest
+            .db_factors
+            .insert("macd_weekly_dea".to_string(), 0.2);
+        latest
+            .db_factors
+            .insert("macd_monthly_dif".to_string(), 0.3);
+        latest
+            .db_factors
+            .insert("macd_monthly_dea".to_string(), -0.1);
 
         let output = run_lsh_strategy(&rows, pick_date);
 
@@ -163,7 +198,7 @@ mod tests {
         assert!(dea.last().is_some_and(|value| *value > 0.0));
         assert!(hist.last().is_some_and(|value| *value < 0.0));
 
-        assert!(super::latest_macd_dif_and_dea_positive(&closes));
+        assert!(crate::strategies::latest_macd_dif_and_dea_positive(&closes));
     }
 
     fn satisfy_lsh_daily_formula(rows: &mut [PreparedRow]) {
