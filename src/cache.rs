@@ -10,16 +10,19 @@ use serde_json::{Value, json};
 use crate::model::{Method, PreparedRow};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 8;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 11;
+pub const DB_NATIVE_PREPARED_CACHE_SOURCE: &str = "stock-cache-db-native";
+pub const LOCAL_DERIVED_PREPARED_CACHE_SOURCE: &str = "prepared-local-derived";
 pub const DEFAULT_PREPARED_CACHE_RETENTION_LIMIT: usize = 30;
 pub const PREPARED_CACHE_RETENTION_LIMIT_ENV: &str = "STOCK_SELECT_PREPARED_CACHE_LIMIT";
+pub const MIN_DB_NATIVE_WINDOW_TRADING_DAYS: u32 = 235;
 const LEGACY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRBIN1";
 const DICTIONARY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRDIC2";
 const ZSTD_FRAME_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
 const PREPARED_CACHE_ZSTD_LEVEL: i32 = 1;
 
 pub fn prepared_cache_start_date(end_date: NaiveDate) -> NaiveDate {
-    date_years_before(end_date, 3)
+    date_years_before(end_date, 1)
 }
 
 fn date_years_before(date: NaiveDate, years: i32) -> NaiveDate {
@@ -63,6 +66,16 @@ pub struct PreparedCacheMetadata {
     pub compression: Option<String>,
     #[serde(default)]
     pub encoding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_trading_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_start_date: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_end_date: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub calc_versions: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub membership_sources: BTreeMap<String, String>,
 }
 
 pub fn prepared_cache_data_path(runtime_root: &Path, pick_date: NaiveDate) -> PathBuf {
@@ -123,6 +136,32 @@ pub fn write_prepared_cache(
         false,
         rows,
     )
+}
+
+pub fn write_db_native_prepared_cache(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    window_trading_days: u32,
+    rows: &[PreparedRow],
+) -> anyhow::Result<()> {
+    let paths = prepared_cache_paths(runtime_root, pick_date, false);
+    write_prepared_cache_rows_file(&paths.data_path, rows)?;
+    write_json(
+        &paths.meta_path,
+        &build_db_native_metadata(
+            method,
+            pick_date,
+            start_date,
+            end_date,
+            window_trading_days,
+            rows,
+        ),
+    )?;
+    prune_eod_prepared_cache_to_limit(runtime_root, prepared_cache_retention_limit()?)?;
+    Ok(())
 }
 
 pub fn write_prepared_cache_for_mode(
@@ -273,14 +312,58 @@ fn build_metadata(
         schema_version: PREPARED_CACHE_SCHEMA_VERSION,
         row_count: rows.len(),
         symbol_count,
-        source_table: "daily_market".to_string(),
+        source_table: LOCAL_DERIVED_PREPARED_CACHE_SOURCE.to_string(),
         mode: intraday.then(|| "intraday_snapshot".to_string()),
         source: intraday.then(|| "tushare_rt_k".to_string()),
         run_id: None,
         previous_trade_date: None,
         compression: Some("zstd".to_string()),
         encoding: Some("dictionary_v2".to_string()),
+        window_trading_days: None,
+        window_start_date: None,
+        window_end_date: None,
+        calc_versions: BTreeMap::new(),
+        membership_sources: BTreeMap::new(),
     }
+}
+
+fn build_db_native_metadata(
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    requested_window_trading_days: u32,
+    rows: &[PreparedRow],
+) -> PreparedCacheMetadata {
+    let mut metadata = build_metadata(method, pick_date, start_date, end_date, false, rows);
+    metadata.source_table = DB_NATIVE_PREPARED_CACHE_SOURCE.to_string();
+    metadata.source = Some(DB_NATIVE_PREPARED_CACHE_SOURCE.to_string());
+    let (window_start_date, window_end_date, window_trading_days) = prepared_row_window(rows)
+        .unwrap_or((start_date, end_date, requested_window_trading_days));
+    metadata.start_date = window_start_date;
+    metadata.end_date = window_end_date;
+    metadata.window_trading_days = Some(window_trading_days);
+    metadata.window_start_date = Some(window_start_date);
+    metadata.window_end_date = Some(window_end_date);
+    metadata.calc_versions = BTreeMap::from([
+        ("macd".to_string(), "macd_qfq_12_26_9_v1".to_string()),
+        ("rolling".to_string(), "rolling_qfq_v1".to_string()),
+        ("left_peak".to_string(), "left_peak_qfq_v1".to_string()),
+    ]);
+    metadata.membership_sources =
+        BTreeMap::from([("ths".to_string(), "current_index_ths_member".to_string())]);
+    metadata
+}
+
+fn prepared_row_window(rows: &[PreparedRow]) -> Option<(NaiveDate, NaiveDate, u32)> {
+    let dates = rows
+        .iter()
+        .map(|row| row.trade_date)
+        .collect::<BTreeSet<_>>();
+    let start_date = dates.first().copied()?;
+    let end_date = dates.last().copied()?;
+    let trading_days = u32::try_from(dates.len()).ok()?;
+    Some((start_date, end_date, trading_days))
 }
 
 fn write_prepared_cache_rows_file(path: &Path, rows: &[PreparedRow]) -> anyhow::Result<()> {
@@ -536,11 +619,38 @@ pub fn load_prepared_cache_for_mode(
     if rows.len() != metadata.row_count {
         return Ok(None);
     }
+    if !decoded_rows_match_db_native_window(&metadata, start_date, end_date, &rows) {
+        return Ok(None);
+    }
     if !rows.iter().any(|row| row.trade_date == end_date) {
         return Ok(None);
     }
 
     Ok(Some(rows))
+}
+
+fn decoded_rows_match_db_native_window(
+    metadata: &PreparedCacheMetadata,
+    requested_start_date: NaiveDate,
+    requested_end_date: NaiveDate,
+    rows: &[PreparedRow],
+) -> bool {
+    if metadata.source_table != DB_NATIVE_PREPARED_CACHE_SOURCE
+        || metadata.mode.as_deref() == Some("intraday_snapshot")
+    {
+        return true;
+    }
+    let trade_dates = rows
+        .iter()
+        .map(|row| row.trade_date)
+        .collect::<BTreeSet<_>>();
+    let Some(actual_start) = trade_dates.first().copied() else {
+        return false;
+    };
+    actual_start >= requested_start_date
+        && trade_dates.last().copied() == Some(requested_end_date)
+        && u32::try_from(trade_dates.len())
+            .is_ok_and(|len| len >= MIN_DB_NATIVE_WINDOW_TRADING_DAYS)
 }
 
 fn metadata_matches(
@@ -554,10 +664,21 @@ fn metadata_matches(
         && metadata_schema_matches(metadata.schema_version)
         && metadata_method_matches(metadata, method)
         && metadata.pick_date == pick_date
-        && (metadata.start_date == start_date
-            || metadata.mode.as_deref() == Some("intraday_snapshot"))
+        && metadata_window_matches(metadata, start_date)
         && metadata.end_date == end_date
-        && metadata.source_table == "daily_market"
+        && (metadata.source_table == LOCAL_DERIVED_PREPARED_CACHE_SOURCE
+            || metadata.source_table == DB_NATIVE_PREPARED_CACHE_SOURCE)
+}
+
+fn metadata_window_matches(metadata: &PreparedCacheMetadata, start_date: NaiveDate) -> bool {
+    if metadata.start_date == start_date || metadata.mode.as_deref() == Some("intraday_snapshot") {
+        return true;
+    }
+    metadata.source_table == DB_NATIVE_PREPARED_CACHE_SOURCE
+        && metadata.start_date >= start_date
+        && metadata
+            .window_trading_days
+            .is_some_and(|days| days >= MIN_DB_NATIVE_WINDOW_TRADING_DAYS)
 }
 
 fn metadata_schema_matches(schema_version: u32) -> bool {

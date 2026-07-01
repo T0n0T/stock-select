@@ -1,9 +1,12 @@
 import signal
+import sys
 import tempfile
+import types
 import unittest
+from datetime import date
 from pathlib import Path
 
-from ml.dates import read_dates_file, validate_date, weekday_fallback
+from ml.dates import fetch_trade_dates, read_dates_file, validate_date, weekday_fallback
 from ml.env import load_dotenv_values, resolve_config_value
 from ml.paths import candidate_path, factor_artifact_path, select_dir
 from ml.subprocesses import format_returncode
@@ -34,6 +37,60 @@ class MlCommonTest(unittest.TestCase):
         self.assertEqual(candidate_path(root, "2026-06-01", "b3"), root / "candidates" / "2026-06-01.b3.json")
         self.assertEqual(factor_artifact_path(root, "2026-06-01", "b3"), root / "factors" / "2026-06-01.b3" / "factors.json")
         self.assertEqual(select_dir(root, "2026-06-01", "b3"), root / "select" / "2026-06-01.b3")
+        self.assertEqual(
+            candidate_path(root, "2026-06-01", "b2", intraday=True),
+            root / "candidates" / "2026-06-01.intraday.b2.json",
+        )
+        self.assertEqual(
+            factor_artifact_path(root, "2026-06-01", "b2", intraday=True),
+            root / "factors" / "2026-06-01.intraday.b2" / "factors.json",
+        )
+        self.assertEqual(
+            select_dir(root, "2026-06-01", "b2", intraday=True),
+            root / "select" / "2026-06-01.intraday.b2",
+        )
+
+    def test_fetch_trade_dates_uses_stock_cache_factor_table(self):
+        captured: dict[str, object] = {}
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, query, params):
+                captured["query"] = query
+                captured["params"] = params
+
+            def fetchall(self):
+                return [(date(2026, 6, 1),), (date(2026, 6, 2),)]
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def cursor(self):
+                return FakeCursor()
+
+        previous = sys.modules.get("psycopg")
+        sys.modules["psycopg"] = types.SimpleNamespace(connect=lambda _dsn: FakeConnection())
+        try:
+            dates = fetch_trade_dates("postgresql://fixture", "2026-06-01", "2026-06-03")
+        finally:
+            if previous is None:
+                sys.modules.pop("psycopg", None)
+            else:
+                sys.modules["psycopg"] = previous
+
+        query = str(captured["query"]).lower()
+        self.assertEqual(dates, ["2026-06-01", "2026-06-02"])
+        self.assertIn("stock_stk_factor_pro", query)
+        self.assertNotIn("daily_market", query)
 
     def test_format_returncode_labels_signals(self):
         self.assertEqual(format_returncode(-signal.SIGKILL), "signal=SIGKILL")

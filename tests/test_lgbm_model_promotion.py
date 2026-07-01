@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ml.model_ops.promote import (
     describe_current_model,
+    file_hash,
     list_archived_models,
     main,
     promote_model,
@@ -79,6 +80,22 @@ def passing_report() -> dict:
     }
 
 
+def write_native_parity_report(candidate: Path, *, status: str = "passed", max_abs_diff: float = 0.0) -> None:
+    (candidate / "native_parity_report.json").write_text(
+        json.dumps(
+            {
+                "status": status,
+                "sample_count": 3,
+                "max_abs_diff": max_abs_diff,
+                "tolerance": 1e-9,
+                "model_sha256": file_hash(candidate / "model.txt"),
+                "metadata_sha256": file_hash(candidate / "model_metadata.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class LgbmModelPromotionTest(unittest.TestCase):
     def test_default_target_dir_prefers_shell_env_over_dotenv_runtime_root(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -137,7 +154,7 @@ class LgbmModelPromotionTest(unittest.TestCase):
             self.assertEqual(card["routing"]["models"], ["neutral_rf", "strong_sw4"])
             self.assertTrue((target / "models" / "strong_sw4" / "model.txt").exists())
 
-    def test_validate_model_artifacts_accepts_native_categorical_metadata(self):
+    def test_validate_model_artifacts_rejects_native_categorical_without_parity_report(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             candidate = Path(temp_dir) / "candidate"
             write_candidate_model(candidate, report=passing_report())
@@ -153,10 +170,52 @@ class LgbmModelPromotionTest(unittest.TestCase):
             )
             metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 
+            with self.assertRaisesRegex(ValueError, "native_parity_report.json"):
+                validate_model_artifacts(candidate)
+
+    def test_validate_model_artifacts_accepts_native_categorical_with_passing_parity_report(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = Path(temp_dir) / "candidate"
+            write_candidate_model(candidate, report=passing_report())
+            metadata_path = candidate / "model_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update(
+                {
+                    "categorical_encoding": "native",
+                    "categorical_code_maps": {"env": {"weak": 0, "strong": 1}},
+                    "feature_names": ["close_to_zxdkx_pct", "env"],
+                    "lightgbm_feature_names": ["close_to_zxdkx_pct", "env"],
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            write_native_parity_report(candidate)
+
             summary = validate_model_artifacts(candidate)
 
         self.assertEqual(summary["feature_count"], 2)
         self.assertEqual(summary["categorical_encoding"], "native")
+        self.assertEqual(summary["native_parity"]["status"], "passed")
+
+    def test_validate_model_artifacts_rejects_native_categorical_with_stale_parity_hash(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = Path(temp_dir) / "candidate"
+            write_candidate_model(candidate, report=passing_report())
+            metadata_path = candidate / "model_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update(
+                {
+                    "categorical_encoding": "native",
+                    "categorical_code_maps": {"env": {"weak": 0, "strong": 1}},
+                    "feature_names": ["close_to_zxdkx_pct", "env"],
+                    "lightgbm_feature_names": ["close_to_zxdkx_pct", "env"],
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            write_native_parity_report(candidate)
+            (candidate / "model.txt").write_text("changed\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "parity.*model_sha256"):
+                validate_model_artifacts(candidate)
 
     def test_validate_model_artifacts_rejects_native_categorical_without_code_map(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -290,6 +349,29 @@ class LgbmModelPromotionTest(unittest.TestCase):
             self.assertEqual([row["version"] for row in rows], ["20260602T000000Z", "20260601T000000Z"])
             self.assertEqual(rows[0]["validation"]["feature_count"], 3)
             self.assertEqual(rows[0]["validation"]["label_column"], "rank_label_3d")
+
+    def test_list_archived_models_keeps_rows_with_validation_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "runtime" / "models" / "b2"
+            archive = target.parent / "archive" / "b2" / "20260601T000000Z"
+            write_candidate_model(archive, report=passing_report())
+            metadata_path = archive / "model_metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata.update(
+                {
+                    "categorical_encoding": "native",
+                    "categorical_code_maps": {"env": {"weak": 0, "strong": 1}},
+                    "feature_names": ["close_to_zxdkx_pct", "env"],
+                    "lightgbm_feature_names": ["close_to_zxdkx_pct", "env"],
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            rows = list_archived_models(target)
+
+        self.assertEqual([row["version"] for row in rows], ["20260601T000000Z"])
+        self.assertEqual(rows[0]["validation"]["decision"], "blocked")
+        self.assertIn("native_parity_report.json", rows[0]["validation"]["error"])
 
     def test_archives_are_scoped_by_method_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:

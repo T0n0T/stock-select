@@ -99,7 +99,7 @@ fn candidate_payload_factor_provider_uses_candidate_method_factor_profile() {
     assert_eq!(row.diagnostics["factor_profile"], "b3");
     assert_eq!(
         row.diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "chip_age", "b3_semantic"])
+        serde_json::json!(["raw_common", "b3_semantic"])
     );
 }
 
@@ -154,12 +154,9 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
         row.factors.get("macd_hist_slope_3d_to_close_pct"),
         Some(&FactorValue::Number(1.0909))
     );
-    assert_eq!(
-        row.diagnostics
-            .get("history_factor_count")
-            .and_then(|value| value.as_u64()),
-        Some(82)
-    );
+    assert!(row.factors.contains_key("structure_zxdkx"));
+    assert!(!row.factors.contains_key("chip_entropy"));
+    assert!(!row.factors.contains_key("chip_age_ultrashort_ratio"));
 }
 
 #[test]

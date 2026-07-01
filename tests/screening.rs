@@ -4,24 +4,26 @@ use stock_select::cache::{
     prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
     write_prepared_cache_for_mode,
 };
-use stock_select::intraday::{RawRtKRow, StaticRtKProvider};
+use stock_select::intraday::{MacdPeriodState, RawRtKRow, StaticRtKProvider};
 use stock_select::model::{MarketRow, Method, PreparedRow};
 use stock_select::screening::{
-    PoolSource, ScreenRequest, prepared_cache_start_date, run_intraday_screen_with_loaders,
-    run_intraday_screen_with_provider, run_screen_with_loader, screen_window,
+    PoolSource, ScreenRequest, prepared_cache_start_date,
+    run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_loader,
+    run_intraday_screen_with_loaders, run_intraday_screen_with_provider, run_screen_with_loader,
+    screen_window,
 };
 
 #[test]
-fn screen_window_uses_three_year_prepared_history() {
+fn screen_window_uses_one_year_prepared_history() {
     let pick_date = NaiveDate::from_ymd_opt(2026, 6, 23).unwrap();
 
     assert_eq!(
         screen_window(pick_date),
-        (NaiveDate::from_ymd_opt(2023, 6, 23).unwrap(), pick_date)
+        (NaiveDate::from_ymd_opt(2025, 6, 23).unwrap(), pick_date)
     );
     assert_eq!(
         prepared_cache_start_date(pick_date),
-        NaiveDate::from_ymd_opt(2023, 6, 23).unwrap()
+        NaiveDate::from_ymd_opt(2025, 6, 23).unwrap()
     );
 }
 
@@ -76,6 +78,209 @@ fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
     assert_eq!(payload["pool_source"], "turnover-top");
     assert_eq!(payload["count"], 0);
     assert_eq!(payload["candidates"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn db_native_screen_writes_db_native_prepared_cache_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let requested_window_start = prepared_cache_start_date(pick_date);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+        assert_eq!(start_date, requested_window_start);
+        assert_eq!(end_date, pick_date);
+        Ok((0..365)
+            .map(|offset| {
+                market_row_at_date(
+                    requested_window_start + Duration::days(offset),
+                    10.0 + offset as f64 * 0.01,
+                    100.0,
+                )
+            })
+            .chain(std::iter::once(market_row_at_date(
+                pick_date, 12.52, 100.0,
+            )))
+            .collect())
+    })
+    .unwrap();
+
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(temp.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(metadata["source_table"], "stock-cache-db-native");
+    assert_eq!(metadata["source"], "stock-cache-db-native");
+    assert_eq!(metadata["start_date"], requested_window_start.to_string());
+    assert_eq!(metadata["end_date"], pick_date.to_string());
+    assert_eq!(metadata["window_trading_days"], 366);
+    assert_eq!(metadata["window_start_date"], requested_window_start.to_string());
+    assert_eq!(metadata["window_end_date"], pick_date.to_string());
+    assert_eq!(metadata["calc_versions"]["macd"], "macd_qfq_12_26_9_v1");
+}
+
+#[test]
+fn db_native_screen_rejects_joined_window_missing_requested_start_date() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let requested_start = prepared_cache_start_date(pick_date);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    let err = run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+        assert_eq!(start_date, requested_start);
+        assert_eq!(end_date, pick_date);
+        Ok((1..750)
+            .map(|offset| {
+                market_row_at_date(requested_start + Duration::days(offset), 10.0, 100.0)
+            })
+            .chain(std::iter::once(market_row_at_date(
+                pick_date, 12.51, 100.0,
+            )))
+            .collect())
+    })
+    .expect_err("DB-native joined window missing requested start date should fail");
+
+    assert!(err.to_string().contains("requested prepared window"));
+    assert!(!prepared_cache_meta_path(temp.path(), pick_date).exists());
+}
+
+#[test]
+fn db_native_screen_allows_window_start_on_next_trading_date() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 29).unwrap();
+    let requested_start = prepared_cache_start_date(pick_date);
+    let actual_start = NaiveDate::from_ymd_opt(2025, 6, 30).unwrap();
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+        assert_eq!(start_date, requested_start);
+        assert_eq!(end_date, pick_date);
+        Ok((0..365)
+            .map(|offset| {
+                market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0)
+            })
+            .chain(std::iter::once(market_row_at_date(
+                pick_date, 12.51, 100.0,
+            )))
+            .collect())
+    })
+    .unwrap();
+
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(temp.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["start_date"], actual_start.to_string());
+    assert_eq!(metadata["window_start_date"], actual_start.to_string());
+    assert_eq!(metadata["window_end_date"], pick_date.to_string());
+}
+
+#[test]
+fn db_native_screen_allows_window_start_after_long_holiday_when_trading_days_are_sufficient() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 28).unwrap();
+    let requested_start = prepared_cache_start_date(pick_date);
+    let actual_start = NaiveDate::from_ymd_opt(2025, 2, 5).unwrap();
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+        assert_eq!(start_date, requested_start);
+        assert_eq!(end_date, pick_date);
+        Ok((0..235)
+            .map(|offset| {
+                market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0)
+            })
+            .chain(std::iter::once(market_row_at_date(
+                pick_date, 12.51, 100.0,
+            )))
+            .collect())
+    })
+    .unwrap();
+
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(temp.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["start_date"], actual_start.to_string());
+    assert_eq!(metadata["window_start_date"], actual_start.to_string());
+    assert_eq!(metadata["window_end_date"], pick_date.to_string());
+}
+
+#[test]
+fn db_native_screen_rejects_window_with_too_few_trading_days() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 28).unwrap();
+    let requested_start = prepared_cache_start_date(pick_date);
+    let actual_start = NaiveDate::from_ymd_opt(2025, 2, 5).unwrap();
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    let err = run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+        assert_eq!(start_date, requested_start);
+        assert_eq!(end_date, pick_date);
+        Ok((0..200)
+            .map(|offset| {
+                market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0)
+            })
+            .chain(std::iter::once(market_row_at_date(
+                pick_date, 12.51, 100.0,
+            )))
+            .collect())
+    })
+    .expect_err("DB-native joined window with too few trading days should fail");
+
+    assert!(err.to_string().contains("requested prepared window"));
+    assert!(!prepared_cache_meta_path(temp.path(), pick_date).exists());
 }
 
 #[test]
@@ -256,6 +461,74 @@ fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
 }
 
 #[test]
+fn screen_prepare_prefers_db_native_kdj_macd_and_rolling_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    let pick_date = first_date + Duration::days(1);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+        Ok((0..2)
+            .map(|offset| {
+                let mut row = market_row_at_date(
+                    first_date + Duration::days(offset),
+                    10.0 + offset as f64,
+                    100.0,
+                );
+                row.db_factors
+                    .insert("kdj_k_qfq".to_string(), 11.0 + offset as f64);
+                row.db_factors
+                    .insert("kdj_d_qfq".to_string(), 22.0 + offset as f64);
+                row.db_factors
+                    .insert("kdj_j_qfq".to_string(), 33.0 + offset as f64);
+                row.db_factors
+                    .insert("macd_daily_dif".to_string(), 0.7 + offset as f64);
+                row.db_factors
+                    .insert("macd_daily_dea".to_string(), 0.4 + offset as f64);
+                row.db_factors
+                    .insert("macd_daily_hist".to_string(), 0.3 + offset as f64);
+                row.db_factors
+                    .insert("rolling_ma25_qfq".to_string(), 9.5 + offset as f64);
+                row.db_factors
+                    .insert("rolling_ma144_qfq".to_string(), 8.8 + offset as f64);
+                row
+            })
+            .collect())
+    })
+    .unwrap();
+
+    let prepared = load_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        prepared_cache_start_date(pick_date),
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = prepared.last().unwrap();
+
+    assert_eq!(latest.k, 12.0);
+    assert_eq!(latest.d, 23.0);
+    assert_eq!(latest.j, 34.0);
+    assert_eq!(latest.dif, 1.7);
+    assert_eq!(latest.dea, 1.4);
+    assert_eq!(latest.macd_hist, 1.3);
+    assert_eq!(latest.ma25, Some(10.5));
+    assert_eq!(latest.ma144, Some(9.8));
+}
+
+#[test]
 fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting_existing_values() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
@@ -412,6 +685,8 @@ fn screen_missing_pick_date_rows_reports_latest_cached_date() {
     assert!(message.contains("No prepared rows found for pick_date 2026-06-08"));
     assert!(message.contains("latest cached trade_date is 2026-06-05"));
     assert!(message.contains("--intraday"));
+    assert!(message.contains("DB-native stock-cache daily prepared cache"));
+    assert!(!message.contains("daily_market"));
     assert!(!prepared_cache_data_path(temp.path(), pick_date).exists());
 }
 
@@ -1001,6 +1276,436 @@ fn intraday_screen_export_factors_runs_through_local_factor_fill() {
     assert!(row_factors["turnover_rate_f"].is_null());
 }
 
+#[test]
+fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
+    let start_date = prepared_cache_start_date(previous_trade_date);
+    let provider = StaticRtKProvider::new([
+        ("*.SH", vec![]),
+        (
+            "*.SZ",
+            vec![RawRtKRow::from_value(serde_json::json!({
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "open": 10.2,
+                "high": 10.8,
+                "low": 10.1,
+                "close": 10.6,
+                "vol": 130000.0,
+                "amount": 1390000.0,
+                "trade_time": "14:59:59"
+            }))],
+        ),
+        ("*.BJ", vec![]),
+    ]);
+
+    run_db_native_intraday_screen_with_loaders(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        &provider,
+        "15:00:00",
+        |_dsn, trade_date| {
+            assert_eq!(trade_date, pick_date);
+            Ok(previous_trade_date)
+        },
+        |_dsn, actual_start, actual_end| {
+            assert_eq!(actual_start, start_date);
+            assert_eq!(actual_end, previous_trade_date);
+            let mut row = MarketRow {
+                ts_code: "000001.SZ".to_string(),
+                trade_date: previous_trade_date,
+                open: 10.0,
+                high: 10.3,
+                low: 9.9,
+                close: 10.1,
+                vol: 1000.0,
+                turnover_rate: Some(1.0),
+                adj_factor: Some(2.0),
+                db_factors: Default::default(),
+            };
+            row.db_factors.insert("rolling_ma25_qfq".to_string(), 19.8);
+            row.db_factors.insert("left_peak_valid".to_string(), 1.0);
+            Ok(vec![row])
+        },
+        |_dsn, symbols, trade_date| {
+            assert_eq!(symbols, &["000001.SZ".to_string()]);
+            assert_eq!(trade_date, pick_date);
+            Ok(vec![
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "daily".to_string(),
+                    ema12: 18.0,
+                    ema26: 17.0,
+                    dea: 0.4,
+                    period_count: 240,
+                },
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "weekly".to_string(),
+                    ema12: 17.0,
+                    ema26: 16.4,
+                    dea: 0.2,
+                    period_count: 80,
+                },
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "monthly".to_string(),
+                    ema12: 16.0,
+                    ema26: 15.8,
+                    dea: 0.1,
+                    period_count: 36,
+                },
+            ])
+        },
+    )
+    .unwrap();
+
+    let prepared = load_prepared_cache_for_mode(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = prepared.last().unwrap();
+    let live_ema12 = 18.0 * (11.0 / 13.0) + 21.2 * (2.0 / 13.0);
+    let live_ema26 = 17.0 * (25.0 / 27.0) + 21.2 * (2.0 / 27.0);
+    let live_dif = live_ema12 - live_ema26;
+    let live_dea = 0.4 * 0.8 + live_dif * 0.2;
+
+    assert_eq!(latest.trade_date, pick_date);
+    assert!((latest.dif - live_dif).abs() < 1e-9);
+    assert!((latest.dea - live_dea).abs() < 1e-9);
+    assert!((latest.macd_hist - (live_dif - live_dea)).abs() < 1e-9);
+    assert_eq!(latest.db_factors["macd_daily_period_count"], 241.0);
+    assert!(latest.db_factors["macd_weekly_hist"].is_finite());
+    assert!(latest.db_factors["macd_monthly_hist"].is_finite());
+    assert_eq!(latest.db_factors["rolling_ma25_qfq"], 19.8);
+    assert_eq!(latest.db_factors["left_peak_valid"], 1.0);
+    assert_eq!(
+        latest.db_factors["intraday_structure_source_previous_eod"],
+        1.0
+    );
+}
+
+#[test]
+fn db_native_intraday_screen_filters_snapshot_universe_and_skips_incomplete_period_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
+    let start_date = prepared_cache_start_date(previous_trade_date);
+    let provider = StaticRtKProvider::new([
+        (
+            "*.SH",
+            vec![RawRtKRow::from_value(serde_json::json!({
+                "ts_code": "510050.SH",
+                "name": "ETF",
+                "open": 3.0,
+                "high": 3.1,
+                "low": 2.9,
+                "close": 3.05,
+                "vol": 130000.0,
+                "amount": 1390000.0
+            }))],
+        ),
+        (
+            "*.SZ",
+            vec![
+                RawRtKRow::from_value(serde_json::json!({
+                    "ts_code": "000001.SZ",
+                    "name": "平安银行",
+                    "open": 10.2,
+                    "high": 10.8,
+                    "low": 10.1,
+                    "close": 10.6,
+                    "vol": 130000.0,
+                    "amount": 1390000.0
+                })),
+                RawRtKRow::from_value(serde_json::json!({
+                    "ts_code": "000002.SZ",
+                    "name": "万科A",
+                    "open": 8.2,
+                    "high": 8.8,
+                    "low": 8.1,
+                    "close": 8.6,
+                    "vol": 120000.0,
+                    "amount": 1290000.0
+                })),
+                RawRtKRow::from_value(serde_json::json!({
+                    "ts_code": "128001.SZ",
+                    "name": "转债",
+                    "open": 110.0,
+                    "high": 111.0,
+                    "low": 109.0,
+                    "close": 110.5,
+                    "vol": 1000.0,
+                    "amount": 110500.0
+                })),
+            ],
+        ),
+        ("*.BJ", vec![]),
+    ]);
+
+    run_db_native_intraday_screen_with_loaders(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        &provider,
+        "15:00:00",
+        |_dsn, _trade_date| Ok(previous_trade_date),
+        |_dsn, actual_start, actual_end| {
+            assert_eq!(actual_start, start_date);
+            assert_eq!(actual_end, previous_trade_date);
+            Ok(vec![
+                MarketRow {
+                    ts_code: "000001.SZ".to_string(),
+                    trade_date: previous_trade_date,
+                    open: 10.0,
+                    high: 10.3,
+                    low: 9.9,
+                    close: 10.1,
+                    vol: 1000.0,
+                    turnover_rate: Some(1.0),
+                    adj_factor: Some(2.0),
+                    db_factors: Default::default(),
+                },
+                MarketRow {
+                    ts_code: "000002.SZ".to_string(),
+                    trade_date: previous_trade_date,
+                    open: 8.0,
+                    high: 8.3,
+                    low: 7.9,
+                    close: 8.1,
+                    vol: 1000.0,
+                    turnover_rate: Some(1.0),
+                    adj_factor: Some(1.5),
+                    db_factors: Default::default(),
+                },
+            ])
+        },
+        |_dsn, _symbols, _trade_date| {
+            assert_eq!(
+                _symbols,
+                &["000001.SZ".to_string(), "000002.SZ".to_string()]
+            );
+            Ok(vec![
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "daily".to_string(),
+                    ema12: 18.0,
+                    ema26: 17.0,
+                    dea: 0.4,
+                    period_count: 240,
+                },
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "weekly".to_string(),
+                    ema12: 17.0,
+                    ema26: 16.4,
+                    dea: 0.2,
+                    period_count: 80,
+                },
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "monthly".to_string(),
+                    ema12: 16.0,
+                    ema26: 15.8,
+                    dea: 0.1,
+                    period_count: 36,
+                },
+            ])
+        },
+    )
+    .unwrap();
+
+    let prepared = load_prepared_cache_for_mode(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(prepared.iter().any(|row| {
+        row.ts_code == "000001.SZ"
+            && row.trade_date == pick_date
+            && row.db_factors.contains_key("macd_daily_dif")
+            && row.db_factors.contains_key("macd_weekly_dif")
+            && row.db_factors.contains_key("macd_monthly_dif")
+            && row.db_factors.contains_key("intraday_price_live_qfq")
+    }));
+    assert!(
+        !prepared
+            .iter()
+            .any(|row| row.ts_code == "000002.SZ" && row.trade_date == pick_date)
+    );
+    assert!(
+        !prepared
+            .iter()
+            .any(|row| row.ts_code == "510050.SH" || row.ts_code == "128001.SZ")
+    );
+
+    let result: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("candidates/2026-05-25.intraday.b2.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["stats"]["intraday_snapshot_skipped_non_universe"], 2);
+    assert_eq!(
+        result["stats"]["intraday_snapshot_skipped_missing_macd_state"],
+        1
+    );
+}
+
+#[test]
+fn db_native_intraday_screen_skips_snapshot_rows_without_live_qfq_price() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
+    let start_date = prepared_cache_start_date(previous_trade_date);
+    let provider = StaticRtKProvider::new([
+        ("*.SH", vec![]),
+        (
+            "*.SZ",
+            vec![
+                RawRtKRow::from_value(serde_json::json!({
+                    "ts_code": "000001.SZ",
+                    "name": "平安银行",
+                    "open": 10.2,
+                    "high": 10.8,
+                    "low": 10.1,
+                    "close": 10.6,
+                    "vol": 130000.0,
+                    "amount": 1390000.0
+                })),
+                RawRtKRow::from_value(serde_json::json!({
+                    "ts_code": "000002.SZ",
+                    "name": "万科A",
+                    "open": 8.2,
+                    "high": 8.8,
+                    "low": 8.1,
+                    "close": 8.6,
+                    "vol": 120000.0,
+                    "amount": 1290000.0
+                })),
+            ],
+        ),
+        ("*.BJ", vec![]),
+    ]);
+
+    run_db_native_intraday_screen_with_loaders(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        &provider,
+        "15:00:00",
+        |_dsn, _trade_date| Ok(previous_trade_date),
+        |_dsn, actual_start, actual_end| {
+            assert_eq!(actual_start, start_date);
+            assert_eq!(actual_end, previous_trade_date);
+            Ok(vec![
+                MarketRow {
+                    ts_code: "000001.SZ".to_string(),
+                    trade_date: previous_trade_date,
+                    open: 10.0,
+                    high: 10.3,
+                    low: 9.9,
+                    close: 10.1,
+                    vol: 1000.0,
+                    turnover_rate: Some(1.0),
+                    adj_factor: Some(2.0),
+                    db_factors: Default::default(),
+                },
+                MarketRow {
+                    ts_code: "000002.SZ".to_string(),
+                    trade_date: previous_trade_date,
+                    open: 8.0,
+                    high: 8.3,
+                    low: 7.9,
+                    close: 8.1,
+                    vol: 1000.0,
+                    turnover_rate: Some(1.0),
+                    adj_factor: None,
+                    db_factors: Default::default(),
+                },
+            ])
+        },
+        |_dsn, symbols, _trade_date| {
+            assert_eq!(symbols, &["000001.SZ".to_string(), "000002.SZ".to_string()]);
+            Ok(vec![
+                macd_state("000001.SZ", "daily"),
+                macd_state("000001.SZ", "weekly"),
+                macd_state("000001.SZ", "monthly"),
+                macd_state("000002.SZ", "daily"),
+                macd_state("000002.SZ", "weekly"),
+                macd_state("000002.SZ", "monthly"),
+            ])
+        },
+    )
+    .unwrap();
+
+    let prepared = load_prepared_cache_for_mode(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(prepared.iter().any(|row| {
+        row.ts_code == "000001.SZ"
+            && row.trade_date == pick_date
+            && row.db_factors.contains_key("intraday_price_live_qfq")
+            && row.db_factors.contains_key("macd_daily_dif")
+    }));
+    assert!(
+        !prepared
+            .iter()
+            .any(|row| row.ts_code == "000002.SZ" && row.trade_date == pick_date)
+    );
+
+    let result: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("candidates/2026-05-25.intraday.b2.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["stats"]["intraday_snapshot_skipped_non_universe"], 0);
+    assert_eq!(result["stats"]["intraday_snapshot_skipped_missing_macd_state"], 0);
+    assert_eq!(result["stats"]["intraday_snapshot_skipped_missing_live_qfq_price"], 1);
+}
+
 fn intraday_b2_positive_monthly_market_rows(
     first_date: NaiveDate,
     previous_trade_date: NaiveDate,
@@ -1127,6 +1832,17 @@ fn market_row_at_date(trade_date: NaiveDate, close: f64, vol: f64) -> MarketRow 
         turnover_rate: Some(vol / 100.0),
         adj_factor: None,
         db_factors: Default::default(),
+    }
+}
+
+fn macd_state(ts_code: &str, period_type: &str) -> MacdPeriodState {
+    MacdPeriodState {
+        ts_code: ts_code.to_string(),
+        period_type: period_type.to_string(),
+        ema12: 18.0,
+        ema26: 17.0,
+        dea: 0.4,
+        period_count: 240,
     }
 }
 

@@ -7,16 +7,19 @@ use chrono::{Duration, NaiveDate};
 use serde_json::json;
 
 use crate::cache::{
-    candidate_output_path, load_prepared_cache,
-    prepared_cache_start_date as cache_prepared_cache_start_date, write_prepared_cache,
-    write_prepared_cache_for_mode,
+    MIN_DB_NATIVE_WINDOW_TRADING_DAYS, candidate_output_path, load_prepared_cache,
+    prepared_cache_start_date as cache_prepared_cache_start_date, write_db_native_prepared_cache,
+    write_prepared_cache, write_prepared_cache_for_mode,
 };
 use crate::environment::{normalize_environment_state, prepared_market_state};
 use crate::factors::registry::{
     RAW_MARKET_AMOUNT_FACTOR, build_candidate_factor_rows_from_refs, write_factor_artifact,
 };
 use crate::indicators::{kdj, macd, rolling_mean, rolling_sum, zx_lines};
-use crate::intraday::{IntradaySnapshotProvider, build_intraday_market_rows, fetch_rt_k_snapshot};
+use crate::intraday::{
+    IntradaySnapshotProvider, MacdPeriodState, build_intraday_market_rows,
+    build_intraday_market_rows_with_macd_states, fetch_rt_k_snapshot,
+};
 use crate::local_factors::enrich_local_market_factors;
 use crate::model::{MarketRow, Method, PreparedRow, ScreenResult};
 use crate::strategies::StrategyOutput;
@@ -88,10 +91,31 @@ pub fn run_screen_with_loader<F>(request: ScreenRequest, loader: F) -> anyhow::R
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
+    run_screen_with_loader_and_cache_source(request, loader, false)
+}
+
+pub fn run_db_native_screen_with_loader<F>(
+    request: ScreenRequest,
+    loader: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+{
+    run_screen_with_loader_and_cache_source(request, loader, true)
+}
+
+fn run_screen_with_loader_and_cache_source<F>(
+    request: ScreenRequest,
+    loader: F,
+    db_native_source: bool,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+{
     ensure_screen_supported(request.method)?;
     let (start_date, end_date) = screen_window(request.pick_date);
     let prepared = if request.recompute {
-        load_and_prepare(&request, start_date, end_date, loader)?
+        load_and_prepare(&request, start_date, end_date, loader, db_native_source)?
     } else {
         match load_prepared_cache(
             &request.runtime_root,
@@ -101,7 +125,7 @@ where
             end_date,
         )? {
             Some(rows) => rows,
-            None => load_and_prepare(&request, start_date, end_date, loader)?,
+            None => load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
         }
     };
     if !prepared
@@ -205,11 +229,177 @@ where
     }
     let market_rows = build_intraday_market_rows(history, &snapshot, request.pick_date);
     let prepared = prepare_rows(market_rows);
+    write_intraday_screen_output(request, fallback_trade_time, start_date, prepared)
+}
+
+pub fn run_db_native_intraday_screen_with_loaders<P, Prev, F, S>(
+    request: ScreenRequest,
+    provider: &P,
+    fallback_trade_time: &str,
+    previous_trade_date_loader: Prev,
+    history_loader: F,
+    macd_state_loader: S,
+) -> anyhow::Result<PathBuf>
+where
+    P: IntradaySnapshotProvider,
+    Prev: FnOnce(&str, NaiveDate) -> anyhow::Result<NaiveDate>,
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+    S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
+{
+    ensure_screen_supported(request.method)?;
+    let previous_trade_date = previous_trade_date_loader(&request.dsn, request.pick_date)?;
+    let start_date = prepared_cache_start_date(previous_trade_date);
+    let snapshot = fetch_rt_k_snapshot(provider, request.pick_date, fallback_trade_time)?;
+    let history = history_loader(&request.dsn, start_date, previous_trade_date)?;
+    if history.is_empty() {
+        anyhow::bail!("No market rows found between {start_date} and {previous_trade_date}.");
+    }
+    let universe = db_native_intraday_history_universe(&history, previous_trade_date);
+    let supported_snapshot = snapshot
+        .iter()
+        .filter(|row| universe.contains(row.ts_code.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let skipped_non_universe = snapshot.len().saturating_sub(supported_snapshot.len());
+    let symbols = supported_snapshot
+        .iter()
+        .map(|row| row.ts_code.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let macd_states = macd_state_loader(&request.dsn, &symbols, request.pick_date)?;
+    let covered_symbols = intraday_macd_covered_symbols(&symbols, &macd_states);
+    let skipped_missing_macd_state = supported_snapshot
+        .iter()
+        .filter(|row| !covered_symbols.contains(row.ts_code.as_str()))
+        .count();
+    let macd_covered_snapshot = supported_snapshot
+        .into_iter()
+        .filter(|row| covered_symbols.contains(row.ts_code.as_str()))
+        .collect::<Vec<_>>();
+    let qfq_symbols = intraday_live_qfq_price_symbols(&history, request.pick_date);
+    let skipped_missing_live_qfq_price = macd_covered_snapshot
+        .iter()
+        .filter(|row| !qfq_symbols.contains(row.ts_code.as_str()))
+        .count();
+    let live_macd_snapshot = macd_covered_snapshot
+        .into_iter()
+        .filter(|row| qfq_symbols.contains(row.ts_code.as_str()))
+        .collect::<Vec<_>>();
+    let market_rows = build_intraday_market_rows_with_macd_states(
+        history,
+        &live_macd_snapshot,
+        request.pick_date,
+        &macd_states,
+    );
+    let prepared = prepare_rows(market_rows);
+    write_intraday_screen_output_with_extra_stats(
+        request,
+        fallback_trade_time,
+        start_date,
+        prepared,
+        BTreeMap::from([
+            (
+                "intraday_snapshot_skipped_non_universe".to_string(),
+                skipped_non_universe,
+            ),
+            (
+                "intraday_snapshot_skipped_missing_macd_state".to_string(),
+                skipped_missing_macd_state,
+            ),
+            (
+                "intraday_snapshot_skipped_missing_live_qfq_price".to_string(),
+                skipped_missing_live_qfq_price,
+            ),
+        ]),
+    )
+}
+
+fn db_native_intraday_history_universe(
+    history: &[MarketRow],
+    previous_trade_date: NaiveDate,
+) -> BTreeSet<&str> {
+    let previous_day = history
+        .iter()
+        .filter(|row| row.trade_date == previous_trade_date)
+        .map(|row| row.ts_code.as_str())
+        .collect::<BTreeSet<_>>();
+    if previous_day.is_empty() {
+        history
+            .iter()
+            .map(|row| row.ts_code.as_str())
+            .collect::<BTreeSet<_>>()
+    } else {
+        previous_day
+    }
+}
+
+fn intraday_macd_covered_symbols<'a>(
+    symbols: &'a [String],
+    states: &[MacdPeriodState],
+) -> BTreeSet<&'a str> {
+    const REQUIRED_PERIODS: [&str; 3] = ["daily", "weekly", "monthly"];
+    symbols
+        .iter()
+        .filter_map(|symbol| {
+            let covered = REQUIRED_PERIODS.iter().all(|period_type| {
+                states.iter().any(|state| {
+                    state.ts_code == *symbol
+                        && state.period_type == *period_type
+                        && state.ema12.is_finite()
+                        && state.ema26.is_finite()
+                        && state.dea.is_finite()
+                })
+            });
+            covered.then_some(symbol.as_str())
+        })
+        .collect()
+}
+
+fn intraday_live_qfq_price_symbols(history: &[MarketRow], trade_date: NaiveDate) -> BTreeSet<&str> {
+    history
+        .iter()
+        .filter(|row| row.trade_date <= trade_date)
+        .filter(|row| {
+            row.adj_factor
+                .is_some_and(|value| value.is_finite() && value > 0.0)
+        })
+        .map(|row| row.ts_code.as_str())
+        .collect()
+}
+
+fn write_intraday_screen_output(
+    request: ScreenRequest,
+    fallback_trade_time: &str,
+    start_date: NaiveDate,
+    prepared: Vec<PreparedRow>,
+) -> anyhow::Result<PathBuf> {
+    write_intraday_screen_output_with_extra_stats(
+        request,
+        fallback_trade_time,
+        start_date,
+        prepared,
+        BTreeMap::new(),
+    )
+}
+
+fn write_intraday_screen_output_with_extra_stats(
+    request: ScreenRequest,
+    fallback_trade_time: &str,
+    start_date: NaiveDate,
+    prepared: Vec<PreparedRow>,
+    extra_stats: BTreeMap<String, usize>,
+) -> anyhow::Result<PathBuf> {
+    let metadata_start_date = prepared
+        .iter()
+        .map(|row| row.trade_date)
+        .min()
+        .unwrap_or(start_date);
     write_prepared_cache_for_mode(
         &request.runtime_root,
         request.method,
         request.pick_date,
-        start_date,
+        metadata_start_date,
         request.pick_date,
         true,
         &prepared,
@@ -229,7 +419,9 @@ where
     };
     let pool = pool_refs(&prepared, &pool_codes);
     let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
-    let count = strategy_output.stats.get("selected").copied().unwrap_or(0);
+    let mut stats = strategy_output.stats;
+    stats.extend(extra_stats);
+    let count = stats.get("selected").copied().unwrap_or(0);
     let result = ScreenResult {
         mode: Some("intraday_snapshot".to_string()),
         method: request.method,
@@ -246,7 +438,7 @@ where
         candidates: strategy_output.candidates,
         generated_at: Some("0".to_string()),
         count: Some(count),
-        stats: strategy_output.stats,
+        stats,
     };
     let output_path =
         intraday_candidate_output_path(&request.runtime_root, request.pick_date, request.method);
@@ -286,9 +478,9 @@ fn missing_pick_date_rows_message(
         message.push('.');
     }
     if intraday_candidates.exists() || intraday_cache.data_path.exists() {
-        message.push_str(" Intraday artifacts exist for this date; use --intraday for intraday selection, or refresh the post-market daily cache after daily_market is available.");
+        message.push_str(" Intraday artifacts exist for this date; use --intraday for intraday selection, or refresh the DB-native stock-cache daily prepared cache after stock-cache coverage is available.");
     } else {
-        message.push_str(" Refresh the post-market daily cache after daily_market is available.");
+        message.push_str(" Refresh the DB-native stock-cache daily prepared cache after stock-cache coverage is available.");
     }
     message
 }
@@ -353,6 +545,7 @@ fn load_and_prepare<F>(
     start_date: NaiveDate,
     end_date: NaiveDate,
     loader: F,
+    db_native_source: bool,
 ) -> anyhow::Result<Vec<PreparedRow>>
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
@@ -362,24 +555,69 @@ where
         anyhow::bail!("No market rows found between {start_date} and {end_date}.");
     }
     let prepared = prepare_rows(rows);
+    if db_native_source {
+        ensure_db_native_prepared_window(&prepared, start_date, end_date)?;
+    }
     if !prepared.iter().any(|row| row.trade_date == end_date) {
         return Ok(prepared);
     }
     let write_cache_started = Instant::now();
-    write_prepared_cache(
-        &request.runtime_root,
-        request.method,
-        request.pick_date,
-        start_date,
-        end_date,
-        &prepared,
-    )?;
+    if db_native_source {
+        write_db_native_prepared_cache(
+            &request.runtime_root,
+            request.method,
+            request.pick_date,
+            start_date,
+            end_date,
+            0,
+            &prepared,
+        )?;
+    } else {
+        write_prepared_cache(
+            &request.runtime_root,
+            request.method,
+            request.pick_date,
+            start_date,
+            end_date,
+            &prepared,
+        )?;
+    }
     eprintln!(
         "[screen] prepared cache wrote rows={} elapsed={:.3}s",
         prepared.len(),
         write_cache_started.elapsed().as_secs_f64()
     );
     Ok(prepared)
+}
+
+fn ensure_db_native_prepared_window(
+    prepared: &[PreparedRow],
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<()> {
+    let trade_dates = prepared
+        .iter()
+        .map(|row| row.trade_date)
+        .collect::<BTreeSet<_>>();
+    if trade_dates
+        .first()
+        .copied()
+        .is_some_and(|actual_start| actual_start >= start_date)
+        && trade_dates.last().copied() == Some(end_date)
+        && u32::try_from(trade_dates.len())
+            .is_ok_and(|len| len >= MIN_DB_NATIVE_WINDOW_TRADING_DAYS)
+    {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "DB-native joined prepared window has {} trading dates over {:?}..{:?}; expected requested prepared window {}..{}.",
+            trade_dates.len(),
+            trade_dates.first(),
+            trade_dates.last(),
+            start_date,
+            end_date
+        );
+    }
 }
 
 fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
@@ -421,17 +659,17 @@ fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
                 volume: row.vol,
                 turnover_n: turnover_n[idx],
                 turnover_rate: row.turnover_rate,
-                k: k[idx],
-                d: d[idx],
-                j: j[idx],
+                k: db_factor_or(&row.db_factors, "kdj_k_qfq", k[idx]),
+                d: db_factor_or(&row.db_factors, "kdj_d_qfq", d[idx]),
+                j: db_factor_or(&row.db_factors, "kdj_j_qfq", j[idx]),
                 zxdq: Some(zxdq[idx]),
                 zxdkx: zxdkx[idx],
-                dif: dif[idx],
-                dea: dea[idx],
-                macd_hist: macd_hist[idx],
-                ma25: ma25[idx],
+                dif: db_factor_or(&row.db_factors, "macd_daily_dif", dif[idx]),
+                dea: db_factor_or(&row.db_factors, "macd_daily_dea", dea[idx]),
+                macd_hist: db_factor_or(&row.db_factors, "macd_daily_hist", macd_hist[idx]),
+                ma25: db_factor_option_or(&row.db_factors, "rolling_ma25_qfq", ma25[idx]),
                 ma60: ma60[idx],
-                ma144: ma144[idx],
+                ma144: db_factor_option_or(&row.db_factors, "rolling_ma144_qfq", ma144[idx]),
                 chg_d: (idx > 0).then(|| (row.close - close[idx - 1]) / close[idx - 1] * 100.0),
                 weekly_ma_bull: false,
                 max_vol_not_bearish: true,
@@ -456,6 +694,26 @@ fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
             .then(left.trade_date.cmp(&right.trade_date))
     });
     prepared
+}
+
+fn db_factor_or(factors: &BTreeMap<String, f64>, key: &str, fallback: f64) -> f64 {
+    factors
+        .get(key)
+        .copied()
+        .filter(|value| value.is_finite())
+        .unwrap_or(fallback)
+}
+
+fn db_factor_option_or(
+    factors: &BTreeMap<String, f64>,
+    key: &str,
+    fallback: Option<f64>,
+) -> Option<f64> {
+    factors
+        .get(key)
+        .copied()
+        .filter(|value| value.is_finite())
+        .or(fallback)
 }
 
 fn front_adjust_rows(rows: &mut [MarketRow]) {

@@ -10,7 +10,6 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde_json::{Value, json};
 
 use crate::factors::abnormal_volume::push_abnormal_volume_event_factors;
-use crate::factors::chip_age::push_chip_age_summary_factors;
 use crate::factors::ma::push_ma_support_factors;
 use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
 use crate::factors::price_position::{
@@ -29,21 +28,20 @@ pub const FACTOR_ARTIFACT_VERSION: u32 = 2;
 pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v3";
 pub(crate) const RAW_MARKET_AMOUNT_FACTOR: &str = "_raw_market_amount";
 
-const HISTORY_DB_FACTOR_KEYS: &[&str] = &["chip_vwap", "chip_turnover", RAW_MARKET_AMOUNT_FACTOR];
+const THS_MEMBERSHIP_SOURCE: &str = "current_index_ths_member";
+
+const HISTORY_DB_FACTOR_KEYS: &[&str] = &[RAW_MARKET_AMOUNT_FACTOR];
 
 const B2_FACTOR_BUNDLES: &[FactorBundle] = &[
     FactorBundle::RawCommon,
-    FactorBundle::ChipAge,
     FactorBundle::B2Semantic,
 ];
 const B3_FACTOR_BUNDLES: &[FactorBundle] = &[
     FactorBundle::RawCommon,
-    FactorBundle::ChipAge,
     FactorBundle::B3Semantic,
 ];
 const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[
     FactorBundle::RawCommon,
-    FactorBundle::ChipAge,
     FactorBundle::LshSemantic,
 ];
 const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
@@ -61,7 +59,6 @@ const REVIEW_ONLY_FACTOR_KEYS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactorBundle {
     RawCommon,
-    ChipAge,
     B2Semantic,
     B3Semantic,
     LshSemantic,
@@ -71,7 +68,6 @@ impl FactorBundle {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RawCommon => "raw_common",
-            Self::ChipAge => "chip_age",
             Self::B2Semantic => "b2_semantic",
             Self::B3Semantic => "b3_semantic",
             Self::LshSemantic => "lsh_semantic",
@@ -287,9 +283,6 @@ fn history_factor_fields_for_profile(
                     latest_close,
                 );
             }
-            FactorBundle::ChipAge => {
-                push_chip_age_summary_factors(&mut factors, history);
-            }
             FactorBundle::B2Semantic => {
                 push_b2_semantic_factors(
                     &mut factors,
@@ -317,51 +310,8 @@ fn history_factor_fields_for_profile(
         }
     }
     push_latest_db_factor_extras(&mut factors, latest);
-    push_stock_relative_to_sw_l2_factors(&mut factors, &close, latest);
+    push_db_native_schema_aliases(&mut factors, latest_zxdkx);
     factors
-}
-
-fn push_stock_relative_to_sw_l2_factors(
-    factors: &mut FactorList,
-    close: &[f64],
-    latest: Option<&FactorInputRow>,
-) {
-    let latest = latest.map(|row| &row.db_factors);
-    push_number(
-        factors,
-        "stock_vs_sw_l2_ret5_pct",
-        stock_return_minus_factor(
-            close,
-            5,
-            latest.and_then(|factors| factors.get("sw_l2_ret5_pct").copied()),
-        ),
-    );
-    push_number(
-        factors,
-        "stock_vs_sw_l2_ret20_pct",
-        stock_return_minus_factor(
-            close,
-            20,
-            latest.and_then(|factors| factors.get("sw_l2_ret20_pct").copied()),
-        ),
-    );
-}
-
-fn stock_return_minus_factor(
-    close: &[f64],
-    periods: usize,
-    compare_ret_pct: Option<f64>,
-) -> Option<f64> {
-    let compare_ret_pct = compare_ret_pct.filter(|value| value.is_finite())?;
-    if close.len() <= periods {
-        return None;
-    }
-    let latest = *close.last()?;
-    let base = close[close.len() - 1 - periods];
-    if !latest.is_finite() || !base.is_finite() || base == 0.0 {
-        return None;
-    }
-    Some((latest - base) / base * 100.0 - compare_ret_pct)
 }
 
 fn push_latest_db_factor_extras(factors: &mut FactorList, latest: Option<&FactorInputRow>) {
@@ -374,6 +324,130 @@ fn push_latest_db_factor_extras(factors: &mut FactorList, latest: Option<&Factor
         }
         push_number(factors, key, value.is_finite().then_some(*value));
     }
+}
+
+fn push_db_native_schema_aliases(factors: &mut FactorList, latest_zxdkx: Option<f64>) {
+    for (target, source) in DB_NATIVE_FACTOR_ALIASES {
+        push_factor_alias(factors, target, source);
+    }
+    if !factor_key_exists(factors, "structure_zxdkx") {
+        push_number(factors, "structure_zxdkx", latest_zxdkx);
+    }
+}
+
+const DB_NATIVE_FACTOR_ALIASES: &[(&str, &str)] = &[
+    ("structure_box_position_120d_pct", "box_position_120d_pct"),
+    (
+        "structure_box_mid_position_120d_pct",
+        "box_mid_position_120d_pct",
+    ),
+    ("structure_close_to_120d_max_pct", "close_to_120d_max_pct"),
+    ("structure_close_to_120d_min_pct", "close_to_120d_min_pct"),
+    (
+        "structure_close_to_120d_range_center_pct",
+        "close_to_120d_range_center_pct",
+    ),
+    ("structure_range_width_120d_pct", "range_width_120d_pct"),
+    ("structure_hl90_position", "hl90_position"),
+    ("structure_hl90_range_pct", "hl90_range_pct"),
+    ("structure_range_compression_20d", "range_compression_20d"),
+    ("structure_range_compression_40d", "range_compression_40d"),
+    ("structure_close_to_ma25_pct", "close_to_ma25_pct"),
+    ("structure_low_to_ma25_pct", "low_to_ma25_pct"),
+    ("structure_near_ma25_support_flag", "near_ma25_support_flag"),
+    ("structure_ma25_slope_5d_pct", "ma25_slope_5d_pct"),
+    ("structure_ma_aligned_flag", "ma_aligned_flag"),
+    ("structure_close_to_zxdkx_pct", "close_to_zxdkx_pct"),
+    ("structure_zxdq_slope_5d_pct", "zxdq_slope_5d_pct"),
+    ("structure_zxdkx_slope_5d_pct", "zxdkx_slope_5d_pct"),
+    ("macd_state_phase_score", "macd_phase"),
+    ("macd_state_daily_phase_type", "daily_macd_phase_type"),
+    ("macd_state_daily_wave_index", "daily_macd_wave_index"),
+    ("macd_state_daily_wave_stage", "daily_macd_wave_stage"),
+    ("macd_state_weekly_phase_type", "weekly_macd_phase_type"),
+    ("macd_state_weekly_wave_index", "weekly_macd_wave_index"),
+    ("macd_state_weekly_wave_stage", "weekly_macd_wave_stage"),
+    (
+        "macd_state_weekly_daily_combo_type",
+        "weekly_daily_combo_type",
+    ),
+    (
+        "macd_state_daily_rising_initial_flag",
+        "daily_rising_initial_flag",
+    ),
+    ("macd_state_top_divergence_flag", "macd_top_divergence_flag"),
+    ("macd_daily_dif_to_close_pct", "macd_dif_to_close_pct"),
+    ("macd_daily_dea_to_close_pct", "macd_dea_to_close_pct"),
+    ("macd_daily_hist_to_close_pct", "macd_hist_to_close_pct"),
+    (
+        "macd_daily_hist_delta_to_close_pct",
+        "macd_hist_delta_to_close_pct",
+    ),
+    (
+        "macd_daily_hist_slope_3d_to_close_pct",
+        "macd_hist_slope_3d_to_close_pct",
+    ),
+    ("macd_daily_hist_positive_flag", "macd_hist_positive_flag"),
+    ("macd_weekly_dea_pctile", "weekly_dea_pctile"),
+    ("macd_weekly_hist", "weekly_macd_hist"),
+    ("macd_monthly_dea_pctile", "monthly_dea_pctile"),
+    ("macd_monthly_hist", "monthly_macd_hist"),
+    (
+        "volume_event_abnormal_days_ago",
+        "abnormal_volume_event_days_ago",
+    ),
+    (
+        "volume_event_abnormal_to_ma20_ratio",
+        "abnormal_volume_to_ma20_ratio",
+    ),
+    ("volume_event_body_pct", "abnormal_event_body_pct"),
+    (
+        "volume_event_price_to_current_pct",
+        "abnormal_event_price_to_current_pct",
+    ),
+    (
+        "volume_event_post_drawdown_pct",
+        "post_abnormal_drawdown_pct",
+    ),
+    (
+        "volume_event_redundant_position_pct",
+        "abnormal_redundant_position_pct",
+    ),
+    ("bar_close_position_pct", "latest_bar_position_pct"),
+    ("bar_upper_shadow_pct", "upper_shadow_pct"),
+    ("bar_lower_shadow_pct", "b3_lower_shadow_pct"),
+    ("bar_amplitude_pct", "b3_amplitude_pct"),
+    ("bar_body_pct", "b3_body_pct"),
+    (
+        "signal_bullish_engulf_prev_bearish_flag",
+        "b2_bullish_engulf_prev_bearish_flag",
+    ),
+    (
+        "signal_bullish_engulf_volume_ratio",
+        "b2_bullish_engulf_volume_ratio",
+    ),
+    ("signal_yang_engulf_ma25_flag", "b2_yang_engulf_ma25"),
+    ("signal_prev_b2_flag", "b3_prev_b2_flag"),
+    ("signal_b3_plus_flag", "b3_plus_flag"),
+];
+
+fn push_factor_alias(factors: &mut FactorList, target: &str, source: &str) {
+    if factor_key_exists(factors, target) {
+        return;
+    }
+    let value = latest_factor_value(factors, source).unwrap_or(FactorValue::Missing);
+    factors.push((target.to_string(), value));
+}
+
+fn factor_key_exists(factors: &FactorList, key: &str) -> bool {
+    factors.iter().any(|(existing, _value)| existing == key)
+}
+
+fn latest_factor_value(factors: &FactorList, key: &str) -> Option<FactorValue> {
+    factors
+        .iter()
+        .rev()
+        .find_map(|(existing, value)| (existing == key).then(|| value.clone()))
 }
 
 pub fn record_factor_profile_diagnostics(row: &mut FactorRow, profile: FactorProfile) {
@@ -809,12 +883,14 @@ impl Serialize for FactorManifestFile<'_> {
     where
         S: serde::Serializer,
     {
-        let mut map = serializer.serialize_map(Some(7))?;
+        let membership_sources = BTreeMap::from([("ths", THS_MEMBERSHIP_SOURCE)]);
+        let mut map = serializer.serialize_map(Some(8))?;
         map.serialize_entry("artifact_key", self.artifact_key)?;
         map.serialize_entry("artifact_version", &self.artifact_version)?;
         map.serialize_entry("candidate_artifact", &self.candidate_artifact)?;
         map.serialize_entry("factor_library_version", self.factor_library_version)?;
         map.serialize_entry("factor_source", self.factor_source)?;
+        map.serialize_entry("membership_sources", &membership_sources)?;
         map.serialize_entry("method", self.method)?;
         map.serialize_entry("row_count", &self.row_count)?;
         map.end()
@@ -937,6 +1013,9 @@ mod tests {
             "factor_library_version": FACTOR_LIBRARY_VERSION,
             "factor_source": "rust_factor_library",
             "candidate_artifact": candidate_artifact.to_string_lossy(),
+            "membership_sources": {
+                "ths": "current_index_ths_member"
+            },
             "row_count": 1,
         }))
         .unwrap();
@@ -958,6 +1037,8 @@ mod tests {
                 db_factors.insert(format!("history_big_{offset}"), 9_999.0 + offset as f64);
                 if offset == 2 {
                     db_factors.insert("latest_export_factor".to_string(), 42.0);
+                    db_factors.insert("ths_sector_count".to_string(), 3.0);
+                    db_factors.insert("stock_vs_ths_main_pct_change".to_string(), 1.25);
                 }
                 PreparedRow {
                     ts_code: "000001.SZ".to_string(),
@@ -1008,19 +1089,11 @@ mod tests {
         assert_eq!(history.len(), 3);
         assert_eq!(
             history[0].db_factors.keys().cloned().collect::<Vec<_>>(),
-            vec![
-                RAW_MARKET_AMOUNT_FACTOR.to_string(),
-                "chip_turnover".to_string(),
-                "chip_vwap".to_string(),
-            ]
+            vec![RAW_MARKET_AMOUNT_FACTOR.to_string()]
         );
         assert_eq!(
             history[1].db_factors.keys().cloned().collect::<Vec<_>>(),
-            vec![
-                RAW_MARKET_AMOUNT_FACTOR.to_string(),
-                "chip_turnover".to_string(),
-                "chip_vwap".to_string(),
-            ]
+            vec![RAW_MARKET_AMOUNT_FACTOR.to_string()]
         );
         assert!(history[2].db_factors.contains_key("history_big_2"));
         assert!(history[2].db_factors.contains_key("latest_export_factor"));
@@ -1045,8 +1118,16 @@ mod tests {
             rows[0].factors.get("latest_export_factor"),
             Some(&FactorValue::Number(42.0))
         );
+        assert_eq!(
+            rows[0].factors.get("ths_sector_count"),
+            Some(&FactorValue::Number(3.0))
+        );
+        assert_eq!(
+            rows[0].factors.get("stock_vs_ths_main_pct_change"),
+            Some(&FactorValue::Number(1.25))
+        );
         assert!(!rows[0].factors.contains_key("future_export_factor"));
-        assert!(rows[0].factors.contains_key("chip_entropy"));
+        assert!(!rows[0].factors.contains_key("chip_entropy"));
     }
 
     #[test]

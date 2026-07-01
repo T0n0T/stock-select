@@ -241,7 +241,7 @@ fn db_factor_extras_flow_from_screen_loader_into_candidate_factors() {
 }
 
 #[test]
-fn stock_relative_to_sw_l2_returns_are_derived_from_history_and_industry_factors() {
+fn factor_artifact_no_longer_exports_legacy_sw_l2_relative_factors() {
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(24);
     let prepared = (0..25)
@@ -272,14 +272,111 @@ fn stock_relative_to_sw_l2_returns_are_derived_from_history_and_industry_factors
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
     let factors = &rows[0].factors;
 
-    assert_eq!(
-        factors.get("stock_vs_sw_l2_ret5_pct"),
-        Some(&FactorValue::Number(0.2017))
-    );
-    assert_eq!(
-        factors.get("stock_vs_sw_l2_ret20_pct"),
-        Some(&FactorValue::Number(9.2308))
-    );
+    assert!(!factors.contains_key("stock_vs_sw_l2_ret5_pct"));
+    assert!(!factors.contains_key("stock_vs_sw_l2_ret20_pct"));
+}
+
+#[test]
+fn factor_artifact_exports_db_native_special_structure_factor_family_names() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(129);
+    let prepared = (0..=129)
+        .map(|offset| {
+            let mut row = prepared_row(
+                "000001.SZ",
+                first_date + Duration::days(offset),
+                10.0 + offset as f64 * 0.1,
+                if offset == 119 {
+                    10_000.0
+                } else {
+                    1000.0 + offset as f64
+                },
+            );
+            if offset == 129 {
+                row.db_factors.insert("left_peak_valid".to_string(), 1.0);
+                row.db_factors.insert("left_peak_b_div_a".to_string(), 1.03);
+                row.db_factors
+                    .insert("left_peak_days_since_peak".to_string(), 17.0);
+            }
+            row
+        })
+        .collect::<Vec<_>>();
+    let candidate = Candidate {
+        code: "000001.SZ".to_string(),
+        pick_date,
+        close: prepared.last().unwrap().close,
+        turnover_n: prepared.last().unwrap().turnover_n,
+        signal: Some("B2".to_string()),
+        yellow_b1: None,
+    };
+
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, Some("neutral"));
+    let factors = &rows[0].factors;
+
+    for key in [
+        "structure_box_position_120d_pct",
+        "structure_box_mid_position_120d_pct",
+        "structure_close_to_120d_max_pct",
+        "structure_close_to_120d_min_pct",
+        "structure_close_to_120d_range_center_pct",
+        "structure_range_width_120d_pct",
+        "structure_hl90_position",
+        "structure_hl90_range_pct",
+        "structure_range_compression_20d",
+        "structure_range_compression_40d",
+        "structure_close_to_ma25_pct",
+        "structure_low_to_ma25_pct",
+        "structure_near_ma25_support_flag",
+        "structure_ma25_slope_5d_pct",
+        "structure_ma_aligned_flag",
+        "structure_zxdkx",
+        "structure_close_to_zxdkx_pct",
+        "structure_zxdq_slope_5d_pct",
+        "structure_zxdkx_slope_5d_pct",
+        "macd_state_phase_score",
+        "macd_state_daily_phase_type",
+        "macd_state_daily_wave_index",
+        "macd_state_daily_wave_stage",
+        "macd_state_weekly_phase_type",
+        "macd_state_weekly_wave_index",
+        "macd_state_weekly_wave_stage",
+        "macd_state_weekly_daily_combo_type",
+        "macd_state_daily_rising_initial_flag",
+        "macd_state_top_divergence_flag",
+        "macd_daily_dif_to_close_pct",
+        "macd_daily_dea_to_close_pct",
+        "macd_daily_hist_to_close_pct",
+        "macd_daily_hist_delta_to_close_pct",
+        "macd_daily_hist_slope_3d_to_close_pct",
+        "macd_daily_hist_positive_flag",
+        "macd_weekly_dea_pctile",
+        "macd_weekly_hist",
+        "macd_monthly_dea_pctile",
+        "macd_monthly_hist",
+        "volume_event_abnormal_days_ago",
+        "volume_event_abnormal_to_ma20_ratio",
+        "volume_event_body_pct",
+        "volume_event_price_to_current_pct",
+        "volume_event_post_drawdown_pct",
+        "volume_event_redundant_position_pct",
+        "bar_close_position_pct",
+        "bar_upper_shadow_pct",
+        "bar_amplitude_pct",
+        "bar_body_pct",
+        "signal_bullish_engulf_prev_bearish_flag",
+        "signal_bullish_engulf_volume_ratio",
+        "signal_yang_engulf_ma25_flag",
+        "signal_prev_b2_flag",
+        "signal_b3_plus_flag",
+        "left_peak_valid",
+        "left_peak_b_div_a",
+        "left_peak_days_since_peak",
+    ] {
+        assert!(
+            factors.contains_key(key),
+            "missing DB-native factor family key {key}"
+        );
+    }
 }
 
 #[test]
@@ -426,8 +523,7 @@ fn market_amount_ma5_ratio_uses_raw_price_basis_after_qfq_prepare() {
 }
 
 #[test]
-fn b2_factor_profile_adds_shared_chip_age_summary_from_history_when_vwap_and_turnover_are_available()
- {
+fn b2_factor_profile_does_not_add_chip_age_summary_even_when_chip_inputs_are_available() {
     let trade_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let prepared = (0..3)
         .map(|offset| {
@@ -455,33 +551,27 @@ fn b2_factor_profile_adds_shared_chip_age_summary_from_history_when_vwap_and_tur
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
     let factors = &rows[0].factors;
 
-    assert!(matches!(
-        factors.get("total_mass"),
-        Some(FactorValue::Number(value)) if (*value - 1.0).abs() < 1e-6
-    ));
-    assert!(matches!(
-        factors.get("chip_age_layer_sum"),
-        Some(FactorValue::Number(value)) if (*value - 1.0).abs() < 1e-6
-    ));
-    assert!(factors.contains_key("chip_age_ultrashort_ratio"));
-    assert!(factors.contains_key("chip_age_mid_ratio"));
-    assert!(factors.contains_key("profit_ratio"));
-    assert!(factors.contains_key("avg_cost_close_ratio"));
-    assert!(factors.contains_key("peak_price_close_ratio"));
-    assert!(factors.contains_key("chip_entropy"));
-    assert!(factors.contains_key("chip_age_l0_b00"));
-    assert!(factors.contains_key("chip_age_l3_b31"));
+    assert!(!factors.contains_key("total_mass"));
+    assert!(!factors.contains_key("chip_age_layer_sum"));
+    assert!(!factors.contains_key("chip_age_ultrashort_ratio"));
+    assert!(!factors.contains_key("chip_age_mid_ratio"));
+    assert!(!factors.contains_key("profit_ratio"));
+    assert!(!factors.contains_key("avg_cost_close_ratio"));
+    assert!(!factors.contains_key("peak_price_close_ratio"));
+    assert!(!factors.contains_key("chip_entropy"));
+    assert!(!factors.contains_key("chip_age_l0_b00"));
+    assert!(!factors.contains_key("chip_age_l3_b31"));
     assert_eq!(
         factors
             .keys()
             .filter(|key| key.starts_with("chip_age_l") && key.contains("_b"))
             .count(),
-        128
+        0
     );
     assert_eq!(rows[0].diagnostics["factor_profile"], "b2");
     assert_eq!(
         rows[0].diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "chip_age", "b2_semantic"])
+        serde_json::json!(["raw_common", "b2_semantic"])
     );
 }
 
@@ -520,10 +610,10 @@ fn b3_uses_method_registered_factor_profile_matching_b2_for_now() {
     assert_eq!(rows[0].diagnostics["factor_profile"], "b3");
     assert_eq!(
         rows[0].diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "chip_age", "b3_semantic"])
+        serde_json::json!(["raw_common", "b3_semantic"])
     );
-    assert!(rows[0].factors.contains_key("chip_age_ultrashort_ratio"));
-    assert!(rows[0].factors.contains_key("chip_entropy"));
+    assert!(!rows[0].factors.contains_key("chip_age_ultrashort_ratio"));
+    assert!(!rows[0].factors.contains_key("chip_entropy"));
     assert!(!rows[0].factors.contains_key("trend_structure"));
     assert_eq!(
         rows[0].factors.get("signal"),
@@ -778,14 +868,14 @@ fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only
     assert_eq!(lsh_profile.name, "lsh");
     assert_eq!(
         lsh_profile.bundle_names(),
-        vec!["raw_common", "chip_age", "lsh_semantic"]
+        vec!["raw_common", "lsh_semantic"]
     );
     assert_eq!(
         lsh_rows[0].diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "chip_age", "lsh_semantic"])
+        serde_json::json!(["raw_common", "lsh_semantic"])
     );
-    assert!(lsh_factors.contains_key("chip_age_long_ratio"));
-    assert!(lsh_factors.contains_key("chip_entropy"));
+    assert!(!lsh_factors.contains_key("chip_age_long_ratio"));
+    assert!(!lsh_factors.contains_key("chip_entropy"));
     assert!(lsh_factors.contains_key("lsh_daily_macd_wave_index"));
     assert!(lsh_factors.contains_key("lsh_weekly_macd_wave_index"));
     assert!(lsh_factors.contains_key("lsh_weekly_daily_constructive_combo_flag"));

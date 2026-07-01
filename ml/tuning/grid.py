@@ -99,6 +99,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
     parser.add_argument("--skip-rf-diagnostics", action="store_true")
     parser.add_argument("--num-threads", type=int, default=0, help="LightGBM num_threads; 0 lets LightGBM pick")
     parser.add_argument(
+        "--allow-native-categorical",
+        action="store_true",
+        help="include LightGBM native categorical encoding in Optuna search; default keeps one-hot only",
+    )
+    parser.add_argument(
         "--objective",
         choices=["default", "top3_ret10_ge_10"],
         default="default",

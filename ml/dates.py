@@ -42,7 +42,7 @@ def fetch_trade_dates(dsn: str, start_date: str, end_date: str) -> list[str]:
             cur.execute(
                 """
                 select distinct trade_date
-                from daily_market
+                from stock_stk_factor_pro
                 where trade_date between %s and %s
                 order by trade_date
                 """,

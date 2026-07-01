@@ -120,7 +120,16 @@ RAW_FACTOR_COLUMNS = [
     "turnover_rate_f",
     "dist_to_up_limit_pct",
     "dist_to_down_limit_pct",
+    "stock_mf_net_amount",
+    "stock_mf_net_d5_amount",
+    "stock_mf_buy_lg_amount",
+    "stock_mf_buy_lg_amount_rate",
+    "stock_mf_buy_md_amount",
+    "stock_mf_buy_md_amount_rate",
+    "stock_mf_buy_sm_amount",
+    "stock_mf_buy_sm_amount_rate",
     "large_net_amount_to_amount_pct",
+    "mid_net_amount_to_amount_pct",
     "small_net_amount_to_amount_pct",
     "net_mf_amount_to_amount_pct",
     "turnover_n",
@@ -144,37 +153,130 @@ RAW_FACTOR_COLUMNS = [
     "market_broad_ret20_pct",
     "market_broad_ma20_bias_pct",
     "market_broad_volatility20_pct",
-    "sw_l2_ret5_pct",
-    "sw_l2_ret20_pct",
-    "sw_l2_ma20_bias_pct",
-    "sw_l2_volatility20_pct",
-    "sw_l2_ret5_rank_pct",
-    "sw_l2_ret20_rank_pct",
-    "sw_l2_vs_market_ret5_pct",
-    "sw_l2_vs_market_ret20_pct",
-    "stock_vs_sw_l2_ret5_pct",
-    "stock_vs_sw_l2_ret20_pct",
-    "sw_l2_up_ratio",
-    "sw_l2_ge5_ratio",
-    "sw_l2_limit_up_ratio",
-    "sw_l2_limit_down_ratio",
-    "sw_l2_amount_share_pct",
-    "sw_l2_amount_share_rank_pct",
-    "sw_l2_amount_share_ma5_ratio",
-    "sw_l2_top1_amount_share_pct",
-    "sw_l2_top3_amount_share_pct",
-    "sw_l2_top5_amount_share_pct",
-    "sw_l2_net_mf_to_amount_pct",
-    "sw_l2_net_mf_market_share_pct",
-    "sw_l2_net_mf_rank_pct",
-    "stock_amount_to_sw_l2_amount_pct",
-    "stock_net_mf_to_sw_l2_amount_pct",
+    "stock_env_sector_ret5_pct",
+    "stock_env_sector_ret20_pct",
+    "stock_env_sector_ma20_bias_pct",
+    "stock_env_sector_vs_broad_ret5_pct",
+    "stock_env_sector_vs_broad_ret20_pct",
+    "stock_env_style_ret5_spread_pct",
+    "stock_env_market_sector_ret5_sum_pct",
+    "stock_env_market_score",
+    "stock_env_sector_score",
+    "stock_env_alignment_score",
+    "stock_env_limit_heat_score",
+    "stock_env_overall_score",
     "cyq_winner_rate",
     "cyq_cost_50_to_close_pct",
     "cyq_cost_85_to_close_pct",
     "cyq_weight_avg_to_close_pct",
     "cyq_cost_70_width_pct",
     "cyq_cost_90_width_pct",
+]
+DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS = [
+    "structure_box_position_120d_pct",
+    "structure_box_mid_position_120d_pct",
+    "structure_close_to_120d_max_pct",
+    "structure_close_to_120d_min_pct",
+    "structure_close_to_120d_range_center_pct",
+    "structure_range_width_120d_pct",
+    "structure_hl90_position",
+    "structure_hl90_range_pct",
+    "structure_range_compression_20d",
+    "structure_range_compression_40d",
+    "structure_close_to_ma25_pct",
+    "structure_low_to_ma25_pct",
+    "structure_near_ma25_support_flag",
+    "structure_ma25_slope_5d_pct",
+    "structure_ma_aligned_flag",
+    "structure_zxdkx",
+    "structure_close_to_zxdkx_pct",
+    "structure_zxdq_slope_5d_pct",
+    "structure_zxdkx_slope_5d_pct",
+    "macd_state_phase_score",
+    "macd_state_daily_phase_type",
+    "macd_state_daily_wave_index",
+    "macd_state_daily_wave_stage",
+    "macd_state_weekly_phase_type",
+    "macd_state_weekly_wave_index",
+    "macd_state_weekly_wave_stage",
+    "macd_state_weekly_daily_combo_type",
+    "macd_state_daily_rising_initial_flag",
+    "macd_state_top_divergence_flag",
+    "macd_daily_dif_to_close_pct",
+    "macd_daily_dea_to_close_pct",
+    "macd_daily_hist_to_close_pct",
+    "macd_daily_hist_delta_to_close_pct",
+    "macd_daily_hist_slope_3d_to_close_pct",
+    "macd_daily_hist_positive_flag",
+    "macd_weekly_dea_pctile",
+    "macd_weekly_hist",
+    "macd_monthly_dea_pctile",
+    "macd_monthly_hist",
+    "volume_event_abnormal_days_ago",
+    "volume_event_abnormal_to_ma20_ratio",
+    "volume_event_body_pct",
+    "volume_event_price_to_current_pct",
+    "volume_event_post_drawdown_pct",
+    "volume_event_redundant_position_pct",
+    "bar_close_position_pct",
+    "bar_upper_shadow_pct",
+    "bar_lower_shadow_pct",
+    "bar_amplitude_pct",
+    "bar_body_pct",
+    "signal_bullish_engulf_prev_bearish_flag",
+    "signal_bullish_engulf_volume_ratio",
+    "signal_yang_engulf_ma25_flag",
+    "signal_prev_b2_flag",
+    "signal_b3_plus_flag",
+    "left_peak_valid",
+    "left_peak_b_div_a",
+    "left_peak_days_since_peak",
+]
+THS_SECTOR_RAW_FACTOR_COLUMNS = [
+    "ths_membership_current_flag",
+    "ths_main_sector_rank",
+    "ths_main_pct_change",
+    "ths_main_vol",
+    "ths_main_turnover_rate",
+    "ths_main_total_mv",
+    "ths_main_float_mv",
+    "ths_main_net_amount",
+    "ths_main_net_buy_amount",
+    "ths_main_net_sell_amount",
+    "ths_main_limit_up_count",
+    "ths_main_limit_days",
+    "ths_main_limit_pct_chg",
+    "ths_main_limit_rank",
+    "ths_main_lead_stock_pct_change",
+    "ths_main_macd_daily_dif",
+    "ths_main_macd_daily_dea",
+    "ths_main_macd_daily_hist",
+    "ths_main_macd_weekly_dif",
+    "ths_main_macd_weekly_dea",
+    "ths_main_macd_weekly_hist",
+    "ths_main_macd_monthly_dif",
+    "ths_main_macd_monthly_dea",
+    "ths_main_macd_monthly_hist",
+    "ths_sector_count",
+    "ths_best_pct_change",
+    "ths_avg_pct_change",
+    "ths_best_net_amount",
+    "ths_avg_net_amount",
+    "ths_best_net_buy_amount",
+    "ths_avg_net_buy_amount",
+    "ths_best_net_sell_amount",
+    "ths_avg_net_sell_amount",
+    "ths_best_limit_up_count",
+    "ths_avg_limit_up_count",
+    "ths_any_limit_up_sector_flag",
+    "ths_limit_up_sector_count",
+    "ths_limit_up_sector_ratio",
+    "ths_best_limit_days",
+    "ths_best_limit_pct_chg",
+    "ths_avg_limit_pct_chg",
+    "ths_best_limit_rank",
+    "stock_vs_ths_main_pct_change",
+    "stock_vs_ths_avg_pct_change",
 ]
 B2_RDAGENT_RAW_FACTOR_COLUMNS = [
     "D",
@@ -196,21 +298,12 @@ B2_RDAGENT_RAW_FACTOR_COLUMNS = [
     "b2_yang_engulf_ma25_vol_ratio",
     "b2_yang_engulf_ma25_strength",
 ]
-CHIP_AGE_RAW_FACTOR_COLUMNS = [
-    "total_mass",
-    "chip_age_layer_sum",
-    "chip_age_ultrashort_ratio",
-    "chip_age_short_ratio",
-    "chip_age_mid_ratio",
-    "chip_age_long_ratio",
-    "profit_ratio",
-    "avg_cost_close_ratio",
-    "peak_price_close_ratio",
-    "chip_entropy",
-    "chip_concentration",
-    *[f"chip_age_l{layer}_b{bin_index:02}" for layer in range(4) for bin_index in range(32)],
-]
-B2_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + CHIP_AGE_RAW_FACTOR_COLUMNS + B2_RDAGENT_RAW_FACTOR_COLUMNS
+B2_RAW_FACTOR_COLUMNS = (
+    RAW_FACTOR_COLUMNS
+    + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS
+    + THS_SECTOR_RAW_FACTOR_COLUMNS
+    + B2_RDAGENT_RAW_FACTOR_COLUMNS
+)
 B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_volume_shrink_ratio",
     "b3_amplitude_pct",
@@ -221,7 +314,12 @@ B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "b3_prev_b2_flag",
     "b3_plus_flag",
 ]
-B3_RAW_FACTOR_COLUMNS = RAW_FACTOR_COLUMNS + CHIP_AGE_RAW_FACTOR_COLUMNS + B3_SPECIFIC_RAW_FACTOR_COLUMNS
+B3_RAW_FACTOR_COLUMNS = (
+    RAW_FACTOR_COLUMNS
+    + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS
+    + THS_SECTOR_RAW_FACTOR_COLUMNS
+    + B3_SPECIFIC_RAW_FACTOR_COLUMNS
+)
 LSH_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "lsh_daily_macd_wave_index",
     "lsh_weekly_macd_wave_index",
@@ -240,7 +338,7 @@ LSH_EXCLUDED_RAW_FACTOR_COLUMNS = {
 }
 LSH_RAW_FACTOR_COLUMNS = [
     column for column in RAW_FACTOR_COLUMNS if column not in LSH_EXCLUDED_RAW_FACTOR_COLUMNS
-] + CHIP_AGE_RAW_FACTOR_COLUMNS + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
+] + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS + THS_SECTOR_RAW_FACTOR_COLUMNS + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
 LABEL_COLUMNS = [
     "ret3",
     "ret5",
@@ -475,13 +573,14 @@ def read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def selection_dirs(runtime_root: Path, method: str, start_date: str, end_date: str) -> list[Path]:
+def selection_dirs(runtime_root: Path, method: str, start_date: str, end_date: str, *, intraday: bool = False) -> list[Path]:
     root = runtime_root / "select"
     if not root.exists():
         return []
     dirs: list[Path] = []
-    suffix = f".{method}"
-    for path in sorted(root.glob(f"????-??-??{suffix}")):
+    suffix = f".intraday.{method}" if intraday else f".{method}"
+    glob_pattern = f"????-??-??.intraday.{method}" if intraday else f"????-??-??.{method}"
+    for path in sorted(root.glob(glob_pattern)):
         pick_date = path.name.removesuffix(suffix)
         if start_date <= pick_date <= end_date:
             dirs.append(path)
@@ -586,12 +685,20 @@ def extract_selection_row(
     return row
 
 
-def load_selection_rows(runtime_root: Path, *, method: str, start_date: str, end_date: str) -> tuple[list[dict[str, Any]], list[str]]:
+def load_selection_rows(
+    runtime_root: Path,
+    *,
+    method: str,
+    start_date: str,
+    end_date: str,
+    intraday: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
-    for select_dir in selection_dirs(runtime_root, method, start_date, end_date):
-        pick_date = select_dir.name.removesuffix(f".{method}")
-        artifact_key = factor_artifact_key_for_date(pick_date)
+    for select_dir in selection_dirs(runtime_root, method, start_date, end_date, intraday=intraday):
+        suffix = f".intraday.{method}" if intraday else f".{method}"
+        pick_date = select_dir.name.removesuffix(suffix)
+        artifact_key = factor_artifact_key_for_date(pick_date, intraday=intraday)
         run = read_json(select_dir / "run.json")
         display = read_json(select_dir / "display.json")
         if run is None:
@@ -634,13 +741,14 @@ def load_selection_rows(runtime_root: Path, *, method: str, start_date: str, end
     return rows, warnings
 
 
-def candidate_files(runtime_root: Path, method: str, start_date: str, end_date: str) -> list[Path]:
+def candidate_files(runtime_root: Path, method: str, start_date: str, end_date: str, *, intraday: bool = False) -> list[Path]:
     root = runtime_root / "candidates"
     if not root.exists():
         return []
     files: list[Path] = []
-    suffix = f".{method}.json"
-    for path in sorted(root.glob(f"????-??-??{suffix}")):
+    suffix = f".intraday.{method}.json" if intraday else f".{method}.json"
+    glob_pattern = f"????-??-??.intraday.{method}.json" if intraday else f"????-??-??.{method}.json"
+    for path in sorted(root.glob(glob_pattern)):
         pick_date = path.name.removesuffix(suffix)
         if start_date <= pick_date <= end_date:
             files.append(path)
@@ -672,20 +780,23 @@ def extract_candidate_row(candidate: dict[str, Any], *, pick_date: str, method: 
     return row
 
 
-def load_candidate_rows(runtime_root: Path, *, method: str, start_date: str, end_date: str) -> tuple[list[dict[str, Any]], list[str]]:
+def load_candidate_rows(
+    runtime_root: Path,
+    *,
+    method: str,
+    start_date: str,
+    end_date: str,
+    intraday: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
-    for path in candidate_files(runtime_root, method, start_date, end_date):
+    suffix = f".intraday.{method}.json" if intraday else f".{method}.json"
+    for path in candidate_files(runtime_root, method, start_date, end_date, intraday=intraday):
         payload = read_json(path)
         if payload is None:
             warnings.append(f"invalid_candidate_json:{path}")
             continue
-        pick_date = str(payload.get("pick_date") or path.name.removesuffix(f".{method}.json"))
-        artifact_key = factor_artifact_key_for_date(pick_date)
-        factor_by_code, factor_warnings = load_factor_artifact_rows(runtime_root, method=method, artifact_key=artifact_key)
-        warnings.extend(factor_warnings)
-        if not factor_by_code:
-            continue
+        pick_date = str(payload.get("pick_date") or path.name.removesuffix(suffix))
         env = "unknown"
         environment = payload.get("environment")
         if isinstance(environment, dict):
@@ -695,6 +806,13 @@ def load_candidate_rows(runtime_root: Path, *, method: str, start_date: str, end
             candidate_rows = payload.get("rows")
         if not isinstance(candidate_rows, list):
             warnings.append(f"invalid_candidate_rows:{path}")
+            continue
+        if not candidate_rows:
+            continue
+        artifact_key = factor_artifact_key_for_date(pick_date, intraday=intraday)
+        factor_by_code, factor_warnings = load_factor_artifact_rows(runtime_root, method=method, artifact_key=artifact_key)
+        warnings.extend(factor_warnings)
+        if not factor_by_code:
             continue
         for candidate in candidate_rows:
             if not isinstance(candidate, dict):
@@ -830,17 +948,20 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
     if not symbols:
         return {}
     query = """
-        SELECT ts_code, trade_date, open::double precision, close::double precision, high::double precision, low::double precision,
-               vol::double precision, turnover_rate::double precision, pct_chg::double precision,
-               CASE
-                   WHEN extra_market_jsonb ? 'adj_factor'
-                   THEN (extra_market_jsonb->>'adj_factor')::double precision
-               END AS adj_factor
-        FROM daily_market
+        SELECT ts_code, trade_date,
+               open_qfq::double precision AS open,
+               close_qfq::double precision AS close,
+               high_qfq::double precision AS high,
+               low_qfq::double precision AS low,
+               vol::double precision,
+               turnover_rate::double precision,
+               pct_chg::double precision,
+               adj_factor::double precision
+        FROM stock_stk_factor_pro
         WHERE ts_code = ANY(%s)
           AND trade_date >= %s
           AND trade_date <= %s
-          AND close IS NOT NULL
+          AND close_qfq IS NOT NULL
         ORDER BY ts_code ASC, trade_date ASC
     """
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -984,13 +1105,16 @@ def factor_artifact_label_from_warning(warning: str, *, method: str) -> str:
 def rerun_factor_artifact_hint(label: str, *, method: str) -> str:
     suffix = f".{method}"
     artifact_key = label.removesuffix(suffix) if label.endswith(suffix) else label
+    intraday = artifact_key.endswith(".intraday")
     if artifact_key.endswith(".intraday"):
         pick_date = artifact_key.removesuffix(".intraday")
     else:
         pick_date = artifact_key
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", pick_date):
-        return f"stock-select-rs screen --method {method} --pick-date {pick_date} --export-factors"
-    return f"stock-select-rs screen --method {method} --pick-date <date> --export-factors"
+        intraday_flag = " --intraday" if intraday else ""
+        return f"stock-select-rs screen --method {method}{intraday_flag} --pick-date {pick_date} --export-factors"
+    intraday_flag = " --intraday" if intraday else ""
+    return f"stock-select-rs screen --method {method}{intraday_flag} --pick-date <date> --export-factors"
 
 
 def fatal_factor_warning_message(warnings: Sequence[str], *, method: str, limit: int = 10) -> str | None:
@@ -1017,6 +1141,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--end-date", required=True, type=validate_date)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--source", choices=["candidates", "select"], default="candidates")
+    parser.add_argument("--intraday", action="store_true")
     parser.add_argument("--min-history-days", type=int, default=120)
     parser.add_argument("--forward-days", type=int, default=15)
     parser.add_argument(
@@ -1040,13 +1165,22 @@ def main_from_args(args: argparse.Namespace) -> int:
     if not runtime_root.exists():
         raise SystemExit(f"runtime root does not exist: {runtime_root}")
     dsn = resolve_dsn(args.dsn)
+    intraday = bool(getattr(args, "intraday", False))
     if args.source == "select":
         training_input_rows, warnings = load_selection_rows(
-            runtime_root, method=args.method, start_date=args.start_date, end_date=args.end_date
+            runtime_root,
+            method=args.method,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            intraday=intraday,
         )
     else:
         training_input_rows, warnings = load_candidate_rows(
-            runtime_root, method=args.method, start_date=args.start_date, end_date=args.end_date
+            runtime_root,
+            method=args.method,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            intraday=intraday,
         )
     fatal_factor_message = fatal_factor_warning_message(warnings, method=args.method)
     if fatal_factor_message is not None:

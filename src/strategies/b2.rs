@@ -305,6 +305,22 @@ mod tests {
     }
 
     #[test]
+    fn b2_strategy_prefers_db_monthly_macd_dea_when_available() {
+        let first = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let pick = first + chrono::Duration::days(89);
+        let mut rows = monthly_macd_rows(first, true);
+        rows.last_mut()
+            .unwrap()
+            .db_factors
+            .insert("macd_monthly_dea".to_string(), -0.25);
+
+        let output = run_b2_strategy(&rows, pick);
+
+        assert!(output.candidates.is_empty());
+        assert_eq!(output.stats["fail_monthly_macd_dea"], 1);
+    }
+
+    #[test]
     fn b2_ref_strategy_matches_owned_slice_strategy() {
         let pick = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
         let rows = vec![

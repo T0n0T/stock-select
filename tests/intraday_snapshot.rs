@@ -1,8 +1,9 @@
 use chrono::NaiveDate;
 use serde_json::json;
 use stock_select::intraday::{
-    RawRtKRow, StaticRtKProvider, TushareRestProvider, TushareRtKResponse,
-    build_intraday_market_rows, fetch_rt_k_snapshot, normalize_rt_k_rows,
+    MacdPeriodState, RawRtKRow, StaticRtKProvider, TushareRestProvider, TushareRtKResponse,
+    build_intraday_market_rows, build_intraday_market_rows_with_macd_states,
+    derive_live_macd_from_period_state, fetch_rt_k_snapshot, normalize_rt_k_rows,
     parse_tushare_rt_k_response, tushare_rt_k_request_payload,
 };
 use stock_select::model::MarketRow;
@@ -212,6 +213,33 @@ fn parse_tushare_rt_k_response_surfaces_api_error() {
 }
 
 #[test]
+fn derive_live_macd_from_period_state_uses_completed_state_and_live_qfq_price() {
+    let state = MacdPeriodState {
+        ts_code: "000001.SZ".to_string(),
+        period_type: "weekly".to_string(),
+        ema12: 10.0,
+        ema26: 9.0,
+        dea: 0.5,
+        period_count: 42,
+    };
+
+    let live = derive_live_macd_from_period_state(&state, 13.0);
+
+    let expected_ema12 = 10.0 * (11.0 / 13.0) + 13.0 * (2.0 / 13.0);
+    let expected_ema26 = 9.0 * (25.0 / 27.0) + 13.0 * (2.0 / 27.0);
+    let expected_dif = expected_ema12 - expected_ema26;
+    let expected_dea = 0.5 * 0.8 + expected_dif * 0.2;
+    let expected_hist = expected_dif - expected_dea;
+
+    assert_eq!(live.ts_code, "000001.SZ");
+    assert_eq!(live.period_type, "weekly");
+    assert!((live.dif - expected_dif).abs() < 1e-12);
+    assert!((live.dea - expected_dea).abs() < 1e-12);
+    assert!((live.hist - expected_hist).abs() < 1e-12);
+    assert_eq!(live.period_count, 43);
+}
+
+#[test]
 fn tushare_rest_provider_rejects_empty_token() {
     let err = TushareRestProvider::new("  ".to_string()).unwrap_err();
 
@@ -329,4 +357,121 @@ fn build_intraday_market_rows_uses_pick_date_adj_factor_for_snapshot_rows() {
         .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
         .unwrap();
     assert_eq!(snapshot_row.adj_factor, Some(1.0));
+}
+
+#[test]
+fn build_intraday_market_rows_derives_live_macd_from_period_state_with_qfq_price() {
+    let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
+    let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+    let history = vec![MarketRow {
+        ts_code: "000001.SZ".to_string(),
+        trade_date: previous_date,
+        open: 10.0,
+        high: 10.4,
+        low: 9.8,
+        close: 10.0,
+        vol: 100.0,
+        turnover_rate: Some(1.0),
+        adj_factor: Some(2.0),
+        db_factors: Default::default(),
+    }];
+    let snapshot = normalize_rt_k_rows(
+        vec![RawRtKRow::from_value(json!({
+            "ts_code": "000001.SZ",
+            "name": "平安银行",
+            "open": 5.0,
+            "high": 5.4,
+            "low": 4.9,
+            "close": 5.3,
+            "vol": 1234567,
+            "amount": 152300000.0
+        }))],
+        trade_date,
+        "10:00:00",
+    )
+    .unwrap();
+    let states = vec![MacdPeriodState {
+        ts_code: "000001.SZ".to_string(),
+        period_type: "daily".to_string(),
+        ema12: 10.0,
+        ema26: 9.0,
+        dea: 0.5,
+        period_count: 100,
+    }];
+
+    let rows = build_intraday_market_rows_with_macd_states(history, &snapshot, trade_date, &states);
+
+    let snapshot_row = rows
+        .iter()
+        .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
+        .unwrap();
+    let live = derive_live_macd_from_period_state(&states[0], 10.6);
+    assert_eq!(snapshot_row.db_factors["intraday_price_live_qfq"], 10.6);
+    assert!((snapshot_row.db_factors["macd_daily_dif"] - live.dif).abs() < 1e-12);
+    assert!((snapshot_row.db_factors["macd_daily_dea"] - live.dea).abs() < 1e-12);
+    assert!((snapshot_row.db_factors["macd_daily_hist"] - live.hist).abs() < 1e-12);
+    assert_eq!(snapshot_row.db_factors["macd_daily_period_count"], 101.0);
+}
+
+#[test]
+fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows() {
+    let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
+    let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+    let mut db_factors = std::collections::BTreeMap::new();
+    db_factors.insert("rolling_ma25_qfq".to_string(), 10.2);
+    db_factors.insert("ths_sector_count".to_string(), 3.0);
+    db_factors.insert("ths_main_pct_change".to_string(), 2.4);
+    db_factors.insert("stock_vs_ths_main_pct_change".to_string(), 0.8);
+    db_factors.insert("stock_env_sector_score".to_string(), 3.4);
+    db_factors.insert("unrelated_previous_eod_factor".to_string(), 99.0);
+    db_factors.insert("ths_main_net_amount".to_string(), f64::NAN);
+    let history = vec![MarketRow {
+        ts_code: "000001.SZ".to_string(),
+        trade_date: previous_date,
+        open: 10.0,
+        high: 10.4,
+        low: 9.8,
+        close: 10.0,
+        vol: 100.0,
+        turnover_rate: Some(1.0),
+        adj_factor: Some(2.0),
+        db_factors,
+    }];
+    let snapshot = normalize_rt_k_rows(
+        vec![RawRtKRow::from_value(json!({
+            "ts_code": "000001.SZ",
+            "name": "平安银行",
+            "open": 5.0,
+            "high": 5.4,
+            "low": 4.9,
+            "close": 5.3,
+            "vol": 1234567,
+            "amount": 152300000.0
+        }))],
+        trade_date,
+        "10:00:00",
+    )
+    .unwrap();
+
+    let rows = build_intraday_market_rows(history, &snapshot, trade_date);
+
+    let snapshot_row = rows
+        .iter()
+        .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
+        .unwrap();
+    assert_eq!(snapshot_row.db_factors["rolling_ma25_qfq"], 10.2);
+    assert_eq!(snapshot_row.db_factors["ths_sector_count"], 3.0);
+    assert_eq!(snapshot_row.db_factors["ths_main_pct_change"], 2.4);
+    assert_eq!(snapshot_row.db_factors["stock_vs_ths_main_pct_change"], 0.8);
+    assert_eq!(snapshot_row.db_factors["stock_env_sector_score"], 3.4);
+    assert_eq!(
+        snapshot_row.db_factors["intraday_structure_source_previous_eod"],
+        1.0
+    );
+    assert!(
+        !snapshot_row
+            .db_factors
+            .contains_key("unrelated_previous_eod_factor")
+    );
+    assert!(!snapshot_row.db_factors.contains_key("ths_main_net_amount"));
 }

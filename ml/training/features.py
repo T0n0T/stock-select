@@ -42,6 +42,19 @@ FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 RF_FEATURE_SELECTION_MODES = {"none", "cumulative_importance"}
 CATEGORICAL_ENCODINGS = {"one_hot", "native"}
 DEFAULT_CATEGORICAL_ENCODING = "one_hot"
+UNSTABLE_ZERO_COVERAGE_RAW_COLUMNS = {
+    "cyq_winner_rate",
+    "cyq_cost_50_to_close_pct",
+    "cyq_cost_85_to_close_pct",
+    "cyq_weight_avg_to_close_pct",
+    "cyq_cost_70_width_pct",
+    "cyq_cost_90_width_pct",
+    "bar_lower_shadow_pct",
+    "bar_amplitude_pct",
+    "bar_body_pct",
+    "signal_prev_b2_flag",
+    "signal_b3_plus_flag",
+}
 
 
 def categorical_columns_for_method(method: str = DEFAULT_METHOD) -> set[str]:
@@ -53,7 +66,7 @@ def raw_numeric_columns_for_method(method: str = DEFAULT_METHOD) -> set[str]:
         set(rank_dataset_schema.raw_factor_columns_for_method(method))
         | set(rank_dataset_schema.context_numeric_columns_for_method(method))
         | set(rank_dataset_schema.training_macd_numeric_columns_for_method(method))
-    )
+    ) - UNSTABLE_ZERO_COVERAGE_RAW_COLUMNS
 
 
 def select_feature_columns(
