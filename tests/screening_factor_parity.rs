@@ -4,7 +4,7 @@ use stock_select::factors::registry::{build_candidate_factor_rows, factor_profil
 use stock_select::factors::types::FactorValue;
 use stock_select::model::{Candidate, MarketRow, Method, PreparedRow};
 use stock_select::screening::{
-    PoolSource, ScreenRequest, prepared_cache_start_date, run_screen_with_loader,
+    prepared_cache_start_date, run_screen_with_loader, PoolSource, ScreenRequest,
 };
 
 #[test]
@@ -610,6 +610,30 @@ fn b3_factor_profile_adds_b3_specific_raw_factors_only_for_b3() {
     assert_eq!(
         b3_factors.get("b3_plus_flag"),
         Some(&FactorValue::Bool(true))
+    );
+    assert_eq!(
+        b3_factors.get("structure_hl90_position"),
+        Some(&FactorValue::Number(1.0))
+    );
+    assert_eq!(
+        b3_factors.get("structure_hl90_range_pct"),
+        Some(&FactorValue::Number(10.9453))
+    );
+    assert_eq!(
+        b3_factors.get("bar_upper_shadow_pct"),
+        Some(&FactorValue::Number(0.0))
+    );
+    assert_eq!(
+        b3_factors.get("signal_bullish_engulf_prev_bearish_flag"),
+        Some(&FactorValue::Bool(false))
+    );
+    assert_eq!(
+        b3_factors.get("signal_bullish_engulf_volume_ratio"),
+        Some(&FactorValue::Number(1.3333))
+    );
+    assert_eq!(
+        b3_factors.get("signal_yang_engulf_ma25_flag"),
+        Some(&FactorValue::Bool(false))
     );
     assert!(!b2_factors.contains_key("b3_volume_shrink_ratio"));
     assert!(!b2_factors.contains_key("b3_prev_b2_flag"));
