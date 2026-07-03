@@ -668,14 +668,41 @@ const STOCK_PERIOD_MACD_STATE_QUERY: &str = "
         ";
 
 const INSTRUMENT_INFO_QUERY: &str = "
+        WITH requested AS (
+            SELECT unnest($1::text[]) AS ts_code
+        ),
+        ths_name AS (
+            SELECT
+                con_code AS ts_code,
+                max(con_name) AS name
+            FROM index_ths_member
+            WHERE con_code = ANY($1)
+            GROUP BY con_code
+        ),
+        ths_industry AS (
+            SELECT DISTINCT ON (m.con_code)
+                m.con_code AS ts_code,
+                i.name AS industry
+            FROM index_ths_member m
+            JOIN index_ths i ON i.ts_code = m.ts_code
+            WHERE m.con_code = ANY($1)
+              AND i.type = 'I'
+              AND NULLIF(btrim(i.name), '') IS NOT NULL
+            ORDER BY
+                m.con_code,
+                CASE WHEN i.name LIKE '%(A股)' THEN 1 ELSE 0 END,
+                i.count ASC NULLS LAST,
+                i.name ASC
+        )
         SELECT
-            con_code AS ts_code,
-            max(con_name) AS name,
-            NULL::text AS industry
-        FROM index_ths_member
-        WHERE con_code = ANY($1)
-        GROUP BY con_code
-        ORDER BY con_code ASC
+            r.ts_code,
+            COALESCE(NULLIF(btrim(s.name), ''), ths_name.name) AS name,
+            COALESCE(NULLIF(btrim(s.industry), ''), ths_industry.industry) AS industry
+        FROM requested r
+        LEFT JOIN stock_basic s ON s.ts_code = r.ts_code
+        LEFT JOIN ths_name ON ths_name.ts_code = r.ts_code
+        LEFT JOIN ths_industry ON ths_industry.ts_code = r.ts_code
+        ORDER BY r.ts_code ASC
         ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1547,17 +1574,23 @@ mod tests {
     }
 
     #[test]
-    fn instrument_info_query_uses_stock_cache_membership_table() {
+    fn instrument_info_query_uses_stock_basic_with_ths_industry_fallback() {
         for fragment in [
-            "FROM index_ths_member",
-            "con_code AS ts_code",
-            "max(con_name) AS name",
-            "NULL::text AS industry",
-            "WHERE con_code = ANY($1)",
+            "WITH requested AS",
+            "SELECT unnest($1::text[]) AS ts_code",
+            "LEFT JOIN stock_basic s ON s.ts_code = r.ts_code",
+            "COALESCE(NULLIF(btrim(s.name), ''), ths_name.name) AS name",
+            "FROM index_ths_member m",
+            "JOIN index_ths i",
+            "i.type = 'I'",
+            "COALESCE(NULLIF(btrim(s.industry), ''), ths_industry.industry) AS industry",
         ] {
-            assert!(INSTRUMENT_INFO_QUERY.contains(fragment), "missing {fragment}");
+            assert!(
+                INSTRUMENT_INFO_QUERY.contains(fragment),
+                "missing {fragment}"
+            );
         }
-        assert!(!INSTRUMENT_INFO_QUERY.contains("FROM instruments"));
+        assert!(!INSTRUMENT_INFO_QUERY.contains("NULL::text AS industry"));
     }
 
     #[test]

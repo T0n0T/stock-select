@@ -33,6 +33,7 @@ REVIEW_METADATA_COLUMNS = [
     "risk_flags",
 ]
 TRAINING_CATEGORICAL_COLUMNS = [
+    "listing_board",
     "signal",
     "signal_type",
     "daily_macd_phase_type",
@@ -426,6 +427,23 @@ def normalize_env(value: Any) -> str:
     return text if text in {"weak", "neutral", "strong"} else "unknown"
 
 
+def infer_listing_board(code: Any) -> str:
+    text = str(code or "").strip().upper()
+    symbol = text.split(".", 1)[0]
+    suffix = text.rsplit(".", 1)[1] if "." in text else ""
+    if not symbol:
+        return "unknown"
+    if suffix == "BJ" or symbol.startswith(("43", "83", "87", "88", "92")):
+        return "bse"
+    if symbol.startswith("688"):
+        return "star"
+    if symbol.startswith("30"):
+        return "chinext"
+    if symbol.startswith(("00", "60")):
+        return "main"
+    return "unknown"
+
+
 def normalize_verdict(value: Any) -> str:
     text = str(value or "").strip().upper()
     return text if text in {"PASS", "WATCH", "FAIL"} else "UNKNOWN"
@@ -648,6 +666,8 @@ def merge_factor_artifact_values(row: dict[str, Any], factors: dict[str, Any], *
         row[key] = json_factor_value(value)
     if normalize_env(row.get("env")) == "unknown" and normalize_env(factors.get("env")) != "unknown":
         row["env"] = normalize_env(factors.get("env"))
+    if "listing_board" in dataset_column_set and format_csv_value(row.get("listing_board")) == "":
+        row["listing_board"] = infer_listing_board(row.get("code"))
 
 
 def extract_selection_row(
@@ -679,9 +699,13 @@ def extract_selection_row(
             "risk_flags": risk_flags_text,
         }
     )
+    if "listing_board" in dataset_column_set:
+        row["listing_board"] = infer_listing_board(row.get("code"))
     for key, value in factors.items():
         if key in dataset_column_set:
             row[key] = json_factor_value(value)
+    if "listing_board" in dataset_column_set and format_csv_value(row.get("listing_board")) == "":
+        row["listing_board"] = infer_listing_board(row.get("code"))
     return row
 
 
@@ -769,6 +793,8 @@ def extract_candidate_row(candidate: dict[str, Any], *, pick_date: str, method: 
             "signal": candidate.get("signal") or "",
         }
     )
+    if "listing_board" in dataset_column_set:
+        row["listing_board"] = infer_listing_board(row.get("code"))
     factors = candidate.get("factors")
     if isinstance(factors, dict):
         for key, value in factors.items():
@@ -1003,6 +1029,8 @@ def build_dataset_rows(
         for key, value in selection_row.items():
             if key in dataset_column_set and key not in LABEL_COLUMNS and format_csv_value(value) != "":
                 row[key] = value
+        if "listing_board" in dataset_column_set and format_csv_value(row.get("listing_board")) == "":
+            row["listing_board"] = infer_listing_board(row.get("code"))
         merge_external_feature_values(row, external_features_by_key, method=method)
         row.update(compute_forward_labels(symbol_rows, str(row.get("date"))))
         rows.append(row)

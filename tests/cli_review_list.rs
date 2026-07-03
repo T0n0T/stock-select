@@ -99,7 +99,7 @@ fn review_list_prefers_selection_display_artifact() {
     ])
     .assert()
     .success()
-    .stdout("1\t000002.SZ\t测试二\t-\t0.700000\t↑\n");
+    .stdout("1\t000002.SZ\t测试二\t全国地产\t0.700000\t↑\n");
 }
 
 #[test]
