@@ -18,6 +18,7 @@ from ml.dataset.rank_dataset import (
     load_external_feature_rows,
     load_factor_artifact_rows,
     fetch_price_rows,
+    infer_listing_board,
     load_selection_rows,
     main_from_args,
     normalize_env,
@@ -145,6 +146,7 @@ class RankDatasetTest(unittest.TestCase):
             self.assertNotIn(review_score, columns)
 
         for training_column in [
+            "listing_board",
             "signal_type",
             "daily_macd_phase_type",
             "daily_macd_wave_stage",
@@ -158,6 +160,31 @@ class RankDatasetTest(unittest.TestCase):
             "box_mid_position_120d_pct",
         ]:
             self.assertIn(training_column, columns)
+
+    def test_listing_board_is_b2_b3_categorical_training_feature(self):
+        for method in ["b2", "b3"]:
+            with self.subTest(method=method):
+                self.assertIn("listing_board", dataset_columns_for_method(method))
+                self.assertNotIn("listing_board", raw_factor_columns_for_method(method))
+
+        self.assertNotIn("listing_board", dataset_columns_for_method("lsh"))
+
+    def test_infer_listing_board_from_a_share_code(self):
+        cases = {
+            "000001.SZ": "main",
+            "002594.SZ": "main",
+            "300750.SZ": "chinext",
+            "301269.SZ": "chinext",
+            "600000.SH": "main",
+            "688001.SH": "star",
+            "430047.BJ": "bse",
+            "920002.BJ": "bse",
+            "830799": "bse",
+            "": "unknown",
+        }
+        for code, expected in cases.items():
+            with self.subTest(code=code):
+                self.assertEqual(infer_listing_board(code), expected)
 
     def test_b3_factor_artifact_merge_ignores_review_scores_and_keeps_training_features(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -216,6 +243,7 @@ class RankDatasetTest(unittest.TestCase):
             )
 
         self.assertEqual(warnings, [])
+        self.assertEqual(rows[0]["listing_board"], "main")
         self.assertEqual(rows[0]["signal_type"], "trend_start")
         self.assertEqual(rows[0]["daily_macd_phase_type"], "rising")
         self.assertEqual(rows[0]["daily_macd_wave_index"], 2)
@@ -1256,6 +1284,30 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(by_code["000001.SZ"]["win3_vs_day_median"], 1)
         self.assertEqual(by_code["000002.SZ"]["rank_label_3d"], 0)
         self.assertEqual(by_code["000001.SZ"]["close_to_zxdkx_pct"], 1.25)
+        self.assertEqual(by_code["000001.SZ"]["listing_board"], "main")
+
+    def test_build_dataset_rows_preserves_artifact_listing_board(self):
+        selection_rows = [
+            {
+                "date": "2026-05-25",
+                "code": "300750.SZ",
+                "env": "neutral",
+                "method": "b2",
+                "listing_board": "manual_board",
+            }
+        ]
+        prices = {
+            "300750.SZ": [
+                {"trade_date": "2026-05-25", "close": 10, "high": 10.2, "low": 9.8},
+                {"trade_date": "2026-05-26", "close": 11, "high": 11.2, "low": 10.9},
+                {"trade_date": "2026-05-27", "close": 12, "high": 12.2, "low": 11.8},
+                {"trade_date": "2026-05-28", "close": 13, "high": 13.2, "low": 12.7},
+            ]
+        }
+
+        rows = build_dataset_rows(selection_rows, prices)
+
+        self.assertEqual(rows[0]["listing_board"], "manual_board")
 
     def test_build_dataset_rows_preserves_semantic_classifier_fields(self):
         selection_rows = [

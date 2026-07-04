@@ -1617,17 +1617,21 @@ where
     let codes = rows
         .iter()
         .filter(|row| {
-            row.name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .is_none()
+            is_blank_display_value(row.name.as_deref())
+                || is_blank_display_value(row.industry.as_deref())
         })
         .map(|row| row.code.clone())
         .collect::<Vec<_>>();
     let instruments = name_loader(dsn, &codes)?;
     fill_missing_display_instrument_info(rows, &instruments);
     Ok(())
+}
+
+fn is_blank_display_value(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
 }
 
 fn fetch_db_native_daily_window_if_dsn(
@@ -1658,59 +1662,73 @@ fn run_db_native_intraday_screen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
-    fn review_list_loads_instrument_info_for_missing_display_rows_only() {
-        let temp = tempfile::tempdir().unwrap();
-        let display_dir = temp.path().join("select/2026-05-25.b2");
-        std::fs::create_dir_all(&display_dir).unwrap();
-        std::fs::write(
-            display_dir.join("display.json"),
-            serde_json::to_vec_pretty(&json!({
-                "rows": [
-                    {"code": "000001.SZ", "name": null, "model_rank": 1, "model_score": 0.7, "llm_action": null, "llm_risk_flags": []},
-                    {"code": "000002.SZ", "name": "已有名称", "industry": "已有行业", "model_rank": 2, "model_score": 0.6, "llm_action": null, "llm_risk_flags": []},
-                    {"code": "000003.SZ", "name": "", "model_rank": 3, "model_score": 0.5, "llm_action": null, "llm_risk_flags": []}
-                ]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let args = ReviewListArgs {
-            method: MethodArgs {
-                method: Method::B2,
-                intraday: false,
+    fn review_list_loads_instrument_info_for_missing_display_fields_only() {
+        let mut rows = vec![
+            DisplayRow {
+                code: "000001.SZ".to_string(),
+                name: None,
+                industry: None,
+                model_rank: Some(1),
+                model_score: Some(0.7),
+                llm_action: None,
+                llm_risk_flags: Vec::new(),
+                llm_comment: None,
             },
-            limit: Some(2),
-            runtime_root: Some(temp.path().to_path_buf()),
-            dsn: Some("postgres://example".to_string()),
-            pick_date: Some(NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()),
-            tushare_token: None,
-            recompute: false,
-            pool_file: None,
-            pool_source: PoolSource::TurnoverTop,
-            model_path: None,
-            model_feature_metadata_path: None,
-            environment_state: None,
-            environment_reason: None,
-            record: false,
-            record_window_trading_days: None,
-        };
+            DisplayRow {
+                code: "000002.SZ".to_string(),
+                name: Some("已有名称".to_string()),
+                industry: None,
+                model_rank: Some(2),
+                model_score: Some(0.6),
+                llm_action: None,
+                llm_risk_flags: Vec::new(),
+                llm_comment: None,
+            },
+            DisplayRow {
+                code: "000004.SZ".to_string(),
+                name: Some("已有名称".to_string()),
+                industry: Some("已有行业".to_string()),
+                model_rank: Some(4),
+                model_score: Some(0.4),
+                llm_action: None,
+                llm_risk_flags: Vec::new(),
+                llm_comment: None,
+            },
+        ];
 
-        run_review_list_with_name_loader(args, |dsn, codes| {
+        fill_review_list_names(&mut rows, Some("postgres://example"), |dsn, codes| {
             assert_eq!(dsn, "postgres://example");
-            assert_eq!(codes, &["000001.SZ".to_string()]);
-            Ok(BTreeMap::from([(
-                "000001.SZ".to_string(),
-                InstrumentInfo {
-                    name: Some("平安银行".to_string()),
-                    industry: Some("银行".to_string()),
-                },
-            )]))
+            assert_eq!(
+                codes,
+                &["000001.SZ".to_string(), "000002.SZ".to_string()]
+            );
+            Ok(BTreeMap::from([
+                (
+                    "000001.SZ".to_string(),
+                    InstrumentInfo {
+                        name: Some("平安银行".to_string()),
+                        industry: Some("银行".to_string()),
+                    },
+                ),
+                (
+                    "000002.SZ".to_string(),
+                    InstrumentInfo {
+                        name: Some("不应覆盖已有名称".to_string()),
+                        industry: Some("房地产".to_string()),
+                    },
+                ),
+            ]))
         })
         .unwrap();
+
+        assert_eq!(rows[0].name.as_deref(), Some("平安银行"));
+        assert_eq!(rows[0].industry.as_deref(), Some("银行"));
+        assert_eq!(rows[1].name.as_deref(), Some("已有名称"));
+        assert_eq!(rows[1].industry.as_deref(), Some("房地产"));
+        assert_eq!(rows[2].name.as_deref(), Some("已有名称"));
+        assert_eq!(rows[2].industry.as_deref(), Some("已有行业"));
     }
 
     #[test]

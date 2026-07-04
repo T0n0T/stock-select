@@ -499,6 +499,10 @@ pub fn build_candidate_factor_rows_from_refs(
         .map(|candidate| {
             let profile = factor_profile_for_method(method);
             let mut row = FactorRow::new(candidate.code.clone(), method);
+            row.factors.insert(
+                "listing_board".to_string(),
+                FactorValue::Category(infer_listing_board(candidate.code.as_str()).to_string()),
+            );
             row.factors
                 .insert("close".to_string(), FactorValue::Number(candidate.close));
             row.factors.insert(
@@ -553,6 +557,35 @@ pub fn build_candidate_factor_rows_from_refs(
             row
         })
         .collect()
+}
+
+pub fn infer_listing_board(ts_code: &str) -> &'static str {
+    let code = ts_code.trim().to_ascii_uppercase();
+    let symbol = code.split('.').next().unwrap_or("");
+    let suffix = code
+        .rsplit_once('.')
+        .map(|(_, suffix)| suffix)
+        .unwrap_or("");
+    if symbol.is_empty() {
+        return "unknown";
+    }
+    if suffix == "BJ"
+        || ["43", "83", "87", "88", "92"]
+            .iter()
+            .any(|prefix| symbol.starts_with(prefix))
+    {
+        return "bse";
+    }
+    if symbol.starts_with("688") {
+        return "star";
+    }
+    if symbol.starts_with("30") {
+        return "chinext";
+    }
+    if symbol.starts_with("00") || symbol.starts_with("60") {
+        return "main";
+    }
+    "unknown"
 }
 
 fn candidate_history_rows_by_code<'a>(

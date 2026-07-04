@@ -798,6 +798,7 @@ fn b3_factor_artifact_excludes_review_scores_but_keeps_training_context() {
         "b3_prev_b2_flag",
         "b3_plus_flag",
         "env",
+        "listing_board",
     ] {
         assert!(
             factors.contains_key(key),
@@ -809,6 +810,51 @@ fn b3_factor_artifact_excludes_review_scores_but_keeps_training_context() {
         factors.get("box_mid_position_120d_pct"),
         Some(FactorValue::Number(value)) if value.is_finite()
     ));
+    assert_eq!(
+        factors.get("listing_board"),
+        Some(&FactorValue::Category("main".to_string()))
+    );
+}
+
+#[test]
+fn factor_artifact_derives_listing_board_from_stock_code() {
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+    let candidates = [
+        ("600000.SH", "main"),
+        ("000001.SZ", "main"),
+        ("300001.SZ", "chinext"),
+        ("688001.SH", "star"),
+        ("830001.BJ", "bse"),
+        ("430001.BJ", "bse"),
+        ("920001.BJ", "bse"),
+    ]
+    .into_iter()
+    .map(|(code, _board)| Candidate {
+        code: code.to_string(),
+        pick_date,
+        close: 10.0,
+        turnover_n: 1_000_000.0,
+        signal: Some("B2".to_string()),
+        yellow_b1: None,
+    })
+    .collect::<Vec<_>>();
+
+    let rows = build_candidate_factor_rows(&candidates, &[], Method::B2, Some("neutral"));
+
+    for (row, (_code, expected_board)) in rows.iter().zip([
+        ("600000.SH", "main"),
+        ("000001.SZ", "main"),
+        ("300001.SZ", "chinext"),
+        ("688001.SH", "star"),
+        ("830001.BJ", "bse"),
+        ("430001.BJ", "bse"),
+        ("920001.BJ", "bse"),
+    ]) {
+        assert_eq!(
+            row.factors.get("listing_board"),
+            Some(&FactorValue::Category(expected_board.to_string()))
+        );
+    }
 }
 #[test]
 fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only_for_lsh() {
