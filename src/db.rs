@@ -1011,9 +1011,6 @@ fn ensure_db_native_required_coverage(probe: &DbNativeCoverageProbe) -> anyhow::
     if probe.stock_left_peak_rows == 0 {
         missing.push("stock_daily_left_peak calc_version left_peak_qfq_v1");
     }
-    if probe.stock_moneyflow_rows == 0 {
-        missing.push("stock_moneyflow_ths pick-date rows");
-    }
     if probe.index_ths_daily_rows == 0 {
         missing.push("index_ths_daily pick-date rows");
     }
@@ -1843,7 +1840,6 @@ mod tests {
         assert!(message.contains("rolling_qfq_v1"));
         assert!(message.contains("stock_daily_left_peak"));
         assert!(message.contains("left_peak_qfq_v1"));
-        assert!(message.contains("stock_moneyflow_ths"));
         assert!(message.contains("index_ths_daily"));
         assert!(message.contains("index_idx_factor_pro"));
         assert!(message.contains("index_daily_asof_indicators"));
@@ -1852,6 +1848,29 @@ mod tests {
         assert!(!message.contains("POSTGRES_DSN"));
         assert!(!message.contains("postgres://"));
         assert!(!message.contains("postgresql://"));
+    }
+
+    #[test]
+    fn db_native_required_coverage_allows_missing_stock_moneyflow_ths() {
+        let probe = DbNativeCoverageProbe {
+            pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
+            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
+            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
+            window_trade_dates: 252,
+            stock_factor_rows: 5000,
+            stock_macd_rows: 5000,
+            stock_rolling_rows: 5000,
+            stock_left_peak_rows: 5000,
+            stock_moneyflow_rows: 0,
+            index_ths_daily_rows: 500,
+            index_market_rows: 2,
+            index_macd_rows: 500,
+            index_moneyflow_rows: 500,
+            index_limit_rows: 500,
+        };
+
+        ensure_db_native_required_coverage(&probe)
+            .expect("missing stock_moneyflow_ths rows should not block DB-native loading");
     }
 
     #[test]
