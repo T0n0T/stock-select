@@ -3,11 +3,9 @@ use chrono::{Days, NaiveDate};
 use crate::environment_profiles::get_method_environment_profile;
 use crate::factors::ma::push_b2_long_trend_factors;
 use crate::factors::macd::{macd_lines, push_b2_period_macd_factors};
-use crate::factors::price_position::{
-    latest_bar_position_ratio, push_b2_hl90_position_factors, push_latest_upper_shadow_factor,
-};
+use crate::factors::price_position::{latest_bar_position_ratio, push_latest_upper_shadow_factor};
 use crate::factors::series::{
-    pct_change, push_category, push_number, rolling_mean_series, FactorList,
+    FactorList, pct_change, push_category, push_number, rolling_mean_series,
 };
 use crate::factors::types::{FactorInputRow, FactorValue};
 use crate::factors::zx::zx_lines;
@@ -130,29 +128,8 @@ pub fn push_rank_runtime_common_factors(factors: &mut FactorList, history: &[Fac
     let previous_zxdkx = zxdkx.iter().rev().nth(1).copied().flatten();
     let latest_zxdkx_for_model = latest_zxdkx.or(latest_ma25).or(latest_close);
     let previous_zxdkx_for_model = previous_zxdkx.or(previous_ma25).or(previous_close);
-    let recent_high_90 = max_tail(&high, 90);
-    let recent_low_90 = min_tail(&low, 90);
-    let mid_90 = recent_high_90
-        .zip(recent_low_90)
-        .map(|(high, low)| (high + low) / 2.0);
     let recent_high_120 = max_tail(&high, 120);
     let recent_low_120 = min_tail(&low, 120);
-
-    push_number(
-        factors,
-        "price_vs_90d_high",
-        pct_change_option(latest_close, recent_high_90),
-    );
-    push_number(
-        factors,
-        "price_vs_90d_low",
-        pct_change_option(latest_close, recent_low_90),
-    );
-    push_number(
-        factors,
-        "price_vs_90d_mid",
-        pct_change_option(latest_close, mid_90),
-    );
     push_number(
         factors,
         "close_to_zxdkx_pct",
@@ -265,8 +242,6 @@ fn push_b2_rdagent_rank_factors(
         return;
     }
     let close = history.iter().map(|row| row.close).collect::<Vec<_>>();
-    let high = history.iter().map(|row| row.high).collect::<Vec<_>>();
-    let low = history.iter().map(|row| row.low).collect::<Vec<_>>();
     let latest = history.last();
     let latest_close = latest.map(|row| row.close);
     let latest_high = latest.map(|row| row.high);
@@ -279,7 +254,6 @@ fn push_b2_rdagent_rank_factors(
         latest_bar_position_ratio(latest_close, latest_low, latest_high),
     );
     push_b2_long_trend_factors(factors, &close, latest_close, latest_ma60);
-    push_b2_hl90_position_factors(factors, &high, &low, latest_close);
     push_latest_upper_shadow_factor(factors, latest_high, latest_close);
     push_b2_period_macd_factors(factors, history);
     push_b2_bullish_engulfing_factors(factors, history);
@@ -376,32 +350,8 @@ fn push_b3_schema_structure_factors(factors: &mut FactorList, history: &[FactorI
         .iter()
         .map(|row| row.close)
         .collect::<Vec<_>>();
-    let high = setup_history.iter().map(|row| row.high).collect::<Vec<_>>();
-    let low = setup_history.iter().map(|row| row.low).collect::<Vec<_>>();
     let latest = setup_history.last();
     let previous = setup_history.iter().rev().nth(1);
-    let latest_close = close.last().copied();
-
-    let high_90 = max_tail(&high, 90).or_else(|| high.iter().copied().reduce(f64::max));
-    let low_90 = min_tail(&low, 90).or_else(|| low.iter().copied().reduce(f64::min));
-    let range_90 = high_90.zip(low_90).map(|(high, low)| high - low);
-    let mid_90 = high_90.zip(low_90).map(|(high, low)| (high + low) / 2.0);
-    push_number(
-        factors,
-        "structure_hl90_position",
-        match (latest_close, low_90, range_90) {
-            (Some(close), Some(low), Some(width)) if width != 0.0 => Some((close - low) / width),
-            _ => None,
-        },
-    );
-    push_number(
-        factors,
-        "structure_hl90_range_pct",
-        match (range_90, mid_90) {
-            (Some(width), Some(mid)) if mid != 0.0 => Some(width / mid * 100.0),
-            _ => None,
-        },
-    );
     push_number(
         factors,
         "bar_upper_shadow_pct",
@@ -598,41 +548,6 @@ fn push_b2_family_semantic_factors(
         "macd_top_divergence_flag",
         weekly_trend.is_top_divergence || daily_trend.is_top_divergence,
     );
-
-    let latest_close = close.last().copied();
-    let latest_low = low.last().copied();
-    let previous_close = close.iter().rev().nth(1).copied();
-    let recent_high = max_tail(&high, 90);
-    let recent_low = min_tail(&low, 90);
-    let mid_90 = recent_high
-        .zip(recent_low)
-        .map(|(high, low)| (high + low) / 2.0);
-    push_number(
-        factors,
-        "price_vs_90d_high",
-        pct_change_option(latest_close, recent_high),
-    );
-    push_number(
-        factors,
-        "price_vs_90d_low",
-        pct_change_option(latest_close, recent_low),
-    );
-    push_number(
-        factors,
-        "price_vs_90d_mid",
-        pct_change_option(latest_close, mid_90),
-    );
-    push_category(
-        factors,
-        "midline_state",
-        midline_state(
-            latest_close,
-            previous_close,
-            latest_low,
-            mid_90,
-            volume_ratio_5d(&volume),
-        ),
-    );
 }
 
 fn prepared_rows(history: &[FactorInputRow]) -> Vec<PreparedRow> {
@@ -777,15 +692,6 @@ fn abnormal_volume_to_ma20_ratio(volume: &[f64]) -> Option<f64> {
     ratio_option(Some(event_volume), Some(ma20))
 }
 
-fn volume_ratio_5d(volume: &[f64]) -> Option<f64> {
-    if volume.len() < 2 {
-        return None;
-    }
-    let latest = *volume.last()?;
-    let average = mean_tail(&volume[..volume.len() - 1], 5)?;
-    (average > 0.0).then_some(latest / average)
-}
-
 fn ratio_option(current: Option<f64>, base: Option<f64>) -> Option<f64> {
     match (current, base) {
         (Some(current), Some(base)) if base != 0.0 => Some(current / base),
@@ -795,34 +701,6 @@ fn ratio_option(current: Option<f64>, base: Option<f64>) -> Option<f64> {
 
 fn pct_change_option(current: Option<f64>, base: Option<f64>) -> Option<f64> {
     ratio_option(current, base).map(|ratio| (ratio - 1.0) * 100.0)
-}
-
-fn midline_state(
-    latest_close: Option<f64>,
-    previous_close: Option<f64>,
-    latest_low: Option<f64>,
-    mid_90: Option<f64>,
-    volume_ratio_5d: Option<f64>,
-) -> &'static str {
-    let (Some(latest_close), Some(mid_90)) = (latest_close, mid_90) else {
-        return "unknown";
-    };
-    if previous_close.is_some_and(|close| close <= mid_90)
-        && latest_close > mid_90
-        && volume_ratio_5d.is_some_and(|ratio| ratio >= 1.30)
-    {
-        return "reclaim_volume";
-    }
-    if latest_close >= mid_90
-        && latest_low.is_some_and(|low| low <= mid_90 * 1.02 && low >= mid_90 * 0.97)
-    {
-        return "pullback_confirm";
-    }
-    if latest_close >= mid_90 {
-        "above_hold"
-    } else {
-        "below_midline"
-    }
 }
 
 fn round2(value: f64) -> f64 {

@@ -10,6 +10,7 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde_json::{Value, json};
 
 use crate::factors::abnormal_volume::push_abnormal_volume_event_factors;
+use crate::factors::czsc::push_czsc_factors;
 use crate::factors::ma::push_ma_support_factors;
 use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
 use crate::factors::price_position::{
@@ -25,25 +26,16 @@ use crate::factors::zx::{push_zx_pullback_factors, zx_lines};
 use crate::model::{Candidate, Method, PreparedRow};
 
 pub const FACTOR_ARTIFACT_VERSION: u32 = 2;
-pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v3";
+pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v4";
 pub(crate) const RAW_MARKET_AMOUNT_FACTOR: &str = "_raw_market_amount";
 
 const THS_MEMBERSHIP_SOURCE: &str = "current_index_ths_member";
 
 const HISTORY_DB_FACTOR_KEYS: &[&str] = &[RAW_MARKET_AMOUNT_FACTOR];
 
-const B2_FACTOR_BUNDLES: &[FactorBundle] = &[
-    FactorBundle::RawCommon,
-    FactorBundle::B2Semantic,
-];
-const B3_FACTOR_BUNDLES: &[FactorBundle] = &[
-    FactorBundle::RawCommon,
-    FactorBundle::B3Semantic,
-];
-const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[
-    FactorBundle::RawCommon,
-    FactorBundle::LshSemantic,
-];
+const B2_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B2Semantic];
+const B3_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B3Semantic];
+const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::LshSemantic];
 const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
 
 const REVIEW_ONLY_FACTOR_KEYS: &[&str] = &[
@@ -282,6 +274,7 @@ fn history_factor_fields_for_profile(
                     &volume,
                     latest_close,
                 );
+                push_czsc_factors(&mut factors, history);
             }
             FactorBundle::B2Semantic => {
                 push_b2_semantic_factors(
@@ -319,7 +312,7 @@ fn push_latest_db_factor_extras(factors: &mut FactorList, latest: Option<&Factor
         return;
     };
     for (key, value) in &latest.db_factors {
-        if key == RAW_MARKET_AMOUNT_FACTOR {
+        if key == RAW_MARKET_AMOUNT_FACTOR || key.starts_with('_') {
             continue;
         }
         push_number(factors, key, value.is_finite().then_some(*value));
@@ -348,8 +341,6 @@ const DB_NATIVE_FACTOR_ALIASES: &[(&str, &str)] = &[
         "close_to_120d_range_center_pct",
     ),
     ("structure_range_width_120d_pct", "range_width_120d_pct"),
-    ("structure_hl90_position", "hl90_position"),
-    ("structure_hl90_range_pct", "hl90_range_pct"),
     ("structure_range_compression_20d", "range_compression_20d"),
     ("structure_range_compression_40d", "range_compression_40d"),
     ("structure_close_to_ma25_pct", "close_to_ma25_pct"),
@@ -459,6 +450,75 @@ pub fn record_factor_profile_diagnostics(row: &mut FactorRow, profile: FactorPro
         .insert("factor_bundles".to_string(), json!(profile.bundle_names()));
 }
 
+fn record_czsc_snapshot_diagnostics(row: &mut FactorRow, latest: Option<&FactorInputRow>) {
+    let raw = |key: &str| {
+        latest
+            .and_then(|value| value.db_factors.get(key))
+            .copied()
+            .filter(|value| value.is_finite())
+    };
+    let raw_date = |key: &str| {
+        raw(key)
+            .map(|value| value as i64)
+            .and_then(|days| {
+                NaiveDate::from_ymd_opt(1970, 1, 1)?
+                    .checked_add_signed(chrono::Duration::days(days))
+            })
+            .map(|date| date.to_string())
+    };
+    let snapshot_available = raw("_czsc_snapshot_available") == Some(1.0);
+    let status_code = raw("_czsc_status_code").map(|code| code as i32);
+    let status = status_code
+        .and_then(|code| match code {
+            0 => Some("invalid_source_bar"),
+            1 => Some("no_finished_bi"),
+            2 => Some("insufficient_bis_for_zs"),
+            3 => Some("no_valid_zs"),
+            4 => Some("ok"),
+            _ => None,
+        })
+        .unwrap_or("missing_snapshot");
+    let snapshot_state = if !snapshot_available {
+        "missing_snapshot"
+    } else {
+        match status_code {
+            Some(1..=3) => "snapshot_without_structure",
+            Some(4) => "structure_available",
+            _ => "calculation_error",
+        }
+    };
+
+    row.diagnostics.insert(
+        "czsc_snapshot".to_string(),
+        json!({
+            "calc_version": "czsc_structure_qfq_min6_r7_v1",
+            "available": snapshot_available,
+            "snapshot_state": snapshot_state,
+            "source_bar_valid": raw("_czsc_source_bar_valid").map(|value| value == 1.0),
+            "status": status,
+            "last_bi_start_date": raw_date("_czsc_last_bi_start_day"),
+            "last_bi_end_date": raw_date("_czsc_last_bi_end_day"),
+            "last_bi_high": raw("_czsc_last_bi_high"),
+            "last_bi_low": raw("_czsc_last_bi_low"),
+            "last_bi_mid": raw("_czsc_last_bi_mid"),
+            "latest_zs_start_date": raw_date("_czsc_latest_zs_start_day"),
+            "latest_zs_end_date": raw_date("_czsc_latest_zs_end_day"),
+            "latest_zs_zg": raw("_czsc_latest_zs_zg"),
+            "latest_zs_zd": raw("_czsc_latest_zs_zd"),
+            "latest_zs_zz": raw("_czsc_latest_zs_zz"),
+            "recent_peak_date": raw_date("_czsc_recent_peak_day"),
+            "recent_peak_high": raw("_czsc_recent_peak_high"),
+            "post_peak_first_bear_date": raw_date("_czsc_post_peak_first_bear_day"),
+            "post_peak_first_bear_open": raw("_czsc_post_peak_first_bear_open"),
+            "post_peak_first_bear_high": raw("_czsc_post_peak_first_bear_high"),
+            "post_peak_first_bear_low": raw("_czsc_post_peak_first_bear_low"),
+            "post_peak_first_bear_close": raw("_czsc_post_peak_first_bear_close"),
+            "post_peak_first_bear_missing": raw("_czsc_post_peak_first_bear_missing")
+                .map(|value| value == 1.0),
+        }),
+    );
+}
+
 pub fn remove_review_only_factors(row: &mut FactorRow) {
     for key in REVIEW_ONLY_FACTOR_KEYS {
         row.factors.remove(*key);
@@ -538,6 +598,7 @@ pub fn build_candidate_factor_rows_from_refs(
                 }
             }
             record_factor_profile_diagnostics(&mut row, profile);
+            record_czsc_snapshot_diagnostics(&mut row, history.last());
             row.diagnostics.insert(
                 "factor_source".to_string(),
                 Value::String("rust_factor_library".to_string()),
@@ -643,14 +704,12 @@ fn candidate_history_rows_by_code<'a>(
 }
 
 fn required_history_db_factors(row: &PreparedRow) -> BTreeMap<String, f64> {
-    HISTORY_DB_FACTOR_KEYS
+    row.db_factors
         .iter()
-        .filter_map(|key| {
-            row.db_factors
-                .get(*key)
-                .copied()
-                .map(|value| ((*key).to_string(), value))
+        .filter(|(key, _)| {
+            key.starts_with("_czsc_") || HISTORY_DB_FACTOR_KEYS.contains(&key.as_str())
         })
+        .map(|(key, value)| (key.clone(), *value))
         .collect()
 }
 
@@ -963,6 +1022,10 @@ mod tests {
     use super::*;
     use chrono::{Duration, NaiveDate};
 
+    fn epoch_day(date: NaiveDate) -> f64 {
+        (date - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as f64
+    }
+
     fn test_prepared_row(
         ts_code: &str,
         trade_date: NaiveDate,
@@ -1000,6 +1063,516 @@ mod tests {
             yellow_b1: false,
             db_factors: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn czsc_snapshot_exports_shared_percentage_structure_factors_without_raw_anchors() {
+        let first_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let mut prepared = (0..7)
+            .map(|offset| {
+                test_prepared_row(
+                    "000001.SZ",
+                    first_date + Duration::days(offset),
+                    10.0 + offset as f64 / 6.0,
+                    1_000.0,
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        let latest = prepared.last_mut().unwrap();
+        latest.close = 11.0;
+        latest.db_factors = BTreeMap::from([
+            ("_czsc_snapshot_available".to_string(), 1.0),
+            ("_czsc_source_bar_valid".to_string(), 1.0),
+            ("_czsc_status_code".to_string(), 4.0),
+            ("_czsc_available_finished_bi_count".to_string(), 9.0),
+            ("_czsc_recent_bi_count".to_string(), 7.0),
+            ("_czsc_last_bi_direction_code".to_string(), 1.0),
+            (
+                "_czsc_last_bi_start_day".to_string(),
+                epoch_day(first_date + Duration::days(2)),
+            ),
+            (
+                "_czsc_last_bi_end_day".to_string(),
+                epoch_day(first_date + Duration::days(6)),
+            ),
+            ("_czsc_last_bi_high".to_string(), 12.0),
+            ("_czsc_last_bi_low".to_string(), 8.0),
+            ("_czsc_last_bi_mid".to_string(), 10.0),
+            (
+                "_czsc_latest_zs_start_day".to_string(),
+                epoch_day(first_date + Duration::days(1)),
+            ),
+            (
+                "_czsc_latest_zs_end_day".to_string(),
+                epoch_day(first_date + Duration::days(5)),
+            ),
+            ("_czsc_latest_zs_bi_count".to_string(), 3.0),
+            ("_czsc_latest_zs_zg".to_string(), 10.0),
+            ("_czsc_latest_zs_zd".to_string(), 8.0),
+            ("_czsc_latest_zs_zz".to_string(), 9.0),
+            (
+                "_czsc_recent_peak_day".to_string(),
+                epoch_day(first_date + Duration::days(3)),
+            ),
+            ("_czsc_recent_peak_high".to_string(), 12.0),
+            (
+                "_czsc_post_peak_first_bear_day".to_string(),
+                epoch_day(first_date + Duration::days(4)),
+            ),
+            ("_czsc_post_peak_first_bear_open".to_string(), 11.5),
+            ("_czsc_post_peak_first_bear_high".to_string(), 12.0),
+            ("_czsc_post_peak_first_bear_low".to_string(), 10.5),
+            ("_czsc_post_peak_first_bear_close".to_string(), 11.0),
+            ("_czsc_post_peak_first_bear_missing".to_string(), 0.0),
+        ]);
+        let candidate = Candidate {
+            code: "000001.SZ".to_string(),
+            pick_date: latest.trade_date,
+            close: latest.close,
+            turnover_n: latest.turnover_n,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        };
+
+        for method in [Method::B2, Method::B3, Method::Lsh] {
+            let rows = build_candidate_factor_rows(
+                std::slice::from_ref(&candidate),
+                &prepared,
+                method,
+                None,
+            );
+            let factors = &rows[0].factors;
+            assert_eq!(
+                factors.get("czsc_status"),
+                Some(&FactorValue::Category("ok".to_string()))
+            );
+            assert_eq!(
+                factors.get("czsc_bi_available"),
+                Some(&FactorValue::Bool(true))
+            );
+            assert_eq!(
+                factors.get("czsc_zs_available"),
+                Some(&FactorValue::Bool(true))
+            );
+            assert_eq!(
+                factors.get("czsc_pricing_line_available"),
+                Some(&FactorValue::Bool(true))
+            );
+            assert_eq!(
+                factors.get("czsc_last_bi_direction"),
+                Some(&FactorValue::Category("up".to_string()))
+            );
+            assert_eq!(
+                factors.get("czsc_close_to_last_bi_mid_pct"),
+                Some(&FactorValue::Number(10.0))
+            );
+            assert_eq!(
+                factors.get("czsc_last_bi_range_width_pct"),
+                Some(&FactorValue::Number(50.0))
+            );
+            assert_eq!(
+                factors.get("czsc_close_to_zs_zg_pct"),
+                Some(&FactorValue::Number(10.0))
+            );
+            assert_eq!(
+                factors.get("czsc_close_to_zs_zd_pct"),
+                Some(&FactorValue::Number(37.5))
+            );
+            assert_eq!(
+                factors.get("czsc_close_to_zs_zz_pct"),
+                Some(&FactorValue::Number(22.2222))
+            );
+            assert_eq!(
+                factors.get("czsc_zs_width_pct"),
+                Some(&FactorValue::Number(25.0))
+            );
+            assert_eq!(
+                factors.get("czsc_zs_region"),
+                Some(&FactorValue::Category("above_zg".to_string()))
+            );
+            assert_eq!(
+                factors.get("czsc_close_to_recent_peak_pct"),
+                Some(&FactorValue::Number(-8.3333))
+            );
+            assert_eq!(
+                factors.get("czsc_close_to_pricing_line_pct"),
+                Some(&FactorValue::Number(-4.3478))
+            );
+            assert_eq!(rows[0].diagnostics["czsc_snapshot"]["status"], "ok");
+            assert_eq!(rows[0].diagnostics["czsc_snapshot"]["latest_zs_zg"], 10.0);
+            assert_eq!(rows[0].diagnostics["czsc_snapshot"]["latest_zs_zd"], 8.0);
+            assert_eq!(rows[0].diagnostics["czsc_snapshot"]["latest_zs_zz"], 9.0);
+            assert_eq!(
+                rows[0].diagnostics["czsc_snapshot"]["recent_peak_high"],
+                12.0
+            );
+            assert_eq!(
+                rows[0].diagnostics["czsc_snapshot"]["post_peak_first_bear_open"],
+                11.5
+            );
+            for retained in [
+                "box_position_120d_pct",
+                "box_mid_position_120d_pct",
+                "close_to_120d_max_pct",
+                "close_to_120d_min_pct",
+                "close_to_120d_range_center_pct",
+                "breakout_distance_120d_pct",
+                "range_floor_distance_120d_pct",
+                "range_width_120d_pct",
+                "close_to_20d_max_close_pct",
+                "range_compression_20d",
+                "range_compression_40d",
+            ] {
+                assert!(
+                    factors.contains_key(retained),
+                    "missing retained factor {retained}"
+                );
+            }
+            for removed in [
+                "midline_state",
+                "price_vs_90d_high",
+                "price_vs_90d_low",
+                "price_vs_90d_mid",
+                "hl90_position",
+                "hl90_range_pct",
+                "close_to_hl90_mid_pct",
+                "structure_hl90_position",
+                "structure_hl90_range_pct",
+            ] {
+                assert!(
+                    !factors.contains_key(removed),
+                    "legacy factor leaked: {removed}"
+                );
+            }
+            assert!(!factors.keys().any(|key| key.starts_with("left_peak_")));
+            assert!(!factors.keys().any(|key| key.starts_with("_czsc_")));
+        }
+    }
+
+    #[test]
+    fn czsc_snapshot_diagnostics_classifies_snapshot_and_structure_state() {
+        let trade_date = NaiveDate::from_ymd_opt(2026, 6, 23).unwrap();
+        let cases = [
+            (None, "missing_snapshot"),
+            (Some(0.0), "calculation_error"),
+            (Some(2.0), "snapshot_without_structure"),
+            (Some(4.0), "structure_available"),
+        ];
+
+        for (status_code, expected) in cases {
+            let mut prepared = test_prepared_row("000001.SZ", trade_date, 10.0, 1_000.0, None);
+            if let Some(status_code) = status_code {
+                prepared
+                    .db_factors
+                    .insert("_czsc_snapshot_available".to_string(), 1.0);
+                prepared
+                    .db_factors
+                    .insert("_czsc_status_code".to_string(), status_code);
+            }
+            let candidate = Candidate {
+                code: "000001.SZ".to_string(),
+                pick_date: trade_date,
+                close: prepared.close,
+                turnover_n: prepared.turnover_n,
+                signal: Some("B2".to_string()),
+                yellow_b1: None,
+            };
+
+            let rows = build_candidate_factor_rows(&[candidate], &[prepared], Method::B2, None);
+            assert_eq!(
+                rows[0].diagnostics["czsc_snapshot"]["snapshot_state"],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn czsc_pricing_line_lifecycle_detects_confirmed_shrink_pullback_after_peak_breakout() {
+        let first_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let closes = [11.0, 11.2, 11.4, 11.6, 11.8, 12.2, 11.55];
+        let volumes = [1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_000.0, 2_000.0, 700.0];
+        let prepared = closes
+            .into_iter()
+            .zip(volumes)
+            .enumerate()
+            .map(|(offset, (close, volume))| {
+                let date = first_date + Duration::days(offset as i64);
+                let mut row = test_prepared_row("000001.SZ", date, close, volume, None);
+                row.low = if offset == 6 { 11.45 } else { close - 0.2 };
+                row.db_factors = BTreeMap::from([
+                    ("_czsc_snapshot_available".to_string(), 1.0),
+                    ("_czsc_source_bar_valid".to_string(), 1.0),
+                    ("_czsc_status_code".to_string(), 4.0),
+                    ("_czsc_recent_peak_day".to_string(), epoch_day(first_date)),
+                    ("_czsc_recent_peak_high".to_string(), 12.0),
+                    (
+                        "_czsc_post_peak_first_bear_day".to_string(),
+                        epoch_day(first_date + Duration::days(1)),
+                    ),
+                    ("_czsc_post_peak_first_bear_open".to_string(), 11.5),
+                    ("_czsc_post_peak_first_bear_high".to_string(), 11.8),
+                    ("_czsc_post_peak_first_bear_low".to_string(), 11.2),
+                    ("_czsc_post_peak_first_bear_close".to_string(), 11.3),
+                    ("_czsc_post_peak_first_bear_missing".to_string(), 0.0),
+                ]);
+                row
+            })
+            .collect::<Vec<_>>();
+        let latest = prepared.last().unwrap();
+        let candidate = Candidate {
+            code: "000001.SZ".to_string(),
+            pick_date: latest.trade_date,
+            close: latest.close,
+            turnover_n: latest.turnover_n,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        };
+
+        let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+        let factors = &rows[0].factors;
+
+        assert_eq!(
+            factors.get("czsc_pricing_lifecycle_state"),
+            Some(&FactorValue::Category("active".to_string()))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_line_active_flag"),
+            Some(&FactorValue::Bool(true))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_cycle_count"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_pullback_count"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_days_since_breakout"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_latest_pullback_distance_pct"),
+            Some(&FactorValue::Number(-0.4348))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_latest_pullback_volume_to_breakout"),
+            Some(&FactorValue::Number(0.35))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_latest_pullback_volume_to_prev5"),
+            Some(&FactorValue::Number(0.5833))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_latest_pullback_shrink_flag"),
+            Some(&FactorValue::Bool(true))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_pullback_today_flag"),
+            Some(&FactorValue::Bool(true))
+        );
+    }
+
+    #[test]
+    fn czsc_zs_lifecycle_restarts_after_failure_and_rebreakout() {
+        let first_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let closes = [9.5, 9.7, 9.8, 9.9, 10.0, 10.2, 10.05, 9.8, 9.9, 10.2, 10.05];
+        let volumes = [
+            1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_000.0, 2_000.0, 700.0, 900.0, 1_000.0, 2_000.0,
+            700.0,
+        ];
+        let prepared = closes
+            .into_iter()
+            .zip(volumes)
+            .enumerate()
+            .map(|(offset, (close, volume))| {
+                let date = first_date + Duration::days(offset as i64);
+                let mut row = test_prepared_row("000001.SZ", date, close, volume, None);
+                row.low = if offset == 6 || offset == 10 {
+                    9.95
+                } else {
+                    close - 0.1
+                };
+                row.db_factors = BTreeMap::from([
+                    ("_czsc_snapshot_available".to_string(), 1.0),
+                    ("_czsc_source_bar_valid".to_string(), 1.0),
+                    ("_czsc_status_code".to_string(), 4.0),
+                    (
+                        "_czsc_latest_zs_start_day".to_string(),
+                        epoch_day(first_date),
+                    ),
+                    (
+                        "_czsc_latest_zs_end_day".to_string(),
+                        epoch_day(first_date + Duration::days(3)),
+                    ),
+                    ("_czsc_latest_zs_bi_count".to_string(), 3.0),
+                    ("_czsc_latest_zs_zg".to_string(), 10.0),
+                    ("_czsc_latest_zs_zd".to_string(), 8.0),
+                    ("_czsc_latest_zs_zz".to_string(), 9.0),
+                ]);
+                row
+            })
+            .collect::<Vec<_>>();
+        let latest = prepared.last().unwrap();
+        let candidate = Candidate {
+            code: "000001.SZ".to_string(),
+            pick_date: latest.trade_date,
+            close: latest.close,
+            turnover_n: latest.turnover_n,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        };
+
+        let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+        let factors = &rows[0].factors;
+
+        assert_eq!(
+            factors.get("czsc_zs_lifecycle_state"),
+            Some(&FactorValue::Category("active".to_string()))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_upper_active_flag"),
+            Some(&FactorValue::Bool(true))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_cycle_count"),
+            Some(&FactorValue::Number(2.0))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_failed_cycle_count"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_pullback_count"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_days_since_breakout"),
+            Some(&FactorValue::Number(1.0))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_latest_pullback_shrink_flag"),
+            Some(&FactorValue::Bool(true))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_pullback_today_flag"),
+            Some(&FactorValue::Bool(true))
+        );
+    }
+
+    #[test]
+    fn czsc_lifecycle_is_unknown_when_structure_predates_prepared_window() {
+        let first_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let prepared = (0..4)
+            .map(|offset| {
+                let date = first_date + Duration::days(offset);
+                let mut row = test_prepared_row("000001.SZ", date, 9.8, 1_000.0, None);
+                row.db_factors = BTreeMap::from([
+                    ("_czsc_snapshot_available".to_string(), 1.0),
+                    ("_czsc_source_bar_valid".to_string(), 1.0),
+                    ("_czsc_status_code".to_string(), 4.0),
+                    (
+                        "_czsc_latest_zs_start_day".to_string(),
+                        epoch_day(first_date),
+                    ),
+                    (
+                        "_czsc_latest_zs_end_day".to_string(),
+                        epoch_day(first_date + Duration::days(1)),
+                    ),
+                    ("_czsc_latest_zs_zg".to_string(), 10.0),
+                    ("_czsc_latest_zs_zd".to_string(), 8.0),
+                    ("_czsc_latest_zs_zz".to_string(), 9.0),
+                ]);
+                row
+            })
+            .collect::<Vec<_>>();
+        let latest = prepared.last().unwrap();
+        let candidate = Candidate {
+            code: "000001.SZ".to_string(),
+            pick_date: latest.trade_date,
+            close: latest.close,
+            turnover_n: latest.turnover_n,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        };
+
+        let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+        let factors = &rows[0].factors;
+
+        assert_eq!(
+            factors.get("czsc_zs_lifecycle_state"),
+            Some(&FactorValue::Category("unknown".to_string()))
+        );
+        assert_eq!(
+            factors.get("czsc_zs_cycle_count"),
+            Some(&FactorValue::Number(0.0))
+        );
+    }
+
+    #[test]
+    fn intraday_czsc_uses_live_price_only_for_intraday_distances() {
+        let first_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let closes = [11.6, 11.7, 11.8, 12.2];
+        let prepared = closes
+            .into_iter()
+            .enumerate()
+            .map(|(offset, close)| {
+                let date = first_date + Duration::days(offset as i64);
+                let mut row = test_prepared_row("000001.SZ", date, close, 1_000.0, None);
+                if offset >= 1 {
+                    row.db_factors = BTreeMap::from([
+                        ("_czsc_snapshot_available".to_string(), 1.0),
+                        ("_czsc_source_bar_valid".to_string(), 1.0),
+                        ("_czsc_status_code".to_string(), 4.0),
+                        (
+                            "_czsc_recent_peak_day".to_string(),
+                            epoch_day(first_date + Duration::days(1)),
+                        ),
+                        ("_czsc_recent_peak_high".to_string(), 12.0),
+                        (
+                            "_czsc_post_peak_first_bear_day".to_string(),
+                            epoch_day(first_date + Duration::days(2)),
+                        ),
+                        ("_czsc_post_peak_first_bear_open".to_string(), 11.5),
+                    ]);
+                }
+                if offset == 3 {
+                    row.db_factors
+                        .insert("intraday_structure_source_previous_eod".to_string(), 1.0);
+                }
+                row
+            })
+            .collect::<Vec<_>>();
+        let latest = prepared.last().unwrap();
+        let candidate = Candidate {
+            code: "000001.SZ".to_string(),
+            pick_date: latest.trade_date,
+            close: latest.close,
+            turnover_n: latest.turnover_n,
+            signal: Some("B2".to_string()),
+            yellow_b1: None,
+        };
+
+        let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
+        let factors = &rows[0].factors;
+
+        assert_eq!(
+            factors.get("czsc_close_to_recent_peak_pct"),
+            Some(&FactorValue::Number(-1.6667))
+        );
+        assert_eq!(
+            factors.get("intraday_czsc_close_to_recent_peak_pct"),
+            Some(&FactorValue::Number(1.6667))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_lifecycle_state"),
+            Some(&FactorValue::Category("waiting_breakout".to_string()))
+        );
+        assert_eq!(
+            factors.get("czsc_pricing_cycle_count"),
+            Some(&FactorValue::Number(0.0))
+        );
     }
 
     #[test]

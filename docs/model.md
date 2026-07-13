@@ -113,7 +113,9 @@ uv run stock-select-ml tune lgbm-rank \
 
 `factors.json` 的 `rows[].factors` 只承载训练候选特征：数值因子、布尔因子和低基数类别因子。review-only 评分字段不进入 `rows[].factors`，包括 `trend_structure`、`price_position`、`volume_behavior`、`previous_abnormal_move`、`weekly_daily_combo_score`、`total_score` 和 `verdict`。
 
-允许保留的训练语义字段必须被 schema 明确确认，例如数值字段 `macd_phase`、`daily_macd_wave_index`、`weekly_macd_wave_index`，原始位置字段 `box_mid_position_120d_pct`，以及类别字段 `signal_type`、`daily_macd_phase_type`、`daily_macd_wave_stage`、`weekly_macd_phase_type`、`weekly_macd_wave_stage`、`weekly_daily_combo_type` 和 `midline_state`。这些字段由 RF 和 LightGBM 共用同一份特征选择逻辑。
+允许保留的训练语义字段必须被 schema 明确确认，例如数值字段 `macd_phase`、`daily_macd_wave_index`、`weekly_macd_wave_index`、`box_mid_position_120d_pct`、`czsc_close_to_zs_zz_pct`，以及类别字段 `signal_type`、`daily_macd_phase_type`、`daily_macd_wave_stage`、`weekly_macd_phase_type`、`weekly_macd_wave_stage`、`weekly_daily_combo_type`、`czsc_status`、`czsc_last_bi_direction`、`czsc_zs_region`、`czsc_pricing_lifecycle_state` 和 `czsc_zs_lifecycle_state`。这些字段由 RF 和 LightGBM 共用同一份特征选择逻辑。旧 `left_peak_*`、90 日区间代理和 `midline_state` 不再属于训练契约。
+
+CZSC 训练覆盖按 `czsc_snapshot_available` 统计，只要固定版本快照行存在即计覆盖；`no_finished_bi`、`insufficient_bis_for_zs`、`no_valid_zs` 等“快照存在但结构尚未形成”的状态仍算已覆盖。EOD 数据集低于 95% 时停止构建，95%（含）至 99%（不含）写入警告，99%（含）以上正常；盘中数据集低覆盖只写警告。
 
 训练前会生成并校验 `feature_coverage`：每个被选中的训练特征必须在数据集中至少有一个非空值。若确认训练的特征 zero coverage，训练会失败并输出缺失列表，避免 schema 中的因子没有真实进入 RF/LightGBM。
 

@@ -34,20 +34,21 @@ class LgbmTrainingFeaturesTest(unittest.TestCase):
         self.assertEqual(numeric, ["close_to_zxdkx_pct", "price_up_1d_flag"])
         self.assertEqual(categorical, ["env", "daily_macd_phase_type", "signal_type"])
 
-    def test_select_feature_columns_supports_legacy_semantic_feature_sets(self):
+    def test_select_feature_columns_supports_czsc_structure_feature_sets(self):
         columns = [
             "env",
             "signal",
             "signal_type",
             "daily_macd_phase_type",
             "weekly_daily_combo_type",
-            "midline_state",
-            "price_vs_90d_mid",
+            "czsc_status",
+            "czsc_zs_lifecycle_state",
+            "czsc_close_to_zs_zz_pct",
             "close_to_zxdkx_pct",
         ]
 
         numeric, categorical = select_feature_columns(columns, feature_set="raw_numeric")
-        self.assertEqual(numeric, ["price_vs_90d_mid", "close_to_zxdkx_pct"])
+        self.assertEqual(numeric, ["czsc_close_to_zs_zz_pct", "close_to_zxdkx_pct"])
         self.assertEqual(categorical, [])
 
         _numeric, categorical = select_feature_columns(columns, feature_set="raw_plus_signal")
@@ -62,7 +63,8 @@ class LgbmTrainingFeaturesTest(unittest.TestCase):
                 "signal_type",
                 "daily_macd_phase_type",
                 "weekly_daily_combo_type",
-                "midline_state",
+                "czsc_status",
+                "czsc_zs_lifecycle_state",
             ],
         )
 

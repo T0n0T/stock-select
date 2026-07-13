@@ -6,40 +6,40 @@ use std::process::{Child, Command};
 
 use chrono::{Local, NaiveDate};
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use serde::Serialize;
 use serde_json::json;
 use stock_select::cache::{load_prepared_cache_for_mode, prepared_cache_start_date};
 use stock_select::config::{resolve_config_value, resolve_runtime_root};
 use stock_select::db::{
-    fetch_db_native_daily_window, fetch_instrument_info, fetch_stock_period_macd_states,
-    resolve_previous_trade_date,
+    fetch_db_native_daily_window, fetch_db_native_daily_window_for_intraday, fetch_instrument_info,
+    fetch_stock_period_macd_states, resolve_previous_trade_date,
 };
 use stock_select::engine::artifacts::{
-    read_selection_json, write_selection_json, SelectionRunPaths,
+    SelectionRunPaths, read_selection_json, write_selection_json,
 };
 use stock_select::engine::b2::artifact_key_for_run;
 use stock_select::engine::capability::ensure_model_run_supported;
 use stock_select::engine::inference::{
-    build_feature_vector, LightGbmRuntimeModel, ModelFeatureMetadata,
+    LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector,
 };
 use stock_select::engine::presentation::{
     fill_missing_display_instrument_info, format_display_lines, limit_display_rows,
     review_signal_symbol,
 };
-use stock_select::engine::run::{run_selection, SelectionRunRequest};
+use stock_select::engine::run::{SelectionRunRequest, run_selection};
 use stock_select::engine::types::{DisplayRow, LlmAnnotation};
 use stock_select::environment::{
-    ensure_market_environment, normalize_environment_state, persist_prepared_market_environment,
-    prepared_market_state, resolve_intraday_market_environment, resolve_market_environment,
-    ResolvedEnvironment,
+    ResolvedEnvironment, ensure_market_environment, normalize_environment_state,
+    persist_prepared_market_environment, prepared_market_state,
+    resolve_intraday_market_environment, resolve_market_environment,
 };
 use stock_select::intraday::TushareRestProvider;
 use stock_select::model::{InstrumentInfo, MarketRow, Method, PreparedRow};
-use stock_select::record::{update_run_record, RunRecordConfig};
+use stock_select::record::{RunRecordConfig, update_run_record};
 use stock_select::screening::{
-    run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_loader, PoolSource,
-    ScreenRequest,
+    PoolSource, ScreenRequest, run_db_native_intraday_screen_with_loaders,
+    run_db_native_screen_with_loader,
 };
 
 #[derive(Debug, Parser)]
@@ -1673,6 +1673,17 @@ fn fetch_db_native_daily_window_if_dsn(
     fetch_db_native_daily_window(dsn, start_date, end_date)
 }
 
+fn fetch_db_native_intraday_window_if_dsn(
+    dsn: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<Vec<MarketRow>> {
+    if dsn.trim().is_empty() {
+        anyhow::bail!("A database DSN is required.");
+    }
+    fetch_db_native_daily_window_for_intraday(dsn, start_date, end_date)
+}
+
 fn run_db_native_intraday_screen(
     request: ScreenRequest,
     provider: &TushareRestProvider,
@@ -1682,7 +1693,7 @@ fn run_db_native_intraday_screen(
         provider,
         "15:00:00",
         resolve_previous_trade_date,
-        fetch_db_native_daily_window_if_dsn,
+        fetch_db_native_intraday_window_if_dsn,
         fetch_stock_period_macd_states,
     )
 }

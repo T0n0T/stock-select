@@ -37,7 +37,7 @@ MACD_CATEGORICAL_COLUMNS = {
     "weekly_macd_wave_stage",
     "weekly_daily_combo_type",
 }
-CONTEXT_CATEGORICAL_COLUMNS = {"midline_state"}
+CONTEXT_CATEGORICAL_COLUMNS = set(rank_dataset_schema.CZSC_TRAINING_CATEGORICAL_COLUMNS)
 FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 RF_FEATURE_SELECTION_MODES = {"none", "cumulative_importance"}
 CATEGORICAL_ENCODINGS = {"one_hot", "native"}

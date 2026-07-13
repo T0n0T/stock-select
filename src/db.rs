@@ -6,11 +6,17 @@ use crate::intraday::MacdPeriodState;
 use crate::model::{InstrumentInfo, MarketRow};
 
 const DAILY_WINDOW_SESSION_SETTINGS_SQL: &str = "
-    SET max_parallel_workers_per_gather = 2;
-    SET work_mem = '64MB';
+    SET max_parallel_workers_per_gather = 0;
+    SET work_mem = '16MB';
 ";
 
 const MIN_DB_NATIVE_WINDOW_TRADE_DATES: i64 = 235;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CzscCoveragePolicy {
+    Strict,
+    WarnOnly,
+}
 
 const DB_NATIVE_DAILY_WINDOW_QUERY: &str = "
         WITH query_params AS (
@@ -29,8 +35,43 @@ const DB_NATIVE_DAILY_WINDOW_QUERY: &str = "
             s.adj_factor::double precision AS adj_factor,
             s.vol::double precision AS vol,
             s.amount::double precision AS amount,
-            s.turnover_rate::double precision AS turnover_rate
+            s.turnover_rate::double precision AS turnover_rate,
+            CASE WHEN c.ts_code IS NOT NULL THEN 1.0 ELSE 0.0 END::double precision AS _czsc_snapshot_available,
+            CASE WHEN c.source_bar_valid THEN 1.0 WHEN c.source_bar_valid = false THEN 0.0 END::double precision AS _czsc_source_bar_valid,
+            CASE c.status
+                WHEN 'invalid_source_bar' THEN 0.0
+                WHEN 'no_finished_bi' THEN 1.0
+                WHEN 'insufficient_bis_for_zs' THEN 2.0
+                WHEN 'no_valid_zs' THEN 3.0
+                WHEN 'ok' THEN 4.0
+            END::double precision AS _czsc_status_code,
+            c.available_finished_bi_count::double precision AS _czsc_available_finished_bi_count,
+            c.recent_bi_count::double precision AS _czsc_recent_bi_count,
+            CASE c.last_bi_direction WHEN 'up' THEN 1.0 WHEN 'down' THEN -1.0 END::double precision AS _czsc_last_bi_direction_code,
+            (c.last_bi_start_date - DATE '1970-01-01')::double precision AS _czsc_last_bi_start_day,
+            (c.last_bi_end_date - DATE '1970-01-01')::double precision AS _czsc_last_bi_end_day,
+            c.last_bi_high::double precision AS _czsc_last_bi_high,
+            c.last_bi_low::double precision AS _czsc_last_bi_low,
+            c.last_bi_mid::double precision AS _czsc_last_bi_mid,
+            (c.latest_zs_start_date - DATE '1970-01-01')::double precision AS _czsc_latest_zs_start_day,
+            (c.latest_zs_end_date - DATE '1970-01-01')::double precision AS _czsc_latest_zs_end_day,
+            c.latest_zs_bi_count::double precision AS _czsc_latest_zs_bi_count,
+            c.latest_zs_zg::double precision AS _czsc_latest_zs_zg,
+            c.latest_zs_zd::double precision AS _czsc_latest_zs_zd,
+            c.latest_zs_zz::double precision AS _czsc_latest_zs_zz,
+            (c.recent_peak_date - DATE '1970-01-01')::double precision AS _czsc_recent_peak_day,
+            c.recent_peak_high::double precision AS _czsc_recent_peak_high,
+            (c.post_peak_first_bear_date - DATE '1970-01-01')::double precision AS _czsc_post_peak_first_bear_day,
+            c.post_peak_first_bear_open::double precision AS _czsc_post_peak_first_bear_open,
+            c.post_peak_first_bear_high::double precision AS _czsc_post_peak_first_bear_high,
+            c.post_peak_first_bear_low::double precision AS _czsc_post_peak_first_bear_low,
+            c.post_peak_first_bear_close::double precision AS _czsc_post_peak_first_bear_close,
+            CASE WHEN c.post_peak_first_bear_missing THEN 1.0 WHEN c.post_peak_first_bear_missing = false THEN 0.0 END::double precision AS _czsc_post_peak_first_bear_missing
         FROM stock_stk_factor_pro s
+        LEFT JOIN stock_daily_czsc_structure c
+          ON c.ts_code = s.ts_code
+         AND c.trade_date = s.trade_date
+         AND c.calc_version = 'czsc_structure_qfq_min6_r7_v1'
         WHERE s.trade_date BETWEEN (SELECT start_date FROM query_params) AND (SELECT end_date FROM query_params)
         ";
 
@@ -176,18 +217,6 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             r.turnover_to_ma5_ratio::double precision AS rolling_turnover_to_ma5_ratio,
             r.range_compression_20d::double precision AS rolling_range_compression_20d,
             r.range_compression_40d::double precision AS rolling_range_compression_40d,
-            l.left_peak_high::double precision AS left_peak_high,
-            l.breakout_close::double precision AS left_peak_breakout_close,
-            (CASE WHEN l.breakout_body_above_left_peak THEN 1.0 ELSE 0.0 END)::double precision AS left_peak_breakout_body_above_flag,
-            l.first_bear_open::double precision AS left_peak_first_bear_open,
-            (CASE WHEN l.first_bear_missing THEN 1.0 ELSE 0.0 END)::double precision AS left_peak_first_bear_missing_flag,
-            l.b_div_a::double precision AS left_peak_b_div_a,
-            l.abs_ba_minus_1::double precision AS left_peak_abs_ba_minus_1,
-            (CASE WHEN l.a_lt_b THEN 1.0 ELSE 0.0 END)::double precision AS left_peak_a_lt_b,
-            (CASE WHEN l.is_valid THEN 1.0 ELSE 0.0 END)::double precision AS left_peak_valid,
-            CASE WHEN l.left_peak_date IS NOT NULL THEN (s.trade_date - l.left_peak_date)::double precision END AS left_peak_days_since_peak,
-            CASE WHEN l.breakout_date IS NOT NULL THEN (s.trade_date - l.breakout_date)::double precision END AS left_peak_days_since_breakout,
-            CASE WHEN l.first_bear_date IS NOT NULL THEN (s.trade_date - l.first_bear_date)::double precision END AS left_peak_days_since_first_bear,
             smf.net_amount::double precision AS stock_mf_net_amount,
             smf.net_d5_amount::double precision AS stock_mf_net_d5_amount,
             smf.buy_lg_amount::double precision AS stock_mf_buy_lg_amount,
@@ -233,10 +262,6 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
           ON r.ts_code = s.ts_code
          AND r.trade_date = s.trade_date
          AND r.calc_version = 'rolling_qfq_v1'
-        LEFT JOIN stock_daily_left_peak l
-          ON l.ts_code = s.ts_code
-         AND l.trade_date = s.trade_date
-         AND l.calc_version = 'left_peak_qfq_v1'
         LEFT JOIN stock_moneyflow_ths smf
           ON smf.ts_code = s.ts_code
          AND smf.trade_date = s.trade_date
@@ -627,10 +652,10 @@ const DB_NATIVE_COVERAGE_PROBE_QUERY: &str = "
             ) AS stock_rolling_rows,
             (
                 SELECT count(*)
-                FROM stock_daily_left_peak
+                FROM stock_daily_czsc_structure
                 WHERE trade_date = $1
-                  AND calc_version = 'left_peak_qfq_v1'
-            ) AS stock_left_peak_rows,
+                  AND calc_version = 'czsc_structure_qfq_min6_r7_v1'
+            ) AS stock_czsc_rows,
             (SELECT count(*) FROM stock_moneyflow_ths WHERE trade_date = $1) AS stock_moneyflow_rows,
             (SELECT count(*) FROM index_ths_daily WHERE trade_date = $1) AS index_ths_daily_rows,
             (SELECT count(*) FROM index_idx_factor_pro WHERE trade_date = $1 AND ts_code IN ('000001.SH', '399303.SZ')) AS index_market_rows,
@@ -714,7 +739,7 @@ pub struct DbNativeCoverageProbe {
     pub stock_factor_rows: i64,
     pub stock_macd_rows: i64,
     pub stock_rolling_rows: i64,
-    pub stock_left_peak_rows: i64,
+    pub stock_czsc_rows: i64,
     pub stock_moneyflow_rows: i64,
     pub index_ths_daily_rows: i64,
     pub index_market_rows: i64,
@@ -737,7 +762,34 @@ struct DbNativeDailyRow {
     db_factors: BTreeMap<String, Option<f64>>,
 }
 
-const DB_NATIVE_FACTOR_COLUMNS: &[&str] = &["amount"];
+const DB_NATIVE_FACTOR_COLUMNS: &[&str] = &[
+    "amount",
+    "_czsc_snapshot_available",
+    "_czsc_source_bar_valid",
+    "_czsc_status_code",
+    "_czsc_available_finished_bi_count",
+    "_czsc_recent_bi_count",
+    "_czsc_last_bi_direction_code",
+    "_czsc_last_bi_start_day",
+    "_czsc_last_bi_end_day",
+    "_czsc_last_bi_high",
+    "_czsc_last_bi_low",
+    "_czsc_last_bi_mid",
+    "_czsc_latest_zs_start_day",
+    "_czsc_latest_zs_end_day",
+    "_czsc_latest_zs_bi_count",
+    "_czsc_latest_zs_zg",
+    "_czsc_latest_zs_zd",
+    "_czsc_latest_zs_zz",
+    "_czsc_recent_peak_day",
+    "_czsc_recent_peak_high",
+    "_czsc_post_peak_first_bear_day",
+    "_czsc_post_peak_first_bear_open",
+    "_czsc_post_peak_first_bear_high",
+    "_czsc_post_peak_first_bear_low",
+    "_czsc_post_peak_first_bear_close",
+    "_czsc_post_peak_first_bear_missing",
+];
 
 const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
     "amount",
@@ -814,18 +866,6 @@ const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
     "rolling_turnover_to_ma5_ratio",
     "rolling_range_compression_20d",
     "rolling_range_compression_40d",
-    "left_peak_high",
-    "left_peak_breakout_close",
-    "left_peak_breakout_body_above_flag",
-    "left_peak_first_bear_open",
-    "left_peak_first_bear_missing_flag",
-    "left_peak_b_div_a",
-    "left_peak_abs_ba_minus_1",
-    "left_peak_a_lt_b",
-    "left_peak_valid",
-    "left_peak_days_since_peak",
-    "left_peak_days_since_breakout",
-    "left_peak_days_since_first_bear",
     "stock_mf_net_amount",
     "stock_mf_net_d5_amount",
     "stock_mf_buy_lg_amount",
@@ -924,10 +964,32 @@ pub fn fetch_db_native_daily_window(
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<Vec<MarketRow>> {
+    fetch_db_native_daily_window_with_policy(dsn, start_date, end_date, CzscCoveragePolicy::Strict)
+}
+
+pub fn fetch_db_native_daily_window_for_intraday(
+    dsn: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<Vec<MarketRow>> {
+    fetch_db_native_daily_window_with_policy(
+        dsn,
+        start_date,
+        end_date,
+        CzscCoveragePolicy::WarnOnly,
+    )
+}
+
+fn fetch_db_native_daily_window_with_policy(
+    dsn: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    czsc_policy: CzscCoveragePolicy,
+) -> anyhow::Result<Vec<MarketRow>> {
     let mut client = Client::connect(dsn, NoTls)?;
     configure_daily_window_session(&mut client)?;
     let probe = probe_db_native_coverage_with_client(&mut client, end_date)?;
-    ensure_db_native_required_coverage(&probe)?;
+    ensure_db_native_required_coverage_with_policy(&probe, czsc_policy)?;
 
     let mut market_rows = Vec::new();
     {
@@ -978,7 +1040,7 @@ fn probe_db_native_coverage_with_client(
         stock_factor_rows: row.try_get("stock_factor_rows")?,
         stock_macd_rows: row.try_get("stock_macd_rows")?,
         stock_rolling_rows: row.try_get("stock_rolling_rows")?,
-        stock_left_peak_rows: row.try_get("stock_left_peak_rows")?,
+        stock_czsc_rows: row.try_get("stock_czsc_rows")?,
         stock_moneyflow_rows: row.try_get("stock_moneyflow_rows")?,
         index_ths_daily_rows: row.try_get("index_ths_daily_rows")?,
         index_market_rows: row.try_get("index_market_rows")?,
@@ -988,43 +1050,62 @@ fn probe_db_native_coverage_with_client(
     })
 }
 
+#[cfg(test)]
 fn ensure_db_native_required_coverage(probe: &DbNativeCoverageProbe) -> anyhow::Result<()> {
-    let mut missing = Vec::new();
+    ensure_db_native_required_coverage_with_policy(probe, CzscCoveragePolicy::Strict)
+}
+
+fn ensure_db_native_required_coverage_with_policy(
+    probe: &DbNativeCoverageProbe,
+    czsc_policy: CzscCoveragePolicy,
+) -> anyhow::Result<()> {
+    let mut missing = Vec::<String>::new();
     let requested_start = db_native_coverage_start_date(probe.pick_date);
-    if !probe
+    if probe
         .window_start_date
-        .is_some_and(|actual_start| actual_start >= requested_start)
+        .is_none_or(|actual_start| actual_start < requested_start)
         || probe.window_end_date != Some(probe.pick_date)
         || probe.window_trade_dates < MIN_DB_NATIVE_WINDOW_TRADE_DATES
     {
-        missing.push("requested prepared window");
+        missing.push("requested prepared window".to_string());
     }
     if probe.stock_factor_rows == 0 {
-        missing.push("stock_stk_factor_pro pick-date rows");
+        missing.push("stock_stk_factor_pro pick-date rows".to_string());
     }
     if probe.stock_macd_rows == 0 {
-        missing.push("stock_daily_asof_indicators calc_version macd_qfq_12_26_9_v1");
+        missing.push("stock_daily_asof_indicators calc_version macd_qfq_12_26_9_v1".to_string());
     }
     if probe.stock_rolling_rows == 0 {
-        missing.push("stock_daily_rolling_factors calc_version rolling_qfq_v1");
+        missing.push("stock_daily_rolling_factors calc_version rolling_qfq_v1".to_string());
     }
-    if probe.stock_left_peak_rows == 0 {
-        missing.push("stock_daily_left_peak calc_version left_peak_qfq_v1");
+    if probe.stock_factor_rows > 0 {
+        let czsc_coverage_pct =
+            probe.stock_czsc_rows as f64 / probe.stock_factor_rows as f64 * 100.0;
+        if czsc_coverage_pct < 95.0 && czsc_policy == CzscCoveragePolicy::Strict {
+            missing.push(format!(
+                "CZSC coverage {czsc_coverage_pct:.2}% below 95% for stock_daily_czsc_structure calc_version czsc_structure_qfq_min6_r7_v1"
+            ));
+        } else if czsc_coverage_pct < 99.0 {
+            eprintln!(
+                "warning: CZSC coverage {czsc_coverage_pct:.2}% is below 99% for pick_date {}",
+                probe.pick_date
+            );
+        }
     }
     if probe.index_ths_daily_rows == 0 {
-        missing.push("index_ths_daily pick-date rows");
+        missing.push("index_ths_daily pick-date rows".to_string());
     }
     if probe.index_market_rows < 2 {
-        missing.push("index_idx_factor_pro pick-date rows for 000001.SH and 399303.SZ");
+        missing.push("index_idx_factor_pro pick-date rows for 000001.SH and 399303.SZ".to_string());
     }
     if probe.index_macd_rows == 0 {
-        missing.push("index_daily_asof_indicators calc_version macd_qfq_12_26_9_v1");
+        missing.push("index_daily_asof_indicators calc_version macd_qfq_12_26_9_v1".to_string());
     }
     if probe.index_moneyflow_rows == 0 {
-        missing.push("index_moneyflow_cnt_ths pick-date rows");
+        missing.push("index_moneyflow_cnt_ths pick-date rows".to_string());
     }
     if probe.index_limit_rows == 0 {
-        missing.push("index_limit_cpt_list pick-date rows");
+        missing.push("index_limit_cpt_list pick-date rows".to_string());
     }
     if missing.is_empty() {
         Ok(())
@@ -1074,17 +1155,20 @@ fn merge_pick_date_extras(
         let trade_date: NaiveDate = row.try_get("trade_date")?;
         let mut factors = BTreeMap::new();
         for column in DB_NATIVE_PICK_DATE_FACTOR_COLUMNS {
-            if let Some(value) = optional_option_f64(&row, column)? {
-                if value.is_finite() {
-                    factors.insert((*column).to_string(), value);
-                }
+            if let Some(value) = optional_option_f64(&row, column)?
+                && value.is_finite()
+            {
+                factors.insert((*column).to_string(), value);
             }
         }
         if !factors.is_empty() {
             extras_by_key.insert((ts_code, trade_date), factors);
         }
     }
-    for row in market_rows.iter_mut().filter(|row| row.trade_date == end_date) {
+    for row in market_rows
+        .iter_mut()
+        .filter(|row| row.trade_date == end_date)
+    {
         if let Some(extras) = extras_by_key.remove(&(row.ts_code.clone(), row.trade_date)) {
             row.db_factors.extend(extras);
         }
@@ -1104,10 +1188,10 @@ fn merge_ths_sector_extras(
         let trade_date: NaiveDate = row.try_get("trade_date")?;
         let mut factors = BTreeMap::new();
         for column in DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS {
-            if let Some(value) = optional_option_f64(&row, column)? {
-                if value.is_finite() {
-                    factors.insert((*column).to_string(), value);
-                }
+            if let Some(value) = optional_option_f64(&row, column)?
+                && value.is_finite()
+            {
+                factors.insert((*column).to_string(), value);
             }
         }
         if !factors.is_empty() {
@@ -1264,6 +1348,18 @@ mod tests {
             "s.vol::double precision AS vol",
             "s.amount::double precision AS amount",
             "s.turnover_rate::double precision AS turnover_rate",
+            "LEFT JOIN stock_daily_czsc_structure c",
+            "c.ts_code = s.ts_code",
+            "c.trade_date = s.trade_date",
+            "c.calc_version = 'czsc_structure_qfq_min6_r7_v1'",
+            "c.source_bar_valid",
+            "c.available_finished_bi_count",
+            "c.last_bi_direction",
+            "c.latest_zs_zg",
+            "c.latest_zs_zd",
+            "c.latest_zs_zz",
+            "c.recent_peak_high",
+            "c.post_peak_first_bear_open",
         ] {
             assert!(
                 DB_NATIVE_DAILY_WINDOW_QUERY.contains(fragment),
@@ -1285,6 +1381,7 @@ mod tests {
                 "main prepared stock window should not contain pick-date extra fragment {fragment}"
             );
         }
+        assert!(!DB_NATIVE_DAILY_WINDOW_QUERY.contains("left_peak_qfq_v1"));
         assert!(
             !DB_NATIVE_DAILY_WINDOW_QUERY.contains("ORDER BY s.ts_code"),
             "main DB-native window should not force a database sort; Rust prepare_rows sorts per symbol"
@@ -1332,7 +1429,6 @@ mod tests {
             "LEFT JOIN index_market_factors imf",
             "LEFT JOIN stock_daily_asof_indicators a",
             "LEFT JOIN stock_daily_rolling_factors r",
-            "LEFT JOIN stock_daily_left_peak l",
             "a.calc_version = 'macd_qfq_12_26_9_v1'",
             "a.daily_hist_x2_asof::double precision / 2.0 AS macd_daily_hist",
             "a.weekly_hist_x2_asof::double precision / 2.0 AS macd_weekly_hist",
@@ -1340,19 +1436,20 @@ mod tests {
             "r.calc_version = 'rolling_qfq_v1'",
             "r.position_90d::double precision AS rolling_position_90d",
             "r.close_to_20d_max_close_pct::double precision AS close_to_20d_max_close_pct",
-            "l.calc_version = 'left_peak_qfq_v1'",
-            "(CASE WHEN l.is_valid THEN 1.0 ELSE 0.0 END)::double precision AS left_peak_valid",
         ] {
             assert!(
                 DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains(fragment),
                 "missing {fragment}"
             );
         }
+        assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("stock_daily_left_peak"));
+        assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("left_peak_"));
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("s.kdj_j_qfq"));
         assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("CASE"));
-        assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains(
-            "WHEN s.kdj_k_qfq IS NOT NULL AND s.kdj_d_qfq IS NOT NULL"
-        ));
+        assert!(
+            DB_NATIVE_PICK_DATE_EXTRAS_QUERY
+                .contains("WHEN s.kdj_k_qfq IS NOT NULL AND s.kdj_d_qfq IS NOT NULL")
+        );
         assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains(
             "THEN 3.0 * s.kdj_k_qfq::double precision - 2.0 * s.kdj_d_qfq::double precision"
         ));
@@ -1409,7 +1506,7 @@ mod tests {
             "stock_stk_factor_pro",
             "stock_daily_asof_indicators",
             "stock_daily_rolling_factors",
-            "stock_daily_left_peak",
+            "stock_daily_czsc_structure",
             "index_ths_daily",
             "stock_moneyflow_ths",
             "index_idx_factor_pro",
@@ -1418,13 +1515,15 @@ mod tests {
             "index_limit_cpt_list",
             "macd_qfq_12_26_9_v1",
             "rolling_qfq_v1",
-            "left_peak_qfq_v1",
+            "czsc_structure_qfq_min6_r7_v1",
         ] {
             assert!(
                 DB_NATIVE_COVERAGE_PROBE_QUERY.contains(fragment),
                 "missing {fragment}"
             );
         }
+        assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("stock_daily_left_peak"));
+        assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("left_peak_qfq_v1"));
         assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("POSTGRES_DSN"));
         assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("postgres://"));
         assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("postgresql://"));
@@ -1630,10 +1729,10 @@ mod tests {
                 ("rolling_position_90d".to_string(), Some(0.72)),
                 ("close_to_20d_max_close_pct".to_string(), Some(-1.8)),
                 ("rolling_range_compression_20d".to_string(), Some(0.16)),
-                ("left_peak_high".to_string(), Some(11.8)),
-                ("left_peak_valid".to_string(), Some(1.0)),
-                ("left_peak_b_div_a".to_string(), Some(1.03)),
-                ("left_peak_days_since_peak".to_string(), Some(17.0)),
+                ("_czsc_snapshot_available".to_string(), Some(1.0)),
+                ("_czsc_status_code".to_string(), Some(4.0)),
+                ("_czsc_recent_peak_high".to_string(), Some(11.8)),
+                ("_czsc_post_peak_first_bear_open".to_string(), Some(11.2)),
                 ("ths_membership_current_flag".to_string(), Some(1.0)),
                 ("ths_main_sector_rank".to_string(), Some(3.0)),
                 ("ths_main_pct_change".to_string(), Some(2.4)),
@@ -1667,7 +1766,10 @@ mod tests {
                 ("stock_env_sector_vs_broad_ret5_pct".to_string(), Some(4.8)),
                 ("stock_env_sector_vs_broad_ret20_pct".to_string(), Some(9.6)),
                 ("stock_env_style_ret5_spread_pct".to_string(), Some(0.6)),
-                ("stock_env_market_sector_ret5_sum_pct".to_string(), Some(7.6)),
+                (
+                    "stock_env_market_sector_ret5_sum_pct".to_string(),
+                    Some(7.6),
+                ),
                 ("stock_env_market_score".to_string(), Some(1.05)),
                 ("stock_env_sector_score".to_string(), Some(3.4)),
                 ("stock_env_alignment_score".to_string(), Some(1.0)),
@@ -1741,10 +1843,10 @@ mod tests {
         assert_eq!(mapped.db_factors["rolling_position_90d"], 0.72);
         assert_eq!(mapped.db_factors["close_to_20d_max_close_pct"], -1.8);
         assert_eq!(mapped.db_factors["rolling_range_compression_20d"], 0.16);
-        assert_eq!(mapped.db_factors["left_peak_high"], 11.8);
-        assert_eq!(mapped.db_factors["left_peak_valid"], 1.0);
-        assert_eq!(mapped.db_factors["left_peak_b_div_a"], 1.03);
-        assert_eq!(mapped.db_factors["left_peak_days_since_peak"], 17.0);
+        assert_eq!(mapped.db_factors["_czsc_snapshot_available"], 1.0);
+        assert_eq!(mapped.db_factors["_czsc_status_code"], 4.0);
+        assert_eq!(mapped.db_factors["_czsc_recent_peak_high"], 11.8);
+        assert_eq!(mapped.db_factors["_czsc_post_peak_first_bear_open"], 11.2);
         assert_eq!(mapped.db_factors["ths_membership_current_flag"], 1.0);
         assert_eq!(mapped.db_factors["ths_main_sector_rank"], 3.0);
         assert_eq!(mapped.db_factors["ths_main_pct_change"], 2.4);
@@ -1776,9 +1878,15 @@ mod tests {
         assert_eq!(mapped.db_factors["stock_env_sector_ret20_pct"], 12.4);
         assert_eq!(mapped.db_factors["stock_env_sector_ma20_bias_pct"], 3.3);
         assert_eq!(mapped.db_factors["stock_env_sector_vs_broad_ret5_pct"], 4.8);
-        assert_eq!(mapped.db_factors["stock_env_sector_vs_broad_ret20_pct"], 9.6);
+        assert_eq!(
+            mapped.db_factors["stock_env_sector_vs_broad_ret20_pct"],
+            9.6
+        );
         assert_eq!(mapped.db_factors["stock_env_style_ret5_spread_pct"], 0.6);
-        assert_eq!(mapped.db_factors["stock_env_market_sector_ret5_sum_pct"], 7.6);
+        assert_eq!(
+            mapped.db_factors["stock_env_market_sector_ret5_sum_pct"],
+            7.6
+        );
         assert_eq!(mapped.db_factors["stock_env_market_score"], 1.05);
         assert_eq!(mapped.db_factors["stock_env_sector_score"], 3.4);
         assert_eq!(mapped.db_factors["stock_env_alignment_score"], 1.0);
@@ -1822,7 +1930,7 @@ mod tests {
             stock_factor_rows: 5000,
             stock_macd_rows: 0,
             stock_rolling_rows: 0,
-            stock_left_peak_rows: 0,
+            stock_czsc_rows: 0,
             stock_moneyflow_rows: 0,
             index_ths_daily_rows: 0,
             index_market_rows: 0,
@@ -1838,8 +1946,8 @@ mod tests {
         assert!(message.contains("macd_qfq_12_26_9_v1"));
         assert!(message.contains("stock_daily_rolling_factors"));
         assert!(message.contains("rolling_qfq_v1"));
-        assert!(message.contains("stock_daily_left_peak"));
-        assert!(message.contains("left_peak_qfq_v1"));
+        assert!(message.contains("stock_daily_czsc_structure"));
+        assert!(message.contains("czsc_structure_qfq_min6_r7_v1"));
         assert!(message.contains("index_ths_daily"));
         assert!(message.contains("index_idx_factor_pro"));
         assert!(message.contains("index_daily_asof_indicators"));
@@ -1860,7 +1968,7 @@ mod tests {
             stock_factor_rows: 5000,
             stock_macd_rows: 5000,
             stock_rolling_rows: 5000,
-            stock_left_peak_rows: 5000,
+            stock_czsc_rows: 5000,
             stock_moneyflow_rows: 0,
             index_ths_daily_rows: 500,
             index_market_rows: 2,
@@ -1874,6 +1982,82 @@ mod tests {
     }
 
     #[test]
+    fn db_native_required_coverage_rejects_czsc_coverage_below_95_percent() {
+        let probe = DbNativeCoverageProbe {
+            pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
+            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
+            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
+            window_trade_dates: 252,
+            stock_factor_rows: 1000,
+            stock_macd_rows: 1000,
+            stock_rolling_rows: 1000,
+            stock_czsc_rows: 949,
+            stock_moneyflow_rows: 1000,
+            index_ths_daily_rows: 500,
+            index_market_rows: 2,
+            index_macd_rows: 500,
+            index_moneyflow_rows: 500,
+            index_limit_rows: 500,
+        };
+
+        let err = ensure_db_native_required_coverage(&probe)
+            .expect_err("EOD DB-native loading must reject CZSC coverage below 95%");
+
+        assert!(err.to_string().contains("CZSC coverage 94.90% below 95%"));
+    }
+
+    #[test]
+    fn db_native_required_coverage_accepts_95_and_99_percent_boundaries() {
+        for stock_czsc_rows in [950, 990] {
+            let probe = DbNativeCoverageProbe {
+                pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
+                window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
+                window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
+                window_trade_dates: 252,
+                stock_factor_rows: 1000,
+                stock_macd_rows: 1000,
+                stock_rolling_rows: 1000,
+                stock_czsc_rows,
+                stock_moneyflow_rows: 1000,
+                index_ths_daily_rows: 500,
+                index_market_rows: 2,
+                index_macd_rows: 500,
+                index_moneyflow_rows: 500,
+                index_limit_rows: 500,
+            };
+
+            ensure_db_native_required_coverage(&probe).unwrap_or_else(|error| {
+                panic!("CZSC boundary coverage {stock_czsc_rows}/1000 failed: {error}")
+            });
+        }
+    }
+
+    #[test]
+    fn db_native_intraday_coverage_warns_instead_of_rejecting_low_czsc_coverage() {
+        let probe = DbNativeCoverageProbe {
+            pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
+            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
+            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
+            window_trade_dates: 252,
+            stock_factor_rows: 1000,
+            stock_macd_rows: 1000,
+            stock_rolling_rows: 1000,
+            stock_czsc_rows: 949,
+            stock_moneyflow_rows: 1000,
+            index_ths_daily_rows: 500,
+            index_market_rows: 2,
+            index_macd_rows: 500,
+            index_moneyflow_rows: 500,
+            index_limit_rows: 500,
+        };
+
+        ensure_db_native_required_coverage_with_policy(&probe, CzscCoveragePolicy::WarnOnly)
+            .expect(
+                "intraday DB-native loading should warn instead of rejecting low CZSC coverage",
+            );
+    }
+
+    #[test]
     fn db_native_required_coverage_fails_without_requested_prepared_window() {
         let probe = DbNativeCoverageProbe {
             pick_date: NaiveDate::from_ymd_opt(2026, 6, 15).unwrap(),
@@ -1883,7 +2067,7 @@ mod tests {
             stock_factor_rows: 5000,
             stock_macd_rows: 5000,
             stock_rolling_rows: 5000,
-            stock_left_peak_rows: 5000,
+            stock_czsc_rows: 5000,
             stock_moneyflow_rows: 5000,
             index_ths_daily_rows: 0,
             index_market_rows: 2,
@@ -1908,7 +2092,7 @@ mod tests {
             stock_factor_rows: 5000,
             stock_macd_rows: 5000,
             stock_rolling_rows: 5000,
-            stock_left_peak_rows: 5000,
+            stock_czsc_rows: 5000,
             stock_moneyflow_rows: 5000,
             index_ths_daily_rows: 5000,
             index_market_rows: 2,
@@ -1930,7 +2114,7 @@ mod tests {
             stock_factor_rows: 5000,
             stock_macd_rows: 5000,
             stock_rolling_rows: 5000,
-            stock_left_peak_rows: 5000,
+            stock_czsc_rows: 5000,
             stock_moneyflow_rows: 5000,
             index_ths_daily_rows: 5000,
             index_market_rows: 2,
@@ -1961,7 +2145,7 @@ mod tests {
         assert!(probe.stock_factor_rows > 0);
         assert!(probe.stock_macd_rows > 0);
         assert!(probe.stock_rolling_rows > 0);
-        assert!(probe.stock_left_peak_rows > 0);
+        assert!(probe.stock_czsc_rows > 0);
         assert!(probe.index_ths_daily_rows > 0);
         assert!(probe.index_macd_rows > 0);
         assert!(probe.index_moneyflow_rows > 0);
@@ -1998,11 +2182,23 @@ mod tests {
         assert!(row.db_factors.contains_key("macd_monthly_hist"));
         assert!(row.db_factors.contains_key("rolling_position_90d"));
         assert!(row.db_factors.contains_key("close_to_20d_max_close_pct"));
-        assert!(row.db_factors.contains_key("left_peak_valid"));
+        assert!(row.db_factors.contains_key("_czsc_snapshot_available"));
+        assert!(row.db_factors.contains_key("_czsc_status_code"));
+        assert!(
+            !row.db_factors
+                .keys()
+                .any(|key| key.starts_with("left_peak_"))
+        );
         assert!(row.db_factors.contains_key("stock_mf_net_amount"));
-        assert!(row.db_factors.contains_key("large_net_amount_to_amount_pct"));
+        assert!(
+            row.db_factors
+                .contains_key("large_net_amount_to_amount_pct")
+        );
         assert!(row.db_factors.contains_key("mid_net_amount_to_amount_pct"));
-        assert!(row.db_factors.contains_key("small_net_amount_to_amount_pct"));
+        assert!(
+            row.db_factors
+                .contains_key("small_net_amount_to_amount_pct")
+        );
         assert!(row.db_factors.contains_key("net_mf_amount_to_amount_pct"));
         assert!(row.db_factors.contains_key("ths_main_limit_up_count"));
         assert!(row.db_factors.contains_key("ths_best_limit_up_count"));
@@ -2010,8 +2206,14 @@ mod tests {
         assert!(row.db_factors.contains_key("ths_limit_up_sector_count"));
         assert!(row.db_factors.contains_key("ths_limit_up_sector_ratio"));
         assert!(row.db_factors.contains_key("stock_env_sector_ret5_pct"));
-        assert!(row.db_factors.contains_key("stock_env_sector_vs_broad_ret5_pct"));
-        assert!(row.db_factors.contains_key("stock_env_style_ret5_spread_pct"));
+        assert!(
+            row.db_factors
+                .contains_key("stock_env_sector_vs_broad_ret5_pct")
+        );
+        assert!(
+            row.db_factors
+                .contains_key("stock_env_style_ret5_spread_pct")
+        );
         assert!(row.db_factors.contains_key("stock_env_market_score"));
         assert!(row.db_factors.contains_key("stock_env_sector_score"));
         assert!(row.db_factors.contains_key("stock_env_alignment_score"));
@@ -2023,8 +2225,8 @@ mod tests {
     }
 
     #[test]
-    fn db_native_window_session_settings_allow_parallel_query_and_larger_work_mem() {
-        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("max_parallel_workers_per_gather = 2"));
-        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("work_mem = '64MB'"));
+    fn db_native_window_session_settings_avoid_parallel_dsm_with_bounded_work_mem() {
+        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("max_parallel_workers_per_gather = 0"));
+        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("work_mem = '16MB'"));
     }
 }

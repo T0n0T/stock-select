@@ -16,6 +16,9 @@ pub const LOCAL_DERIVED_PREPARED_CACHE_SOURCE: &str = "prepared-local-derived";
 pub const DEFAULT_PREPARED_CACHE_RETENTION_LIMIT: usize = 30;
 pub const PREPARED_CACHE_RETENTION_LIMIT_ENV: &str = "STOCK_SELECT_PREPARED_CACHE_LIMIT";
 pub const MIN_DB_NATIVE_WINDOW_TRADING_DAYS: u32 = 235;
+const DB_NATIVE_MACD_CALC_VERSION: &str = "macd_qfq_12_26_9_v1";
+const DB_NATIVE_ROLLING_CALC_VERSION: &str = "rolling_qfq_v1";
+const DB_NATIVE_CZSC_CALC_VERSION: &str = "czsc_structure_qfq_min6_r7_v1";
 const LEGACY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRBIN1";
 const DICTIONARY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRDIC2";
 const ZSTD_FRAME_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
@@ -338,17 +341,20 @@ fn build_db_native_metadata(
     let mut metadata = build_metadata(method, pick_date, start_date, end_date, false, rows);
     metadata.source_table = DB_NATIVE_PREPARED_CACHE_SOURCE.to_string();
     metadata.source = Some(DB_NATIVE_PREPARED_CACHE_SOURCE.to_string());
-    let (window_start_date, window_end_date, window_trading_days) = prepared_row_window(rows)
-        .unwrap_or((start_date, end_date, requested_window_trading_days));
+    let (window_start_date, window_end_date, window_trading_days) =
+        prepared_row_window(rows).unwrap_or((start_date, end_date, requested_window_trading_days));
     metadata.start_date = window_start_date;
     metadata.end_date = window_end_date;
     metadata.window_trading_days = Some(window_trading_days);
     metadata.window_start_date = Some(window_start_date);
     metadata.window_end_date = Some(window_end_date);
     metadata.calc_versions = BTreeMap::from([
-        ("macd".to_string(), "macd_qfq_12_26_9_v1".to_string()),
-        ("rolling".to_string(), "rolling_qfq_v1".to_string()),
-        ("left_peak".to_string(), "left_peak_qfq_v1".to_string()),
+        ("macd".to_string(), DB_NATIVE_MACD_CALC_VERSION.to_string()),
+        (
+            "rolling".to_string(),
+            DB_NATIVE_ROLLING_CALC_VERSION.to_string(),
+        ),
+        ("czsc".to_string(), DB_NATIVE_CZSC_CALC_VERSION.to_string()),
     ]);
     metadata.membership_sources =
         BTreeMap::from([("ths".to_string(), "current_index_ths_member".to_string())]);
@@ -668,6 +674,21 @@ fn metadata_matches(
         && metadata.end_date == end_date
         && (metadata.source_table == LOCAL_DERIVED_PREPARED_CACHE_SOURCE
             || metadata.source_table == DB_NATIVE_PREPARED_CACHE_SOURCE)
+        && db_native_calc_versions_match(metadata)
+}
+
+fn db_native_calc_versions_match(metadata: &PreparedCacheMetadata) -> bool {
+    if metadata.source_table != DB_NATIVE_PREPARED_CACHE_SOURCE {
+        return true;
+    }
+
+    metadata.calc_versions.len() == 3
+        && metadata.calc_versions.get("macd").map(String::as_str)
+            == Some(DB_NATIVE_MACD_CALC_VERSION)
+        && metadata.calc_versions.get("rolling").map(String::as_str)
+            == Some(DB_NATIVE_ROLLING_CALC_VERSION)
+        && metadata.calc_versions.get("czsc").map(String::as_str)
+            == Some(DB_NATIVE_CZSC_CALC_VERSION)
 }
 
 fn metadata_window_matches(metadata: &PreparedCacheMetadata, start_date: NaiveDate) -> bool {

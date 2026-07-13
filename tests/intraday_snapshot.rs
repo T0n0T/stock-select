@@ -419,6 +419,9 @@ fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows
     let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
     let mut db_factors = std::collections::BTreeMap::new();
     db_factors.insert("rolling_ma25_qfq".to_string(), 10.2);
+    db_factors.insert("_czsc_snapshot_available".to_string(), 1.0);
+    db_factors.insert("_czsc_latest_zs_zg".to_string(), 10.8);
+    db_factors.insert("left_peak_valid".to_string(), 1.0);
     db_factors.insert("ths_sector_count".to_string(), 3.0);
     db_factors.insert("ths_main_pct_change".to_string(), 2.4);
     db_factors.insert("stock_vs_ths_main_pct_change".to_string(), 0.8);
@@ -460,6 +463,8 @@ fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows
         .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
         .unwrap();
     assert_eq!(snapshot_row.db_factors["rolling_ma25_qfq"], 10.2);
+    assert_eq!(snapshot_row.db_factors["_czsc_snapshot_available"], 1.0);
+    assert_eq!(snapshot_row.db_factors["_czsc_latest_zs_zg"], 10.8);
     assert_eq!(snapshot_row.db_factors["ths_sector_count"], 3.0);
     assert_eq!(snapshot_row.db_factors["ths_main_pct_change"], 2.4);
     assert_eq!(snapshot_row.db_factors["stock_vs_ths_main_pct_change"], 0.8);
@@ -474,4 +479,74 @@ fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows
             .contains_key("unrelated_previous_eod_factor")
     );
     assert!(!snapshot_row.db_factors.contains_key("ths_main_net_amount"));
+    assert!(!snapshot_row.db_factors.contains_key("left_peak_valid"));
+}
+
+#[test]
+fn build_intraday_market_rows_does_not_forward_fill_czsc_past_previous_trade_date() {
+    let older_date = NaiveDate::from_ymd_opt(2026, 4, 7).unwrap();
+    let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
+    let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+    let history = vec![
+        MarketRow {
+            ts_code: "000001.SZ".to_string(),
+            trade_date: older_date,
+            open: 10.0,
+            high: 10.4,
+            low: 9.8,
+            close: 10.0,
+            vol: 100.0,
+            turnover_rate: Some(1.0),
+            adj_factor: Some(2.0),
+            db_factors: std::collections::BTreeMap::from([
+                ("_czsc_snapshot_available".to_string(), 1.0),
+                ("_czsc_latest_zs_zg".to_string(), 10.8),
+            ]),
+        },
+        MarketRow {
+            ts_code: "000001.SZ".to_string(),
+            trade_date: previous_date,
+            open: 10.1,
+            high: 10.5,
+            low: 9.9,
+            close: 10.2,
+            vol: 110.0,
+            turnover_rate: Some(1.1),
+            adj_factor: Some(2.0),
+            db_factors: Default::default(),
+        },
+    ];
+    let snapshot = normalize_rt_k_rows(
+        vec![RawRtKRow::from_value(json!({
+            "ts_code": "000001.SZ",
+            "name": "平安银行",
+            "open": 5.0,
+            "high": 5.4,
+            "low": 4.9,
+            "close": 5.3,
+            "vol": 1234567,
+            "amount": 152300000.0
+        }))],
+        trade_date,
+        "10:00:00",
+    )
+    .unwrap();
+
+    let rows = build_intraday_market_rows(history, &snapshot, trade_date);
+    let snapshot_row = rows
+        .iter()
+        .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
+        .unwrap();
+
+    assert!(
+        !snapshot_row
+            .db_factors
+            .keys()
+            .any(|key| key.starts_with("_czsc_"))
+    );
+    assert!(
+        !snapshot_row
+            .db_factors
+            .contains_key("intraday_structure_source_previous_eod")
+    );
 }
