@@ -465,8 +465,8 @@ fn derive_lifecycle(
         let previous_close = index.checked_sub(1).map(|previous| history[previous].close);
 
         if result.state != LifecycleState::Active {
-            let breakout = previous_close.is_some_and(|close| close <= trigger_line)
-                && row.close > trigger_line
+            let breakout = pct_change(previous_close, Some(trigger_line))
+                .is_some_and(|value| value < BREAKOUT_MIN_PCT)
                 && pct_change(Some(row.close), Some(trigger_line))
                     .is_some_and(|value| value >= BREAKOUT_MIN_PCT);
             if breakout {
@@ -869,6 +869,32 @@ mod tests {
         assert_eq!(
             factor(&factors, "czsc_pricing_pullback_today_flag"),
             &FactorValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn lifecycle_detects_delayed_crossing_of_breakout_threshold() {
+        let first_date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let rows = [9.8, 10.05, 10.12]
+            .into_iter()
+            .enumerate()
+            .map(|(index, close)| pricing_row(first_date, index, close, close, 800.0))
+            .collect::<Vec<_>>();
+
+        let mut factors = FactorList::new();
+        push_czsc_factors(&mut factors, &rows);
+
+        assert_eq!(
+            factor(&factors, "czsc_pricing_lifecycle_state"),
+            &FactorValue::Category("active".to_string())
+        );
+        assert_eq!(
+            factor(&factors, "czsc_pricing_cycle_count"),
+            &FactorValue::Number(1.0)
+        );
+        assert_eq!(
+            factor(&factors, "czsc_pricing_days_since_breakout"),
+            &FactorValue::Number(0.0)
         );
     }
 
