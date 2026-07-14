@@ -198,7 +198,8 @@ def run_record_backfill(
             for task in tasks
         }
         for future in as_completed(futures):
-            task = futures[future]
+            # Drop finished futures immediately so captured subprocess output can be released per task.
+            task = futures.pop(future)
             command = command_for_task(task, config)
             try:
                 actual_task, proc = future.result()

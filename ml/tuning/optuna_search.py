@@ -212,6 +212,7 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
             rolling_train_dates=args.rolling_train_dates,
             rolling_test_dates=args.rolling_test_dates,
             method=args.method,
+            feature_manifest=getattr(args, "feature_manifest", None),
             rf_diagnostics=not args.skip_rf_diagnostics,
             **kwargs,
         )

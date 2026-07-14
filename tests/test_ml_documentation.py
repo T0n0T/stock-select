@@ -73,7 +73,7 @@ class MlDocumentationTests(unittest.TestCase):
         expected_fragments = [
             "# 选股筛选方法过滤条件",
             "实际接入 screen 的方法：`b2`、`b3`、`lsh`。",
-            "往前 3 年同日到 `pick_date` 的行情窗口",
+            "截至 `pick_date` 的约 252 个交易日预计算行情和指标",
             "`STOCK_SELECT_PREPARED_CACHE_LIMIT`",
             "盘中 prepared cache 不计入这个保留数量",
             "`turnover-top` 股票池",

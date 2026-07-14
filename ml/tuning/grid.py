@@ -57,6 +57,7 @@ def run_grid_search(args: argparse.Namespace) -> int:
             rolling_train_dates=args.rolling_train_dates,
             rolling_test_dates=args.rolling_test_dates,
             method=args.method,
+            feature_manifest=getattr(args, "feature_manifest", None),
             rf_diagnostics=not args.skip_rf_diagnostics,
             **kwargs,
         )
@@ -88,6 +89,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
     parser.add_argument("--strategy", choices=["grid", "optuna"], default="grid")
     parser.add_argument("--max-trials", type=int, default=12)
     parser.add_argument("--dataset", type=Path)
+    parser.add_argument("--feature-manifest", type=Path)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--test-ratio", type=float, default=0.2)
     parser.add_argument("--num-boost-round", type=int, default=120)

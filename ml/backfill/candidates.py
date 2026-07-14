@@ -118,7 +118,8 @@ def run_backfill(
         }
         completed_count = 0
         for future in as_completed(futures):
-            pick_date = futures[future]
+            # Drop finished futures immediately so captured subprocess output can be freed per date.
+            pick_date = futures.pop(future)
             command = build_screen_command(
                 binary=config.binary,
                 pick_date=pick_date,
