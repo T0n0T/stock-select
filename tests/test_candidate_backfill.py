@@ -173,6 +173,47 @@ class CandidateBackfillTest(unittest.TestCase):
         self.assertEqual(result.failures[0].pick_date, "2026-06-02")
         self.assertIn("screen failed", result.failures[0].stderr)
 
+    def test_run_backfill_releases_completed_outputs_between_jobs(self):
+        import gc
+        import time
+        import weakref
+
+        payload_refs = []
+        observed = {}
+
+        class Payload:
+            pass
+
+        def fake_runner(command, **_kwargs):
+            pick_date = command[command.index("--pick-date") + 1]
+            payload = Payload()
+            payload_refs.append(weakref.ref(payload))
+            if pick_date == "2026-06-03":
+                for _ in range(50):
+                    gc.collect()
+                    if payload_refs[0]() is None:
+                        break
+                    time.sleep(0.01)
+                observed["first_payload_collected"] = payload_refs[0]() is None
+            return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
+
+        config = BackfillConfig(
+            binary=Path("stock-select-rs"),
+            runtime_root=Path("/tmp/runtime"),
+            method="b2",
+            workers=1,
+            quiet=True,
+        )
+
+        result = run_backfill(
+            ["2026-06-01", "2026-06-02", "2026-06-03"],
+            config=config,
+            runner=fake_runner,
+        )
+
+        self.assertEqual(result.success_count, 3)
+        self.assertTrue(observed["first_payload_collected"])
+
     def test_format_returncode_labels_negative_signal_exit(self):
         self.assertEqual(format_returncode(-signal.SIGKILL), "signal=SIGKILL")
 

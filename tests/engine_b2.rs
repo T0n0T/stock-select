@@ -160,7 +160,7 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
 }
 
 #[test]
-fn candidate_payload_factor_provider_includes_legacy_semantic_factors() {
+fn candidate_payload_factor_provider_reports_missing_czsc_snapshot_without_legacy_proxies() {
     let history = (0..130)
         .map(|offset| {
             let close = 100.0 + offset as f64 * 0.3;
@@ -198,8 +198,12 @@ fn candidate_payload_factor_provider_includes_legacy_semantic_factors() {
         Some(&FactorValue::Category("rising".to_string()))
     );
     assert_eq!(
-        row.factors.get("midline_state"),
-        Some(&FactorValue::Category("above_hold".to_string()))
+        row.factors.get("czsc_status"),
+        Some(&FactorValue::Category("missing_snapshot".to_string()))
+    );
+    assert_eq!(
+        row.factors.get("czsc_snapshot_available"),
+        Some(&FactorValue::Bool(false))
     );
     assert!(matches!(
         row.factors.get("daily_macd_wave_index"),
@@ -244,10 +248,14 @@ fn candidate_payload_factor_provider_includes_legacy_semantic_factors() {
         row.factors.get("macd_phase"),
         Some(FactorValue::Number(value)) if *value >= 1.0
     ));
-    assert!(matches!(
-        row.factors.get("price_vs_90d_mid"),
-        Some(FactorValue::Number(_))
-    ));
+    for removed in [
+        "midline_state",
+        "price_vs_90d_high",
+        "price_vs_90d_low",
+        "price_vs_90d_mid",
+    ] {
+        assert!(!row.factors.contains_key(removed));
+    }
 }
 
 #[test]
@@ -347,9 +355,6 @@ fn candidate_payload_factor_provider_computes_b2_rdagent_rank_factors() {
         "D",
         "close_to_lt_r_pct",
         "lt_r_to_ma60_pct",
-        "hl90_position",
-        "hl90_range_pct",
-        "close_to_hl90_mid_pct",
         "bar_close_position",
         "upper_shadow_pct",
         "weekly_dea_pctile",
@@ -363,14 +368,9 @@ fn candidate_payload_factor_provider_computes_b2_rdagent_rank_factors() {
         assert!(row.factors.contains_key(key), "missing {key}");
     }
     assert_eq!(row.factors.get("D"), Some(&FactorValue::Number(45.0)));
-    assert_eq!(
-        row.factors.get("hl90_position"),
-        Some(&FactorValue::Number(0.9038))
-    );
-    assert_eq!(
-        row.factors.get("hl90_range_pct"),
-        Some(&FactorValue::Number(50.0))
-    );
+    for removed in ["hl90_position", "hl90_range_pct", "close_to_hl90_mid_pct"] {
+        assert!(!row.factors.contains_key(removed));
+    }
     assert_eq!(
         row.factors.get("bar_close_position"),
         Some(&FactorValue::Number(0.3333))

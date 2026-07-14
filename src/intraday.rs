@@ -284,9 +284,13 @@ pub fn build_intraday_market_rows_with_macd_states(
                 acc
             },
         );
+    let previous_trade_date = history
+        .iter()
+        .filter_map(|row| (row.trade_date < trade_date).then_some(row.trade_date))
+        .max();
     let latest_structure_factors_by_code = history
         .iter()
-        .filter(|row| row.trade_date < trade_date)
+        .filter(|row| Some(row.trade_date) == previous_trade_date)
         .fold(
             BTreeMap::<String, (NaiveDate, BTreeMap<String, f64>)>::new(),
             |mut acc, row| {
@@ -373,7 +377,7 @@ fn previous_eod_structure_factors(row: &MarketRow) -> BTreeMap<String, f64> {
         .filter(|(key, value)| {
             value.is_finite()
                 && (key.starts_with("rolling_")
-                    || key.starts_with("left_peak_")
+                    || key.starts_with("_czsc_")
                     || key.starts_with("ths_")
                     || key.starts_with("stock_vs_ths_")
                     || key.starts_with("stock_env_"))

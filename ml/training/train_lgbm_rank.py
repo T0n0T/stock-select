@@ -16,6 +16,7 @@ from .features import (
     DEFAULT_METHOD,
     FEATURE_SETS,
     RF_FEATURE_SELECTION_MODES,
+    drop_optional_zero_coverage_features,
     load_feature_manifest_with_levels,
     select_feature_columns,
     select_features_by_rf_importance,
@@ -292,18 +293,23 @@ def train_and_report(
         fixed_categorical_levels = {}
     candidate_numeric_columns = list(numeric_columns)
     candidate_categorical_columns = list(categorical_columns)
+    numeric_columns, categorical_columns, dropped_optional_features = drop_optional_zero_coverage_features(
+        train_rows + test_rows,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+    )
     feature_coverage = validate_selected_feature_coverage(
         train_rows + test_rows,
         numeric_columns=numeric_columns,
         categorical_columns=categorical_columns,
     )
     feature_selection_payload = {
-        "mode": "none",
+        "mode": "drop_optional_zero_coverage" if dropped_optional_features else "none",
         "candidate_feature_count": len(candidate_numeric_columns) + len(candidate_categorical_columns),
-        "selected_feature_count": len(candidate_numeric_columns) + len(candidate_categorical_columns),
-        "dropped_feature_count": 0,
-        "selected_features": candidate_numeric_columns + candidate_categorical_columns,
-        "dropped_features": [],
+        "selected_feature_count": len(numeric_columns) + len(categorical_columns),
+        "dropped_feature_count": len(dropped_optional_features),
+        "selected_features": numeric_columns + categorical_columns,
+        "dropped_features": dropped_optional_features,
     }
 
     rf_config = RandomForestDiagnosticsConfig(
@@ -338,8 +344,8 @@ def train_and_report(
         if rf_feature_selection == "cumulative_importance":
             feature_selection_payload = select_features_by_rf_importance(
                 rf_payload,
-                numeric_columns=candidate_numeric_columns,
-                categorical_columns=candidate_categorical_columns,
+                numeric_columns=numeric_columns,
+                categorical_columns=categorical_columns,
                 threshold=rf_cumulative_importance_threshold,
                 min_selected_features=rf_min_selected_features,
             )

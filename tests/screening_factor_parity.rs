@@ -4,7 +4,7 @@ use stock_select::factors::registry::{build_candidate_factor_rows, factor_profil
 use stock_select::factors::types::FactorValue;
 use stock_select::model::{Candidate, MarketRow, Method, PreparedRow};
 use stock_select::screening::{
-    prepared_cache_start_date, run_screen_with_loader, PoolSource, ScreenRequest,
+    PoolSource, ScreenRequest, prepared_cache_start_date, run_screen_with_loader,
 };
 
 #[test]
@@ -293,10 +293,9 @@ fn factor_artifact_exports_db_native_special_structure_factor_family_names() {
                 },
             );
             if offset == 129 {
-                row.db_factors.insert("left_peak_valid".to_string(), 1.0);
-                row.db_factors.insert("left_peak_b_div_a".to_string(), 1.03);
                 row.db_factors
-                    .insert("left_peak_days_since_peak".to_string(), 17.0);
+                    .insert("_czsc_snapshot_available".to_string(), 1.0);
+                row.db_factors.insert("_czsc_status_code".to_string(), 4.0);
             }
             row
         })
@@ -320,8 +319,6 @@ fn factor_artifact_exports_db_native_special_structure_factor_family_names() {
         "structure_close_to_120d_min_pct",
         "structure_close_to_120d_range_center_pct",
         "structure_range_width_120d_pct",
-        "structure_hl90_position",
-        "structure_hl90_range_pct",
         "structure_range_compression_20d",
         "structure_range_compression_40d",
         "structure_close_to_ma25_pct",
@@ -368,9 +365,13 @@ fn factor_artifact_exports_db_native_special_structure_factor_family_names() {
         "signal_yang_engulf_ma25_flag",
         "signal_prev_b2_flag",
         "signal_b3_plus_flag",
-        "left_peak_valid",
-        "left_peak_b_div_a",
-        "left_peak_days_since_peak",
+        "czsc_snapshot_available",
+        "czsc_status",
+        "czsc_close_to_zs_zz_pct",
+        "czsc_close_to_recent_peak_pct",
+        "czsc_close_to_pricing_line_pct",
+        "czsc_pricing_lifecycle_state",
+        "czsc_zs_lifecycle_state",
     ] {
         assert!(
             factors.contains_key(key),
@@ -701,14 +702,8 @@ fn b3_factor_profile_adds_b3_specific_raw_factors_only_for_b3() {
         b3_factors.get("b3_plus_flag"),
         Some(&FactorValue::Bool(true))
     );
-    assert_eq!(
-        b3_factors.get("structure_hl90_position"),
-        Some(&FactorValue::Number(1.0))
-    );
-    assert_eq!(
-        b3_factors.get("structure_hl90_range_pct"),
-        Some(&FactorValue::Number(10.9453))
-    );
+    assert!(!b3_factors.contains_key("structure_hl90_position"));
+    assert!(!b3_factors.contains_key("structure_hl90_range_pct"));
     assert_eq!(
         b3_factors.get("bar_upper_shadow_pct"),
         Some(&FactorValue::Number(0.0))
@@ -926,9 +921,13 @@ fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only
     assert!(lsh_factors.contains_key("lsh_weekly_macd_wave_index"));
     assert!(lsh_factors.contains_key("lsh_weekly_daily_constructive_combo_flag"));
     for key in [
-        "price_vs_90d_high",
-        "price_vs_90d_low",
-        "price_vs_90d_mid",
+        "czsc_status",
+        "czsc_snapshot_available",
+        "czsc_close_to_zs_zz_pct",
+        "czsc_close_to_recent_peak_pct",
+        "czsc_close_to_pricing_line_pct",
+        "czsc_pricing_lifecycle_state",
+        "czsc_zs_lifecycle_state",
         "near_ma25_support_flag",
         "ma_aligned_flag",
         "zxdkx_up_1d_flag",

@@ -188,7 +188,8 @@ def run_dates(dates: Sequence[str], config: RunConfig, *, skipped: int = 0) -> R
     with ThreadPoolExecutor(max_workers=config.workers) as pool:
         futures = {pool.submit(run_single_result, day, config, print_output=True): day for day in dates}
         for future in as_completed(futures):
-            day = futures[future]
+            # Drop finished futures immediately so captured subprocess output can be released per day.
+            day = futures.pop(future)
             try:
                 actual_day, proc = future.result()
             except FileNotFoundError as exc:

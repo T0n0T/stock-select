@@ -935,6 +935,51 @@ fn b2_eod_run_without_manual_environment_or_dsn_uses_prepared_market_state() {
 }
 
 #[test]
+fn b2_eod_run_writes_environment_for_each_pick_date() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let second_date = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+    write_selecting_prepared_cache(temp.path(), first_date);
+    write_selecting_prepared_cache(temp.path(), second_date);
+
+    for date in ["2026-05-25", "2026-05-26"] {
+        let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+        cmd.current_dir(temp.path())
+            .env_remove("POSTGRES_DSN")
+            .args([
+                "run",
+                "--runtime-root",
+                temp.path().to_str().unwrap(),
+                "--pick-date",
+                date,
+                "--method",
+                "b2",
+                "--candidates-path",
+                candidates_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+    }
+
+    for date in ["2026-05-25", "2026-05-26"] {
+        let run: Value = serde_json::from_slice(
+            &std::fs::read(temp.path().join(format!("select/{date}.b2/run.json"))).unwrap(),
+        )
+        .unwrap();
+        let state = run["environment"]["state"].as_str().unwrap();
+        assert!(
+            temp.path()
+                .join(format!("environment/daily/{date}.{state}.json"))
+                .exists()
+        );
+    }
+    let history = std::fs::read_to_string(temp.path().join("environment/history.jsonl")).unwrap();
+    assert_eq!(history.lines().count(), 2);
+}
+
+#[test]
 fn b2_run_llm_review_limit_charts_only_top_ranked_rows() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();

@@ -136,12 +136,8 @@ mod tests {
         let mut rows = rows(first_date, 430, true);
         satisfy_lsh_daily_formula(&mut rows);
         let latest = rows.last_mut().unwrap();
-        latest
-            .db_factors
-            .insert("macd_weekly_dif".to_string(), 0.4);
-        latest
-            .db_factors
-            .insert("macd_weekly_dea".to_string(), 0.2);
+        latest.db_factors.insert("macd_weekly_dif".to_string(), 0.4);
+        latest.db_factors.insert("macd_weekly_dea".to_string(), 0.2);
         latest
             .db_factors
             .insert("macd_monthly_dif".to_string(), 0.3);

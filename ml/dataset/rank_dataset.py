@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METHOD = "b2"
 RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
 EXPECTED_FACTOR_ARTIFACT_VERSION = 2
-EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v3"
+EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v4"
 
 
 IDENTITY_COLUMNS = ["date", "code", "name", "env", "method"]
@@ -31,6 +31,13 @@ REVIEW_METADATA_COLUMNS = [
     "model_rank",
     "llm_action",
     "risk_flags",
+]
+CZSC_TRAINING_CATEGORICAL_COLUMNS = [
+    "czsc_status",
+    "czsc_last_bi_direction",
+    "czsc_zs_region",
+    "czsc_pricing_lifecycle_state",
+    "czsc_zs_lifecycle_state",
 ]
 TRAINING_CATEGORICAL_COLUMNS = [
     "listing_board",
@@ -41,10 +48,11 @@ TRAINING_CATEGORICAL_COLUMNS = [
     "weekly_macd_phase_type",
     "weekly_macd_wave_stage",
     "weekly_daily_combo_type",
-    "midline_state",
+    *CZSC_TRAINING_CATEGORICAL_COLUMNS,
 ]
 LSH_TRAINING_CATEGORICAL_COLUMNS = [
     "signal",
+    *CZSC_TRAINING_CATEGORICAL_COLUMNS,
 ]
 
 TRAINING_MACD_NUMERIC_COLUMNS = [
@@ -52,11 +60,7 @@ TRAINING_MACD_NUMERIC_COLUMNS = [
     "daily_macd_wave_index",
     "weekly_macd_wave_index",
 ]
-CONTEXT_NUMERIC_COLUMNS = [
-    "price_vs_90d_high",
-    "price_vs_90d_low",
-    "price_vs_90d_mid",
-]
+CONTEXT_NUMERIC_COLUMNS: list[str] = []
 RAW_FACTOR_COLUMNS = [
     "close_to_ma25_pct",
     "close_to_zxdkx_pct",
@@ -173,6 +177,73 @@ RAW_FACTOR_COLUMNS = [
     "cyq_cost_70_width_pct",
     "cyq_cost_90_width_pct",
 ]
+CZSC_RAW_FACTOR_COLUMNS = [
+    "czsc_snapshot_available",
+    "czsc_source_bar_valid",
+    "czsc_available_finished_bi_count",
+    "czsc_recent_bi_count",
+    "czsc_bi_available",
+    "czsc_close_to_last_bi_high_pct",
+    "czsc_close_to_last_bi_low_pct",
+    "czsc_close_to_last_bi_mid_pct",
+    "czsc_last_bi_range_width_pct",
+    "czsc_last_bi_move_pct",
+    "czsc_last_bi_duration_trade_days",
+    "czsc_zs_available",
+    "czsc_close_to_zs_zg_pct",
+    "czsc_close_to_zs_zd_pct",
+    "czsc_close_to_zs_zz_pct",
+    "czsc_zs_width_pct",
+    "czsc_zs_bi_count",
+    "czsc_zs_duration_trade_days",
+    "czsc_recent_peak_available",
+    "czsc_close_to_recent_peak_pct",
+    "czsc_recent_peak_age_trade_days",
+    "czsc_pricing_line_available",
+    "czsc_pricing_line_missing_after_peak",
+    "czsc_close_to_pricing_line_pct",
+    "czsc_pricing_line_age_trade_days",
+    "czsc_pricing_bear_body_pct",
+    "czsc_pricing_bear_amplitude_pct",
+    "czsc_close_to_pricing_bear_high_pct",
+    "czsc_close_to_pricing_bear_low_pct",
+    "czsc_close_to_pricing_bear_close_pct",
+    "czsc_pricing_line_active_flag",
+    "czsc_pricing_cycle_count",
+    "czsc_pricing_failed_cycle_count",
+    "czsc_pricing_pullback_count",
+    "czsc_pricing_days_since_breakout",
+    "czsc_pricing_days_since_first_pullback",
+    "czsc_pricing_days_since_latest_pullback",
+    "czsc_pricing_latest_pullback_distance_pct",
+    "czsc_pricing_latest_pullback_volume_to_breakout",
+    "czsc_pricing_latest_pullback_volume_to_prev5",
+    "czsc_pricing_latest_pullback_shrink_flag",
+    "czsc_pricing_pullback_today_flag",
+    "czsc_zs_upper_active_flag",
+    "czsc_zs_cycle_count",
+    "czsc_zs_failed_cycle_count",
+    "czsc_zs_pullback_count",
+    "czsc_zs_days_since_breakout",
+    "czsc_zs_days_since_first_pullback",
+    "czsc_zs_days_since_latest_pullback",
+    "czsc_zs_latest_pullback_distance_pct",
+    "czsc_zs_latest_pullback_volume_to_breakout",
+    "czsc_zs_latest_pullback_volume_to_prev5",
+    "czsc_zs_latest_pullback_shrink_flag",
+    "czsc_zs_pullback_today_flag",
+    "intraday_czsc_close_to_last_bi_high_pct",
+    "intraday_czsc_close_to_last_bi_low_pct",
+    "intraday_czsc_close_to_last_bi_mid_pct",
+    "intraday_czsc_close_to_zs_zg_pct",
+    "intraday_czsc_close_to_zs_zd_pct",
+    "intraday_czsc_close_to_zs_zz_pct",
+    "intraday_czsc_close_to_recent_peak_pct",
+    "intraday_czsc_close_to_pricing_line_pct",
+    "intraday_czsc_close_to_pricing_bear_high_pct",
+    "intraday_czsc_close_to_pricing_bear_low_pct",
+    "intraday_czsc_close_to_pricing_bear_close_pct",
+]
 DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS = [
     "structure_box_position_120d_pct",
     "structure_box_mid_position_120d_pct",
@@ -180,8 +251,6 @@ DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS = [
     "structure_close_to_120d_min_pct",
     "structure_close_to_120d_range_center_pct",
     "structure_range_width_120d_pct",
-    "structure_hl90_position",
-    "structure_hl90_range_pct",
     "structure_range_compression_20d",
     "structure_range_compression_40d",
     "structure_close_to_ma25_pct",
@@ -229,9 +298,7 @@ DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS = [
     "signal_yang_engulf_ma25_flag",
     "signal_prev_b2_flag",
     "signal_b3_plus_flag",
-    "left_peak_valid",
-    "left_peak_b_div_a",
-    "left_peak_days_since_peak",
+    *CZSC_RAW_FACTOR_COLUMNS,
 ]
 THS_SECTOR_RAW_FACTOR_COLUMNS = [
     "ths_membership_current_flag",
@@ -283,9 +350,6 @@ B2_RDAGENT_RAW_FACTOR_COLUMNS = [
     "D",
     "close_to_lt_r_pct",
     "lt_r_to_ma60_pct",
-    "hl90_position",
-    "hl90_range_pct",
-    "close_to_hl90_mid_pct",
     "bar_close_position",
     "upper_shadow_pct",
     "weekly_dea_pctile",
@@ -416,6 +480,26 @@ def as_float(value: Any) -> float | None:
     if math.isnan(parsed):
         return None
     return parsed
+
+
+def validate_czsc_training_coverage(
+    rows: Sequence[dict[str, Any]],
+    *,
+    intraday: bool,
+) -> str | None:
+    if not rows:
+        return None
+    covered = sum(
+        1
+        for row in rows
+        if as_float(row.get("czsc_snapshot_available")) == 1.0
+    )
+    coverage_pct = covered / len(rows) * 100.0
+    if coverage_pct < 95.0 and not intraday:
+        raise ValueError(f"CZSC training coverage {coverage_pct:.2f}% below 95%")
+    if coverage_pct < 99.0:
+        return f"czsc_training_coverage:{coverage_pct:.2f}%:below_99%"
+    return None
 
 
 def round4(value: float | None) -> float | None:
@@ -1213,6 +1297,15 @@ def main_from_args(args: argparse.Namespace) -> int:
     fatal_factor_message = fatal_factor_warning_message(warnings, method=args.method)
     if fatal_factor_message is not None:
         raise SystemExit(fatal_factor_message)
+    try:
+        czsc_coverage_warning = validate_czsc_training_coverage(
+            training_input_rows,
+            intraday=intraday,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if czsc_coverage_warning is not None:
+        warnings.append(czsc_coverage_warning)
     symbols = sorted({str(row.get("code")) for row in training_input_rows if row.get("code")})
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()

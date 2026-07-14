@@ -29,9 +29,10 @@ from ml.dataset.rank_dataset import (
     resolve_runtime_root,
 )
 from ml.dataset import schema as rank_dataset_schema
+from ml.dataset import rank_dataset
 
 TEST_FACTOR_ARTIFACT_VERSION = 2
-TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v3"
+TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v4"
 
 
 class RankDatasetTest(unittest.TestCase):
@@ -42,6 +43,42 @@ class RankDatasetTest(unittest.TestCase):
             **payload,
         }
         (factor_dir / "factors.json").write_text(json.dumps(artifact), encoding="utf-8")
+
+    def test_eod_training_rejects_czsc_snapshot_coverage_below_95_percent(self):
+        rows = [
+            {"czsc_snapshot_available": index < 949, "czsc_status": "no_finished_bi"}
+            for index in range(1000)
+        ]
+
+        with self.assertRaisesRegex(ValueError, r"CZSC training coverage 94\.90% below 95%"):
+            rank_dataset.validate_czsc_training_coverage(rows, intraday=False)
+
+    def test_training_czsc_coverage_accepts_95_and_99_percent_boundaries(self):
+        at_95 = [
+            {"czsc_snapshot_available": index < 95, "czsc_status": "no_finished_bi"}
+            for index in range(100)
+        ]
+        at_99 = [
+            {"czsc_snapshot_available": index < 99, "czsc_status": "no_finished_bi"}
+            for index in range(100)
+        ]
+
+        self.assertEqual(
+            rank_dataset.validate_czsc_training_coverage(at_95, intraday=False),
+            "czsc_training_coverage:95.00%:below_99%",
+        )
+        self.assertIsNone(rank_dataset.validate_czsc_training_coverage(at_99, intraday=False))
+
+    def test_intraday_training_warns_instead_of_rejecting_low_czsc_coverage(self):
+        rows = [
+            {"czsc_snapshot_available": index < 949}
+            for index in range(1000)
+        ]
+
+        self.assertEqual(
+            rank_dataset.validate_czsc_training_coverage(rows, intraday=True),
+            "czsc_training_coverage:94.90%:below_99%",
+        )
 
     def test_parse_args_requires_training_window_dates(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -153,7 +190,7 @@ class RankDatasetTest(unittest.TestCase):
             "weekly_macd_phase_type",
             "weekly_macd_wave_stage",
             "weekly_daily_combo_type",
-            "midline_state",
+            "czsc_status",
             "macd_phase",
             "daily_macd_wave_index",
             "weekly_macd_wave_index",
@@ -221,7 +258,7 @@ class RankDatasetTest(unittest.TestCase):
                                 "weekly_macd_wave_index": 1,
                                 "weekly_macd_wave_stage": "early",
                                 "weekly_daily_combo_type": "rising:1|rising:2",
-                                "midline_state": "above_hold",
+                                "czsc_zs_region": "above_zg",
                                 "macd_phase": 4.5,
                                 "box_mid_position_120d_pct": 74.0,
                                 "b3_volume_shrink_ratio": 0.5,
@@ -250,7 +287,7 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(rows[0]["weekly_macd_phase_type"], "rising")
         self.assertEqual(rows[0]["weekly_macd_wave_index"], 1)
         self.assertEqual(rows[0]["weekly_daily_combo_type"], "rising:1|rising:2")
-        self.assertEqual(rows[0]["midline_state"], "above_hold")
+        self.assertEqual(rows[0]["czsc_zs_region"], "above_zg")
         self.assertEqual(rows[0]["macd_phase"], 4.5)
         self.assertEqual(rows[0]["box_mid_position_120d_pct"], 74.0)
         self.assertEqual(rows[0]["b3_volume_shrink_ratio"], 0.5)
@@ -452,8 +489,6 @@ class RankDatasetTest(unittest.TestCase):
             "structure_close_to_120d_min_pct",
             "structure_close_to_120d_range_center_pct",
             "structure_range_width_120d_pct",
-            "structure_hl90_position",
-            "structure_hl90_range_pct",
             "structure_range_compression_20d",
             "structure_range_compression_40d",
             "structure_close_to_ma25_pct",
@@ -501,15 +536,116 @@ class RankDatasetTest(unittest.TestCase):
             "signal_yang_engulf_ma25_flag",
             "signal_prev_b2_flag",
             "signal_b3_plus_flag",
-            "left_peak_valid",
-            "left_peak_b_div_a",
-            "left_peak_days_since_peak",
         ]
 
         for method in ("b2", "b3", "lsh"):
             for column in expected:
                 self.assertIn(column, dataset_columns_for_method(method))
                 self.assertIn(column, raw_factor_columns_for_method(method))
+
+    def test_dataset_schema_replaces_legacy_structure_proxies_with_czsc_factors(self):
+        retained_window_factors = [
+            "box_position_120d_pct",
+            "box_mid_position_120d_pct",
+            "close_to_120d_max_pct",
+            "close_to_120d_min_pct",
+            "close_to_120d_range_center_pct",
+            "breakout_distance_120d_pct",
+            "range_floor_distance_120d_pct",
+            "range_width_120d_pct",
+            "close_to_20d_max_close_pct",
+            "range_compression_20d",
+            "range_compression_40d",
+        ]
+        czsc_categorical_factors = [
+            "czsc_status",
+            "czsc_last_bi_direction",
+            "czsc_zs_region",
+            "czsc_pricing_lifecycle_state",
+            "czsc_zs_lifecycle_state",
+        ]
+        czsc_raw_factors = [
+            "czsc_snapshot_available",
+            "czsc_source_bar_valid",
+            "czsc_available_finished_bi_count",
+            "czsc_recent_bi_count",
+            "czsc_bi_available",
+            "czsc_close_to_last_bi_high_pct",
+            "czsc_close_to_last_bi_low_pct",
+            "czsc_close_to_last_bi_mid_pct",
+            "czsc_last_bi_range_width_pct",
+            "czsc_last_bi_move_pct",
+            "czsc_last_bi_duration_trade_days",
+            "czsc_zs_available",
+            "czsc_close_to_zs_zg_pct",
+            "czsc_close_to_zs_zd_pct",
+            "czsc_close_to_zs_zz_pct",
+            "czsc_zs_width_pct",
+            "czsc_zs_bi_count",
+            "czsc_zs_duration_trade_days",
+            "czsc_recent_peak_available",
+            "czsc_close_to_recent_peak_pct",
+            "czsc_recent_peak_age_trade_days",
+            "czsc_pricing_line_available",
+            "czsc_pricing_line_missing_after_peak",
+            "czsc_close_to_pricing_line_pct",
+            "czsc_pricing_line_age_trade_days",
+            "czsc_pricing_bear_body_pct",
+            "czsc_pricing_bear_amplitude_pct",
+            "czsc_close_to_pricing_bear_high_pct",
+            "czsc_close_to_pricing_bear_low_pct",
+            "czsc_close_to_pricing_bear_close_pct",
+            "czsc_pricing_line_active_flag",
+            "czsc_pricing_cycle_count",
+            "czsc_pricing_failed_cycle_count",
+            "czsc_pricing_pullback_count",
+            "czsc_pricing_days_since_breakout",
+            "czsc_pricing_days_since_first_pullback",
+            "czsc_pricing_days_since_latest_pullback",
+            "czsc_pricing_latest_pullback_distance_pct",
+            "czsc_pricing_latest_pullback_volume_to_breakout",
+            "czsc_pricing_latest_pullback_volume_to_prev5",
+            "czsc_pricing_latest_pullback_shrink_flag",
+            "czsc_pricing_pullback_today_flag",
+            "czsc_zs_upper_active_flag",
+            "czsc_zs_cycle_count",
+            "czsc_zs_failed_cycle_count",
+            "czsc_zs_pullback_count",
+            "czsc_zs_days_since_breakout",
+            "czsc_zs_days_since_first_pullback",
+            "czsc_zs_days_since_latest_pullback",
+            "czsc_zs_latest_pullback_distance_pct",
+            "czsc_zs_latest_pullback_volume_to_breakout",
+            "czsc_zs_latest_pullback_volume_to_prev5",
+            "czsc_zs_latest_pullback_shrink_flag",
+            "czsc_zs_pullback_today_flag",
+        ]
+        removed_legacy_factors = [
+            "midline_state",
+            "price_vs_90d_high",
+            "price_vs_90d_low",
+            "price_vs_90d_mid",
+            "structure_hl90_position",
+            "structure_hl90_range_pct",
+            "left_peak_valid",
+            "left_peak_b_div_a",
+            "left_peak_days_since_peak",
+        ]
+
+        for method in ("b2", "b3", "lsh"):
+            columns = dataset_columns_for_method(method)
+            raw_columns = raw_factor_columns_for_method(method)
+            for column in retained_window_factors:
+                self.assertIn(column, columns)
+            for column in czsc_categorical_factors:
+                self.assertIn(column, columns)
+                self.assertNotIn(column, raw_columns)
+            for column in czsc_raw_factors:
+                self.assertIn(column, columns)
+                self.assertIn(column, raw_columns)
+            for column in removed_legacy_factors:
+                self.assertNotIn(column, columns)
+                self.assertNotIn(column, raw_columns)
 
     def test_dataset_schema_excludes_legacy_sw_l2_training_factors(self):
         legacy_columns = [
@@ -563,9 +699,6 @@ class RankDatasetTest(unittest.TestCase):
             "D",
             "close_to_lt_r_pct",
             "lt_r_to_ma60_pct",
-            "hl90_position",
-            "hl90_range_pct",
-            "close_to_hl90_mid_pct",
             "bar_close_position",
             "upper_shadow_pct",
             "weekly_dea_pctile",
@@ -943,8 +1076,8 @@ class RankDatasetTest(unittest.TestCase):
             (factor_dir / "factors.json").write_text(
                 json.dumps(
                     {
-                        "artifact_version": 1,
-                        "factor_library_version": "rust-factor-library-v2",
+                        "artifact_version": 2,
+                        "factor_library_version": "rust-factor-library-v3",
                         "method": "b2",
                         "artifact_key": "2026-05-25",
                         "rows": [
@@ -967,7 +1100,7 @@ class RankDatasetTest(unittest.TestCase):
             warnings,
             [
                 "stale_factor_artifact:2026-05-25.b2:"
-                "artifact_version=1:factor_library_version=rust-factor-library-v2"
+                "artifact_version=2:factor_library_version=rust-factor-library-v3"
             ],
         )
 
@@ -1028,6 +1161,64 @@ class RankDatasetTest(unittest.TestCase):
         self.assertIn("2026-05-25.b2", message)
         self.assertIn("stock-select-rs screen --method b2 --pick-date 2026-05-25 --export-factors", message)
         self.assertFalse((output_dir / "rank_dataset.csv").exists())
+
+    def test_dataset_build_rejects_low_eod_czsc_coverage_before_querying_prices(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runtime = root / "runtime"
+            output_dir = root / "out"
+            candidate_dir = runtime / "candidates"
+            factor_dir = runtime / "factors" / "2026-05-25.b2"
+            candidate_dir.mkdir(parents=True)
+            factor_dir.mkdir(parents=True)
+            codes = [f"{index:06d}.SZ" for index in range(1000)]
+            (candidate_dir / "2026-05-25.b2.json").write_text(
+                json.dumps(
+                    {
+                        "pick_date": "2026-05-25",
+                        "environment": {"state": "neutral"},
+                        "candidates": [{"code": code} for code in codes],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.write_factor_artifact(
+                factor_dir,
+                {
+                    "method": "b2",
+                    "artifact_key": "2026-05-25",
+                    "rows": [
+                        {
+                            "code": code,
+                            "factors": {"czsc_snapshot_available": index < 949},
+                        }
+                        for index, code in enumerate(codes)
+                    ],
+                },
+            )
+
+            with self.assertRaisesRegex(SystemExit, r"CZSC training coverage 94\.90% below 95%"):
+                main_from_args(
+                    type(
+                        "Args",
+                        (),
+                        {
+                            "runtime_root": runtime,
+                            "dsn": "postgres://must-not-be-used",
+                            "method": "b2",
+                            "start_date": "2026-05-25",
+                            "end_date": "2026-05-25",
+                            "output_dir": output_dir,
+                            "source": "candidates",
+                            "intraday": False,
+                            "min_history_days": 120,
+                            "forward_days": 15,
+                            "external_feature_csv": [],
+                        },
+                    )()
+                )
+
+            self.assertFalse((output_dir / "rank_dataset.csv").exists())
 
     def test_intraday_missing_factor_hint_keeps_intraday_screen_flag(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1319,8 +1510,8 @@ class RankDatasetTest(unittest.TestCase):
                 "signal_type": "manual_signal",
                 "daily_macd_phase_type": "manual_daily",
                 "weekly_daily_combo_type": "manual_combo",
-                "midline_state": "pullback_confirm",
-                "price_vs_90d_mid": -1.5,
+                "czsc_zs_region": "inside_upper_half",
+                "czsc_close_to_zs_zz_pct": -1.5,
             }
         ]
         prices = {
@@ -1340,8 +1531,8 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(rows[0]["signal_type"], "manual_signal")
         self.assertEqual(rows[0]["daily_macd_phase_type"], "manual_daily")
         self.assertEqual(rows[0]["weekly_daily_combo_type"], "manual_combo")
-        self.assertEqual(rows[0]["midline_state"], "pullback_confirm")
-        self.assertEqual(rows[0]["price_vs_90d_mid"], -1.5)
+        self.assertEqual(rows[0]["czsc_zs_region"], "inside_upper_half")
+        self.assertEqual(rows[0]["czsc_close_to_zs_zz_pct"], -1.5)
 
     def test_normalizers_and_csv_values_are_stable(self):
         self.assertEqual(normalize_env("Strong"), "strong")

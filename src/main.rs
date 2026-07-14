@@ -12,8 +12,8 @@ use serde_json::json;
 use stock_select::cache::{load_prepared_cache_for_mode, prepared_cache_start_date};
 use stock_select::config::{resolve_config_value, resolve_runtime_root};
 use stock_select::db::{
-    fetch_db_native_daily_window, fetch_instrument_info, fetch_stock_period_macd_states,
-    resolve_previous_trade_date,
+    fetch_db_native_daily_window, fetch_db_native_daily_window_for_intraday, fetch_instrument_info,
+    fetch_stock_period_macd_states, resolve_previous_trade_date,
 };
 use stock_select::engine::artifacts::{
     SelectionRunPaths, read_selection_json, write_selection_json,
@@ -528,6 +528,7 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         pick_date,
         args.method.intraday,
         record_config.as_ref(),
+        &dsn,
     )?;
     if artifact_args.limit.is_some() {
         eprintln!("[run] chart start");
@@ -612,14 +613,41 @@ fn maybe_update_run_record(
     pick_date: NaiveDate,
     intraday: bool,
     record_config: Option<&RunRecordConfig>,
+    dsn: &str,
 ) -> anyhow::Result<()> {
+    maybe_update_run_record_with_name_loader(
+        runtime_root,
+        paths,
+        method,
+        pick_date,
+        intraday,
+        record_config,
+        dsn,
+        fetch_instrument_info,
+    )
+}
+
+fn maybe_update_run_record_with_name_loader<F>(
+    runtime_root: &Path,
+    paths: &SelectionRunPaths,
+    method: Method,
+    pick_date: NaiveDate,
+    intraday: bool,
+    record_config: Option<&RunRecordConfig>,
+    dsn: &str,
+    name_loader: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(&str, &[String]) -> anyhow::Result<BTreeMap<String, InstrumentInfo>>,
+{
     if intraday {
         return Ok(());
     }
     let Some(config) = record_config else {
         return Ok(());
     };
-    let rows = read_display_rows(paths)?;
+    let mut rows = read_display_rows(paths)?;
+    fill_review_list_names(&mut rows, Some(dsn), name_loader)?;
     let count = update_run_record(
         runtime_root,
         method,
@@ -726,10 +754,9 @@ fn resolve_command_environment(
         ensure_market_environment(runtime_root, pick_date, manual_state, manual_reason, || {
             unreachable!("manual environment state should not evaluate")
         })?
-    } else if let Ok(resolved) = resolve_market_environment(runtime_root, pick_date) {
-        resolved
     } else {
-        resolve_prepared_market_environment(runtime_root, pick_date)?
+        resolve_prepared_market_environment(runtime_root, pick_date)
+            .or_else(|_| resolve_market_environment(runtime_root, pick_date))?
     };
     eprintln!(
         "[environment] state={} source={} interval={}..{}",
@@ -1585,6 +1612,7 @@ where
         pick_date,
         intraday,
         record_config.as_ref(),
+        &dsn_val,
     )?;
 
     // Read and display results from the now-existing artifact
@@ -1645,6 +1673,17 @@ fn fetch_db_native_daily_window_if_dsn(
     fetch_db_native_daily_window(dsn, start_date, end_date)
 }
 
+fn fetch_db_native_intraday_window_if_dsn(
+    dsn: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<Vec<MarketRow>> {
+    if dsn.trim().is_empty() {
+        anyhow::bail!("A database DSN is required.");
+    }
+    fetch_db_native_daily_window_for_intraday(dsn, start_date, end_date)
+}
+
 fn run_db_native_intraday_screen(
     request: ScreenRequest,
     provider: &TushareRestProvider,
@@ -1654,7 +1693,7 @@ fn run_db_native_intraday_screen(
         provider,
         "15:00:00",
         resolve_previous_trade_date,
-        fetch_db_native_daily_window_if_dsn,
+        fetch_db_native_intraday_window_if_dsn,
         fetch_stock_period_macd_states,
     )
 }
@@ -1700,10 +1739,7 @@ mod tests {
 
         fill_review_list_names(&mut rows, Some("postgres://example"), |dsn, codes| {
             assert_eq!(dsn, "postgres://example");
-            assert_eq!(
-                codes,
-                &["000001.SZ".to_string(), "000002.SZ".to_string()]
-            );
+            assert_eq!(codes, &["000001.SZ".to_string(), "000002.SZ".to_string()]);
             Ok(BTreeMap::from([
                 (
                     "000001.SZ".to_string(),
@@ -1748,5 +1784,59 @@ mod tests {
             panic!("blank DSN must not trigger instrument name loading")
         })
         .unwrap();
+    }
+
+    #[test]
+    fn run_record_loads_instrument_names_before_writing_csv() {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime_root = temp.path();
+        let pick_date = NaiveDate::from_ymd_opt(2026, 7, 3).unwrap();
+        let paths = SelectionRunPaths::new(runtime_root, Method::B2, "2026-07-03");
+        write_selection_json(
+            &paths.display_path(),
+            &json!({
+                "rows": [
+                    {
+                        "code": "002384.SZ",
+                        "name": null,
+                        "industry": null,
+                        "model_rank": 1,
+                        "model_score": 1.0,
+                        "llm_action": null,
+                        "llm_risk_flags": []
+                    }
+                ]
+            }),
+        )
+        .unwrap();
+
+        maybe_update_run_record_with_name_loader(
+            runtime_root,
+            &paths,
+            Method::B2,
+            pick_date,
+            false,
+            Some(&RunRecordConfig {
+                methods: std::collections::BTreeSet::from([Method::B2]),
+                window_trading_days: 10,
+                record_limit: 30,
+            }),
+            "postgres://example",
+            |dsn, codes| {
+                assert_eq!(dsn, "postgres://example");
+                assert_eq!(codes, &["002384.SZ".to_string()]);
+                Ok(BTreeMap::from([(
+                    "002384.SZ".to_string(),
+                    InstrumentInfo {
+                        name: Some("东山精密".to_string()),
+                        industry: Some("消费电子".to_string()),
+                    },
+                )]))
+            },
+        )
+        .unwrap();
+
+        let record = std::fs::read_to_string(runtime_root.join("record.csv")).unwrap();
+        assert!(record.contains("002384.SZ,东山精密,b2,2026-07-03,1,1"));
     }
 }

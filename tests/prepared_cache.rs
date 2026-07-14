@@ -624,7 +624,11 @@ fn write_db_native_prepared_cache_records_source_window_and_calc_versions() {
     assert_eq!(metadata["window_end_date"], pick_date.to_string());
     assert_eq!(metadata["calc_versions"]["macd"], "macd_qfq_12_26_9_v1");
     assert_eq!(metadata["calc_versions"]["rolling"], "rolling_qfq_v1");
-    assert_eq!(metadata["calc_versions"]["left_peak"], "left_peak_qfq_v1");
+    assert_eq!(
+        metadata["calc_versions"]["czsc"],
+        "czsc_structure_qfq_min6_r7_v1"
+    );
+    assert!(metadata["calc_versions"].get("left_peak").is_none());
     assert_eq!(
         metadata["membership_sources"]["ths"],
         "current_index_ths_member"
@@ -634,6 +638,40 @@ fn write_db_native_prepared_cache_records_source_window_and_calc_versions() {
         .unwrap()
         .unwrap();
     assert_eq!(loaded.len(), rows.len());
+}
+
+#[test]
+fn load_prepared_cache_rejects_db_native_cache_with_legacy_structure_version() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 13).unwrap();
+    let rows = db_native_window_rows("000001.SZ", start_date, pick_date, 235);
+
+    write_db_native_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        252,
+        &rows,
+    )
+    .unwrap();
+
+    let metadata_path = prepared_cache_meta_path(root.path(), pick_date);
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
+    metadata["calc_versions"] = json!({
+        "macd": "macd_qfq_12_26_9_v1",
+        "rolling": "rolling_qfq_v1",
+        "left_peak": "left_peak_qfq_v1"
+    });
+    std::fs::write(metadata_path, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
+
+    let loaded =
+        load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date).unwrap();
+
+    assert!(loaded.is_none());
 }
 
 #[test]
@@ -685,8 +723,8 @@ fn load_prepared_cache_rejects_db_native_cache_with_short_decoded_window() {
     )
     .unwrap();
 
-    let loaded = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
-        .unwrap();
+    let loaded =
+        load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date).unwrap();
 
     assert!(loaded.is_none());
 }

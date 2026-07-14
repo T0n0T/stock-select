@@ -1,4 +1,5 @@
 pub mod abnormal_volume;
+pub mod czsc;
 pub mod ma;
 pub mod macd;
 pub mod price_position;

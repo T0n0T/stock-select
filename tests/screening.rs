@@ -108,9 +108,7 @@ fn db_native_screen_writes_db_native_prepared_cache_metadata() {
                     100.0,
                 )
             })
-            .chain(std::iter::once(market_row_at_date(
-                pick_date, 12.52, 100.0,
-            )))
+            .chain(std::iter::once(market_row_at_date(pick_date, 12.52, 100.0)))
             .collect())
     })
     .unwrap();
@@ -125,7 +123,10 @@ fn db_native_screen_writes_db_native_prepared_cache_metadata() {
     assert_eq!(metadata["start_date"], requested_window_start.to_string());
     assert_eq!(metadata["end_date"], pick_date.to_string());
     assert_eq!(metadata["window_trading_days"], 366);
-    assert_eq!(metadata["window_start_date"], requested_window_start.to_string());
+    assert_eq!(
+        metadata["window_start_date"],
+        requested_window_start.to_string()
+    );
     assert_eq!(metadata["window_end_date"], pick_date.to_string());
     assert_eq!(metadata["calc_versions"]["macd"], "macd_qfq_12_26_9_v1");
 }
@@ -151,12 +152,8 @@ fn db_native_screen_rejects_joined_window_missing_requested_start_date() {
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((1..750)
-            .map(|offset| {
-                market_row_at_date(requested_start + Duration::days(offset), 10.0, 100.0)
-            })
-            .chain(std::iter::once(market_row_at_date(
-                pick_date, 12.51, 100.0,
-            )))
+            .map(|offset| market_row_at_date(requested_start + Duration::days(offset), 10.0, 100.0))
+            .chain(std::iter::once(market_row_at_date(pick_date, 12.51, 100.0)))
             .collect())
     })
     .expect_err("DB-native joined window missing requested start date should fail");
@@ -187,12 +184,8 @@ fn db_native_screen_allows_window_start_on_next_trading_date() {
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((0..365)
-            .map(|offset| {
-                market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0)
-            })
-            .chain(std::iter::once(market_row_at_date(
-                pick_date, 12.51, 100.0,
-            )))
+            .map(|offset| market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0))
+            .chain(std::iter::once(market_row_at_date(pick_date, 12.51, 100.0)))
             .collect())
     })
     .unwrap();
@@ -228,12 +221,8 @@ fn db_native_screen_allows_window_start_after_long_holiday_when_trading_days_are
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((0..235)
-            .map(|offset| {
-                market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0)
-            })
-            .chain(std::iter::once(market_row_at_date(
-                pick_date, 12.51, 100.0,
-            )))
+            .map(|offset| market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0))
+            .chain(std::iter::once(market_row_at_date(pick_date, 12.51, 100.0)))
             .collect())
     })
     .unwrap();
@@ -269,12 +258,8 @@ fn db_native_screen_rejects_window_with_too_few_trading_days() {
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((0..200)
-            .map(|offset| {
-                market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0)
-            })
-            .chain(std::iter::once(market_row_at_date(
-                pick_date, 12.51, 100.0,
-            )))
+            .map(|offset| market_row_at_date(actual_start + Duration::days(offset), 10.0, 100.0))
+            .chain(std::iter::once(market_row_at_date(pick_date, 12.51, 100.0)))
             .collect())
     })
     .expect_err("DB-native joined window with too few trading days should fail");
@@ -1335,7 +1320,10 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
                 db_factors: Default::default(),
             };
             row.db_factors.insert("rolling_ma25_qfq".to_string(), 19.8);
-            row.db_factors.insert("left_peak_valid".to_string(), 1.0);
+            row.db_factors
+                .insert("_czsc_snapshot_available".to_string(), 1.0);
+            row.db_factors
+                .insert("_czsc_latest_zs_zg".to_string(), 20.4);
             Ok(vec![row])
         },
         |_dsn, symbols, trade_date| {
@@ -1395,7 +1383,9 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
     assert!(latest.db_factors["macd_weekly_hist"].is_finite());
     assert!(latest.db_factors["macd_monthly_hist"].is_finite());
     assert_eq!(latest.db_factors["rolling_ma25_qfq"], 19.8);
-    assert_eq!(latest.db_factors["left_peak_valid"], 1.0);
+    assert_eq!(latest.db_factors["_czsc_snapshot_available"], 1.0);
+    assert_eq!(latest.db_factors["_czsc_latest_zs_zg"], 20.4);
+    assert!(!latest.db_factors.contains_key("left_peak_valid"));
     assert_eq!(
         latest.db_factors["intraday_structure_source_previous_eod"],
         1.0
@@ -1702,8 +1692,14 @@ fn db_native_intraday_screen_skips_snapshot_rows_without_live_qfq_price() {
     )
     .unwrap();
     assert_eq!(result["stats"]["intraday_snapshot_skipped_non_universe"], 0);
-    assert_eq!(result["stats"]["intraday_snapshot_skipped_missing_macd_state"], 0);
-    assert_eq!(result["stats"]["intraday_snapshot_skipped_missing_live_qfq_price"], 1);
+    assert_eq!(
+        result["stats"]["intraday_snapshot_skipped_missing_macd_state"],
+        0
+    );
+    assert_eq!(
+        result["stats"]["intraday_snapshot_skipped_missing_live_qfq_price"],
+        1
+    );
 }
 
 fn intraday_b2_positive_monthly_market_rows(

@@ -134,46 +134,6 @@ pub fn push_price_position_factors(
     );
 }
 
-pub fn push_b2_hl90_position_factors(
-    factors: &mut FactorList,
-    high: &[f64],
-    low: &[f64],
-    latest_close: Option<f64>,
-) {
-    let tail_high_90 = if high.len() >= 90 {
-        &high[high.len() - 90..]
-    } else {
-        high
-    };
-    let tail_low_90 = if low.len() >= 90 {
-        &low[low.len() - 90..]
-    } else {
-        low
-    };
-    let high_90 = tail_high_90.iter().copied().reduce(f64::max);
-    let low_90 = tail_low_90.iter().copied().reduce(f64::min);
-    let mid_90 = high_90.zip(low_90).map(|(high, low)| (high + low) / 2.0);
-    let range_90 = high_90.zip(low_90).map(|(high, low)| high - low);
-    let position = match (latest_close, low_90, range_90) {
-        (Some(close), Some(low), Some(width)) if width != 0.0 => Some((close - low) / width),
-        _ => None,
-    };
-    push_number(
-        factors,
-        "close_to_hl90_mid_pct",
-        pct_change(latest_close, mid_90),
-    );
-    push_number(factors, "hl90_position", position);
-    push_number(
-        factors,
-        "hl90_range_pct",
-        match (range_90, mid_90) {
-            (Some(width), Some(mid)) if mid != 0.0 => Some(width / mid * 100.0),
-            _ => None,
-        },
-    );
-}
-
 pub fn push_range_compression(
     factors: &mut FactorList,
     high: &[f64],

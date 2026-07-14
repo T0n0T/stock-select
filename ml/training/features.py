@@ -37,7 +37,7 @@ MACD_CATEGORICAL_COLUMNS = {
     "weekly_macd_wave_stage",
     "weekly_daily_combo_type",
 }
-CONTEXT_CATEGORICAL_COLUMNS = {"midline_state"}
+CONTEXT_CATEGORICAL_COLUMNS = set(rank_dataset_schema.CZSC_TRAINING_CATEGORICAL_COLUMNS)
 FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 RF_FEATURE_SELECTION_MODES = {"none", "cumulative_importance"}
 CATEGORICAL_ENCODINGS = {"one_hot", "native"}
@@ -54,6 +54,31 @@ UNSTABLE_ZERO_COVERAGE_RAW_COLUMNS = {
     "bar_body_pct",
     "signal_prev_b2_flag",
     "signal_b3_plus_flag",
+}
+OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS = {
+    "macd_state_phase_score",
+    "macd_state_daily_phase_type",
+    "macd_state_daily_wave_index",
+    "macd_state_daily_wave_stage",
+    "macd_state_weekly_phase_type",
+    "macd_state_weekly_wave_index",
+    "macd_state_weekly_wave_stage",
+    "macd_state_weekly_daily_combo_type",
+    "bar_upper_shadow_pct",
+    "signal_bullish_engulf_prev_bearish_flag",
+    "signal_bullish_engulf_volume_ratio",
+    "signal_yang_engulf_ma25_flag",
+    "intraday_czsc_close_to_last_bi_high_pct",
+    "intraday_czsc_close_to_last_bi_low_pct",
+    "intraday_czsc_close_to_last_bi_mid_pct",
+    "intraday_czsc_close_to_zs_zg_pct",
+    "intraday_czsc_close_to_zs_zd_pct",
+    "intraday_czsc_close_to_zs_zz_pct",
+    "intraday_czsc_close_to_recent_peak_pct",
+    "intraday_czsc_close_to_pricing_line_pct",
+    "intraday_czsc_close_to_pricing_bear_high_pct",
+    "intraday_czsc_close_to_pricing_bear_low_pct",
+    "intraday_czsc_close_to_pricing_bear_close_pct",
 }
 
 
@@ -110,6 +135,27 @@ def feature_value_present(value: Any) -> bool:
     if isinstance(value, float) and math.isnan(value):
         return False
     return True
+
+
+def drop_optional_zero_coverage_features(
+    rows: Sequence[dict[str, Any]],
+    *,
+    numeric_columns: Sequence[str],
+    categorical_columns: Sequence[str],
+) -> tuple[list[str], list[str], list[str]]:
+    selected = list(numeric_columns) + list(categorical_columns)
+    dropped = [
+        column
+        for column in selected
+        if column in OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS
+        and not any(feature_value_present(row.get(column)) for row in rows)
+    ]
+    dropped_set = set(dropped)
+    return (
+        [column for column in numeric_columns if column not in dropped_set],
+        [column for column in categorical_columns if column not in dropped_set],
+        dropped,
+    )
 
 
 def validate_selected_feature_coverage(
