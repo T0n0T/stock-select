@@ -72,7 +72,7 @@ class MlDocumentationTests(unittest.TestCase):
 
         expected_fragments = [
             "# 选股筛选方法过滤条件",
-            "实际接入 screen 的方法：`b2`、`b3`、`lsh`。",
+            "实际接入 screen 的方法：`b2`、`b3`、`lsh`、`qianlong`。",
             "截至 `pick_date` 的约 252 个交易日预计算行情和指标",
             "`STOCK_SELECT_PREPARED_CACHE_LIMIT`",
             "盘中 prepared cache 不计入这个保留数量",
@@ -97,6 +97,14 @@ class MlDocumentationTests(unittest.TestCase):
             "当日收盘价高于 `MA25`",
             "昨日成交量低于前一日成交量",
             "周线和月线最新 DIF 与 DEA 都大于 0",
+            "`qianlong`",
+            "候选信号写为 `QIANLONG`",
+            "已有 schema 11 prepared cache 可以直接复用",
+            "不改写原缓存文件",
+            "第二段峰值必须已经开始缩短",
+            "最新一根不要求仍处于绿柱段",
+            "实时周线/月线 MACD 从本周/本月开始前的已完成周期状态外推",
+            "`qianlong` 当前没有已发布模型",
             "`run` 阶段不再增加硬过滤",
         ]
         for fragment in expected_fragments:

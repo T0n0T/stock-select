@@ -12,7 +12,7 @@ use stock_select::cache::{
 use stock_select::model::{Method, PreparedRow};
 
 #[test]
-fn prepared_cache_schema_version_rejects_pre_db_native_cache() {
+fn prepared_cache_schema_version_remains_compatible_with_existing_db_native_cache() {
     assert_eq!(PREPARED_CACHE_SCHEMA_VERSION, 11);
 }
 
@@ -582,6 +582,13 @@ fn prepared_cache_round_trips_db_factor_extras() {
     )
     .unwrap();
     assert_eq!(metadata["schema_version"], PREPARED_CACHE_SCHEMA_VERSION);
+    assert!(
+        metadata["shared_methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|method| method.as_str() == Some("qianlong"))
+    );
 
     let rows = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
         .unwrap()
@@ -696,7 +703,7 @@ fn load_prepared_cache_rejects_db_native_cache_with_short_decoded_window() {
         serde_json::to_vec_pretty(&json!({
             "artifact_version": 1,
             "method": "b2",
-            "shared_methods": ["b1", "b2", "b3", "lsh", "dribull"],
+            "shared_methods": ["b1", "b2", "b3", "dribull"],
             "pick_date": pick_date,
             "start_date": start_date,
             "end_date": pick_date,
@@ -959,6 +966,51 @@ fn lsh_can_read_legacy_shared_prepared_cache_without_lsh_metadata_entry() {
     let rows = load_prepared_cache(root.path(), Method::Lsh, pick_date, start_date, pick_date)
         .unwrap()
         .unwrap();
+
+    assert_eq!(rows[0].ts_code, "000001.SZ");
+}
+
+#[test]
+fn qianlong_can_read_legacy_shared_prepared_cache_without_qianlong_metadata_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 3).unwrap();
+    write_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        &[prepared_row("000001.SZ", pick_date, 12.0)],
+    )
+    .unwrap();
+    std::fs::write(
+        prepared_cache_meta_path(root.path(), pick_date),
+        serde_json::to_vec_pretty(&json!({
+            "artifact_version": 1,
+            "method": "b2",
+            "shared_methods": ["b1", "b2", "b3", "lsh", "gkxy", "dribull"],
+            "pick_date": "2026-06-04",
+            "start_date": "2025-06-03",
+            "end_date": "2026-06-04",
+            "schema_version": 11,
+            "row_count": 1,
+            "symbol_count": 1,
+            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let rows = load_prepared_cache(
+        root.path(),
+        Method::Qianlong,
+        pick_date,
+        start_date,
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
 
     assert_eq!(rows[0].ts_code, "000001.SZ");
 }

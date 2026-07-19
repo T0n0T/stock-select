@@ -1,10 +1,10 @@
 # 选股筛选方法过滤条件
 
-本文整理当前 Rust CLI 中各个选股筛选方法的实际硬过滤条件。口径以代码实现为准，主要来源为 `src/screening.rs`、`src/strategies/b2.rs`、`src/strategies/b3.rs`、`src/strategies/lsh.rs` 和 `src/engine/run.rs`。
+本文整理当前 Rust CLI 中各个选股筛选方法的实际硬过滤条件。口径以代码实现为准，主要来源为 `src/screening.rs`、`src/strategies/b2.rs`、`src/strategies/b3.rs`、`src/strategies/lsh.rs`、`src/strategies/qianlong.rs` 和 `src/engine/run.rs`。
 
-实际接入 screen 的方法：`b2`、`b3`、`lsh`。
+实际接入 screen 的方法：`b2`、`b3`、`lsh`、`qianlong`。
 
-`b1`、`dribull` 当前没有 screen 策略实现；在 CLI 执行 `screen` 时会返回未实现错误，因此本文不列独立过滤条件。
+`b1`、`dribull` 当前没有 screen 策略实现；在 CLI 执行 `screen` 时会返回未实现错误，因此本文不列独立过滤条件。`qianlong` 当前只接入 `screen` 和因子导出，不接入模型 `run`、`review-list` 或 LLM 复盘。
 
 ## 公共流程
 
@@ -29,7 +29,7 @@
 
 - 只取 `pick_date` 当天有 prepared 行情的股票。
 - `b2` / `b3`：要求当日 `MA25 > MA60`，否则不会进入策略判断。
-- `lsh`：不做 `MA25 > MA60` 前置过滤。
+- `lsh` / `qianlong`：不做 `MA25 > MA60` 前置过滤。
 - 按 `turnover_n` 从高到低排序，同分按代码升序，取 `turnover_n` 最高的前 5000 只。
 
 `custom` 股票池：
@@ -151,9 +151,59 @@
 
 分别对周线和月线模拟收盘序列计算 MACD，参数为 12/26/9。周线和月线最新 DIF 与 DEA 都大于 0 时，才通过过滤。
 
+## `qianlong`
+
+`qianlong` 是三级别 MACD 反转叠加阳包阴和放量大涨的筛选，候选信号写为 `QIANLONG`。
+
+### 基础过滤
+
+- 股票在 `pick_date` 必须有行情行，且代码不能以 `.BJ` 结尾。
+- 当前索引至少为 14，即至少有 15 条日线记录用于判断绿柱背离。
+- 默认 `turnover-top` 股票池不对 `qianlong` 做 `MA25 > MA60` 前置过滤。
+
+### 周线/月线 MACD 条件
+
+`qianlong` 使用 stock-cache DB-native 的周期 MACD 状态，不再从本地 10 年日线重新聚合：
+
+- 月线：`macd_monthly_hist > 0`，且大于上一已完成月线柱 `macd_monthly_prev_hist`，月线样本数至少 30。
+- 周线：`macd_weekly_hist` 大于上一已完成周线柱 `macd_weekly_prev_hist`，周线样本数至少 40。
+
+已有 schema 11 prepared cache 可以直接复用，不需要为 `qianlong` 重建整份缓存。潜龙直接读取缓存中的日线 MACD 序列以及筛选日周线/月线当前柱；如果旧缓存还没有 `macd_weekly_prev_hist` 或 `macd_monthly_prev_hist`，DB-native 筛选只从周期状态表批量补齐缺少的上一已完成周期柱到本次运行内存，不改写原缓存文件。
+
+### 日线绿柱背离条件
+
+日线只统计 `macd_hist < 0` 的绿柱段。允许两种形态：
+
+- 最近两段绿柱：两段都必须已经出现峰值后的缩短，第二段绝对峰值小于第一段绝对峰值。
+- 最近一段连续绿柱：段内必须出现两个已经缩短的局部峰，第二个绝对峰值小于第一个绝对峰值。
+
+第二段峰值必须已经开始缩短；如果第二段仍在继续放大，则不通过。峰值后跨到红柱或零轴以上，也视为已经缩短；最新一根不要求仍处于绿柱段。
+
+### K 线和量能条件
+
+当前最新 K 线必须为阳包阴：
+
+- 昨日为阴线：`REF(close, 1) < REF(open, 1)`。
+- 今日为阳线：`close > open`。
+- 今日收盘价高于昨日最高价：`close > REF(high, 1)`。
+- 今日开盘价低于昨日收盘价：`open < REF(close, 1)`。
+
+近 22 条记录内还必须出现至少一次放量大涨：
+
+- 当日涨幅 `pct >= 9.5%`。
+- 当日成交量 / 前 3 到 5 条记录均量 `>= 1.5`。
+
+### 盘中口径
+
+盘中 `screen --method qianlong --intraday` 会把 Tushare `rt_k` 快照接入最新日线：
+
+- 实时日线 MACD 可作为第二段峰值后的缩短柱。
+- 实时周线/月线 MACD 从本周/本月开始前的已完成周期状态外推，并与上一已完成周期柱比较。
+- 实时 K 线可触发阳包阴；实时成交量可触发近 22 条记录内的放量大涨。
+
 ## run 阶段
 
-`run` 阶段不再增加硬过滤。它会读取 `screen` 产出的候选，补 prepared history，计算因子，然后使用对应 method 的 LightGBM 模型打分排序。
+对支持模型推理的方法，`run` 阶段不再增加硬过滤。它会读取 `screen` 产出的候选，补 prepared history，计算因子，然后使用对应 method 的 LightGBM 模型打分排序。`qianlong` 当前没有已发布模型，执行 `run` 或 `review-list` 会被 capability 保护拒绝。
 
 当前排序阶段还有一个后置分数调整：在模型原始分排序后先归一化分数，再根据筹码因子调整排名分数。该调整只改变排序，不剔除候选：
 

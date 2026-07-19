@@ -47,7 +47,7 @@ stock-select-rs screen --method b2 --pick-date 2026-06-05 --export-factors
 - 写入 `runtime/candidates/<date>.<method>.json`
 - `--export-factors` 额外导出因子到 `runtime/factors/`
 
-当前已接入 `screen` 的方法为 `b2`、`b3`、`lsh`；各方法的股票池过滤和策略条件见 [选股筛选方法过滤条件](screening-methods.md)。
+当前已接入 `screen` 的方法为 `b2`、`b3`、`lsh`、`qianlong`；各方法的股票池过滤和策略条件见 [选股筛选方法过滤条件](screening-methods.md)。其中 `qianlong` 暂不接入模型 `run` 和复盘命令。
 
 ### run
 
@@ -117,7 +117,7 @@ stock-select-rs chart --method b2 --pick-date 2026-06-05 --chart-workers 4
 
 | 参数 | 说明 |
 |------|------|
-| `--method` | 筛选方法，当前 `screen` 支持 `b2` / `b3` / `lsh`，默认 `b2` |
+| `--method` | 筛选方法，当前 `screen` 支持 `b2` / `b3` / `lsh` / `qianlong`，默认 `b2` |
 | `--pick-date` | 交易日（默认取当前日期） |
 | `--intraday` | 盘中模式 |
 | `--runtime-root` | runtime 根目录（默认 `~/.agents/skills/stock-select/runtime`） |
@@ -204,16 +204,18 @@ flowchart TD
     STRAT -->|b2| B2STRAT["run_b2_strategy_from_refs()<br/>src/strategies/b2.rs"]
     STRAT -->|b3| B3STRAT["run_b3_strategy_from_refs()<br/>src/strategies/b3.rs"]
     STRAT -->|lsh| LSHSTRAT["run_lsh_strategy_from_refs()<br/>src/strategies/lsh.rs"]
+    STRAT -->|qianlong| QLSTRAT["run_qianlong_strategy_from_refs()<br/>src/strategies/qianlong.rs"]
     B2STRAT --> CAND["candidates JSON<br/>→ runtime/candidates/"]
     B3STRAT --> CAND
     LSHSTRAT --> CAND
+    QLSTRAT --> CAND
     CAND --> EXP{"--export-factors"}
     EXP -->|yes| EFACT["build_candidate_factor_rows_from_refs()<br/>→ runtime/factors/"]
     EXP -->|no| SDONE["screen 完成"]
 
     %% ── intraday 路径 ──
     SCREEN -.->|intraday| RT["TushareRestProvider<br/>fetch_rt_k() 实时快照<br/>src/intraday.rs"]
-    RT --> IWINDOW["build_intraday_market_rows()"]
+    RT --> IWINDOW["build_intraday_market_rows_with_macd_states()<br/>实时日/周/月 MACD"]
     IWINDOW -.-> PREP
 
     %% ── run 全流水线 ──

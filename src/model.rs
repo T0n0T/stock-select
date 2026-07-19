@@ -12,6 +12,7 @@ pub enum Method {
     B2,
     B3,
     Lsh,
+    Qianlong,
     Dribull,
 }
 
@@ -22,6 +23,7 @@ impl Method {
             Method::B2 => "b2",
             Method::B3 => "b3",
             Method::Lsh => "lsh",
+            Method::Qianlong => "qianlong",
             Method::Dribull => "dribull",
         }
     }
@@ -42,6 +44,7 @@ impl FromStr for Method {
             "b2" => Ok(Method::B2),
             "b3" => Ok(Method::B3),
             "lsh" => Ok(Method::Lsh),
+            "qianlong" => Ok(Method::Qianlong),
             "dribull" => Ok(Method::Dribull),
             _ => anyhow::bail!("unsupported method: {value}"),
         }

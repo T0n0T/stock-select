@@ -9,9 +9,230 @@ use stock_select::model::{MarketRow, Method, PreparedRow};
 use stock_select::screening::{
     PoolSource, ScreenRequest, prepared_cache_start_date,
     run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_loader,
-    run_intraday_screen_with_loaders, run_intraday_screen_with_provider, run_screen_with_loader,
-    screen_window,
+    run_db_native_screen_with_loaders, run_intraday_screen_with_loaders,
+    run_intraday_screen_with_provider, run_screen_with_loader, screen_window,
 };
+use stock_select::strategies::qianlong::run_qianlong_strategy;
+
+#[test]
+fn qianlong_selects_stock_when_all_five_conditions_hold() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+    let rows = qianlong_prepared_rows("000001.SZ", first_date);
+    let pick_date = rows.last().unwrap().trade_date;
+
+    let output = run_qianlong_strategy(&rows, pick_date);
+
+    assert_eq!(output.candidates.len(), 1);
+    assert_eq!(output.candidates[0].code, "000001.SZ");
+    assert_eq!(output.candidates[0].signal.as_deref(), Some("QIANLONG"));
+    assert_eq!(output.stats["selected_qianlong"], 1);
+}
+
+#[test]
+fn qianlong_accepts_red_bar_as_contraction_after_second_green_peak() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
+    for (idx, value) in [-0.04, -0.08, -0.16, 0.02].into_iter().enumerate() {
+        rows[7 + idx].macd_hist = value;
+    }
+    let pick_date = rows.last().unwrap().trade_date;
+
+    let output = run_qianlong_strategy(&rows, pick_date);
+
+    assert_eq!(output.candidates.len(), 1);
+    assert_eq!(output.stats["selected_qianlong"], 1);
+}
+
+#[test]
+fn qianlong_rejects_second_green_peak_before_it_starts_contracting() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
+    let latest = rows.len() - 1;
+    for row in &mut rows[7..latest] {
+        row.macd_hist = 0.02;
+    }
+    rows[latest - 3].macd_hist = -0.04;
+    rows[latest - 2].macd_hist = -0.08;
+    rows[latest - 1].macd_hist = -0.12;
+    rows[latest].macd_hist = -0.16;
+    let pick_date = rows[latest].trade_date;
+
+    let output = run_qianlong_strategy(&rows, pick_date);
+
+    assert!(output.candidates.is_empty());
+    assert_eq!(output.stats["fail_daily_divergence"], 1);
+}
+
+#[test]
+fn qianlong_accepts_two_contracting_peaks_in_one_green_segment() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
+    let single_segment = [
+        -0.05, -0.10, -0.20, -0.35, -0.25, -0.12, -0.08, -0.10, -0.14, -0.18, 0.02, 0.03,
+    ];
+    for (row, value) in rows.iter_mut().zip(single_segment) {
+        row.macd_hist = value;
+    }
+    let pick_date = rows.last().unwrap().trade_date;
+
+    let output = run_qianlong_strategy(&rows, pick_date);
+
+    assert_eq!(output.candidates.len(), 1);
+    assert_eq!(output.stats["selected_qianlong"], 1);
+}
+
+#[test]
+fn screen_qianlong_writes_candidate_artifact_and_excludes_beijing_exchange() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
+    rows.extend(qianlong_prepared_rows("920001.BJ", first_date));
+    let pick_date = rows.last().unwrap().trade_date;
+    let start_date = prepared_cache_start_date(pick_date);
+    write_prepared_cache(
+        temp.path(),
+        Method::Qianlong,
+        pick_date,
+        start_date,
+        pick_date,
+        &rows,
+    )
+    .unwrap();
+
+    let output_path = run_screen_with_loader(
+        ScreenRequest {
+            method: Method::Qianlong,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_dsn, _start, _end| panic!("qianlong screen should reuse prepared cache"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output_path,
+        temp.path().join("candidates/2026-04-28.qianlong.json")
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
+    assert_eq!(payload["method"], "qianlong");
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
+}
+
+#[test]
+fn db_native_qianlong_reuses_legacy_prepared_cache_and_only_backfills_previous_period_histograms() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+    let qianlong_rows = qianlong_prepared_rows("000001.SZ", first_date);
+    let pick_date = qianlong_rows.last().unwrap().trade_date;
+    let start_date = prepared_cache_start_date(pick_date);
+    let mut rows = (0..240)
+        .map(|offset| {
+            prepared_row_at_date(
+                "000001.SZ",
+                start_date + Duration::days(offset),
+                9.0,
+                100.0,
+                45.0,
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.extend(qianlong_rows);
+    let latest = rows.last_mut().unwrap();
+    latest.db_factors.remove("macd_weekly_prev_hist");
+    latest.db_factors.remove("macd_monthly_prev_hist");
+    stock_select::cache::write_db_native_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        252,
+        &rows,
+    )
+    .unwrap();
+    let metadata_path = prepared_cache_meta_path(temp.path(), pick_date);
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
+    metadata["shared_methods"] = serde_json::json!(["b1", "b2", "b3", "lsh", "gkxy", "dribull"]);
+    metadata["schema_version"] = serde_json::json!(11);
+    std::fs::write(
+        &metadata_path,
+        serde_json::to_vec_pretty(&metadata).unwrap(),
+    )
+    .unwrap();
+
+    let output_path = run_db_native_screen_with_loaders(
+        ScreenRequest {
+            method: Method::Qianlong,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_dsn, _start, _end| panic!("legacy prepared cache should be reused"),
+        |_dsn, symbols, trade_date| {
+            assert_eq!(symbols, &["000001.SZ".to_string()]);
+            assert_eq!(trade_date, pick_date);
+            Ok(vec![
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "weekly".to_string(),
+                    ema12: 0.18,
+                    ema26: 0.0,
+                    dea: 0.10,
+                    period_count: 39,
+                },
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "monthly".to_string(),
+                    ema12: 0.16,
+                    ema26: 0.0,
+                    dea: 0.10,
+                    period_count: 29,
+                },
+            ])
+        },
+    )
+    .unwrap();
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
+
+    let cached = load_prepared_cache(
+        temp.path(),
+        Method::Qianlong,
+        pick_date,
+        start_date,
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    let cached_latest = cached.last().unwrap();
+    assert!(
+        !cached_latest
+            .db_factors
+            .contains_key("macd_weekly_prev_hist")
+    );
+    assert!(
+        !cached_latest
+            .db_factors
+            .contains_key("macd_monthly_prev_hist")
+    );
+}
 
 #[test]
 fn screen_window_uses_one_year_prepared_history() {
@@ -1393,6 +1614,120 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
 }
 
 #[test]
+fn db_native_intraday_qianlong_uses_live_contraction_and_period_macd() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
+    let previous_trade_date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
+    let start_date = prepared_cache_start_date(previous_trade_date);
+    let provider = StaticRtKProvider::new([
+        ("*.SH", vec![]),
+        (
+            "*.SZ",
+            vec![RawRtKRow::from_value(serde_json::json!({
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "open": 9.9,
+                "high": 11.1,
+                "low": 9.8,
+                "close": 11.0,
+                "vol": 30000.0,
+                "amount": 330000.0,
+                "trade_time": "14:59:59"
+            }))],
+        ),
+        ("*.BJ", vec![]),
+    ]);
+
+    let output_path = run_db_native_intraday_screen_with_loaders(
+        ScreenRequest {
+            method: Method::Qianlong,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        &provider,
+        "15:00:00",
+        |_dsn, trade_date| {
+            assert_eq!(trade_date, pick_date);
+            Ok(previous_trade_date)
+        },
+        |_dsn, actual_start, actual_end| {
+            assert_eq!(actual_start, start_date);
+            assert_eq!(actual_end, previous_trade_date);
+            Ok(qianlong_intraday_history_rows(previous_trade_date))
+        },
+        |_dsn, symbols, trade_date| {
+            assert_eq!(symbols, &["000001.SZ".to_string()]);
+            assert_eq!(trade_date, pick_date);
+            Ok(vec![
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "daily".to_string(),
+                    ema12: 10.0,
+                    ema26: 10.0,
+                    dea: 0.205,
+                    period_count: 240,
+                },
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "weekly".to_string(),
+                    ema12: 10.0,
+                    ema26: 10.0,
+                    dea: -0.1,
+                    period_count: 40,
+                },
+                MacdPeriodState {
+                    ts_code: "000001.SZ".to_string(),
+                    period_type: "monthly".to_string(),
+                    ema12: 10.0,
+                    ema26: 10.0,
+                    dea: -0.05,
+                    period_count: 30,
+                },
+            ])
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        output_path,
+        temp.path()
+            .join("candidates/2026-04-29.intraday.qianlong.json")
+    );
+    let result: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
+    assert_eq!(result["mode"], "intraday_snapshot");
+    assert_eq!(result["method"], "qianlong");
+    assert_eq!(result["count"], 1);
+    assert_eq!(result["candidates"][0]["code"], "000001.SZ");
+    assert_eq!(result["candidates"][0]["signal"], "QIANLONG");
+
+    let prepared = load_prepared_cache_for_mode(
+        temp.path(),
+        Method::Qianlong,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = prepared.last().unwrap();
+    assert_eq!(latest.close, 11.0);
+    assert_eq!(latest.volume, 300.0);
+    assert!(latest.macd_hist < 0.0);
+    assert!(latest.macd_hist.abs() < 0.16);
+    assert!(latest.db_factors["macd_weekly_hist"] > latest.db_factors["macd_weekly_prev_hist"]);
+    assert!(latest.db_factors["macd_monthly_hist"] > 0.0);
+    assert!(latest.db_factors["macd_monthly_hist"] > latest.db_factors["macd_monthly_prev_hist"]);
+}
+
+#[test]
 fn db_native_intraday_screen_filters_snapshot_universe_and_skips_incomplete_period_state() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -1733,6 +2068,42 @@ fn intraday_b2_positive_monthly_market_rows(
         .collect()
 }
 
+fn qianlong_intraday_history_rows(previous_trade_date: NaiveDate) -> Vec<MarketRow> {
+    let hist = [
+        -0.05, -0.10, -0.20, -0.35, -0.25, -0.12, 0.04, 0.03, 0.02, 0.03, 0.04, 0.03, 0.02, 0.01,
+        0.02, 0.03, 0.04, 0.05, 0.04, 0.03, 0.02, 0.01, 0.02, 0.03, -0.04, -0.08, -0.16,
+    ];
+    let first_date = previous_trade_date - Duration::days((hist.len() - 1) as i64);
+    let mut rows = hist
+        .into_iter()
+        .enumerate()
+        .map(|(offset, macd_hist)| {
+            let mut row = MarketRow {
+                ts_code: "000001.SZ".to_string(),
+                trade_date: first_date + Duration::days(offset as i64),
+                open: 9.9,
+                high: 10.1,
+                low: 9.8,
+                close: 10.0,
+                vol: 100.0,
+                turnover_rate: Some(1.0),
+                adj_factor: Some(1.0),
+                db_factors: Default::default(),
+            };
+            row.db_factors
+                .insert("macd_daily_hist".to_string(), macd_hist);
+            row
+        })
+        .collect::<Vec<_>>();
+
+    let latest = rows.len() - 1;
+    rows[latest].open = 10.4;
+    rows[latest].high = 10.5;
+    rows[latest].low = 9.9;
+    rows[latest].close = 10.0;
+    rows
+}
+
 #[test]
 fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
     let temp = tempfile::tempdir().unwrap();
@@ -1999,4 +2370,50 @@ fn lsh_prepared_rows(
             }
         })
         .collect()
+}
+
+fn qianlong_prepared_rows(code: &str, first_date: NaiveDate) -> Vec<PreparedRow> {
+    let hist = [
+        -0.05, -0.10, -0.20, -0.35, -0.25, -0.12, 0.04, -0.04, -0.08, -0.16, -0.11, -0.05, 0.03,
+        0.04, 0.05, 0.04, 0.03, 0.02, 0.01, 0.02, 0.03, 0.04, 0.05, 0.04, 0.03, 0.02, 0.01, 0.02,
+    ];
+    let mut rows = hist
+        .iter()
+        .enumerate()
+        .map(|(offset, macd_hist)| {
+            let mut row = prepared_row_at_date(
+                code,
+                first_date + Duration::days(offset as i64),
+                10.0 + offset as f64 * 0.01,
+                100.0,
+                45.0,
+            );
+            row.macd_hist = *macd_hist;
+            row
+        })
+        .collect::<Vec<_>>();
+
+    // 近 22 个交易日内存在一次放量涨停。
+    rows[8].close = rows[7].close * 1.10;
+    rows[8].volume = 200.0;
+
+    // 筛选日阳包阴。
+    let latest = rows.len() - 1;
+    rows[latest - 1].open = 10.8;
+    rows[latest - 1].high = 10.9;
+    rows[latest - 1].low = 10.4;
+    rows[latest - 1].close = 10.5;
+    rows[latest].open = 10.4;
+    rows[latest].high = 11.1;
+    rows[latest].low = 10.3;
+    rows[latest].close = 11.0;
+    rows[latest].db_factors.extend([
+        ("macd_weekly_hist".to_string(), 0.12),
+        ("macd_weekly_prev_hist".to_string(), 0.08),
+        ("macd_weekly_period_count".to_string(), 40.0),
+        ("macd_monthly_hist".to_string(), 0.10),
+        ("macd_monthly_prev_hist".to_string(), 0.06),
+        ("macd_monthly_period_count".to_string(), 30.0),
+    ]);
+    rows
 }

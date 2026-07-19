@@ -82,7 +82,7 @@ pub fn default_model_dir(method: Method) -> Option<&'static str> {
         Method::B2 => Some("models/b2"),
         Method::B3 => Some("models/b3"),
         Method::Lsh => Some("models/lsh"),
-        Method::B1 | Method::Dribull => None,
+        Method::B1 | Method::Qianlong | Method::Dribull => None,
     }
 }
 

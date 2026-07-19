@@ -72,6 +72,12 @@ stock-select-rs review-list \
 
 盘中 artifact key 为 `<date>.intraday.b2`，与 EOD 隔离。
 
+`qianlong` 目前只支持筛选，不支持模型 run；盘中可使用：
+
+```bash
+stock-select-rs screen --method qianlong --intraday
+```
+
 清理盘中运行产物：
 
 ```bash
@@ -173,11 +179,14 @@ uv run stock-select-ml backfill runs \
 
 ## 场景五：仅筛选候选
 
-当前 `screen` 支持 `b2`、`b3`、`lsh`。各方法的公共股票池过滤、具体策略条件和 `run` 阶段排序口径见 [选股筛选方法过滤条件](screening-methods.md)。
+当前 `screen` 支持 `b2`、`b3`、`lsh`、`qianlong`。各方法的公共股票池过滤、具体策略条件和 `run` 阶段排序口径见 [选股筛选方法过滤条件](screening-methods.md)。
 
 ```bash
 # 只生成候选（不跑模型）
 stock-select-rs screen --method b2 --pick-date 2026-06-05
+
+# 潜龙只筛选候选（不跑模型）
+stock-select-rs screen --method qianlong --pick-date 2026-06-05
 
 # 生成候选并导出因子
 stock-select-rs screen \
@@ -198,6 +207,8 @@ stock-select-rs chart \
   --pick-date 2026-06-05 \
   --chart-workers 4
 ```
+
+`qianlong` 可复用现有 schema 11 prepared cache；若旧缓存缺少上一已完成周线/月线柱，筛选时只补齐本次运行需要的比较值，不重建也不改写原缓存。
 
 ## 场景六：复盘
 

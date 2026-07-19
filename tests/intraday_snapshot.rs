@@ -414,6 +414,66 @@ fn build_intraday_market_rows_derives_live_macd_from_period_state_with_qfq_price
 }
 
 #[test]
+fn build_intraday_market_rows_carries_completed_period_hist_for_live_macd_comparison() {
+    let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
+    let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+    let history = vec![MarketRow {
+        ts_code: "000001.SZ".to_string(),
+        trade_date: previous_date,
+        open: 10.0,
+        high: 10.4,
+        low: 9.8,
+        close: 10.0,
+        vol: 100.0,
+        turnover_rate: Some(1.0),
+        adj_factor: Some(2.0),
+        db_factors: Default::default(),
+    }];
+    let snapshot = normalize_rt_k_rows(
+        vec![RawRtKRow::from_value(json!({
+            "ts_code": "000001.SZ",
+            "name": "平安银行",
+            "open": 5.0,
+            "high": 5.4,
+            "low": 4.9,
+            "close": 5.3,
+            "vol": 1234567,
+            "amount": 152300000.0
+        }))],
+        trade_date,
+        "10:00:00",
+    )
+    .unwrap();
+    let states = vec![
+        MacdPeriodState {
+            ts_code: "000001.SZ".to_string(),
+            period_type: "weekly".to_string(),
+            ema12: 17.0,
+            ema26: 16.4,
+            dea: 0.2,
+            period_count: 80,
+        },
+        MacdPeriodState {
+            ts_code: "000001.SZ".to_string(),
+            period_type: "monthly".to_string(),
+            ema12: 16.0,
+            ema26: 15.8,
+            dea: 0.1,
+            period_count: 36,
+        },
+    ];
+
+    let rows = build_intraday_market_rows_with_macd_states(history, &snapshot, trade_date, &states);
+
+    let snapshot_row = rows
+        .iter()
+        .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
+        .unwrap();
+    assert!((snapshot_row.db_factors["macd_weekly_prev_hist"] - 0.4).abs() < 1e-12);
+    assert!((snapshot_row.db_factors["macd_monthly_prev_hist"] - 0.1).abs() < 1e-12);
+}
+
+#[test]
 fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows() {
     let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
     let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();

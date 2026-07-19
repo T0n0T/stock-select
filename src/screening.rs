@@ -26,6 +26,7 @@ use crate::strategies::StrategyOutput;
 use crate::strategies::b2::run_b2_strategy_from_refs;
 use crate::strategies::b3::run_b3_strategy_from_refs;
 use crate::strategies::lsh::run_lsh_strategy_from_refs;
+use crate::strategies::qianlong::run_qianlong_strategy_from_refs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolSource {
@@ -91,7 +92,9 @@ pub fn run_screen_with_loader<F>(request: ScreenRequest, loader: F) -> anyhow::R
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
-    run_screen_with_loader_and_cache_source(request, loader, false)
+    run_screen_with_loaders(request, loader, false, |_dsn, _symbols, _pick_date| {
+        Ok(Vec::new())
+    })
 }
 
 pub fn run_db_native_screen_with_loader<F>(
@@ -101,20 +104,34 @@ pub fn run_db_native_screen_with_loader<F>(
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
-    run_screen_with_loader_and_cache_source(request, loader, true)
+    run_db_native_screen_with_loaders(request, loader, crate::db::fetch_stock_period_macd_states)
 }
 
-fn run_screen_with_loader_and_cache_source<F>(
+pub fn run_db_native_screen_with_loaders<F, S>(
     request: ScreenRequest,
     loader: F,
-    db_native_source: bool,
+    macd_state_loader: S,
 ) -> anyhow::Result<PathBuf>
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+    S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
+{
+    run_screen_with_loaders(request, loader, true, macd_state_loader)
+}
+
+fn run_screen_with_loaders<F, S>(
+    request: ScreenRequest,
+    loader: F,
+    db_native_source: bool,
+    macd_state_loader: S,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+    S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
     ensure_screen_supported(request.method)?;
     let (start_date, end_date) = screen_window(request.pick_date);
-    let prepared = if request.recompute {
+    let mut prepared = if request.recompute {
         load_and_prepare(&request, start_date, end_date, loader, db_native_source)?
     } else {
         match load_prepared_cache(
@@ -128,6 +145,12 @@ where
             None => load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
         }
     };
+    backfill_qianlong_previous_period_hists_if_needed(
+        &request,
+        &mut prepared,
+        db_native_source,
+        macd_state_loader,
+    )?;
     if !prepared
         .iter()
         .any(|row| row.trade_date == request.pick_date)
@@ -522,7 +545,7 @@ fn screen_artifact_key(pick_date: NaiveDate, intraday: bool) -> String {
 
 fn ensure_screen_supported(method: Method) -> anyhow::Result<()> {
     match method {
-        Method::B2 | Method::B3 | Method::Lsh => Ok(()),
+        Method::B2 | Method::B3 | Method::Lsh | Method::Qianlong => Ok(()),
         _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
     }
 }
@@ -536,6 +559,7 @@ fn run_screen_strategy(
         Method::B2 => Ok(run_b2_strategy_from_refs(rows, pick_date)),
         Method::B3 => Ok(run_b3_strategy_from_refs(rows, pick_date)),
         Method::Lsh => Ok(run_lsh_strategy_from_refs(rows, pick_date)),
+        Method::Qianlong => Ok(run_qianlong_strategy_from_refs(rows, pick_date)),
         _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
     }
 }
@@ -617,6 +641,84 @@ fn ensure_db_native_prepared_window(
             start_date,
             end_date
         );
+    }
+}
+
+fn backfill_qianlong_previous_period_hists_if_needed<S>(
+    request: &ScreenRequest,
+    prepared: &mut [PreparedRow],
+    db_native_source: bool,
+    macd_state_loader: S,
+) -> anyhow::Result<()>
+where
+    S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
+{
+    if !db_native_source || request.method != Method::Qianlong {
+        return Ok(());
+    }
+    let symbols = prepared
+        .iter()
+        .filter(|row| row.trade_date == request.pick_date)
+        .filter(|row| !row.ts_code.ends_with(".BJ"))
+        .filter(|row| qianlong_missing_previous_period_hist(row))
+        .map(|row| row.ts_code.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if symbols.is_empty() {
+        return Ok(());
+    }
+
+    let states = macd_state_loader(&request.dsn, &symbols, request.pick_date)?;
+    let mut previous_hists = BTreeMap::<(String, String), f64>::new();
+    for state in states
+        .into_iter()
+        .filter(|state| state.period_type == "weekly" || state.period_type == "monthly")
+    {
+        let hist = (state.ema12 - state.ema26) - state.dea;
+        if hist.is_finite() {
+            previous_hists.insert((state.ts_code, state.period_type), hist);
+        }
+    }
+
+    for row in prepared
+        .iter_mut()
+        .filter(|row| row.trade_date == request.pick_date)
+    {
+        maybe_insert_previous_period_hist(row, "weekly", &previous_hists);
+        maybe_insert_previous_period_hist(row, "monthly", &previous_hists);
+    }
+    Ok(())
+}
+
+fn qianlong_missing_previous_period_hist(row: &PreparedRow) -> bool {
+    qianlong_missing_previous_period_hist_for(row, "weekly")
+        || qianlong_missing_previous_period_hist_for(row, "monthly")
+}
+
+fn qianlong_missing_previous_period_hist_for(row: &PreparedRow, period: &str) -> bool {
+    prepared_factor_is_finite(row, &format!("macd_{period}_hist"))
+        && prepared_factor_is_finite(row, &format!("macd_{period}_period_count"))
+        && !prepared_factor_is_finite(row, &format!("macd_{period}_prev_hist"))
+}
+
+fn prepared_factor_is_finite(row: &PreparedRow, key: &str) -> bool {
+    row.db_factors
+        .get(key)
+        .is_some_and(|value| value.is_finite())
+}
+
+fn maybe_insert_previous_period_hist(
+    row: &mut PreparedRow,
+    period: &str,
+    previous_hists: &BTreeMap<(String, String), f64>,
+) {
+    let key = format!("macd_{period}_prev_hist");
+    if prepared_factor_is_finite(row, &key) {
+        return;
+    }
+    if let Some(value) = previous_hists.get(&(row.ts_code.clone(), period.to_string())) {
+        row.db_factors.insert(key, *value);
     }
 }
 
@@ -777,7 +879,7 @@ fn turnover_top_pool_row_allowed(row: &PreparedRow, method: Method) -> bool {
             .ma25
             .zip(row.ma60)
             .is_some_and(|(ma25, ma60)| ma25 > ma60),
-        Method::Lsh => true,
+        Method::Lsh | Method::Qianlong => true,
         _ => true,
     }
 }

@@ -340,9 +340,14 @@ pub fn build_intraday_market_rows_with_macd_states(
             if let Some(states) = macd_states_by_code.get(row.ts_code.as_str()) {
                 for state in states {
                     let live = derive_live_macd_from_period_state(state, price_live_qfq);
+                    let previous_hist = (state.ema12 - state.ema26) - state.dea;
                     db_factors.insert(format!("macd_{}_dif", live.period_type), live.dif);
                     db_factors.insert(format!("macd_{}_dea", live.period_type), live.dea);
                     db_factors.insert(format!("macd_{}_hist", live.period_type), live.hist);
+                    db_factors.insert(
+                        format!("macd_{}_prev_hist", live.period_type),
+                        previous_hist,
+                    );
                     db_factors.insert(
                         format!("macd_{}_period_count", live.period_type),
                         f64::from(live.period_count),

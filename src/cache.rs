@@ -307,6 +307,7 @@ fn build_metadata(
             "b2".to_string(),
             "b3".to_string(),
             "lsh".to_string(),
+            "qianlong".to_string(),
             "dribull".to_string(),
         ],
         pick_date,
@@ -714,7 +715,7 @@ fn metadata_method_matches(metadata: &PreparedCacheMetadata, method: Method) -> 
     {
         return true;
     }
-    method == Method::Lsh
+    matches!(method, Method::Lsh | Method::Qianlong)
         && metadata
             .shared_methods
             .iter()
