@@ -414,7 +414,7 @@ fn build_intraday_market_rows_derives_live_macd_from_period_state_with_qfq_price
 }
 
 #[test]
-fn build_intraday_market_rows_carries_completed_period_hist_for_live_macd_comparison() {
+fn build_intraday_market_rows_uses_existing_period_macd_fields_without_previous_hist() {
     let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
     let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
     let history = vec![MarketRow {
@@ -469,8 +469,27 @@ fn build_intraday_market_rows_carries_completed_period_hist_for_live_macd_compar
         .iter()
         .find(|row| row.ts_code == "000001.SZ" && row.trade_date == trade_date)
         .unwrap();
-    assert!((snapshot_row.db_factors["macd_weekly_prev_hist"] - 0.4).abs() < 1e-12);
-    assert!((snapshot_row.db_factors["macd_monthly_prev_hist"] - 0.1).abs() < 1e-12);
+    for state in &states {
+        let live = derive_live_macd_from_period_state(state, 10.6);
+        assert!(
+            (snapshot_row.db_factors[&format!("macd_{}_dif", state.period_type)] - live.dif).abs()
+                < 1e-12
+        );
+        assert!(
+            (snapshot_row.db_factors[&format!("macd_{}_dea", state.period_type)] - live.dea).abs()
+                < 1e-12
+        );
+        assert!(
+            (snapshot_row.db_factors[&format!("macd_{}_hist", state.period_type)] - live.hist)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            !snapshot_row
+                .db_factors
+                .contains_key(&format!("macd_{}_prev_hist", state.period_type))
+        );
+    }
 }
 
 #[test]

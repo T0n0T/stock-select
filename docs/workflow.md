@@ -208,7 +208,7 @@ stock-select-rs chart \
   --chart-workers 4
 ```
 
-`qianlong` 可复用现有 schema 11 prepared cache；若旧缓存缺少上一已完成周线/月线柱，筛选时只补齐本次运行需要的比较值，不重建也不改写原缓存。
+`qianlong` 可直接复用现有 schema 11 prepared cache 中 B2/B3/LSH 已使用的周线/月线 DIF、DEA 字段；字段缺失时按日线聚合回算，不需要潜龙专用字段，不重建也不改写原缓存。
 
 ## 场景六：复盘
 

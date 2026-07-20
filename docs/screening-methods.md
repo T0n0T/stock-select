@@ -163,12 +163,14 @@
 
 ### 周线/月线 MACD 条件
 
-`qianlong` 使用 stock-cache DB-native 的周期 MACD 状态，不再从本地 10 年日线重新聚合：
+`qianlong` 跟随 B2/B3/LSH 的既有 MACD 取值方式，复用 shared prepared cache 中已有的周期字段：
 
-- 月线：`macd_monthly_hist > 0`，且大于上一已完成月线柱 `macd_monthly_prev_hist`，月线样本数至少 30。
-- 周线：`macd_weekly_hist` 大于上一已完成周线柱 `macd_weekly_prev_hist`，周线样本数至少 40。
+- 周线优先读取 `macd_weekly_dif` / `macd_weekly_dea`。
+- 月线优先读取 `macd_monthly_dif` / `macd_monthly_dea`。
+- 周线和月线的最新 DIF 与 DEA 都大于 0 时，才通过过滤。
+- 任一周期字段缺失时按日线聚合周线/月线收盘价，再以 12/26/9 参数计算对应周期 MACD；聚合口径与 LSH 相同。
 
-已有 schema 11 prepared cache 可以直接复用，不需要为 `qianlong` 重建整份缓存。潜龙直接读取缓存中的日线 MACD 序列以及筛选日周线/月线当前柱；如果旧缓存还没有 `macd_weekly_prev_hist` 或 `macd_monthly_prev_hist`，DB-native 筛选只从周期状态表批量补齐缺少的上一已完成周期柱到本次运行内存，不改写原缓存文件。
+已有 schema 11 prepared cache 可以直接复用，不需要为 `qianlong` 重建整份缓存。潜龙不依赖潜龙专用的上一周期字段，EOD 缓存命中后不会为潜龙补查周期状态，也不改写原缓存文件。
 
 ### 日线绿柱背离条件
 
@@ -198,7 +200,7 @@
 盘中 `screen --method qianlong --intraday` 会把 Tushare `rt_k` 快照接入最新日线：
 
 - 实时日线 MACD 可作为第二段峰值后的缩短柱。
-- 实时周线/月线 MACD 从本周/本月开始前的已完成周期状态外推，并与上一已完成周期柱比较。
+- 实时周线/月线 DIF 和 DEA 从本周/本月开始前的已完成周期状态外推，并沿用上述正值条件。
 - 实时 K 线可触发阳包阴；实时成交量可触发近 22 条记录内的放量大涨。
 
 ## run 阶段

@@ -30,6 +30,31 @@ fn qianlong_selects_stock_when_all_five_conditions_hold() {
 }
 
 #[test]
+fn qianlong_uses_shared_db_period_macd_fields_when_available() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+
+    let mut monthly_rejected = qianlong_prepared_rows("000001.SZ", first_date);
+    let latest = monthly_rejected.last_mut().unwrap();
+    latest
+        .db_factors
+        .insert("macd_monthly_dea".to_string(), -0.01);
+    let pick_date = latest.trade_date;
+    let output = run_qianlong_strategy(&monthly_rejected, pick_date);
+    assert!(output.candidates.is_empty());
+    assert_eq!(output.stats["fail_monthly_macd"], 1);
+
+    let mut weekly_rejected = qianlong_prepared_rows("000001.SZ", first_date);
+    let latest = weekly_rejected.last_mut().unwrap();
+    latest
+        .db_factors
+        .insert("macd_weekly_dif".to_string(), -0.01);
+    let pick_date = latest.trade_date;
+    let output = run_qianlong_strategy(&weekly_rejected, pick_date);
+    assert!(output.candidates.is_empty());
+    assert_eq!(output.stats["fail_weekly_macd"], 1);
+}
+
+#[test]
 fn qianlong_accepts_red_bar_as_contraction_after_second_green_peak() {
     let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
     let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
@@ -146,9 +171,6 @@ fn db_native_qianlong_reuses_legacy_prepared_cache_without_database_loaders() {
         })
         .collect::<Vec<_>>();
     rows.extend(qianlong_rows);
-    let latest = rows.last_mut().unwrap();
-    latest.db_factors.remove("macd_weekly_prev_hist");
-    latest.db_factors.remove("macd_monthly_prev_hist");
     stock_select::cache::write_db_native_prepared_cache(
         temp.path(),
         Method::B2,
@@ -164,11 +186,24 @@ fn db_native_qianlong_reuses_legacy_prepared_cache_without_database_loaders() {
         serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
     metadata["shared_methods"] = serde_json::json!(["b1", "b2", "b3", "lsh", "gkxy", "dribull"]);
     metadata["schema_version"] = serde_json::json!(11);
+    metadata["calc_versions"] = serde_json::json!({
+        "macd": "macd_qfq_12_26_9_v1",
+        "rolling": "rolling_qfq_v1",
+        "left_peak": "left_peak_qfq_v1"
+    });
     std::fs::write(
         &metadata_path,
         serde_json::to_vec_pretty(&metadata).unwrap(),
     )
     .unwrap();
+    let data_path = prepared_cache_data_path(temp.path(), pick_date);
+    let cached_data_before = std::fs::read(&data_path).unwrap();
+    let cached_metadata_before = std::fs::read(&metadata_path).unwrap();
+    let data_modified_before = std::fs::metadata(&data_path).unwrap().modified().unwrap();
+    let metadata_modified_before = std::fs::metadata(&metadata_path)
+        .unwrap()
+        .modified()
+        .unwrap();
 
     let output_path = run_db_native_screen_with_loaders(
         ScreenRequest {
@@ -192,6 +227,24 @@ fn db_native_qianlong_reuses_legacy_prepared_cache_without_database_loaders() {
     let payload: serde_json::Value =
         serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
     assert_eq!(payload["method"], "qianlong");
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
+    assert_eq!(std::fs::read(&data_path).unwrap(), cached_data_before);
+    assert_eq!(
+        std::fs::read(&metadata_path).unwrap(),
+        cached_metadata_before
+    );
+    assert_eq!(
+        std::fs::metadata(&data_path).unwrap().modified().unwrap(),
+        data_modified_before
+    );
+    assert_eq!(
+        std::fs::metadata(&metadata_path)
+            .unwrap()
+            .modified()
+            .unwrap(),
+        metadata_modified_before
+    );
 
     let cached = load_prepared_cache(
         temp.path(),
@@ -1864,7 +1917,7 @@ fn db_native_intraday_qianlong_uses_live_contraction_and_period_macd() {
                     period_type: "weekly".to_string(),
                     ema12: 10.0,
                     ema26: 10.0,
-                    dea: -0.1,
+                    dea: 0.02,
                     period_count: 40,
                 },
                 MacdPeriodState {
@@ -1872,7 +1925,7 @@ fn db_native_intraday_qianlong_uses_live_contraction_and_period_macd() {
                     period_type: "monthly".to_string(),
                     ema12: 10.0,
                     ema26: 10.0,
-                    dea: -0.05,
+                    dea: 0.01,
                     period_count: 30,
                 },
             ])
@@ -1908,9 +1961,12 @@ fn db_native_intraday_qianlong_uses_live_contraction_and_period_macd() {
     assert_eq!(latest.volume, 300.0);
     assert!(latest.macd_hist < 0.0);
     assert!(latest.macd_hist.abs() < 0.16);
-    assert!(latest.db_factors["macd_weekly_hist"] > latest.db_factors["macd_weekly_prev_hist"]);
-    assert!(latest.db_factors["macd_monthly_hist"] > 0.0);
-    assert!(latest.db_factors["macd_monthly_hist"] > latest.db_factors["macd_monthly_prev_hist"]);
+    assert!(latest.db_factors["macd_weekly_dif"] > 0.0);
+    assert!(latest.db_factors["macd_weekly_dea"] > 0.0);
+    assert!(latest.db_factors["macd_monthly_dif"] > 0.0);
+    assert!(latest.db_factors["macd_monthly_dea"] > 0.0);
+    assert!(!latest.db_factors.contains_key("macd_weekly_prev_hist"));
+    assert!(!latest.db_factors.contains_key("macd_monthly_prev_hist"));
 }
 
 #[test]
@@ -2594,11 +2650,13 @@ fn qianlong_prepared_rows(code: &str, first_date: NaiveDate) -> Vec<PreparedRow>
     rows[latest].low = 10.3;
     rows[latest].close = 11.0;
     rows[latest].db_factors.extend([
+        ("macd_weekly_dif".to_string(), 0.12),
+        ("macd_weekly_dea".to_string(), 0.08),
         ("macd_weekly_hist".to_string(), 0.12),
-        ("macd_weekly_prev_hist".to_string(), 0.08),
         ("macd_weekly_period_count".to_string(), 40.0),
+        ("macd_monthly_dif".to_string(), 0.10),
+        ("macd_monthly_dea".to_string(), 0.06),
         ("macd_monthly_hist".to_string(), 0.10),
-        ("macd_monthly_prev_hist".to_string(), 0.06),
         ("macd_monthly_period_count".to_string(), 30.0),
     ]);
     rows

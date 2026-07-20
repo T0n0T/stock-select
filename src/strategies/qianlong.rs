@@ -3,11 +3,12 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 
 use crate::model::{Candidate, PreparedRow};
-use crate::strategies::{StrategyOutput, group_refs_by_symbol, sort_candidates};
+use crate::strategies::{
+    StrategyOutput, group_refs_by_symbol, latest_period_macd_dif_and_dea_positive,
+    monthly_asof_closes, sort_candidates, weekly_asof_closes,
+};
 
 const MIN_DAILY_BARS: usize = 15;
-const MIN_WEEKLY_PERIODS: f64 = 40.0;
-const MIN_MONTHLY_PERIODS: f64 = 30.0;
 const SURGE_LOOKBACK_DAYS: usize = 22;
 const SURGE_PCT_THRESHOLD: f64 = 9.5;
 const SURGE_VOLUME_RATIO_THRESHOLD: f64 = 1.5;
@@ -58,11 +59,11 @@ pub fn run_qianlong_strategy_from_refs(
         }
 
         let active_history = &history[..=idx];
-        if !monthly_macd_increasing(row) {
+        if !monthly_macd_positive(active_history) {
             *stats.entry("fail_monthly_macd".to_string()).or_default() += 1;
             continue;
         }
-        if !weekly_macd_increasing(row) {
+        if !weekly_macd_positive(active_history) {
             *stats.entry("fail_weekly_macd".to_string()).or_default() += 1;
             continue;
         }
@@ -99,28 +100,22 @@ pub fn run_qianlong_strategy_from_refs(
     StrategyOutput { candidates, stats }
 }
 
-fn monthly_macd_increasing(row: &PreparedRow) -> bool {
-    period_hist_pair(row, "monthly", MIN_MONTHLY_PERIODS)
-        .is_some_and(|(current, previous)| current > 0.0 && current > previous)
+fn monthly_macd_positive(history: &[&PreparedRow]) -> bool {
+    latest_period_macd_dif_and_dea_positive(
+        history,
+        "macd_monthly_dif",
+        "macd_monthly_dea",
+        &monthly_asof_closes(history),
+    )
 }
 
-fn weekly_macd_increasing(row: &PreparedRow) -> bool {
-    period_hist_pair(row, "weekly", MIN_WEEKLY_PERIODS)
-        .is_some_and(|(current, previous)| current > previous)
-}
-
-fn period_hist_pair(row: &PreparedRow, period: &str, minimum_periods: f64) -> Option<(f64, f64)> {
-    let current = finite_factor(row, &format!("macd_{period}_hist"))?;
-    let previous = finite_factor(row, &format!("macd_{period}_prev_hist"))?;
-    let period_count = finite_factor(row, &format!("macd_{period}_period_count"))?;
-    (period_count >= minimum_periods).then_some((current, previous))
-}
-
-fn finite_factor(row: &PreparedRow, key: &str) -> Option<f64> {
-    row.db_factors
-        .get(key)
-        .copied()
-        .filter(|value| value.is_finite())
+fn weekly_macd_positive(history: &[&PreparedRow]) -> bool {
+    latest_period_macd_dif_and_dea_positive(
+        history,
+        "macd_weekly_dif",
+        "macd_weekly_dea",
+        &weekly_asof_closes(history),
+    )
 }
 
 fn daily_green_divergence(history: &[&PreparedRow]) -> bool {

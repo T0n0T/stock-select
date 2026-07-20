@@ -139,8 +139,14 @@ class ScanMacdReversalReferenceTests(unittest.TestCase):
         latest = rows[-1]
         self.assertEqual(latest["trade_date"], pick_date)
         self.assertIsInstance(latest["macd_hist"], float)
+        self.assertIsInstance(latest["macd_weekly_dif"], float)
+        self.assertIsInstance(latest["macd_weekly_dea"], float)
         self.assertIsInstance(latest["macd_weekly_hist"], float)
+        self.assertIsInstance(latest["macd_monthly_dif"], float)
+        self.assertIsInstance(latest["macd_monthly_dea"], float)
         self.assertIsInstance(latest["macd_monthly_hist"], float)
+        self.assertNotIn("macd_weekly_prev_hist", latest)
+        self.assertNotIn("macd_monthly_prev_hist", latest)
         self.assertGreaterEqual(latest["macd_weekly_period_count"], 40)
         self.assertGreaterEqual(latest["macd_monthly_period_count"], 30)
 
@@ -242,11 +248,10 @@ class ScanMacdReversalReferenceTests(unittest.TestCase):
         self.assertTrue(result["divergence_detected"])
         self.assertEqual(result["segments_used"], 1)
 
-    def test_period_macd_matches_qianlong_thresholds(self):
-        self.assertTrue(REFERENCE.check_monthly_macd(0.10, 0.06, 30))
-        self.assertFalse(REFERENCE.check_monthly_macd(-0.05, -0.10, 30))
-        self.assertTrue(REFERENCE.check_weekly_macd(-0.08, -0.15, 40))
-        self.assertFalse(REFERENCE.check_weekly_macd(-0.15, -0.08, 40))
+    def test_period_macd_matches_shared_dif_and_dea_condition(self):
+        self.assertTrue(REFERENCE.check_period_macd_positive(0.10, 0.06))
+        self.assertFalse(REFERENCE.check_period_macd_positive(-0.05, 0.10))
+        self.assertFalse(REFERENCE.check_period_macd_positive(0.10, -0.05))
 
     def test_surge_volume_uses_last_22_rows_and_prior_three_to_five_volumes(self):
         rows = [
@@ -277,8 +282,10 @@ class ScanMacdReversalReferenceTests(unittest.TestCase):
         expected_ema26 = 9.0 * (25.0 / 27.0) + 11.0 * (2.0 / 27.0)
         expected_dif = expected_ema12 - expected_ema26
         expected_dea = 0.8 * 0.8 + expected_dif * 0.2
+        self.assertAlmostEqual(result["dif"], expected_dif)
+        self.assertAlmostEqual(result["dea"], expected_dea)
         self.assertAlmostEqual(result["hist"], expected_dif - expected_dea)
-        self.assertAlmostEqual(result["previous_hist"], 0.2)
+        self.assertNotIn("previous_hist", result)
         self.assertEqual(result["period_count"], 41)
 
     def test_turnover_ranks_use_only_pick_date_rows_after_intraday_injection(self):

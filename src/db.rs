@@ -184,13 +184,11 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             a.weekly_dif_asof::double precision AS macd_weekly_dif,
             a.weekly_dea_asof::double precision AS macd_weekly_dea,
             a.weekly_hist_x2_asof::double precision / 2.0 AS macd_weekly_hist,
-            weekly_prev.macd_weekly_prev_hist,
             a.weekly_dea_pctile_asof::double precision AS macd_weekly_dea_pctile,
             a.weekly_period_count::double precision AS macd_weekly_period_count,
             a.monthly_dif_asof::double precision AS macd_monthly_dif,
             a.monthly_dea_asof::double precision AS macd_monthly_dea,
             a.monthly_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist,
-            monthly_prev.macd_monthly_prev_hist,
             a.monthly_dea_pctile_asof::double precision AS macd_monthly_dea_pctile,
             a.monthly_period_count::double precision AS macd_monthly_period_count,
             r.ma25_qfq::double precision AS rolling_ma25_qfq,
@@ -254,26 +252,6 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
           ON a.ts_code = s.ts_code
          AND a.trade_date = s.trade_date
          AND a.calc_version = 'macd_qfq_12_26_9_v1'
-        LEFT JOIN LATERAL (
-            SELECT p.hist_x2::double precision / 2.0 AS macd_weekly_prev_hist
-            FROM {{stock_period_indicator_state}} p
-            WHERE p.ts_code = s.ts_code
-              AND p.period_type = 'weekly'
-              AND p.period_end_date < date_trunc('week', s.trade_date)::date
-              AND p.calc_version = 'macd_qfq_12_26_9_v1'
-            ORDER BY p.period_end_date DESC
-            LIMIT 1
-        ) weekly_prev ON true
-        LEFT JOIN LATERAL (
-            SELECT p.hist_x2::double precision / 2.0 AS macd_monthly_prev_hist
-            FROM {{stock_period_indicator_state}} p
-            WHERE p.ts_code = s.ts_code
-              AND p.period_type = 'monthly'
-              AND p.period_end_date < date_trunc('month', s.trade_date)::date
-              AND p.calc_version = 'macd_qfq_12_26_9_v1'
-            ORDER BY p.period_end_date DESC
-            LIMIT 1
-        ) monthly_prev ON true
         LEFT JOIN {{stock_daily_rolling_factors}} r
           ON r.ts_code = s.ts_code
          AND r.trade_date = s.trade_date
@@ -798,13 +776,11 @@ const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
     "macd_weekly_dif",
     "macd_weekly_dea",
     "macd_weekly_hist",
-    "macd_weekly_prev_hist",
     "macd_weekly_dea_pctile",
     "macd_weekly_period_count",
     "macd_monthly_dif",
     "macd_monthly_dea",
     "macd_monthly_hist",
-    "macd_monthly_prev_hist",
     "macd_monthly_dea_pctile",
     "macd_monthly_period_count",
     "rolling_ma25_qfq",
@@ -1334,6 +1310,12 @@ mod tests {
         }
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("stock_daily_left_peak"));
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("left_peak_"));
+        assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("prev_hist"));
+        assert!(
+            !DB_NATIVE_PICK_DATE_FACTOR_COLUMNS
+                .iter()
+                .any(|column| column.ends_with("_prev_hist"))
+        );
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("s.kdj_j_qfq"));
         assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("CASE"));
         assert!(
@@ -1363,25 +1345,6 @@ mod tests {
                 "missing pick-date factor column {factor}"
             );
         }
-    }
-
-    #[test]
-    fn db_native_pick_date_extras_query_reads_previous_completed_period_histograms() {
-        for fragment in [
-            "AS macd_weekly_prev_hist",
-            "p.period_type = 'weekly'",
-            "p.period_end_date < date_trunc('week', s.trade_date)::date",
-            "AS macd_monthly_prev_hist",
-            "p.period_type = 'monthly'",
-            "p.period_end_date < date_trunc('month', s.trade_date)::date",
-        ] {
-            assert!(
-                DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains(fragment),
-                "missing {fragment}"
-            );
-        }
-        assert!(DB_NATIVE_PICK_DATE_FACTOR_COLUMNS.contains(&"macd_weekly_prev_hist"));
-        assert!(DB_NATIVE_PICK_DATE_FACTOR_COLUMNS.contains(&"macd_monthly_prev_hist"));
     }
 
     #[test]

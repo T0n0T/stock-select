@@ -100,16 +100,22 @@ class MlDocumentationTests(unittest.TestCase):
             "`qianlong`",
             "候选信号写为 `QIANLONG`",
             "已有 schema 11 prepared cache 可以直接复用",
+            "`macd_weekly_dif` / `macd_weekly_dea`",
+            "`macd_monthly_dif` / `macd_monthly_dea`",
+            "缺失时按日线聚合周线/月线收盘价",
+            "不依赖潜龙专用的上一周期字段",
             "不改写原缓存文件",
             "第二段峰值必须已经开始缩短",
             "最新一根不要求仍处于绿柱段",
-            "实时周线/月线 MACD 从本周/本月开始前的已完成周期状态外推",
+            "实时周线/月线 DIF 和 DEA 从本周/本月开始前的已完成周期状态外推",
             "`qianlong` 当前没有已发布模型",
             "`run` 阶段不再增加硬过滤",
         ]
         for fragment in expected_fragments:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, docs)
+        self.assertNotIn("macd_weekly_prev_hist", docs)
+        self.assertNotIn("macd_monthly_prev_hist", docs)
 
     def test_model_docs_describe_random_forest_factor_diagnostics(self):
         docs = (PROJECT_ROOT / "docs" / "model.md").read_text(encoding="utf-8")

@@ -840,17 +840,22 @@ fn metadata_matches(
         && metadata.end_date == end_date
         && (metadata.source_table == LOCAL_DERIVED_PREPARED_CACHE_SOURCE
             || metadata.source_table == DB_NATIVE_PREPARED_CACHE_SOURCE)
-        && db_native_calc_versions_match(metadata)
+        && db_native_calc_versions_match(metadata, method)
 }
 
-fn db_native_calc_versions_match(metadata: &PreparedCacheMetadata) -> bool {
+fn db_native_calc_versions_match(metadata: &PreparedCacheMetadata, method: Method) -> bool {
     if metadata.source_table != DB_NATIVE_PREPARED_CACHE_SOURCE {
         return true;
     }
 
+    let macd_matches =
+        metadata.calc_versions.get("macd").map(String::as_str) == Some(DB_NATIVE_MACD_CALC_VERSION);
+    if method == Method::Qianlong {
+        return macd_matches;
+    }
+
     metadata.calc_versions.len() == 3
-        && metadata.calc_versions.get("macd").map(String::as_str)
-            == Some(DB_NATIVE_MACD_CALC_VERSION)
+        && macd_matches
         && metadata.calc_versions.get("rolling").map(String::as_str)
             == Some(DB_NATIVE_ROLLING_CALC_VERSION)
         && metadata.calc_versions.get("czsc").map(String::as_str)

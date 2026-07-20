@@ -96,9 +96,7 @@ pub fn run_screen_with_loader<F>(request: ScreenRequest, loader: F) -> anyhow::R
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
-    run_screen_with_loaders(request, loader, false, |_dsn, _symbols, _pick_date| {
-        Ok(Vec::new())
-    })
+    run_screen_with_loaders(request, loader, false)
 }
 
 pub fn run_db_native_screen_with_loader<F>(
@@ -108,7 +106,7 @@ pub fn run_db_native_screen_with_loader<F>(
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
-    run_db_native_screen_with_loaders(request, loader, crate::db::fetch_stock_period_macd_states)
+    run_screen_with_loaders(request, loader, true)
 }
 
 pub fn run_db_native_screen_with_dataset_loader<F>(
@@ -118,55 +116,46 @@ pub fn run_db_native_screen_with_dataset_loader<F>(
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<crate::model::MarketDataset>,
 {
-    run_db_native_screen_with_dataset_loaders(
-        request,
-        loader,
-        crate::db::fetch_stock_period_macd_states,
-    )
+    run_screen_with_loaders(request, loader, true)
 }
 
 pub fn run_db_native_screen_with_loaders<F, S>(
     request: ScreenRequest,
     loader: F,
-    macd_state_loader: S,
+    _macd_state_loader: S,
 ) -> anyhow::Result<PathBuf>
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
     S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
-    run_screen_with_loaders(request, loader, true, macd_state_loader)
+    run_screen_with_loaders(request, loader, true)
 }
 
 pub fn run_db_native_screen_with_dataset_loaders<F, S>(
     request: ScreenRequest,
     loader: F,
-    macd_state_loader: S,
+    _macd_state_loader: S,
 ) -> anyhow::Result<PathBuf>
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<crate::model::MarketDataset>,
     S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
-    run_screen_with_loaders(request, loader, true, macd_state_loader)
+    run_screen_with_loaders(request, loader, true)
 }
 
-fn run_screen_with_loaders<F, D, S>(
+fn run_screen_with_loaders<F, D>(
     request: ScreenRequest,
     loader: F,
     db_native_source: bool,
-    macd_state_loader: S,
 ) -> anyhow::Result<PathBuf>
 where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
     D: IntoMarketDataset,
-    S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
     ensure_screen_supported(request.method)?;
     let (start_date, end_date) = screen_window(request.pick_date);
-    let (mut prepared, loaded_from_cache) = if request.recompute {
-        (
-            load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
-            false,
-        )
+    let prepared = if request.recompute {
+        load_and_prepare(&request, start_date, end_date, loader, db_native_source)?
     } else {
         match load_prepared_dataset(
             &request.runtime_root,
@@ -175,23 +164,10 @@ where
             start_date,
             end_date,
         )? {
-            Some(dataset) => (dataset, true),
-            None => (
-                load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
-                false,
-            ),
+            Some(dataset) => dataset,
+            None => load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
         }
     };
-    if !loaded_from_cache
-        && !db_table_unavailable(&prepared.db_data_gaps, "stock_period_indicator_state")
-    {
-        backfill_qianlong_previous_period_hists_if_needed(
-            &request,
-            &mut prepared.rows,
-            db_native_source,
-            macd_state_loader,
-        )?;
-    }
     if !prepared
         .rows
         .iter()
@@ -713,70 +689,6 @@ fn ensure_db_native_prepared_window(
     }
 }
 
-fn backfill_qianlong_previous_period_hists_if_needed<S>(
-    request: &ScreenRequest,
-    prepared: &mut [PreparedRow],
-    db_native_source: bool,
-    macd_state_loader: S,
-) -> anyhow::Result<()>
-where
-    S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
-{
-    if !db_native_source || request.method != Method::Qianlong {
-        return Ok(());
-    }
-    let symbols = prepared
-        .iter()
-        .filter(|row| row.trade_date == request.pick_date)
-        .filter(|row| !row.ts_code.ends_with(".BJ"))
-        .filter(|row| qianlong_missing_previous_period_hist(row))
-        .map(|row| row.ts_code.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if symbols.is_empty() {
-        return Ok(());
-    }
-
-    let states = macd_state_loader(&request.dsn, &symbols, request.pick_date)?;
-    let mut previous_hists = BTreeMap::<(String, String), f64>::new();
-    for state in states
-        .into_iter()
-        .filter(|state| state.period_type == "weekly" || state.period_type == "monthly")
-    {
-        let hist = (state.ema12 - state.ema26) - state.dea;
-        if hist.is_finite() {
-            previous_hists.insert((state.ts_code, state.period_type), hist);
-        }
-    }
-
-    for row in prepared
-        .iter_mut()
-        .filter(|row| row.trade_date == request.pick_date)
-    {
-        maybe_insert_previous_period_hist(row, "weekly", &previous_hists);
-        maybe_insert_previous_period_hist(row, "monthly", &previous_hists);
-    }
-    Ok(())
-}
-
-fn qianlong_missing_previous_period_hist(row: &PreparedRow) -> bool {
-    qianlong_missing_previous_period_hist_for(row, "weekly")
-        || qianlong_missing_previous_period_hist_for(row, "monthly")
-}
-
-fn qianlong_missing_previous_period_hist_for(row: &PreparedRow, period: &str) -> bool {
-    prepared_factor_is_finite(row, &format!("macd_{period}_hist"))
-        && prepared_factor_is_finite(row, &format!("macd_{period}_period_count"))
-        && !prepared_factor_is_finite(row, &format!("macd_{period}_prev_hist"))
-}
-
-fn prepared_factor_is_finite(row: &PreparedRow, key: &str) -> bool {
-    row.db_factors
-        .get(key)
-        .is_some_and(|value| value.is_finite())
-}
-
 fn db_table_unavailable(db_data_gaps: &BTreeMap<String, DbDataGap>, table: &str) -> bool {
     db_data_gaps.get(table).is_some_and(|gap| {
         matches!(
@@ -784,20 +696,6 @@ fn db_table_unavailable(db_data_gaps: &BTreeMap<String, DbDataGap>, table: &str)
             DbDataGapReason::MissingTable | DbDataGapReason::SchemaMismatch
         )
     })
-}
-
-fn maybe_insert_previous_period_hist(
-    row: &mut PreparedRow,
-    period: &str,
-    previous_hists: &BTreeMap<(String, String), f64>,
-) {
-    let key = format!("macd_{period}_prev_hist");
-    if prepared_factor_is_finite(row, &key) {
-        return;
-    }
-    if let Some(value) = previous_hists.get(&(row.ts_code.clone(), period.to_string())) {
-        row.db_factors.insert(key, *value);
-    }
 }
 
 fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
