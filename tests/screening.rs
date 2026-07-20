@@ -1,16 +1,17 @@
 use chrono::{Datelike, Duration, NaiveDate};
 use stock_select::cache::{
-    load_prepared_cache, load_prepared_cache_for_mode, prepared_cache_data_path,
-    prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
+    load_prepared_cache, load_prepared_cache_for_mode, load_prepared_dataset_for_mode,
+    prepared_cache_data_path, prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
     write_prepared_cache_for_mode,
 };
 use stock_select::intraday::{MacdPeriodState, RawRtKRow, StaticRtKProvider};
-use stock_select::model::{MarketRow, Method, PreparedRow};
+use stock_select::model::{DbDataGap, MarketDataset, MarketRow, Method, PreparedRow};
 use stock_select::screening::{
     PoolSource, ScreenRequest, prepared_cache_start_date,
-    run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_loader,
-    run_db_native_screen_with_loaders, run_intraday_screen_with_loaders,
-    run_intraday_screen_with_provider, run_screen_with_loader, screen_window,
+    run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_dataset_loader,
+    run_db_native_screen_with_loader, run_db_native_screen_with_loaders,
+    run_intraday_screen_with_loaders, run_intraday_screen_with_provider, run_screen_with_loader,
+    screen_window,
 };
 use stock_select::strategies::qianlong::run_qianlong_strategy;
 
@@ -127,7 +128,7 @@ fn screen_qianlong_writes_candidate_artifact_and_excludes_beijing_exchange() {
 }
 
 #[test]
-fn db_native_qianlong_reuses_legacy_prepared_cache_and_only_backfills_previous_period_histograms() {
+fn db_native_qianlong_reuses_legacy_prepared_cache_without_database_loaders() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
     let qianlong_rows = qianlong_prepared_rows("000001.SZ", first_date);
@@ -178,39 +179,19 @@ fn db_native_qianlong_reuses_legacy_prepared_cache_and_only_backfills_previous_p
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
-            export_factors: false,
-            environment_state: None,
+            export_factors: true,
+            environment_state: Some("neutral".to_string()),
         },
         |_dsn, _start, _end| panic!("legacy prepared cache should be reused"),
-        |_dsn, symbols, trade_date| {
-            assert_eq!(symbols, &["000001.SZ".to_string()]);
-            assert_eq!(trade_date, pick_date);
-            Ok(vec![
-                MacdPeriodState {
-                    ts_code: "000001.SZ".to_string(),
-                    period_type: "weekly".to_string(),
-                    ema12: 0.18,
-                    ema26: 0.0,
-                    dea: 0.10,
-                    period_count: 39,
-                },
-                MacdPeriodState {
-                    ts_code: "000001.SZ".to_string(),
-                    period_type: "monthly".to_string(),
-                    ema12: 0.16,
-                    ema26: 0.0,
-                    dea: 0.10,
-                    period_count: 29,
-                },
-            ])
+        |_dsn, _symbols, _trade_date| {
+            panic!("prepared cache reuse must not query period indicator state")
         },
     )
     .unwrap();
 
     let payload: serde_json::Value =
         serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
-    assert_eq!(payload["count"], 1);
-    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
+    assert_eq!(payload["method"], "qianlong");
 
     let cached = load_prepared_cache(
         temp.path(),
@@ -350,6 +331,73 @@ fn db_native_screen_writes_db_native_prepared_cache_metadata() {
     );
     assert_eq!(metadata["window_end_date"], pick_date.to_string());
     assert_eq!(metadata["calc_versions"]["macd"], "macd_qfq_12_26_9_v1");
+}
+
+#[test]
+fn db_native_screen_propagates_table_gaps_to_cache_and_factor_manifest_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let requested_window_start = prepared_cache_start_date(pick_date);
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        dsn: "postgresql://fixture".to_string(),
+        recompute: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: true,
+        environment_state: Some("neutral".to_string()),
+    };
+
+    let output_path =
+        run_db_native_screen_with_dataset_loader(request, |_dsn, start_date, end_date| {
+            assert_eq!(start_date, requested_window_start);
+            assert_eq!(end_date, pick_date);
+            Ok(MarketDataset {
+                rows: (0..365)
+                    .map(|offset| {
+                        market_row_at_date(
+                            requested_window_start + Duration::days(offset),
+                            10.0 + offset as f64 * 0.01,
+                            100.0,
+                        )
+                    })
+                    .chain(std::iter::once(market_row_at_date(pick_date, 12.52, 100.0)))
+                    .collect(),
+                db_data_gaps: std::collections::BTreeMap::from([(
+                    "index_moneyflow_cnt_ths".to_string(),
+                    DbDataGap::missing_rows(1, 0),
+                )]),
+            })
+        })
+        .unwrap();
+
+    let candidate_payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
+    assert!(candidate_payload.get("db_data_gaps").is_none());
+
+    let cache_metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(temp.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cache_metadata["db_data_gaps"]["index_moneyflow_cnt_ths"],
+        serde_json::json!({
+            "reason": "missing_rows",
+            "expected_rows": 1,
+            "actual_rows": 0
+        })
+    );
+
+    let factor_manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("factors/2026-06-15.b2/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        factor_manifest["db_data_gaps"],
+        cache_metadata["db_data_gaps"]
+    );
 }
 
 #[test]
@@ -1516,8 +1564,8 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
-            export_factors: false,
-            environment_state: None,
+            export_factors: true,
+            environment_state: Some("neutral".to_string()),
         },
         &provider,
         "15:00:00",
@@ -1545,7 +1593,13 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
                 .insert("_czsc_snapshot_available".to_string(), 1.0);
             row.db_factors
                 .insert("_czsc_latest_zs_zg".to_string(), 20.4);
-            Ok(vec![row])
+            Ok(MarketDataset {
+                rows: vec![row],
+                db_data_gaps: std::collections::BTreeMap::from([(
+                    "index_moneyflow_cnt_ths".to_string(),
+                    DbDataGap::missing_rows(1, 0),
+                )]),
+            })
         },
         |_dsn, symbols, trade_date| {
             assert_eq!(symbols, &["000001.SZ".to_string()]);
@@ -1610,6 +1664,138 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
     assert_eq!(
         latest.db_factors["intraday_structure_source_previous_eod"],
         1.0
+    );
+
+    let dataset = load_prepared_dataset_for_mode(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        dataset.db_data_gaps["index_moneyflow_cnt_ths"],
+        DbDataGap::missing_rows(1, 0)
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            temp.path()
+                .join("factors/2026-05-25.intraday.b2/manifest.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        manifest["db_data_gaps"]["index_moneyflow_cnt_ths"],
+        serde_json::json!({
+            "reason": "missing_rows",
+            "expected_rows": 1,
+            "actual_rows": 0
+        })
+    );
+}
+
+#[test]
+fn db_native_intraday_screen_skips_period_state_loader_when_table_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    let previous_trade_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
+    let start_date = prepared_cache_start_date(previous_trade_date);
+    let provider = StaticRtKProvider::new([
+        ("*.SH", vec![]),
+        (
+            "*.SZ",
+            vec![RawRtKRow::from_value(serde_json::json!({
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "open": 10.2,
+                "high": 10.8,
+                "low": 10.1,
+                "close": 10.6,
+                "vol": 130000.0,
+                "amount": 1390000.0,
+                "trade_time": "14:59:59"
+            }))],
+        ),
+        ("*.BJ", vec![]),
+    ]);
+
+    let output_path = run_db_native_intraday_screen_with_loaders(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: true,
+            environment_state: Some("neutral".to_string()),
+        },
+        &provider,
+        "15:00:00",
+        |_dsn, _trade_date| Ok(previous_trade_date),
+        |_dsn, actual_start, actual_end| {
+            assert_eq!(actual_start, start_date);
+            assert_eq!(actual_end, previous_trade_date);
+            Ok(MarketDataset {
+                rows: vec![MarketRow {
+                    ts_code: "000001.SZ".to_string(),
+                    trade_date: previous_trade_date,
+                    open: 10.0,
+                    high: 10.3,
+                    low: 9.9,
+                    close: 10.1,
+                    vol: 1000.0,
+                    turnover_rate: Some(1.0),
+                    adj_factor: Some(2.0),
+                    db_factors: Default::default(),
+                }],
+                db_data_gaps: std::collections::BTreeMap::from([(
+                    "stock_period_indicator_state".to_string(),
+                    DbDataGap::missing_table(),
+                )]),
+            })
+        },
+        |_dsn, _symbols, _trade_date| panic!("unavailable period state table must not be queried"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output_path,
+        temp.path().join("candidates/2026-05-25.intraday.b2.json")
+    );
+    let dataset = load_prepared_dataset_for_mode(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = dataset.rows.last().unwrap();
+    assert_eq!(latest.trade_date, pick_date);
+    assert!(!latest.db_factors.contains_key("macd_weekly_prev_hist"));
+    assert_eq!(
+        dataset.db_data_gaps["stock_period_indicator_state"],
+        DbDataGap::missing_table()
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            temp.path()
+                .join("factors/2026-05-25.intraday.b2/manifest.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        manifest["db_data_gaps"]["stock_period_indicator_state"],
+        serde_json::json!({"reason": "missing_table"})
     );
 }
 

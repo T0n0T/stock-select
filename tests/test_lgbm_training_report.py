@@ -180,6 +180,80 @@ class LgbmTrainingReportTest(unittest.TestCase):
             },
         )
 
+    def test_train_report_inherits_dataset_db_data_gaps(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dataset = root / "rank_dataset.csv"
+            self.write_dataset(
+                dataset,
+                fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "x"],
+                rows=self.basic_rows(),
+            )
+            expected_gaps = {
+                "index_moneyflow_cnt_ths": {
+                    "artifact_count": 1,
+                    "artifacts": {
+                        "2026-01-01.b2": {
+                            "reason": "missing_rows",
+                            "expected_rows": 1,
+                            "actual_rows": 0,
+                        }
+                    },
+                },
+                "stock_daily_asof_indicators": {
+                    "artifact_count": 1,
+                    "artifacts": {
+                        "2026-01-02.b2": {
+                            "reason": "schema_mismatch",
+                            "missing_columns": ["daily_hist_x2_asof"],
+                        }
+                    },
+                },
+            }
+            (root / "rank_dataset_summary.json").write_text(
+                json.dumps({"db_data_gaps": expected_gaps}),
+                encoding="utf-8",
+            )
+            output_dir = root / "model"
+
+            with patch(
+                "ml.training.train_lgbm_rank.train_model_result",
+                side_effect=self.dummy_model_result,
+            ):
+                report = train_and_report(
+                    dataset,
+                    output_dir,
+                    test_ratio=0.5,
+                    feature_set="raw_numeric",
+                    num_leaves=5,
+                    min_data_in_leaf=1,
+                    num_boost_round=1,
+                    learning_rate=0.1,
+                    label_column="rank_label_3d",
+                    rf_diagnostics=False,
+                    method="b2",
+                )
+
+            persisted = json.loads(
+                (output_dir / "lgbm_rank_report_raw_numeric.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            markdown = (
+                output_dir / "lgbm_rank_report_raw_numeric.md"
+            ).read_text(encoding="utf-8")
+
+        self.assertEqual(report["db_data_gaps"], expected_gaps)
+        self.assertEqual(persisted["db_data_gaps"], expected_gaps)
+        self.assertIn("## database data gaps", markdown)
+        self.assertIn("index_moneyflow_cnt_ths", markdown)
+        self.assertIn("2026-01-01.b2", markdown)
+        self.assertIn("missing_rows", markdown)
+        self.assertIn("expected_rows=1 actual_rows=0", markdown)
+        self.assertIn("stock_daily_asof_indicators", markdown)
+        self.assertIn("schema_mismatch", markdown)
+        self.assertIn("missing_columns=daily_hist_x2_asof", markdown)
+
     def test_train_and_report_persists_lambdarank_truncation_level(self):
         def fake_train_model_result(train_rows, test_rows, **kwargs):
             self.assertEqual(kwargs["label_gain"], [0, 1, 5, 15])

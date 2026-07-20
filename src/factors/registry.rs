@@ -23,7 +23,7 @@ use crate::factors::series::{FactorList, mean_tail, push_number, rolling_mean_se
 use crate::factors::types::{FactorInputRow, FactorRow, FactorValue};
 use crate::factors::volume::{push_latest_volume_shrink_factor, push_volume_turnover_factors};
 use crate::factors::zx::{push_zx_pullback_factors, zx_lines};
-use crate::model::{Candidate, Method, PreparedRow};
+use crate::model::{Candidate, DbDataGap, Method, PreparedRow};
 
 pub const FACTOR_ARTIFACT_VERSION: u32 = 2;
 pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v4";
@@ -894,6 +894,24 @@ pub fn write_factor_artifact(
     rows: &[FactorRow],
     candidate_artifact: Option<&Path>,
 ) -> anyhow::Result<PathBuf> {
+    write_factor_artifact_with_db_data_gaps(
+        runtime_root,
+        method,
+        artifact_key,
+        rows,
+        candidate_artifact,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn write_factor_artifact_with_db_data_gaps(
+    runtime_root: &Path,
+    method: Method,
+    artifact_key: &str,
+    rows: &[FactorRow],
+    candidate_artifact: Option<&Path>,
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
+) -> anyhow::Result<PathBuf> {
     let dir = factor_artifact_dir(runtime_root, method, artifact_key);
     std::fs::create_dir_all(&dir)?;
     let factors_path = dir.join("factors.json");
@@ -918,6 +936,7 @@ pub fn write_factor_artifact(
             factor_source: "rust_factor_library",
             candidate_artifact: candidate_artifact.map(|path| path.to_string_lossy()),
             row_count: rows.len(),
+            db_data_gaps,
         },
     )?;
     Ok(dir)
@@ -949,6 +968,7 @@ struct FactorManifestFile<'a> {
     factor_source: &'static str,
     candidate_artifact: Option<Cow<'a, str>>,
     row_count: usize,
+    db_data_gaps: &'a BTreeMap<String, DbDataGap>,
 }
 
 struct SortedFactorRows<'a>(&'a [FactorRow]);
@@ -976,7 +996,8 @@ impl Serialize for FactorManifestFile<'_> {
         S: serde::Serializer,
     {
         let membership_sources = BTreeMap::from([("ths", THS_MEMBERSHIP_SOURCE)]);
-        let mut map = serializer.serialize_map(Some(8))?;
+        let mut map =
+            serializer.serialize_map(Some(if self.db_data_gaps.is_empty() { 8 } else { 9 }))?;
         map.serialize_entry("artifact_key", self.artifact_key)?;
         map.serialize_entry("artifact_version", &self.artifact_version)?;
         map.serialize_entry("candidate_artifact", &self.candidate_artifact)?;
@@ -985,6 +1006,9 @@ impl Serialize for FactorManifestFile<'_> {
         map.serialize_entry("membership_sources", &membership_sources)?;
         map.serialize_entry("method", self.method)?;
         map.serialize_entry("row_count", &self.row_count)?;
+        if !self.db_data_gaps.is_empty() {
+            map.serialize_entry("db_data_gaps", self.db_data_gaps)?;
+        }
         map.end()
     }
 }

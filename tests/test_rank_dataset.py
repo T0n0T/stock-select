@@ -7,6 +7,7 @@ import types
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from ml.dataset.rank_dataset import (
     add_day_relative_labels,
@@ -43,42 +44,6 @@ class RankDatasetTest(unittest.TestCase):
             **payload,
         }
         (factor_dir / "factors.json").write_text(json.dumps(artifact), encoding="utf-8")
-
-    def test_eod_training_rejects_czsc_snapshot_coverage_below_95_percent(self):
-        rows = [
-            {"czsc_snapshot_available": index < 949, "czsc_status": "no_finished_bi"}
-            for index in range(1000)
-        ]
-
-        with self.assertRaisesRegex(ValueError, r"CZSC training coverage 94\.90% below 95%"):
-            rank_dataset.validate_czsc_training_coverage(rows, intraday=False)
-
-    def test_training_czsc_coverage_accepts_95_and_99_percent_boundaries(self):
-        at_95 = [
-            {"czsc_snapshot_available": index < 95, "czsc_status": "no_finished_bi"}
-            for index in range(100)
-        ]
-        at_99 = [
-            {"czsc_snapshot_available": index < 99, "czsc_status": "no_finished_bi"}
-            for index in range(100)
-        ]
-
-        self.assertEqual(
-            rank_dataset.validate_czsc_training_coverage(at_95, intraday=False),
-            "czsc_training_coverage:95.00%:below_99%",
-        )
-        self.assertIsNone(rank_dataset.validate_czsc_training_coverage(at_99, intraday=False))
-
-    def test_intraday_training_warns_instead_of_rejecting_low_czsc_coverage(self):
-        rows = [
-            {"czsc_snapshot_available": index < 949}
-            for index in range(1000)
-        ]
-
-        self.assertEqual(
-            rank_dataset.validate_czsc_training_coverage(rows, intraday=True),
-            "czsc_training_coverage:94.90%:below_99%",
-        )
 
     def test_parse_args_requires_training_window_dates(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -1162,7 +1127,7 @@ class RankDatasetTest(unittest.TestCase):
         self.assertIn("stock-select-rs screen --method b2 --pick-date 2026-05-25 --export-factors", message)
         self.assertFalse((output_dir / "rank_dataset.csv").exists())
 
-    def test_dataset_build_rejects_low_eod_czsc_coverage_before_querying_prices(self):
+    def test_dataset_build_records_manifest_gaps_without_czsc_coverage_gate(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             runtime = root / "runtime"
@@ -1196,8 +1161,24 @@ class RankDatasetTest(unittest.TestCase):
                     ],
                 },
             )
+            (factor_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "artifact_key": "2026-05-25",
+                        "method": "b2",
+                        "db_data_gaps": {
+                            "index_moneyflow_cnt_ths": {
+                                "reason": "missing_rows",
+                                "expected_rows": 1,
+                                "actual_rows": 0,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
 
-            with self.assertRaisesRegex(SystemExit, r"CZSC training coverage 94\.90% below 95%"):
+            with patch("ml.dataset.rank_dataset.fetch_price_rows", return_value={}):
                 main_from_args(
                     type(
                         "Args",
@@ -1218,7 +1199,26 @@ class RankDatasetTest(unittest.TestCase):
                     )()
                 )
 
-            self.assertFalse((output_dir / "rank_dataset.csv").exists())
+            summary = json.loads(
+                (output_dir / "rank_dataset_summary.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue((output_dir / "rank_dataset.csv").exists())
+            self.assertFalse(
+                any("czsc_training_coverage" in warning for warning in summary["warnings"])
+            )
+            self.assertEqual(
+                summary["db_data_gaps"]["index_moneyflow_cnt_ths"],
+                {
+                    "artifact_count": 1,
+                    "artifacts": {
+                        "2026-05-25.b2": {
+                            "reason": "missing_rows",
+                            "expected_rows": 1,
+                            "actual_rows": 0,
+                        }
+                    },
+                },
+            )
 
     def test_intraday_missing_factor_hint_keeps_intraday_screen_flag(self):
         with tempfile.TemporaryDirectory() as temp_dir:

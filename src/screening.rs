@@ -7,13 +7,14 @@ use chrono::{Duration, NaiveDate};
 use serde_json::json;
 
 use crate::cache::{
-    MIN_DB_NATIVE_WINDOW_TRADING_DAYS, candidate_output_path, load_prepared_cache,
-    prepared_cache_start_date as cache_prepared_cache_start_date, write_db_native_prepared_cache,
-    write_prepared_cache, write_prepared_cache_for_mode,
+    MIN_DB_NATIVE_WINDOW_TRADING_DAYS, candidate_output_path, load_prepared_dataset,
+    prepared_cache_start_date as cache_prepared_cache_start_date, write_db_native_prepared_dataset,
+    write_prepared_cache, write_prepared_dataset_for_mode,
 };
 use crate::environment::{normalize_environment_state, prepared_market_state};
 use crate::factors::registry::{
-    RAW_MARKET_AMOUNT_FACTOR, build_candidate_factor_rows_from_refs, write_factor_artifact,
+    RAW_MARKET_AMOUNT_FACTOR, build_candidate_factor_rows_from_refs,
+    write_factor_artifact_with_db_data_gaps,
 };
 use crate::indicators::{kdj, macd, rolling_mean, rolling_sum, zx_lines};
 use crate::intraday::{
@@ -21,7 +22,10 @@ use crate::intraday::{
     build_intraday_market_rows_with_macd_states, fetch_rt_k_snapshot,
 };
 use crate::local_factors::enrich_local_market_factors;
-use crate::model::{MarketRow, Method, PreparedRow, ScreenResult};
+use crate::model::{
+    DbDataGap, DbDataGapReason, IntoMarketDataset, MarketRow, Method, PreparedDataset, PreparedRow,
+    ScreenResult,
+};
 use crate::strategies::StrategyOutput;
 use crate::strategies::b2::run_b2_strategy_from_refs;
 use crate::strategies::b3::run_b3_strategy_from_refs;
@@ -107,6 +111,20 @@ where
     run_db_native_screen_with_loaders(request, loader, crate::db::fetch_stock_period_macd_states)
 }
 
+pub fn run_db_native_screen_with_dataset_loader<F>(
+    request: ScreenRequest,
+    loader: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<crate::model::MarketDataset>,
+{
+    run_db_native_screen_with_dataset_loaders(
+        request,
+        loader,
+        crate::db::fetch_stock_period_macd_states,
+    )
+}
+
 pub fn run_db_native_screen_with_loaders<F, S>(
     request: ScreenRequest,
     loader: F,
@@ -119,45 +137,69 @@ where
     run_screen_with_loaders(request, loader, true, macd_state_loader)
 }
 
-fn run_screen_with_loaders<F, S>(
+pub fn run_db_native_screen_with_dataset_loaders<F, S>(
+    request: ScreenRequest,
+    loader: F,
+    macd_state_loader: S,
+) -> anyhow::Result<PathBuf>
+where
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<crate::model::MarketDataset>,
+    S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
+{
+    run_screen_with_loaders(request, loader, true, macd_state_loader)
+}
+
+fn run_screen_with_loaders<F, D, S>(
     request: ScreenRequest,
     loader: F,
     db_native_source: bool,
     macd_state_loader: S,
 ) -> anyhow::Result<PathBuf>
 where
-    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
+    D: IntoMarketDataset,
     S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
     ensure_screen_supported(request.method)?;
     let (start_date, end_date) = screen_window(request.pick_date);
-    let mut prepared = if request.recompute {
-        load_and_prepare(&request, start_date, end_date, loader, db_native_source)?
+    let (mut prepared, loaded_from_cache) = if request.recompute {
+        (
+            load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
+            false,
+        )
     } else {
-        match load_prepared_cache(
+        match load_prepared_dataset(
             &request.runtime_root,
             request.method,
             request.pick_date,
             start_date,
             end_date,
         )? {
-            Some(rows) => rows,
-            None => load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
+            Some(dataset) => (dataset, true),
+            None => (
+                load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
+                false,
+            ),
         }
     };
-    backfill_qianlong_previous_period_hists_if_needed(
-        &request,
-        &mut prepared,
-        db_native_source,
-        macd_state_loader,
-    )?;
+    if !loaded_from_cache
+        && !db_table_unavailable(&prepared.db_data_gaps, "stock_period_indicator_state")
+    {
+        backfill_qianlong_previous_period_hists_if_needed(
+            &request,
+            &mut prepared.rows,
+            db_native_source,
+            macd_state_loader,
+        )?;
+    }
     if !prepared
+        .rows
         .iter()
         .any(|row| row.trade_date == request.pick_date)
     {
         anyhow::bail!(missing_pick_date_rows_message(
             request.pick_date,
-            &prepared,
+            &prepared.rows,
             &request.runtime_root,
             request.method,
         ));
@@ -165,18 +207,18 @@ where
 
     let (pool_codes, resolved_pool_file) = match request.pool_source {
         PoolSource::TurnoverTop => (
-            filter_turnover_top_pool_codes(&prepared, request.method, request.pick_date, 5000),
+            filter_turnover_top_pool_codes(&prepared.rows, request.method, request.pick_date, 5000),
             None,
         ),
         PoolSource::Custom => {
             let resolved = resolve_custom_pool(&request)?;
             (
-                filter_custom_pool_codes(&prepared, request.pick_date, &resolved.codes)?,
+                filter_custom_pool_codes(&prepared.rows, request.pick_date, &resolved.codes)?,
                 Some(resolved.path),
             )
         }
     };
-    let pool = pool_refs(&prepared, &pool_codes);
+    let pool = pool_refs(&prepared.rows, &pool_codes);
     let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
     let count = strategy_output.stats.get("selected").copied().unwrap_or(0);
     let result = ScreenResult {
@@ -199,13 +241,14 @@ where
     };
     let output_path = write_screen_result(&request.runtime_root, &result)?;
     if request.export_factors {
-        let prepared_refs = prepared.iter().collect::<Vec<_>>();
+        let prepared_refs = prepared.rows.iter().collect::<Vec<_>>();
         write_screen_factor_artifact(
             &request,
             &result.candidates,
             &prepared_refs,
             &output_path,
             false,
+            &prepared.db_data_gaps,
         )?;
     }
     Ok(output_path)
@@ -255,7 +298,7 @@ where
     write_intraday_screen_output(request, fallback_trade_time, start_date, prepared)
 }
 
-pub fn run_db_native_intraday_screen_with_loaders<P, Prev, F, S>(
+pub fn run_db_native_intraday_screen_with_loaders<P, Prev, F, D, S>(
     request: ScreenRequest,
     provider: &P,
     fallback_trade_time: &str,
@@ -266,17 +309,24 @@ pub fn run_db_native_intraday_screen_with_loaders<P, Prev, F, S>(
 where
     P: IntradaySnapshotProvider,
     Prev: FnOnce(&str, NaiveDate) -> anyhow::Result<NaiveDate>,
-    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
+    D: IntoMarketDataset,
     S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
     ensure_screen_supported(request.method)?;
     let previous_trade_date = previous_trade_date_loader(&request.dsn, request.pick_date)?;
     let start_date = prepared_cache_start_date(previous_trade_date);
     let snapshot = fetch_rt_k_snapshot(provider, request.pick_date, fallback_trade_time)?;
-    let history = history_loader(&request.dsn, start_date, previous_trade_date)?;
-    if history.is_empty() {
+    let history_dataset =
+        history_loader(&request.dsn, start_date, previous_trade_date)?.into_market_dataset();
+    if history_dataset.rows.is_empty() {
         anyhow::bail!("No market rows found between {start_date} and {previous_trade_date}.");
     }
+    let period_state_unavailable = db_table_unavailable(
+        &history_dataset.db_data_gaps,
+        "stock_period_indicator_state",
+    );
+    let history = history_dataset.rows;
     let universe = db_native_intraday_history_universe(&history, previous_trade_date);
     let supported_snapshot = snapshot
         .iter()
@@ -290,8 +340,16 @@ where
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let macd_states = macd_state_loader(&request.dsn, &symbols, request.pick_date)?;
-    let covered_symbols = intraday_macd_covered_symbols(&symbols, &macd_states);
+    let (macd_states, covered_symbols) = if period_state_unavailable {
+        (
+            Vec::new(),
+            symbols.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+        )
+    } else {
+        let states = macd_state_loader(&request.dsn, &symbols, request.pick_date)?;
+        let covered = intraday_macd_covered_symbols(&symbols, &states);
+        (states, covered)
+    };
     let skipped_missing_macd_state = supported_snapshot
         .iter()
         .filter(|row| !covered_symbols.contains(row.ts_code.as_str()))
@@ -315,7 +373,10 @@ where
         request.pick_date,
         &macd_states,
     );
-    let prepared = prepare_rows(market_rows);
+    let prepared = PreparedDataset {
+        rows: prepare_rows(market_rows),
+        db_data_gaps: history_dataset.db_data_gaps,
+    };
     write_intraday_screen_output_with_extra_stats(
         request,
         fallback_trade_time,
@@ -401,7 +462,7 @@ fn write_intraday_screen_output(
         request,
         fallback_trade_time,
         start_date,
-        prepared,
+        PreparedDataset::complete(prepared),
         BTreeMap::new(),
     )
 }
@@ -410,15 +471,16 @@ fn write_intraday_screen_output_with_extra_stats(
     request: ScreenRequest,
     fallback_trade_time: &str,
     start_date: NaiveDate,
-    prepared: Vec<PreparedRow>,
+    prepared: PreparedDataset,
     extra_stats: BTreeMap<String, usize>,
 ) -> anyhow::Result<PathBuf> {
     let metadata_start_date = prepared
+        .rows
         .iter()
         .map(|row| row.trade_date)
         .min()
         .unwrap_or(start_date);
-    write_prepared_cache_for_mode(
+    write_prepared_dataset_for_mode(
         &request.runtime_root,
         request.method,
         request.pick_date,
@@ -429,18 +491,18 @@ fn write_intraday_screen_output_with_extra_stats(
     )?;
     let (pool_codes, resolved_pool_file) = match request.pool_source {
         PoolSource::TurnoverTop => (
-            filter_turnover_top_pool_codes(&prepared, request.method, request.pick_date, 5000),
+            filter_turnover_top_pool_codes(&prepared.rows, request.method, request.pick_date, 5000),
             None,
         ),
         PoolSource::Custom => {
             let resolved = resolve_custom_pool(&request)?;
             (
-                filter_custom_pool_codes(&prepared, request.pick_date, &resolved.codes)?,
+                filter_custom_pool_codes(&prepared.rows, request.pick_date, &resolved.codes)?,
                 Some(resolved.path),
             )
         }
     };
-    let pool = pool_refs(&prepared, &pool_codes);
+    let pool = pool_refs(&prepared.rows, &pool_codes);
     let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
     let mut stats = strategy_output.stats;
     stats.extend(extra_stats);
@@ -470,13 +532,14 @@ fn write_intraday_screen_output_with_extra_stats(
     }
     std::fs::write(&output_path, serde_json::to_vec_pretty(&result)?)?;
     if request.export_factors {
-        let prepared_refs = prepared.iter().collect::<Vec<_>>();
+        let prepared_refs = prepared.rows.iter().collect::<Vec<_>>();
         write_screen_factor_artifact(
             &request,
             &result.candidates,
             &prepared_refs,
             &output_path,
             true,
+            &prepared.db_data_gaps,
         )?;
     }
     Ok(output_path)
@@ -514,6 +577,7 @@ fn write_screen_factor_artifact(
     prepared_rows: &[&PreparedRow],
     candidate_artifact: &Path,
     intraday: bool,
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
 ) -> anyhow::Result<PathBuf> {
     let artifact_key = screen_artifact_key(request.pick_date, intraday);
     let environment_state = match request.environment_state.as_deref() {
@@ -526,12 +590,13 @@ fn write_screen_factor_artifact(
         request.method,
         environment_state.as_deref(),
     );
-    write_factor_artifact(
+    write_factor_artifact_with_db_data_gaps(
         &request.runtime_root,
         request.method,
         &artifact_key,
         &rows,
         Some(candidate_artifact),
+        db_data_gaps,
     )
 }
 
@@ -564,30 +629,34 @@ fn run_screen_strategy(
     }
 }
 
-fn load_and_prepare<F>(
+fn load_and_prepare<F, D>(
     request: &ScreenRequest,
     start_date: NaiveDate,
     end_date: NaiveDate,
     loader: F,
     db_native_source: bool,
-) -> anyhow::Result<Vec<PreparedRow>>
+) -> anyhow::Result<PreparedDataset>
 where
-    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
+    D: IntoMarketDataset,
 {
-    let rows = loader(&request.dsn, start_date, end_date)?;
-    if rows.is_empty() {
+    let market_dataset = loader(&request.dsn, start_date, end_date)?.into_market_dataset();
+    if market_dataset.rows.is_empty() {
         anyhow::bail!("No market rows found between {start_date} and {end_date}.");
     }
-    let prepared = prepare_rows(rows);
+    let prepared = PreparedDataset {
+        rows: prepare_rows(market_dataset.rows),
+        db_data_gaps: market_dataset.db_data_gaps,
+    };
     if db_native_source {
-        ensure_db_native_prepared_window(&prepared, start_date, end_date)?;
+        ensure_db_native_prepared_window(&prepared.rows, start_date, end_date)?;
     }
-    if !prepared.iter().any(|row| row.trade_date == end_date) {
+    if !prepared.rows.iter().any(|row| row.trade_date == end_date) {
         return Ok(prepared);
     }
     let write_cache_started = Instant::now();
     if db_native_source {
-        write_db_native_prepared_cache(
+        write_db_native_prepared_dataset(
             &request.runtime_root,
             request.method,
             request.pick_date,
@@ -603,12 +672,12 @@ where
             request.pick_date,
             start_date,
             end_date,
-            &prepared,
+            &prepared.rows,
         )?;
     }
     eprintln!(
         "[screen] prepared cache wrote rows={} elapsed={:.3}s",
-        prepared.len(),
+        prepared.rows.len(),
         write_cache_started.elapsed().as_secs_f64()
     );
     Ok(prepared)
@@ -706,6 +775,15 @@ fn prepared_factor_is_finite(row: &PreparedRow, key: &str) -> bool {
     row.db_factors
         .get(key)
         .is_some_and(|value| value.is_finite())
+}
+
+fn db_table_unavailable(db_data_gaps: &BTreeMap<String, DbDataGap>, table: &str) -> bool {
+    db_data_gaps.get(table).is_some_and(|gap| {
+        matches!(
+            gap.reason,
+            DbDataGapReason::MissingTable | DbDataGapReason::SchemaMismatch
+        )
+    })
 }
 
 fn maybe_insert_previous_period_hist(

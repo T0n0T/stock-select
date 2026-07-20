@@ -46,6 +46,18 @@ def read_dataset(path: Path) -> list[dict[str, Any]]:
         return list(csv.DictReader(handle))
 
 
+def read_dataset_db_data_gaps(dataset: Path) -> dict[str, Any]:
+    summary_path = dataset.with_name("rank_dataset_summary.json")
+    if not summary_path.exists():
+        return {}
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    gaps = summary.get("db_data_gaps") if isinstance(summary, dict) else None
+    return dict(gaps) if isinstance(gaps, dict) else {}
+
+
 def walk_forward_split_dates(dates: Sequence[str], *, test_ratio: float) -> tuple[list[str], list[str]]:
     ordered = sorted(set(str(date) for date in dates))
     if len(ordered) < 2:
@@ -272,6 +284,7 @@ def train_and_report(
     resolved_eval_at = [int(value) for value in (eval_at or [5, 10, 20])]
 
     rows = read_dataset(dataset)
+    db_data_gaps = read_dataset_db_data_gaps(dataset)
     train_dates, test_dates = walk_forward_split_dates([str(row.get("date")) for row in rows], test_ratio=test_ratio)
     train_rows = rows_for_dates(rows, set(train_dates), label_column=label_column)
     test_rows = rows_for_dates(rows, set(test_dates), label_column=label_column)
@@ -549,6 +562,7 @@ def train_and_report(
         "env_metrics": env_metrics,
         "top_features": top_features,
         "rf_diagnostics": rf_summary,
+        "db_data_gaps": db_data_gaps,
     }
     if model_artifacts is not None:
         report["model_artifacts"] = model_artifacts

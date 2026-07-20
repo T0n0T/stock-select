@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use std::collections::BTreeSet;
 use stock_select::config::{
-    default_runtime_root_from_home, resolve_config_value_from, resolve_dsn_from_sources,
+    default_runtime_root_from_home, resolve_config_value_from,
+    resolve_db_check_tables_from_sources, resolve_dsn_from_sources,
     resolve_runtime_root_from_sources,
 };
 
@@ -78,4 +80,57 @@ fn runtime_root_uses_cli_then_shell_then_dotenv_then_old_default() {
         resolve_runtime_root_from_sources(None, None, "", fallback_home),
         PathBuf::from("/home/tester/.agents/skills/stock-select/runtime")
     );
+}
+
+#[test]
+fn db_check_tables_use_defaults_until_explicitly_configured() {
+    let defaults = BTreeSet::from([
+        "index_idx_factor_pro".to_string(),
+        "index_limit_cpt_list".to_string(),
+        "index_moneyflow_cnt_ths".to_string(),
+        "index_ths_daily".to_string(),
+        "stock_stk_factor_pro".to_string(),
+    ]);
+
+    assert_eq!(
+        resolve_db_check_tables_from_sources(None, "").unwrap(),
+        defaults
+    );
+    assert_eq!(
+        resolve_db_check_tables_from_sources(Some(""), "STOCK_SELECT_DB_CHECK=index_ths_daily\n")
+            .unwrap(),
+        BTreeSet::from(["stock_stk_factor_pro".to_string()])
+    );
+    assert_eq!(
+        resolve_db_check_tables_from_sources(None, "STOCK_SELECT_DB_CHECK=\n").unwrap(),
+        BTreeSet::from(["stock_stk_factor_pro".to_string()])
+    );
+    assert_eq!(
+        resolve_db_check_tables_from_sources(
+            Some(" INDEX_THS_DAILY, stock_moneyflow_ths, index_ths_daily, "),
+            "",
+        )
+        .unwrap(),
+        BTreeSet::from([
+            "index_ths_daily".to_string(),
+            "stock_moneyflow_ths".to_string(),
+            "stock_stk_factor_pro".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn db_check_tables_reject_unknown_or_qualified_names() {
+    let unknown = resolve_db_check_tables_from_sources(Some("missing_table"), "")
+        .unwrap_err()
+        .to_string();
+    assert!(unknown.contains("missing_table"));
+    assert!(unknown.contains("index_ths_daily"));
+
+    for value in ["public.index_ths_daily", "index_*", "*"] {
+        assert!(
+            resolve_db_check_tables_from_sources(Some(value), "").is_err(),
+            "{value} should be rejected"
+        );
+    }
 }

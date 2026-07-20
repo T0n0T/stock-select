@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::model::{Method, PreparedRow};
+use crate::model::{DbDataGap, Method, PreparedDataset, PreparedRow, db_data_gap_warning_message};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
 pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 11;
@@ -23,6 +24,8 @@ const LEGACY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRBIN1";
 const DICTIONARY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRDIC2";
 const ZSTD_FRAME_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
 const PREPARED_CACHE_ZSTD_LEVEL: i32 = 1;
+
+static WARNED_PREPARED_CACHE_GAPS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 
 pub fn prepared_cache_start_date(end_date: NaiveDate) -> NaiveDate {
     date_years_before(end_date, 1)
@@ -79,6 +82,8 @@ pub struct PreparedCacheMetadata {
     pub calc_versions: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub membership_sources: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub db_data_gaps: BTreeMap<String, DbDataGap>,
 }
 
 pub fn prepared_cache_data_path(runtime_root: &Path, pick_date: NaiveDate) -> PathBuf {
@@ -150,6 +155,49 @@ pub fn write_db_native_prepared_cache(
     window_trading_days: u32,
     rows: &[PreparedRow],
 ) -> anyhow::Result<()> {
+    write_db_native_prepared_cache_parts(
+        runtime_root,
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        window_trading_days,
+        rows,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn write_db_native_prepared_dataset(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    window_trading_days: u32,
+    dataset: &PreparedDataset,
+) -> anyhow::Result<()> {
+    write_db_native_prepared_cache_parts(
+        runtime_root,
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        window_trading_days,
+        &dataset.rows,
+        &dataset.db_data_gaps,
+    )
+}
+
+fn write_db_native_prepared_cache_parts(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    window_trading_days: u32,
+    rows: &[PreparedRow],
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
+) -> anyhow::Result<()> {
     let paths = prepared_cache_paths(runtime_root, pick_date, false);
     write_prepared_cache_rows_file(&paths.data_path, rows)?;
     write_json(
@@ -161,6 +209,7 @@ pub fn write_db_native_prepared_cache(
             end_date,
             window_trading_days,
             rows,
+            db_data_gaps,
         ),
     )?;
     prune_eod_prepared_cache_to_limit(runtime_root, prepared_cache_retention_limit()?)?;
@@ -176,6 +225,49 @@ pub fn write_prepared_cache_for_mode(
     intraday: bool,
     rows: &[PreparedRow],
 ) -> anyhow::Result<()> {
+    write_prepared_cache_parts(
+        runtime_root,
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        intraday,
+        rows,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn write_prepared_dataset_for_mode(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    intraday: bool,
+    dataset: &PreparedDataset,
+) -> anyhow::Result<()> {
+    write_prepared_cache_parts(
+        runtime_root,
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        intraday,
+        &dataset.rows,
+        &dataset.db_data_gaps,
+    )
+}
+
+fn write_prepared_cache_parts(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    intraday: bool,
+    rows: &[PreparedRow],
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
+) -> anyhow::Result<()> {
     let retention_limit = if intraday {
         None
     } else {
@@ -185,7 +277,15 @@ pub fn write_prepared_cache_for_mode(
     write_prepared_cache_rows_file(&paths.data_path, rows)?;
     write_json(
         &paths.meta_path,
-        &build_metadata(method, pick_date, start_date, end_date, intraday, rows),
+        &build_metadata(
+            method,
+            pick_date,
+            start_date,
+            end_date,
+            intraday,
+            rows,
+            db_data_gaps,
+        ),
     )?;
     if let Some(limit) = retention_limit {
         prune_eod_prepared_cache_to_limit(runtime_root, limit)?;
@@ -293,6 +393,7 @@ fn build_metadata(
     end_date: NaiveDate,
     intraday: bool,
     rows: &[PreparedRow],
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
 ) -> PreparedCacheMetadata {
     let symbol_count = rows
         .iter()
@@ -328,6 +429,7 @@ fn build_metadata(
         window_end_date: None,
         calc_versions: BTreeMap::new(),
         membership_sources: BTreeMap::new(),
+        db_data_gaps: db_data_gaps.clone(),
     }
 }
 
@@ -338,8 +440,17 @@ fn build_db_native_metadata(
     end_date: NaiveDate,
     requested_window_trading_days: u32,
     rows: &[PreparedRow],
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
 ) -> PreparedCacheMetadata {
-    let mut metadata = build_metadata(method, pick_date, start_date, end_date, false, rows);
+    let mut metadata = build_metadata(
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        false,
+        rows,
+        db_data_gaps,
+    );
     metadata.source_table = DB_NATIVE_PREPARED_CACHE_SOURCE.to_string();
     metadata.source = Some(DB_NATIVE_PREPARED_CACHE_SOURCE.to_string());
     let (window_start_date, window_end_date, window_trading_days) =
@@ -592,7 +703,20 @@ pub fn load_prepared_cache(
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<Option<Vec<PreparedRow>>> {
-    load_prepared_cache_for_mode(runtime_root, method, pick_date, start_date, end_date, false)
+    Ok(
+        load_prepared_dataset(runtime_root, method, pick_date, start_date, end_date)?
+            .map(|dataset| dataset.rows),
+    )
+}
+
+pub fn load_prepared_dataset(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<Option<PreparedDataset>> {
+    load_prepared_dataset_for_mode(runtime_root, method, pick_date, start_date, end_date, false)
 }
 
 pub fn load_prepared_cache_for_mode(
@@ -603,6 +727,25 @@ pub fn load_prepared_cache_for_mode(
     end_date: NaiveDate,
     intraday: bool,
 ) -> anyhow::Result<Option<Vec<PreparedRow>>> {
+    Ok(load_prepared_dataset_for_mode(
+        runtime_root,
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        intraday,
+    )?
+    .map(|dataset| dataset.rows))
+}
+
+pub fn load_prepared_dataset_for_mode(
+    runtime_root: &Path,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    intraday: bool,
+) -> anyhow::Result<Option<PreparedDataset>> {
     let paths = prepared_cache_paths(runtime_root, pick_date, intraday);
     if !paths.meta_path.exists() {
         return Ok(None);
@@ -633,7 +776,29 @@ pub fn load_prepared_cache_for_mode(
         return Ok(None);
     }
 
-    Ok(Some(rows))
+    warn_prepared_cache_gaps_once(&paths.meta_path, pick_date, &metadata.db_data_gaps);
+    Ok(Some(PreparedDataset {
+        rows,
+        db_data_gaps: metadata.db_data_gaps,
+    }))
+}
+
+fn warn_prepared_cache_gaps_once(
+    metadata_path: &Path,
+    pick_date: NaiveDate,
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
+) {
+    let warned = WARNED_PREPARED_CACHE_GAPS.get_or_init(|| Mutex::new(BTreeSet::new()));
+    let mut warned = warned
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for (table, gap) in db_data_gaps {
+        let message = db_data_gap_warning_message(pick_date, table, gap, Some("prepared_cache"));
+        let key = format!("{}\n{message}", metadata_path.display());
+        if warned.insert(key) {
+            eprintln!("{message}");
+        }
+    }
 }
 
 fn decoded_rows_match_db_native_window(

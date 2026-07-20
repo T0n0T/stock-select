@@ -1,5 +1,32 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
+
+pub const STOCK_SELECT_DB_CHECK_ENV: &str = "STOCK_SELECT_DB_CHECK";
+
+pub const DB_CHECK_CORE_TABLES: &[&str] = &["stock_stk_factor_pro"];
+
+pub const DB_CHECK_DEFAULT_TABLES: &[&str] = &[
+    "index_ths_daily",
+    "index_idx_factor_pro",
+    "index_moneyflow_cnt_ths",
+    "index_limit_cpt_list",
+];
+
+pub const DB_CHECK_ALLOWED_TABLES: &[&str] = &[
+    "stock_stk_factor_pro",
+    "stock_daily_asof_indicators",
+    "stock_daily_rolling_factors",
+    "stock_daily_czsc_structure",
+    "stock_period_indicator_state",
+    "stock_moneyflow_ths",
+    "index_daily_asof_indicators",
+    "index_ths_member",
+    "index_ths_daily",
+    "index_idx_factor_pro",
+    "index_moneyflow_cnt_ths",
+    "index_limit_cpt_list",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
@@ -35,6 +62,51 @@ pub fn resolve_config_value_from(
         return Some(value.to_string());
     }
     parse_dotenv_value(dotenv_content, env_name)
+}
+
+pub fn resolve_db_check_tables() -> anyhow::Result<BTreeSet<String>> {
+    let env_value = env::var(STOCK_SELECT_DB_CHECK_ENV).ok();
+    let dotenv = std::fs::read_to_string(".env").unwrap_or_default();
+    resolve_db_check_tables_from_sources(env_value.as_deref(), &dotenv)
+}
+
+pub fn resolve_db_check_tables_from_sources(
+    env_value: Option<&str>,
+    dotenv_content: &str,
+) -> anyhow::Result<BTreeSet<String>> {
+    let configured = match env_value {
+        Some(value) => Some(value.to_string()),
+        None => parse_dotenv_value_preserving_empty(dotenv_content, STOCK_SELECT_DB_CHECK_ENV)
+            .map(str::to_string),
+    };
+
+    let mut strict_tables = DB_CHECK_CORE_TABLES
+        .iter()
+        .map(|table| (*table).to_string())
+        .collect::<BTreeSet<_>>();
+    match configured {
+        None => strict_tables.extend(
+            DB_CHECK_DEFAULT_TABLES
+                .iter()
+                .map(|table| (*table).to_string()),
+        ),
+        Some(value) => {
+            for raw_table in value.split(',') {
+                let table = raw_table.trim().to_ascii_lowercase();
+                if table.is_empty() {
+                    continue;
+                }
+                if !DB_CHECK_ALLOWED_TABLES.contains(&table.as_str()) {
+                    anyhow::bail!(
+                        "unknown database table in {STOCK_SELECT_DB_CHECK_ENV}: {table}; allowed tables: {}",
+                        DB_CHECK_ALLOWED_TABLES.join(", ")
+                    );
+                }
+                strict_tables.insert(table);
+            }
+        }
+    }
+    Ok(strict_tables)
 }
 
 pub fn resolve_dsn_from_env(cli_dsn: Option<&str>) -> Result<String, ConfigError> {
@@ -111,6 +183,22 @@ fn parse_dotenv_value(content: &str, key: &str) -> Option<String> {
         let value = strip_dotenv_quotes(right.trim());
         if let Some(value) = non_empty(Some(value)) {
             return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn parse_dotenv_value_preserving_empty<'a>(content: &'a str, key: &str) -> Option<&'a str> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((left, right)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if left.trim() == key {
+            return Some(strip_dotenv_quotes(right.trim()));
         }
     }
     None
