@@ -12,6 +12,29 @@ fn lsh_method_parses_and_formats_as_lowercase() {
 }
 
 #[test]
+fn qianlong_method_parses_and_supports_screen_without_model_run() {
+    assert_eq!(Method::from_str("qianlong").unwrap(), Method::Qianlong);
+    assert_eq!(Method::Qianlong.as_str(), "qianlong");
+    assert_eq!(Method::Qianlong.to_string(), "qianlong");
+
+    let capability = method_capability(Method::Qianlong);
+    assert_eq!(capability.method, Method::Qianlong);
+    assert!(capability.screen);
+    assert!(capability.factor_extraction);
+    assert!(!capability.model_inference);
+    assert!(!capability.llm_review);
+    assert!(!capability.review_list);
+    assert!(!capability.run);
+    assert!(capability.model_family.is_none());
+
+    let err = ensure_model_run_supported(Method::Qianlong).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("qianlong model review is not available")
+    );
+}
+
+#[test]
 fn b2_supports_model_first_run() {
     let capability = method_capability(Method::B2);
     assert_eq!(capability.method, Method::B2);

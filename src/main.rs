@@ -12,8 +12,8 @@ use serde_json::json;
 use stock_select::cache::{load_prepared_cache_for_mode, prepared_cache_start_date};
 use stock_select::config::{resolve_config_value, resolve_runtime_root};
 use stock_select::db::{
-    fetch_db_native_daily_window, fetch_db_native_daily_window_for_intraday, fetch_instrument_info,
-    fetch_stock_period_macd_states, resolve_previous_trade_date,
+    fetch_db_native_daily_dataset, fetch_db_native_daily_dataset_for_intraday,
+    fetch_instrument_info, fetch_stock_period_macd_states, resolve_previous_trade_date,
 };
 use stock_select::engine::artifacts::{
     SelectionRunPaths, read_selection_json, write_selection_json,
@@ -35,11 +35,11 @@ use stock_select::environment::{
     resolve_intraday_market_environment, resolve_market_environment,
 };
 use stock_select::intraday::TushareRestProvider;
-use stock_select::model::{InstrumentInfo, MarketRow, Method, PreparedRow};
+use stock_select::model::{InstrumentInfo, MarketDataset, Method, PreparedRow};
 use stock_select::record::{RunRecordConfig, update_run_record};
 use stock_select::screening::{
     PoolSource, ScreenRequest, run_db_native_intraday_screen_with_loaders,
-    run_db_native_screen_with_loader,
+    run_db_native_screen_with_dataset_loader,
 };
 
 #[derive(Debug, Parser)]
@@ -416,7 +416,7 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
         let provider = TushareRestProvider::new(token)?;
         run_db_native_intraday_screen(request, &provider)?
     } else {
-        run_db_native_screen_with_loader(request, fetch_db_native_daily_window_if_dsn)?
+        run_db_native_screen_with_dataset_loader(request, fetch_db_native_daily_dataset_if_dsn)?
     };
     let display_path = path.strip_prefix(&runtime_root).unwrap_or(&path);
     println!("screen complete: {}", display_path.display());
@@ -466,7 +466,10 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
                 let provider = TushareRestProvider::new(token)?;
                 run_db_native_intraday_screen(request, &provider)?
             } else {
-                run_db_native_screen_with_loader(request, fetch_db_native_daily_window_if_dsn)?
+                run_db_native_screen_with_dataset_loader(
+                    request,
+                    fetch_db_native_daily_dataset_if_dsn,
+                )?
             };
             let display_path = path.strip_prefix(&runtime_root).unwrap_or(&path);
             eprintln!(
@@ -1572,7 +1575,7 @@ where
             let provider = TushareRestProvider::new(token)?;
             run_db_native_intraday_screen(request, &provider)?
         } else {
-            run_db_native_screen_with_loader(request, fetch_db_native_daily_window_if_dsn)?
+            run_db_native_screen_with_dataset_loader(request, fetch_db_native_daily_dataset_if_dsn)?
         }
     };
 
@@ -1662,26 +1665,26 @@ fn is_blank_display_value(value: Option<&str>) -> bool {
         .is_none()
 }
 
-fn fetch_db_native_daily_window_if_dsn(
+fn fetch_db_native_daily_dataset_if_dsn(
     dsn: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
-) -> anyhow::Result<Vec<MarketRow>> {
+) -> anyhow::Result<MarketDataset> {
     if dsn.trim().is_empty() {
         anyhow::bail!("A database DSN is required.");
     }
-    fetch_db_native_daily_window(dsn, start_date, end_date)
+    fetch_db_native_daily_dataset(dsn, start_date, end_date)
 }
 
-fn fetch_db_native_intraday_window_if_dsn(
+fn fetch_db_native_intraday_dataset_if_dsn(
     dsn: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
-) -> anyhow::Result<Vec<MarketRow>> {
+) -> anyhow::Result<MarketDataset> {
     if dsn.trim().is_empty() {
         anyhow::bail!("A database DSN is required.");
     }
-    fetch_db_native_daily_window_for_intraday(dsn, start_date, end_date)
+    fetch_db_native_daily_dataset_for_intraday(dsn, start_date, end_date)
 }
 
 fn run_db_native_intraday_screen(
@@ -1693,7 +1696,7 @@ fn run_db_native_intraday_screen(
         provider,
         "15:00:00",
         resolve_previous_trade_date,
-        fetch_db_native_intraday_window_if_dsn,
+        fetch_db_native_intraday_dataset_if_dsn,
         fetch_stock_period_macd_states,
     )
 }

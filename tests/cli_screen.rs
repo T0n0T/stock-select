@@ -81,7 +81,7 @@ fn b2_screen_accepts_pool_file_for_custom_pool() {
 }
 
 #[test]
-fn b2_screen_reuses_prepared_cache_without_resolved_dsn() {
+fn b2_screen_reuses_prepared_cache_without_resolving_dsn_or_db_check_config() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     write_two_code_cache(temp.path(), pick_date);
@@ -89,6 +89,7 @@ fn b2_screen_reuses_prepared_cache_without_resolved_dsn() {
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
         .env_remove("POSTGRES_DSN")
+        .env("STOCK_SELECT_DB_CHECK", "not_a_registered_table")
         .args([
             "screen",
             "--runtime-root",

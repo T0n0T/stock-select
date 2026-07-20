@@ -1,22 +1,16 @@
-use chrono::{Datelike, NaiveDate};
-use postgres::{Client, NoTls, fallible_iterator::FallibleIterator};
+use chrono::NaiveDate;
+use postgres::{Client, IsolationLevel, NoTls, fallible_iterator::FallibleIterator};
 use std::collections::BTreeMap;
 
+use crate::config::resolve_db_check_tables;
+use crate::db_check::preflight_db_native_load;
 use crate::intraday::MacdPeriodState;
-use crate::model::{InstrumentInfo, MarketRow};
+use crate::model::{InstrumentInfo, MarketDataset, MarketRow};
 
 const DAILY_WINDOW_SESSION_SETTINGS_SQL: &str = "
     SET max_parallel_workers_per_gather = 0;
     SET work_mem = '16MB';
 ";
-
-const MIN_DB_NATIVE_WINDOW_TRADE_DATES: i64 = 235;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CzscCoveragePolicy {
-    Strict,
-    WarnOnly,
-}
 
 const DB_NATIVE_DAILY_WINDOW_QUERY: &str = "
         WITH query_params AS (
@@ -67,8 +61,8 @@ const DB_NATIVE_DAILY_WINDOW_QUERY: &str = "
             c.post_peak_first_bear_low::double precision AS _czsc_post_peak_first_bear_low,
             c.post_peak_first_bear_close::double precision AS _czsc_post_peak_first_bear_close,
             CASE WHEN c.post_peak_first_bear_missing THEN 1.0 WHEN c.post_peak_first_bear_missing = false THEN 0.0 END::double precision AS _czsc_post_peak_first_bear_missing
-        FROM stock_stk_factor_pro s
-        LEFT JOIN stock_daily_czsc_structure c
+        FROM {{stock_stk_factor_pro}} s
+        LEFT JOIN {{stock_daily_czsc_structure}} c
           ON c.ts_code = s.ts_code
          AND c.trade_date = s.trade_date
          AND c.calc_version = 'czsc_structure_qfq_min6_r7_v1'
@@ -80,7 +74,7 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             SELECT trade_date
             FROM (
                 SELECT DISTINCT trade_date
-                FROM stock_stk_factor_pro
+                FROM {{stock_stk_factor_pro}}
                 WHERE trade_date <= $1
                 ORDER BY trade_date DESC
                 LIMIT 252
@@ -95,7 +89,7 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
                 lag(i.close, 20) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_20_ago,
                 avg(i.close::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS close_ma20,
                 stddev_samp(i.pct_change::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)::double precision AS volatility20_pct
-            FROM index_idx_factor_pro i
+            FROM {{index_idx_factor_pro}} i
             JOIN recent_trade_dates w
               ON w.trade_date = i.trade_date
             WHERE i.ts_code IN ('000001.SH', '399303.SZ')
@@ -253,16 +247,16 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             imf.market_broad_ret20_pct,
             imf.market_broad_ma20_bias_pct,
             imf.market_broad_volatility20_pct
-        FROM stock_stk_factor_pro s
-        LEFT JOIN stock_daily_asof_indicators a
+        FROM {{stock_stk_factor_pro}} s
+        LEFT JOIN {{stock_daily_asof_indicators}} a
           ON a.ts_code = s.ts_code
          AND a.trade_date = s.trade_date
          AND a.calc_version = 'macd_qfq_12_26_9_v1'
-        LEFT JOIN stock_daily_rolling_factors r
+        LEFT JOIN {{stock_daily_rolling_factors}} r
           ON r.ts_code = s.ts_code
          AND r.trade_date = s.trade_date
          AND r.calc_version = 'rolling_qfq_v1'
-        LEFT JOIN stock_moneyflow_ths smf
+        LEFT JOIN {{stock_moneyflow_ths}} smf
           ON smf.ts_code = s.ts_code
          AND smf.trade_date = s.trade_date
         LEFT JOIN index_market_factors imf
@@ -275,7 +269,7 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
             SELECT trade_date
             FROM (
                 SELECT DISTINCT trade_date
-                FROM stock_stk_factor_pro
+                FROM {{stock_stk_factor_pro}}
                 WHERE trade_date <= $1
                 ORDER BY trade_date DESC
                 LIMIT 252
@@ -290,7 +284,7 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
                 lag(i.close, 20) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_20_ago,
                 avg(i.close::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS close_ma20,
                 stddev_samp(i.pct_change::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)::double precision AS volatility20_pct
-            FROM index_idx_factor_pro i
+            FROM {{index_idx_factor_pro}} i
             JOIN recent_trade_dates w
               ON w.trade_date = i.trade_date
             WHERE i.ts_code IN ('000001.SH', '399303.SZ')
@@ -340,7 +334,7 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
                 max(days)::double precision AS days,
                 max(pct_chg)::double precision AS pct_chg,
                 min(rank)::double precision AS rank
-            FROM index_limit_cpt_list
+            FROM {{index_limit_cpt_list}}
             WHERE trade_date = $1
             GROUP BY ts_code, trade_date
         ),
@@ -348,7 +342,7 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
             SELECT
                 ts_code,
                 con_code
-            FROM index_ths_member
+            FROM {{index_ths_member}}
         ),
         ths_sector_base AS (
             SELECT
@@ -358,7 +352,7 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
                 lag(d.close, 5) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date)::double precision AS ths_close_5_ago,
                 lag(d.close, 20) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date)::double precision AS ths_close_20_ago,
                 avg(d.close::double precision) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS ths_close_ma20
-            FROM index_ths_daily d
+            FROM {{index_ths_daily}} d
             JOIN recent_trade_dates w
               ON w.trade_date = d.trade_date
         ),
@@ -413,14 +407,14 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
                     PARTITION BY d.trade_date
                     ORDER BY mf.net_amount DESC NULLS LAST, d.pct_change DESC NULLS LAST, d.ts_code ASC
                 )::double precision AS ths_sector_rank
-            FROM index_ths_daily d
-            LEFT JOIN index_moneyflow_cnt_ths mf
+            FROM {{index_ths_daily}} d
+            LEFT JOIN {{index_moneyflow_cnt_ths}} mf
               ON mf.ts_code = d.ts_code
              AND mf.trade_date = d.trade_date
             LEFT JOIN index_limit_cpt_daily il
               ON il.ts_code = d.ts_code
              AND il.trade_date = d.trade_date
-            LEFT JOIN index_daily_asof_indicators ia
+            LEFT JOIN {{index_daily_asof_indicators}} ia
               ON ia.ts_code = d.ts_code
              AND ia.trade_date = d.trade_date
              AND ia.calc_version = 'macd_qfq_12_26_9_v1'
@@ -465,7 +459,7 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
                     PARTITION BY s.ts_code, s.trade_date
                     ORDER BY ths_sector_rank ASC NULLS LAST, ths_net_amount DESC NULLS LAST, ths_pct_change DESC NULLS LAST, ths_ts_code ASC
                 ) AS sector_choice_rank
-            FROM stock_stk_factor_pro s
+            FROM {{stock_stk_factor_pro}} s
             JOIN current_ths_membership cm
               ON cm.con_code = s.ts_code
             JOIN ths_sector_daily td
@@ -627,48 +621,6 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
         ORDER BY ts_code ASC, trade_date ASC
         ";
 
-const DB_NATIVE_COVERAGE_PROBE_QUERY: &str = "
-        WITH trading_window AS (
-            SELECT DISTINCT trade_date
-            FROM stock_stk_factor_pro
-            WHERE trade_date BETWEEN ($1::date - INTERVAL '1 year')::date AND $1
-        )
-        SELECT
-            (SELECT min(trade_date) FROM trading_window) AS window_start_date,
-            (SELECT max(trade_date) FROM trading_window) AS window_end_date,
-            (SELECT count(*) FROM trading_window) AS window_trade_dates,
-            (SELECT count(*) FROM stock_stk_factor_pro WHERE trade_date = $1) AS stock_factor_rows,
-            (
-                SELECT count(*)
-                FROM stock_daily_asof_indicators
-                WHERE trade_date = $1
-                  AND calc_version = 'macd_qfq_12_26_9_v1'
-            ) AS stock_macd_rows,
-            (
-                SELECT count(*)
-                FROM stock_daily_rolling_factors
-                WHERE trade_date = $1
-                  AND calc_version = 'rolling_qfq_v1'
-            ) AS stock_rolling_rows,
-            (
-                SELECT count(*)
-                FROM stock_daily_czsc_structure
-                WHERE trade_date = $1
-                  AND calc_version = 'czsc_structure_qfq_min6_r7_v1'
-            ) AS stock_czsc_rows,
-            (SELECT count(*) FROM stock_moneyflow_ths WHERE trade_date = $1) AS stock_moneyflow_rows,
-            (SELECT count(*) FROM index_ths_daily WHERE trade_date = $1) AS index_ths_daily_rows,
-            (SELECT count(*) FROM index_idx_factor_pro WHERE trade_date = $1 AND ts_code IN ('000001.SH', '399303.SZ')) AS index_market_rows,
-            (
-                SELECT count(*)
-                FROM index_daily_asof_indicators
-                WHERE trade_date = $1
-                  AND calc_version = 'macd_qfq_12_26_9_v1'
-            ) AS index_macd_rows,
-            (SELECT count(*) FROM index_moneyflow_cnt_ths WHERE trade_date = $1) AS index_moneyflow_rows,
-            (SELECT count(*) FROM index_limit_cpt_list WHERE trade_date = $1) AS index_limit_rows
-        ";
-
 const PREVIOUS_TRADE_DATE_QUERY: &str = "
         SELECT max(trade_date) AS trade_date
         FROM stock_stk_factor_pro
@@ -685,8 +637,11 @@ const STOCK_PERIOD_MACD_STATE_QUERY: &str = "
             p.period_count::integer AS period_count
         FROM stock_period_indicator_state p
         WHERE p.ts_code = ANY($1)
-          AND p.period_type IN ('daily', 'weekly', 'monthly')
-          AND p.period_end_date < $2
+          AND (
+              (p.period_type = 'daily' AND p.period_end_date < $2)
+              OR (p.period_type = 'weekly' AND p.period_end_date < date_trunc('week', $2::date)::date)
+              OR (p.period_type = 'monthly' AND p.period_end_date < date_trunc('month', $2::date)::date)
+          )
           AND p.calc_version = 'macd_qfq_12_26_9_v1'
           AND p.period_count IS NOT NULL
         ORDER BY p.ts_code, p.period_type, p.period_end_date DESC
@@ -729,24 +684,6 @@ const INSTRUMENT_INFO_QUERY: &str = "
         LEFT JOIN ths_industry ON ths_industry.ts_code = r.ts_code
         ORDER BY r.ts_code ASC
         ";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DbNativeCoverageProbe {
-    pub pick_date: NaiveDate,
-    pub window_start_date: Option<NaiveDate>,
-    pub window_end_date: Option<NaiveDate>,
-    pub window_trade_dates: i64,
-    pub stock_factor_rows: i64,
-    pub stock_macd_rows: i64,
-    pub stock_rolling_rows: i64,
-    pub stock_czsc_rows: i64,
-    pub stock_moneyflow_rows: i64,
-    pub index_ths_daily_rows: i64,
-    pub index_market_rows: i64,
-    pub index_macd_rows: i64,
-    pub index_moneyflow_rows: i64,
-    pub index_limit_rows: i64,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 struct DbNativeDailyRow {
@@ -951,20 +888,20 @@ const DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS: &[&str] = &[
     "stock_env_overall_score",
 ];
 
-pub fn probe_db_native_coverage(
-    dsn: &str,
-    pick_date: NaiveDate,
-) -> anyhow::Result<DbNativeCoverageProbe> {
-    let mut client = Client::connect(dsn, NoTls)?;
-    probe_db_native_coverage_with_client(&mut client, pick_date)
-}
-
 pub fn fetch_db_native_daily_window(
     dsn: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<Vec<MarketRow>> {
-    fetch_db_native_daily_window_with_policy(dsn, start_date, end_date, CzscCoveragePolicy::Strict)
+    Ok(fetch_db_native_daily_dataset(dsn, start_date, end_date)?.rows)
+}
+
+pub fn fetch_db_native_daily_dataset(
+    dsn: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<MarketDataset> {
+    fetch_db_native_daily_dataset_with_preflight(dsn, start_date, end_date)
 }
 
 pub fn fetch_db_native_daily_window_for_intraday(
@@ -972,35 +909,59 @@ pub fn fetch_db_native_daily_window_for_intraday(
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<Vec<MarketRow>> {
-    fetch_db_native_daily_window_with_policy(
-        dsn,
-        start_date,
-        end_date,
-        CzscCoveragePolicy::WarnOnly,
-    )
+    Ok(fetch_db_native_daily_dataset_for_intraday(dsn, start_date, end_date)?.rows)
 }
 
-fn fetch_db_native_daily_window_with_policy(
+pub fn fetch_db_native_daily_dataset_for_intraday(
     dsn: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
-    czsc_policy: CzscCoveragePolicy,
-) -> anyhow::Result<Vec<MarketRow>> {
+) -> anyhow::Result<MarketDataset> {
+    fetch_db_native_daily_dataset_with_preflight(dsn, start_date, end_date)
+}
+
+fn fetch_db_native_daily_dataset_with_preflight(
+    dsn: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<MarketDataset> {
+    let strict_tables = resolve_db_check_tables()?;
     let mut client = Client::connect(dsn, NoTls)?;
     configure_daily_window_session(&mut client)?;
-    let probe = probe_db_native_coverage_with_client(&mut client, end_date)?;
-    ensure_db_native_required_coverage_with_policy(&probe, czsc_policy)?;
+    let mut transaction = client
+        .build_transaction()
+        .isolation_level(IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()?;
+    let plan = preflight_db_native_load(&mut transaction, start_date, end_date, &strict_tables)?;
 
     let mut market_rows = Vec::new();
     {
-        let mut rows = client.query_raw(DB_NATIVE_DAILY_WINDOW_QUERY, &[&start_date, &end_date])?;
+        let query = plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY);
+        let mut rows = transaction.query_raw(&query, &[&start_date, &end_date])?;
         while let Some(row) = rows.next()? {
             market_rows.push(db_native_market_row_from_db_row(row)?);
         }
     }
-    merge_pick_date_extras(&mut client, end_date, &mut market_rows)?;
-    merge_ths_sector_extras(&mut client, end_date, &mut market_rows)?;
-    Ok(market_rows)
+    let pick_date_extras_query = plan.adapt_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY);
+    merge_pick_date_extras(
+        &mut transaction,
+        &pick_date_extras_query,
+        end_date,
+        &mut market_rows,
+    )?;
+    let ths_sector_extras_query = plan.adapt_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY);
+    merge_ths_sector_extras(
+        &mut transaction,
+        &ths_sector_extras_query,
+        end_date,
+        &mut market_rows,
+    )?;
+    transaction.commit()?;
+    Ok(MarketDataset {
+        rows: market_rows,
+        db_data_gaps: plan.db_data_gaps,
+    })
 }
 
 pub fn fetch_stock_period_macd_states(
@@ -1027,103 +988,6 @@ pub fn fetch_stock_period_macd_states(
         .collect()
 }
 
-fn probe_db_native_coverage_with_client(
-    client: &mut Client,
-    pick_date: NaiveDate,
-) -> anyhow::Result<DbNativeCoverageProbe> {
-    let row = client.query_one(DB_NATIVE_COVERAGE_PROBE_QUERY, &[&pick_date])?;
-    Ok(DbNativeCoverageProbe {
-        pick_date,
-        window_start_date: row.try_get("window_start_date")?,
-        window_end_date: row.try_get("window_end_date")?,
-        window_trade_dates: row.try_get("window_trade_dates")?,
-        stock_factor_rows: row.try_get("stock_factor_rows")?,
-        stock_macd_rows: row.try_get("stock_macd_rows")?,
-        stock_rolling_rows: row.try_get("stock_rolling_rows")?,
-        stock_czsc_rows: row.try_get("stock_czsc_rows")?,
-        stock_moneyflow_rows: row.try_get("stock_moneyflow_rows")?,
-        index_ths_daily_rows: row.try_get("index_ths_daily_rows")?,
-        index_market_rows: row.try_get("index_market_rows")?,
-        index_macd_rows: row.try_get("index_macd_rows")?,
-        index_moneyflow_rows: row.try_get("index_moneyflow_rows")?,
-        index_limit_rows: row.try_get("index_limit_rows")?,
-    })
-}
-
-#[cfg(test)]
-fn ensure_db_native_required_coverage(probe: &DbNativeCoverageProbe) -> anyhow::Result<()> {
-    ensure_db_native_required_coverage_with_policy(probe, CzscCoveragePolicy::Strict)
-}
-
-fn ensure_db_native_required_coverage_with_policy(
-    probe: &DbNativeCoverageProbe,
-    czsc_policy: CzscCoveragePolicy,
-) -> anyhow::Result<()> {
-    let mut missing = Vec::<String>::new();
-    let requested_start = db_native_coverage_start_date(probe.pick_date);
-    if probe
-        .window_start_date
-        .is_none_or(|actual_start| actual_start < requested_start)
-        || probe.window_end_date != Some(probe.pick_date)
-        || probe.window_trade_dates < MIN_DB_NATIVE_WINDOW_TRADE_DATES
-    {
-        missing.push("requested prepared window".to_string());
-    }
-    if probe.stock_factor_rows == 0 {
-        missing.push("stock_stk_factor_pro pick-date rows".to_string());
-    }
-    if probe.stock_macd_rows == 0 {
-        missing.push("stock_daily_asof_indicators calc_version macd_qfq_12_26_9_v1".to_string());
-    }
-    if probe.stock_rolling_rows == 0 {
-        missing.push("stock_daily_rolling_factors calc_version rolling_qfq_v1".to_string());
-    }
-    if probe.stock_factor_rows > 0 {
-        let czsc_coverage_pct =
-            probe.stock_czsc_rows as f64 / probe.stock_factor_rows as f64 * 100.0;
-        if czsc_coverage_pct < 95.0 && czsc_policy == CzscCoveragePolicy::Strict {
-            missing.push(format!(
-                "CZSC coverage {czsc_coverage_pct:.2}% below 95% for stock_daily_czsc_structure calc_version czsc_structure_qfq_min6_r7_v1"
-            ));
-        } else if czsc_coverage_pct < 99.0 {
-            eprintln!(
-                "warning: CZSC coverage {czsc_coverage_pct:.2}% is below 99% for pick_date {}",
-                probe.pick_date
-            );
-        }
-    }
-    if probe.index_ths_daily_rows == 0 {
-        missing.push("index_ths_daily pick-date rows".to_string());
-    }
-    if probe.index_market_rows < 2 {
-        missing.push("index_idx_factor_pro pick-date rows for 000001.SH and 399303.SZ".to_string());
-    }
-    if probe.index_macd_rows == 0 {
-        missing.push("index_daily_asof_indicators calc_version macd_qfq_12_26_9_v1".to_string());
-    }
-    if probe.index_moneyflow_rows == 0 {
-        missing.push("index_moneyflow_cnt_ths pick-date rows".to_string());
-    }
-    if probe.index_limit_rows == 0 {
-        missing.push("index_limit_cpt_list pick-date rows".to_string());
-    }
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "DB-native coverage missing for pick_date {}: {}",
-            probe.pick_date,
-            missing.join(", ")
-        );
-    }
-}
-
-fn db_native_coverage_start_date(pick_date: NaiveDate) -> NaiveDate {
-    pick_date
-        .with_year(pick_date.year() - 1)
-        .unwrap_or_else(|| NaiveDate::from_ymd_opt(pick_date.year() - 1, 2, 28).unwrap())
-}
-
 fn db_native_market_row_from_db_row(row: postgres::Row) -> anyhow::Result<MarketRow> {
     let mut db_factors = BTreeMap::new();
     for column in DB_NATIVE_FACTOR_COLUMNS {
@@ -1143,13 +1007,14 @@ fn db_native_market_row_from_db_row(row: postgres::Row) -> anyhow::Result<Market
     })
 }
 
-fn merge_pick_date_extras(
-    client: &mut Client,
+fn merge_pick_date_extras<C: postgres::GenericClient>(
+    client: &mut C,
+    query: &str,
     end_date: NaiveDate,
     market_rows: &mut [MarketRow],
 ) -> anyhow::Result<()> {
     let mut extras_by_key: BTreeMap<(String, NaiveDate), BTreeMap<String, f64>> = BTreeMap::new();
-    let rows = client.query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY, &[&end_date])?;
+    let rows = client.query(query, &[&end_date])?;
     for row in rows {
         let ts_code: String = row.try_get("ts_code")?;
         let trade_date: NaiveDate = row.try_get("trade_date")?;
@@ -1176,13 +1041,14 @@ fn merge_pick_date_extras(
     Ok(())
 }
 
-fn merge_ths_sector_extras(
-    client: &mut Client,
+fn merge_ths_sector_extras<C: postgres::GenericClient>(
+    client: &mut C,
+    query: &str,
     end_date: NaiveDate,
     market_rows: &mut [MarketRow],
 ) -> anyhow::Result<()> {
     let mut extras_by_key: BTreeMap<(String, NaiveDate), BTreeMap<String, f64>> = BTreeMap::new();
-    let rows = client.query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY, &[&end_date])?;
+    let rows = client.query(query, &[&end_date])?;
     for row in rows {
         let ts_code: String = row.try_get("ts_code")?;
         let trade_date: NaiveDate = row.try_get("trade_date")?;
@@ -1338,7 +1204,7 @@ mod tests {
     fn db_native_daily_window_query_maps_stock_cache_contract_fields() {
         for fragment in [
             "SELECT $1::date AS start_date, $2::date AS end_date",
-            "FROM stock_stk_factor_pro s",
+            "FROM {{stock_stk_factor_pro}} s",
             "s.trade_date BETWEEN (SELECT start_date FROM query_params) AND (SELECT end_date FROM query_params)",
             "s.open::double precision AS open",
             "s.high::double precision AS high",
@@ -1348,7 +1214,7 @@ mod tests {
             "s.vol::double precision AS vol",
             "s.amount::double precision AS amount",
             "s.turnover_rate::double precision AS turnover_rate",
-            "LEFT JOIN stock_daily_czsc_structure c",
+            "LEFT JOIN {{stock_daily_czsc_structure}} c",
             "c.ts_code = s.ts_code",
             "c.trade_date = s.trade_date",
             "c.calc_version = 'czsc_structure_qfq_min6_r7_v1'",
@@ -1409,7 +1275,7 @@ mod tests {
             "s.dmi_pdi_qfq::double precision - s.dmi_mdi_qfq::double precision AS dmi_pdi_mdi_spread_qfq",
             "s.dmi_adx_qfq::double precision - s.dmi_adxr_qfq::double precision AS dmi_adx_adxr_gap_qfq",
             "s.trix_qfq::double precision AS trix_qfq",
-            "LEFT JOIN stock_moneyflow_ths smf",
+            "LEFT JOIN {{stock_moneyflow_ths}} smf",
             "smf.net_amount::double precision AS stock_mf_net_amount",
             "smf.buy_lg_amount::double precision AS stock_mf_buy_lg_amount",
             "THEN smf.buy_lg_amount::double precision / s.amount::double precision * 100.0",
@@ -1420,15 +1286,15 @@ mod tests {
             "index_market_base AS",
             "lag(i.close, 5) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_5_ago",
             "index_market_raw AS",
-            "FROM index_idx_factor_pro i",
+            "FROM {{index_idx_factor_pro}} i",
             "WHERE i.ts_code IN ('000001.SH', '399303.SZ')",
             "index_market_factors AS",
             "max(ret5_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret5_pct",
             "max(ret5_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret5_pct",
             "CASE WHEN count(ret5_pct) = 2 THEN avg(ret5_pct)::double precision END AS market_broad_ret5_pct",
             "LEFT JOIN index_market_factors imf",
-            "LEFT JOIN stock_daily_asof_indicators a",
-            "LEFT JOIN stock_daily_rolling_factors r",
+            "LEFT JOIN {{stock_daily_asof_indicators}} a",
+            "LEFT JOIN {{stock_daily_rolling_factors}} r",
             "a.calc_version = 'macd_qfq_12_26_9_v1'",
             "a.daily_hist_x2_asof::double precision / 2.0 AS macd_daily_hist",
             "a.weekly_hist_x2_asof::double precision / 2.0 AS macd_weekly_hist",
@@ -1444,6 +1310,12 @@ mod tests {
         }
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("stock_daily_left_peak"));
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("left_peak_"));
+        assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("prev_hist"));
+        assert!(
+            !DB_NATIVE_PICK_DATE_FACTOR_COLUMNS
+                .iter()
+                .any(|column| column.ends_with("_prev_hist"))
+        );
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("s.kdj_j_qfq"));
         assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("CASE"));
         assert!(
@@ -1490,6 +1362,20 @@ mod tests {
     }
 
     #[test]
+    fn db_native_queries_consume_all_relation_placeholders() {
+        let plan = crate::db_check::plan_from_inspections(&BTreeMap::new());
+
+        for query in [
+            DB_NATIVE_DAILY_WINDOW_QUERY,
+            DB_NATIVE_PICK_DATE_EXTRAS_QUERY,
+            DB_NATIVE_THS_SECTOR_EXTRAS_QUERY,
+        ] {
+            let adapted = plan.adapt_query(query);
+            assert!(!adapted.contains("{{"), "unresolved relation placeholder");
+        }
+    }
+
+    #[test]
     fn db_module_no_longer_exposes_legacy_daily_market_loader() {
         let source = include_str!("db.rs")
             .split("#[cfg(test)]")
@@ -1498,35 +1384,8 @@ mod tests {
 
         assert!(!source.contains("const DAILY_WINDOW_QUERY"));
         assert!(!source.contains("pub fn fetch_daily_window"));
-    }
-
-    #[test]
-    fn db_native_coverage_probe_query_checks_required_versions_without_exposing_dsn() {
-        for fragment in [
-            "stock_stk_factor_pro",
-            "stock_daily_asof_indicators",
-            "stock_daily_rolling_factors",
-            "stock_daily_czsc_structure",
-            "index_ths_daily",
-            "stock_moneyflow_ths",
-            "index_idx_factor_pro",
-            "index_daily_asof_indicators",
-            "index_moneyflow_cnt_ths",
-            "index_limit_cpt_list",
-            "macd_qfq_12_26_9_v1",
-            "rolling_qfq_v1",
-            "czsc_structure_qfq_min6_r7_v1",
-        ] {
-            assert!(
-                DB_NATIVE_COVERAGE_PROBE_QUERY.contains(fragment),
-                "missing {fragment}"
-            );
-        }
-        assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("stock_daily_left_peak"));
-        assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("left_peak_qfq_v1"));
-        assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("POSTGRES_DSN"));
-        assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("postgres://"));
-        assert!(!DB_NATIVE_COVERAGE_PROBE_QUERY.contains("postgresql://"));
+        assert!(!source.contains("DB_NATIVE_COVERAGE_PROBE_QUERY"));
+        assert!(!source.contains("probe_db_native_coverage"));
     }
 
     #[test]
@@ -1541,19 +1400,19 @@ mod tests {
         );
         for fragment in [
             "current_ths_membership AS",
-            "FROM index_ths_member",
+            "FROM {{index_ths_member}}",
             "index_market_factors AS",
             "max(ret5_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret5_pct",
             "max(ret5_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret5_pct",
             "ths_sector_daily AS",
-            "FROM index_ths_daily d",
+            "FROM {{index_ths_daily}} d",
             "lag(d.close, 5) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date)::double precision AS ths_close_5_ago",
-            "LEFT JOIN index_moneyflow_cnt_ths mf",
+            "LEFT JOIN {{index_moneyflow_cnt_ths}} mf",
             "index_limit_cpt_daily AS",
-            "FROM index_limit_cpt_list",
+            "FROM {{index_limit_cpt_list}}",
             "GROUP BY ts_code, trade_date",
             "LEFT JOIN index_limit_cpt_daily il",
-            "LEFT JOIN index_daily_asof_indicators ia",
+            "LEFT JOIN {{index_daily_asof_indicators}} ia",
             "stock_ths_sector_candidates AS",
             "ROW_NUMBER() OVER (",
             "PARTITION BY s.ts_code, s.trade_date",
@@ -1651,8 +1510,9 @@ mod tests {
     fn stock_period_macd_state_query_reads_completed_period_states_only() {
         for fragment in [
             "FROM stock_period_indicator_state p",
-            "p.period_type IN ('daily', 'weekly', 'monthly')",
-            "p.period_end_date < $2",
+            "p.period_type = 'daily' AND p.period_end_date < $2",
+            "p.period_type = 'weekly' AND p.period_end_date < date_trunc('week', $2::date)::date",
+            "p.period_type = 'monthly' AND p.period_end_date < date_trunc('month', $2::date)::date",
             "p.calc_version = 'macd_qfq_12_26_9_v1'",
             "p.period_count IS NOT NULL",
             "ORDER BY p.ts_code, p.period_type, p.period_end_date DESC",
@@ -1918,238 +1778,6 @@ mod tests {
         assert_eq!(mapped.db_factors["market_broad_volatility20_pct"], 1.1);
         assert!(!mapped.db_factors.contains_key("ignored_nan"));
         assert!(!mapped.db_factors.contains_key("ignored_null"));
-    }
-
-    #[test]
-    fn db_native_required_coverage_fails_fast_when_calc_versions_are_missing() {
-        let probe = DbNativeCoverageProbe {
-            pick_date: NaiveDate::from_ymd_opt(2026, 6, 15).unwrap(),
-            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 6, 13).unwrap()),
-            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 6, 15).unwrap()),
-            window_trade_dates: 252,
-            stock_factor_rows: 5000,
-            stock_macd_rows: 0,
-            stock_rolling_rows: 0,
-            stock_czsc_rows: 0,
-            stock_moneyflow_rows: 0,
-            index_ths_daily_rows: 0,
-            index_market_rows: 0,
-            index_macd_rows: 0,
-            index_moneyflow_rows: 0,
-            index_limit_rows: 0,
-        };
-
-        let err = ensure_db_native_required_coverage(&probe)
-            .expect_err("missing calc_version coverage should fail fast");
-        let message = err.to_string();
-        assert!(message.contains("stock_daily_asof_indicators"));
-        assert!(message.contains("macd_qfq_12_26_9_v1"));
-        assert!(message.contains("stock_daily_rolling_factors"));
-        assert!(message.contains("rolling_qfq_v1"));
-        assert!(message.contains("stock_daily_czsc_structure"));
-        assert!(message.contains("czsc_structure_qfq_min6_r7_v1"));
-        assert!(message.contains("index_ths_daily"));
-        assert!(message.contains("index_idx_factor_pro"));
-        assert!(message.contains("index_daily_asof_indicators"));
-        assert!(message.contains("index_moneyflow_cnt_ths"));
-        assert!(message.contains("index_limit_cpt_list"));
-        assert!(!message.contains("POSTGRES_DSN"));
-        assert!(!message.contains("postgres://"));
-        assert!(!message.contains("postgresql://"));
-    }
-
-    #[test]
-    fn db_native_required_coverage_allows_missing_stock_moneyflow_ths() {
-        let probe = DbNativeCoverageProbe {
-            pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
-            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
-            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
-            window_trade_dates: 252,
-            stock_factor_rows: 5000,
-            stock_macd_rows: 5000,
-            stock_rolling_rows: 5000,
-            stock_czsc_rows: 5000,
-            stock_moneyflow_rows: 0,
-            index_ths_daily_rows: 500,
-            index_market_rows: 2,
-            index_macd_rows: 500,
-            index_moneyflow_rows: 500,
-            index_limit_rows: 500,
-        };
-
-        ensure_db_native_required_coverage(&probe)
-            .expect("missing stock_moneyflow_ths rows should not block DB-native loading");
-    }
-
-    #[test]
-    fn db_native_required_coverage_rejects_czsc_coverage_below_95_percent() {
-        let probe = DbNativeCoverageProbe {
-            pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
-            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
-            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
-            window_trade_dates: 252,
-            stock_factor_rows: 1000,
-            stock_macd_rows: 1000,
-            stock_rolling_rows: 1000,
-            stock_czsc_rows: 949,
-            stock_moneyflow_rows: 1000,
-            index_ths_daily_rows: 500,
-            index_market_rows: 2,
-            index_macd_rows: 500,
-            index_moneyflow_rows: 500,
-            index_limit_rows: 500,
-        };
-
-        let err = ensure_db_native_required_coverage(&probe)
-            .expect_err("EOD DB-native loading must reject CZSC coverage below 95%");
-
-        assert!(err.to_string().contains("CZSC coverage 94.90% below 95%"));
-    }
-
-    #[test]
-    fn db_native_required_coverage_accepts_95_and_99_percent_boundaries() {
-        for stock_czsc_rows in [950, 990] {
-            let probe = DbNativeCoverageProbe {
-                pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
-                window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
-                window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
-                window_trade_dates: 252,
-                stock_factor_rows: 1000,
-                stock_macd_rows: 1000,
-                stock_rolling_rows: 1000,
-                stock_czsc_rows,
-                stock_moneyflow_rows: 1000,
-                index_ths_daily_rows: 500,
-                index_market_rows: 2,
-                index_macd_rows: 500,
-                index_moneyflow_rows: 500,
-                index_limit_rows: 500,
-            };
-
-            ensure_db_native_required_coverage(&probe).unwrap_or_else(|error| {
-                panic!("CZSC boundary coverage {stock_czsc_rows}/1000 failed: {error}")
-            });
-        }
-    }
-
-    #[test]
-    fn db_native_intraday_coverage_warns_instead_of_rejecting_low_czsc_coverage() {
-        let probe = DbNativeCoverageProbe {
-            pick_date: NaiveDate::from_ymd_opt(2026, 7, 6).unwrap(),
-            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 7, 7).unwrap()),
-            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()),
-            window_trade_dates: 252,
-            stock_factor_rows: 1000,
-            stock_macd_rows: 1000,
-            stock_rolling_rows: 1000,
-            stock_czsc_rows: 949,
-            stock_moneyflow_rows: 1000,
-            index_ths_daily_rows: 500,
-            index_market_rows: 2,
-            index_macd_rows: 500,
-            index_moneyflow_rows: 500,
-            index_limit_rows: 500,
-        };
-
-        ensure_db_native_required_coverage_with_policy(&probe, CzscCoveragePolicy::WarnOnly)
-            .expect(
-                "intraday DB-native loading should warn instead of rejecting low CZSC coverage",
-            );
-    }
-
-    #[test]
-    fn db_native_required_coverage_fails_without_requested_prepared_window() {
-        let probe = DbNativeCoverageProbe {
-            pick_date: NaiveDate::from_ymd_opt(2026, 6, 15).unwrap(),
-            window_start_date: Some(NaiveDate::from_ymd_opt(2023, 6, 16).unwrap()),
-            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 6, 15).unwrap()),
-            window_trade_dates: 700,
-            stock_factor_rows: 5000,
-            stock_macd_rows: 5000,
-            stock_rolling_rows: 5000,
-            stock_czsc_rows: 5000,
-            stock_moneyflow_rows: 5000,
-            index_ths_daily_rows: 0,
-            index_market_rows: 2,
-            index_macd_rows: 0,
-            index_moneyflow_rows: 0,
-            index_limit_rows: 0,
-        };
-
-        let err = ensure_db_native_required_coverage(&probe)
-            .expect_err("DB-native loader requires the requested prepared window start");
-
-        assert!(err.to_string().contains("requested prepared window"));
-    }
-
-    #[test]
-    fn db_native_required_coverage_allows_long_holiday_start_when_window_has_enough_trade_dates() {
-        let probe = DbNativeCoverageProbe {
-            pick_date: NaiveDate::from_ymd_opt(2026, 1, 28).unwrap(),
-            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 2, 5).unwrap()),
-            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 1, 28).unwrap()),
-            window_trade_dates: 243,
-            stock_factor_rows: 5000,
-            stock_macd_rows: 5000,
-            stock_rolling_rows: 5000,
-            stock_czsc_rows: 5000,
-            stock_moneyflow_rows: 5000,
-            index_ths_daily_rows: 5000,
-            index_market_rows: 2,
-            index_macd_rows: 5000,
-            index_moneyflow_rows: 5000,
-            index_limit_rows: 5000,
-        };
-
-        ensure_db_native_required_coverage(&probe).unwrap();
-    }
-
-    #[test]
-    fn db_native_required_coverage_rejects_short_actual_window_even_after_requested_start() {
-        let probe = DbNativeCoverageProbe {
-            pick_date: NaiveDate::from_ymd_opt(2026, 1, 28).unwrap(),
-            window_start_date: Some(NaiveDate::from_ymd_opt(2025, 3, 20).unwrap()),
-            window_end_date: Some(NaiveDate::from_ymd_opt(2026, 1, 28).unwrap()),
-            window_trade_dates: 200,
-            stock_factor_rows: 5000,
-            stock_macd_rows: 5000,
-            stock_rolling_rows: 5000,
-            stock_czsc_rows: 5000,
-            stock_moneyflow_rows: 5000,
-            index_ths_daily_rows: 5000,
-            index_market_rows: 2,
-            index_macd_rows: 5000,
-            index_moneyflow_rows: 5000,
-            index_limit_rows: 5000,
-        };
-
-        let err = ensure_db_native_required_coverage(&probe)
-            .expect_err("short actual DB-native window should fail");
-
-        assert!(err.to_string().contains("requested prepared window"));
-    }
-
-    #[test]
-    fn db_native_coverage_probe_checks_local_stock_cache_when_dsn_is_available() {
-        let Ok(dsn) = std::env::var("POSTGRES_DSN") else {
-            eprintln!("skipping local stock-cache coverage probe: POSTGRES_DSN is not set");
-            return;
-        };
-        let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
-
-        let probe = probe_db_native_coverage(&dsn, pick_date).unwrap();
-
-        assert!(probe.window_trade_dates > 0);
-        assert!(probe.window_start_date.is_some());
-        assert_eq!(probe.window_end_date, Some(pick_date));
-        assert!(probe.stock_factor_rows > 0);
-        assert!(probe.stock_macd_rows > 0);
-        assert!(probe.stock_rolling_rows > 0);
-        assert!(probe.stock_czsc_rows > 0);
-        assert!(probe.index_ths_daily_rows > 0);
-        assert!(probe.index_macd_rows > 0);
-        assert!(probe.index_moneyflow_rows > 0);
-        assert!(probe.index_limit_rows > 0);
     }
 
     #[test]

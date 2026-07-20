@@ -139,6 +139,23 @@ fn write_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
     .unwrap();
 }
 
+fn write_prepared_cache_metadata_with_db_data_gaps(root: &std::path::Path, pick_date: NaiveDate) {
+    write_prepared_cache_metadata(root, pick_date);
+    let path = root.join(format!(
+        "prepared/{}.meta.json",
+        pick_date.format("%Y-%m-%d")
+    ));
+    let mut metadata: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    metadata["db_data_gaps"] = json!({
+        "index_moneyflow_cnt_ths": {
+            "reason": "missing_rows",
+            "expected_rows": 1,
+            "actual_rows": 0
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
+}
+
 fn write_intraday_prepared_cache_fixture(root: &std::path::Path, pick_date: NaiveDate) {
     let prepared_dir = root.join("prepared");
     std::fs::create_dir_all(&prepared_dir).unwrap();
@@ -1640,6 +1657,53 @@ fn b2_run_injects_history_from_prepared_cache_when_candidate_has_no_history() {
             .as_f64()
             .unwrap()
             .is_finite()
+    );
+}
+
+#[test]
+fn b2_run_propagates_prepared_cache_gaps_to_factor_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+    write_close_to_ma25_model(temp.path());
+    write_prepared_cache_fixture(temp.path(), pick_date);
+    write_prepared_cache_metadata_with_db_data_gaps(temp.path(), pick_date);
+    let candidates_path = write_candidates(temp.path());
+
+    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.args([
+        "run",
+        "--runtime-root",
+        temp.path().to_str().unwrap(),
+        "--pick-date",
+        "2026-05-25",
+        "--method",
+        "b2",
+        "--candidates-path",
+        candidates_path.to_str().unwrap(),
+    ]);
+    let assert = cmd.assert().success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert_eq!(
+        stderr
+            .matches(
+                "warning: db data gap pick_date=2026-05-25 table=index_moneyflow_cnt_ths reason=missing_rows expected_rows=1 actual_rows=0 source=prepared_cache",
+            )
+            .count(),
+        1,
+        "prepared cache gap warnings should be emitted once per command; stderr={stderr}",
+    );
+
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("factors/2026-05-25.b2/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        manifest["db_data_gaps"]["index_moneyflow_cnt_ths"],
+        json!({
+            "reason": "missing_rows",
+            "expected_rows": 1,
+            "actual_rows": 0
+        })
     );
 }
 

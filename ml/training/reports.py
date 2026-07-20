@@ -6,6 +6,40 @@ from typing import Any
 from .features import DEFAULT_METHOD
 
 
+def markdown_db_data_gaps(db_data_gaps: Any) -> list[str]:
+    if not isinstance(db_data_gaps, dict) or not db_data_gaps:
+        return []
+
+    lines = [
+        "",
+        "## database data gaps",
+        "",
+        "| table | artifact | reason | details |",
+        "|---|---|---|---|",
+    ]
+    for table, summary in sorted(db_data_gaps.items()):
+        artifacts = summary.get("artifacts") if isinstance(summary, dict) else None
+        if not isinstance(artifacts, dict):
+            continue
+        for artifact, gap in sorted(artifacts.items()):
+            if not isinstance(gap, dict):
+                continue
+            details = []
+            missing_columns = gap.get("missing_columns")
+            if isinstance(missing_columns, list) and missing_columns:
+                details.append(
+                    "missing_columns=" + ",".join(str(column) for column in missing_columns)
+                )
+            if "expected_rows" in gap and "actual_rows" in gap:
+                details.append(
+                    f"expected_rows={gap.get('expected_rows')} actual_rows={gap.get('actual_rows')}"
+                )
+            lines.append(
+                f"| {table} | {artifact} | {gap.get('reason')} | {'; '.join(details)} |"
+            )
+    return lines
+
+
 def markdown_report(report: dict[str, Any]) -> str:
     lines = [
         f"# {report.get('method', DEFAULT_METHOD)} LightGBM rank report",
@@ -34,6 +68,7 @@ def markdown_report(report: dict[str, Any]) -> str:
         )
     lines.extend(["", "## top features", ""])
     lines.extend(f"- {item['feature']}: {item['importance']}" for item in report.get("top_features", [])[:20])
+    lines.extend(markdown_db_data_gaps(report.get("db_data_gaps")))
     rf_summary = report.get("rf_diagnostics") or {}
     if rf_summary:
         rf_metrics = ((rf_summary.get("metrics") or {}).get("test") or {})

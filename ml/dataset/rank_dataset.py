@@ -482,26 +482,6 @@ def as_float(value: Any) -> float | None:
     return parsed
 
 
-def validate_czsc_training_coverage(
-    rows: Sequence[dict[str, Any]],
-    *,
-    intraday: bool,
-) -> str | None:
-    if not rows:
-        return None
-    covered = sum(
-        1
-        for row in rows
-        if as_float(row.get("czsc_snapshot_available")) == 1.0
-    )
-    coverage_pct = covered / len(rows) * 100.0
-    if coverage_pct < 95.0 and not intraday:
-        raise ValueError(f"CZSC training coverage {coverage_pct:.2f}% below 95%")
-    if coverage_pct < 99.0:
-        return f"czsc_training_coverage:{coverage_pct:.2f}%:below_99%"
-    return None
-
-
 def round4(value: float | None) -> float | None:
     return None if value is None else round(value, 4)
 
@@ -714,7 +694,41 @@ def validate_factor_artifact_contract(payload: dict[str, Any], *, method: str, a
     )
 
 
-def load_factor_artifact_rows(runtime_root: Path, *, method: str, artifact_key: str) -> tuple[dict[str, dict[str, Any]], list[str]]:
+def collect_factor_manifest_db_data_gaps(
+    runtime_root: Path,
+    *,
+    method: str,
+    artifact_key: str,
+    db_data_gaps: dict[str, Any],
+) -> None:
+    manifest_path = runtime_root / "factors" / f"{artifact_key}.{method}" / "manifest.json"
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        return
+    manifest_gaps = manifest.get("db_data_gaps")
+    if not isinstance(manifest_gaps, dict):
+        return
+
+    artifact_label = f"{artifact_key}.{method}"
+    for table, gap in manifest_gaps.items():
+        if not isinstance(table, str) or not isinstance(gap, dict):
+            continue
+        table_summary = db_data_gaps.setdefault(
+            table,
+            {"artifact_count": 0, "artifacts": {}},
+        )
+        artifacts = table_summary["artifacts"]
+        artifacts[artifact_label] = dict(gap)
+        table_summary["artifact_count"] = len(artifacts)
+
+
+def load_factor_artifact_rows(
+    runtime_root: Path,
+    *,
+    method: str,
+    artifact_key: str,
+    db_data_gaps: dict[str, Any] | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
     path = runtime_root / "factors" / f"{artifact_key}.{method}" / "factors.json"
     if not path.exists():
         return {}, [f"missing_factor_artifact:{artifact_key}.{method}"]
@@ -724,6 +738,13 @@ def load_factor_artifact_rows(runtime_root: Path, *, method: str, artifact_key: 
     stale_warning = validate_factor_artifact_contract(payload, method=method, artifact_key=artifact_key)
     if stale_warning is not None:
         return {}, [stale_warning]
+    if db_data_gaps is not None:
+        collect_factor_manifest_db_data_gaps(
+            runtime_root,
+            method=method,
+            artifact_key=artifact_key,
+            db_data_gaps=db_data_gaps,
+        )
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         return {}, [f"invalid_factor_rows:{path}"]
@@ -800,6 +821,7 @@ def load_selection_rows(
     start_date: str,
     end_date: str,
     intraday: bool = False,
+    db_data_gaps: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -820,7 +842,12 @@ def load_selection_rows(
         env = "unknown"
         if isinstance(environment, dict):
             env = normalize_env(environment.get("state"))
-        factor_by_code, factor_warnings = load_factor_artifact_rows(runtime_root, method=method, artifact_key=artifact_key)
+        factor_by_code, factor_warnings = load_factor_artifact_rows(
+            runtime_root,
+            method=method,
+            artifact_key=artifact_key,
+            db_data_gaps=db_data_gaps,
+        )
         warnings.extend(factor_warnings)
         if not factor_by_code:
             continue
@@ -897,6 +924,7 @@ def load_candidate_rows(
     start_date: str,
     end_date: str,
     intraday: bool = False,
+    db_data_gaps: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -920,7 +948,12 @@ def load_candidate_rows(
         if not candidate_rows:
             continue
         artifact_key = factor_artifact_key_for_date(pick_date, intraday=intraday)
-        factor_by_code, factor_warnings = load_factor_artifact_rows(runtime_root, method=method, artifact_key=artifact_key)
+        factor_by_code, factor_warnings = load_factor_artifact_rows(
+            runtime_root,
+            method=method,
+            artifact_key=artifact_key,
+            db_data_gaps=db_data_gaps,
+        )
         warnings.extend(factor_warnings)
         if not factor_by_code:
             continue
@@ -1130,6 +1163,7 @@ def dataset_summary(
     end_date: str,
     warnings: Sequence[str],
     source: str,
+    db_data_gaps: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     env_counts = {env: 0 for env in ["weak", "neutral", "strong", "unknown"]}
     for row in rows:
@@ -1154,6 +1188,7 @@ def dataset_summary(
         "missing_price_row_count": sum(1 for row in rows if format_csv_value(row.get("ret3")) == ""),
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "warnings": list(warnings),
+        "db_data_gaps": db_data_gaps or {},
     }
 
 
@@ -1167,6 +1202,7 @@ def write_dataset(
     end_date: str,
     warnings: Sequence[str],
     source: str,
+    db_data_gaps: dict[str, Any] | None = None,
 ) -> None:
     dataset_columns = dataset_columns_for_method(method)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1185,6 +1221,7 @@ def write_dataset(
                 end_date=end_date,
                 warnings=warnings,
                 source=source,
+                db_data_gaps=db_data_gaps,
             ),
             ensure_ascii=False,
             indent=2,
@@ -1278,6 +1315,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         raise SystemExit(f"runtime root does not exist: {runtime_root}")
     dsn = resolve_dsn(args.dsn)
     intraday = bool(getattr(args, "intraday", False))
+    db_data_gaps: dict[str, Any] = {}
     if args.source == "select":
         training_input_rows, warnings = load_selection_rows(
             runtime_root,
@@ -1285,6 +1323,7 @@ def main_from_args(args: argparse.Namespace) -> int:
             start_date=args.start_date,
             end_date=args.end_date,
             intraday=intraday,
+            db_data_gaps=db_data_gaps,
         )
     else:
         training_input_rows, warnings = load_candidate_rows(
@@ -1293,19 +1332,11 @@ def main_from_args(args: argparse.Namespace) -> int:
             start_date=args.start_date,
             end_date=args.end_date,
             intraday=intraday,
+            db_data_gaps=db_data_gaps,
         )
     fatal_factor_message = fatal_factor_warning_message(warnings, method=args.method)
     if fatal_factor_message is not None:
         raise SystemExit(fatal_factor_message)
-    try:
-        czsc_coverage_warning = validate_czsc_training_coverage(
-            training_input_rows,
-            intraday=intraday,
-        )
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-    if czsc_coverage_warning is not None:
-        warnings.append(czsc_coverage_warning)
     symbols = sorted({str(row.get("code")) for row in training_input_rows if row.get("code")})
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()
@@ -1327,6 +1358,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         end_date=args.end_date,
         warnings=warnings,
         source=args.source,
+        db_data_gaps=db_data_gaps,
     )
     print(f"wrote {len(rows)} rows to {output_dir / 'rank_dataset.csv'}")
     return 0

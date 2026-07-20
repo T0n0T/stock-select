@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use crate::cache::{
-    history_payload_for_code, load_prepared_cache_for_mode, prepared_cache_start_date,
+    history_payload_for_code, load_prepared_dataset_for_mode, prepared_cache_start_date,
 };
 use crate::engine::artifacts::{SelectionRunPaths, write_selection_json};
 use crate::engine::b2::{
@@ -23,8 +23,10 @@ use crate::engine::types::{
     DisplayRow, FactorRow, FactorValue, RankedCandidate, SelectionCandidate,
 };
 use crate::environment::ResolvedEnvironment;
-use crate::factors::registry::{build_candidate_factor_rows_from_refs, write_factor_artifact};
-use crate::model::{Candidate, Method, PreparedRow};
+use crate::factors::registry::{
+    build_candidate_factor_rows_from_refs, write_factor_artifact_with_db_data_gaps,
+};
+use crate::model::{Candidate, Method, PreparedDataset, PreparedRow};
 
 const FEATURE_VECTORS_ARTIFACT: &str = "feature_vectors.json";
 
@@ -76,20 +78,19 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         candidates.len(),
         display_candidate_source(&request.runtime_root, &request.candidates_path)
     );
-    inject_prepared_history_if_available(
-        &mut candidates,
+    let prepared_dataset = load_prepared_dataset_for_selection(
         &request.runtime_root,
         request.method,
         request.pick_date,
         request.intraday,
     )?;
+    inject_prepared_history_if_available(&mut candidates, prepared_dataset.as_ref());
     eprintln!("[selection] prepared history injection checked");
     let factor_started = Instant::now();
-    let factors = match factor_rows_from_prepared_cache(
-        &request.runtime_root,
+    let factors = match factor_rows_from_prepared_dataset(
+        prepared_dataset.as_ref(),
         request.method,
         request.pick_date,
-        request.intraday,
         request
             .environment
             .as_ref()
@@ -110,12 +111,18 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         factors.len(),
         factor_started.elapsed().as_secs_f64()
     );
-    write_factor_artifact(
+    let empty_db_data_gaps = BTreeMap::new();
+    let db_data_gaps = prepared_dataset
+        .as_ref()
+        .map(|dataset| &dataset.db_data_gaps)
+        .unwrap_or(&empty_db_data_gaps);
+    write_factor_artifact_with_db_data_gaps(
         &request.runtime_root,
         request.method,
         &artifact_key,
         &factors,
         Some(&request.candidates_path),
+        db_data_gaps,
     )?;
     let (ranked, feature_vectors) =
         rank_candidates(&candidates, &factors, model.as_ref(), request.intraday)?;
@@ -259,35 +266,39 @@ fn read_model_metadata(path: Option<&Path>) -> anyhow::Result<Option<ModelFeatur
     .transpose()
 }
 
-fn inject_prepared_history_if_available(
-    candidates: &mut [SelectionCandidate],
+fn load_prepared_dataset_for_selection(
     runtime_root: &Path,
     method: Method,
     pick_date: NaiveDate,
     intraday: bool,
-) -> anyhow::Result<()> {
-    if candidates.iter().all(candidate_has_complete_history) {
-        return Ok(());
-    }
-
+) -> anyhow::Result<Option<PreparedDataset>> {
     let start_date = prepared_cache_start_date(pick_date);
-    let Some(rows) = load_prepared_cache_for_mode(
+    load_prepared_dataset_for_mode(
         runtime_root,
         method,
         pick_date,
         start_date,
         pick_date,
         intraday,
-    )?
-    else {
-        return Ok(());
+    )
+}
+
+fn inject_prepared_history_if_available(
+    candidates: &mut [SelectionCandidate],
+    prepared_dataset: Option<&PreparedDataset>,
+) {
+    if candidates.iter().all(candidate_has_complete_history) {
+        return;
+    }
+    let Some(dataset) = prepared_dataset else {
+        return;
     };
 
     for candidate in candidates {
         if candidate_has_complete_history(candidate) {
             continue;
         }
-        let history = history_payload_for_code(&rows, &candidate.code);
+        let history = history_payload_for_code(&dataset.rows, &candidate.code);
         if history.is_empty() {
             continue;
         }
@@ -300,31 +311,20 @@ fn inject_prepared_history_if_available(
             Value::String("prepared_cache".to_string()),
         );
     }
-
-    Ok(())
 }
 
-fn factor_rows_from_prepared_cache(
-    runtime_root: &Path,
+fn factor_rows_from_prepared_dataset(
+    prepared_dataset: Option<&PreparedDataset>,
     method: Method,
     pick_date: NaiveDate,
-    intraday: bool,
     environment_state: Option<&str>,
     candidates: &[SelectionCandidate],
 ) -> anyhow::Result<Option<Vec<FactorRow>>> {
-    let start_date = prepared_cache_start_date(pick_date);
-    let Some(rows) = load_prepared_cache_for_mode(
-        runtime_root,
-        method,
-        pick_date,
-        start_date,
-        pick_date,
-        intraday,
-    )?
-    else {
+    let Some(dataset) = prepared_dataset else {
         return Ok(None);
     };
-    let latest_by_code = rows
+    let latest_by_code = dataset
+        .rows
         .iter()
         .filter(|row| row.trade_date == pick_date)
         .map(|row| (row.ts_code.as_str(), row))
@@ -336,7 +336,7 @@ fn factor_rows_from_prepared_cache(
     else {
         return Ok(None);
     };
-    let prepared_refs = rows.iter().collect::<Vec<&PreparedRow>>();
+    let prepared_refs = dataset.rows.iter().collect::<Vec<&PreparedRow>>();
     Ok(Some(build_candidate_factor_rows_from_refs(
         &model_candidates,
         &prepared_refs,
