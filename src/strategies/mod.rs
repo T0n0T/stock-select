@@ -9,6 +9,7 @@ pub mod b2;
 pub mod b3;
 pub mod lsh;
 pub mod qianlong;
+pub mod scm_pbm;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrategyOutput {

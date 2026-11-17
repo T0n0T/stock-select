@@ -65,6 +65,13 @@ class MlDocumentationTests(unittest.TestCase):
             with self.subTest(old_entrypoint=old_entrypoint):
                 self.assertNotIn(old_entrypoint, combined)
 
+    def test_docs_describe_price_basis_invalidation_without_binary_schema_bump(self):
+        for name in ["workflow.md", "screening-methods.md"]:
+            text = (PROJECT_ROOT / "docs" / name).read_text(encoding="utf-8")
+            with self.subTest(document=name):
+                for fragment in ["schema 11", "price_basis", "asof_qfq_v1", "按需重建"]:
+                    self.assertTrue(fragment in text, f"{name}: missing {fragment}")
+
     def test_screening_methods_document_current_filter_conditions(self):
         doc_path = PROJECT_ROOT / "docs" / "screening-methods.md"
         self.assertTrue(doc_path.exists(), "missing screening method filter documentation")
@@ -72,7 +79,7 @@ class MlDocumentationTests(unittest.TestCase):
 
         expected_fragments = [
             "# 选股筛选方法过滤条件",
-            "实际接入 screen 的方法：`b2`、`b3`、`lsh`、`qianlong`。",
+            "实际接入 screen 的方法：`b2`、`b3`、`lsh`、`scm`、`pbm`、`qianlong`。",
             "截至 `pick_date` 的约 252 个交易日预计算行情和指标",
             "`STOCK_SELECT_PREPARED_CACHE_LIMIT`",
             "盘中 prepared cache 不计入这个保留数量",
@@ -97,6 +104,12 @@ class MlDocumentationTests(unittest.TestCase):
             "当日收盘价高于 `MA25`",
             "昨日成交量低于前一日成交量",
             "周线和月线最新 DIF 与 DEA 都大于 0",
+            "`scm`（Sustained Cross MA25）",
+            "`pbm`（Pullback MA25）",
+            "最近 20 日中至少 16 日收盘高于当日 `MA25`，且最近 10 日中至少 8 日收盘高于当日 `MA25`",
+            "当前月 `macd_monthly_hist` 大于前一个月",
+            "选股日当前价格必须严格高于该最大量红周 K 的开盘价",
+            "`runtime/models/scm/` 和 `runtime/models/pbm/`",
             "`qianlong`",
             "候选信号写为 `QIANLONG`",
             "已有 schema 11 prepared cache 可以直接复用",

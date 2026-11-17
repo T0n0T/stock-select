@@ -961,6 +961,16 @@ fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only
 }
 
 #[test]
+fn scm_and_pbm_have_independent_lsh_factor_profiles() {
+    for (method, expected_name) in [(Method::Scm, "scm"), (Method::Pbm, "pbm")] {
+        let profile = factor_profile_for_method(method);
+        assert_eq!(profile.name, expected_name);
+        assert_eq!(profile.method, method);
+        assert_eq!(profile.bundle_names(), vec!["raw_common", "lsh_semantic"]);
+    }
+}
+
+#[test]
 fn lsh_factor_profile_uses_neutral_model_feature_fallbacks_for_short_history() {
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(29);

@@ -110,7 +110,47 @@ def run_backfill(
     if not dates:
         return result
 
-    worker_count = max(1, min(config.workers, len(dates)))
+    requested_workers = 1 if config.method in {"scm", "pbm"} else config.workers
+    worker_count = max(1, min(requested_workers, len(dates)))
+    if worker_count == 1:
+        for completed_count, pick_date in enumerate(dates, start=1):
+            command = build_screen_command(
+                binary=config.binary,
+                pick_date=pick_date,
+                runtime_root=config.runtime_root,
+                method=config.method,
+                recompute=config.recompute,
+                pool_source=config.pool_source,
+                export_factors=config.export_factors,
+                intraday=config.intraday,
+            )
+            try:
+                actual_date, completed = _run_one(pick_date, config=config, runner=runner)
+            except Exception as exc:  # pragma: no cover - defensive for subprocess launch errors
+                result.failures.append(
+                    BackfillFailure(pick_date=pick_date, command=command, returncode=1, stderr=str(exc))
+                )
+                if not config.quiet:
+                    print(f"[{completed_count}/{len(dates)}] {pick_date} failed: {exc}")
+                continue
+            if completed.returncode == 0:
+                result.success_count += 1
+                if not config.quiet:
+                    print(f"[{completed_count}/{len(dates)}] {actual_date} ok")
+            else:
+                result.failures.append(
+                    BackfillFailure(
+                        pick_date=actual_date,
+                        command=command,
+                        returncode=completed.returncode,
+                        stdout=completed.stdout or "",
+                        stderr=completed.stderr or "",
+                    )
+                )
+                if not config.quiet:
+                    print(f"[{completed_count}/{len(dates)}] {actual_date} failed {format_returncode(completed.returncode)}")
+        return result
+
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
             executor.submit(_run_one, pick_date, config=config, runner=runner): pick_date

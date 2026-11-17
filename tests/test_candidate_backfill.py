@@ -149,6 +149,66 @@ class CandidateBackfillTest(unittest.TestCase):
         self.assertEqual(result.success_count, 0)
         self.assertEqual(result.failures, [])
 
+    def test_scm_and_pbm_backfills_run_one_worker_to_bound_memory(self):
+        import threading
+        import time
+
+        for method in ("scm", "pbm"):
+            with self.subTest(method=method):
+                active_workers = 0
+                max_active_workers = 0
+                active_workers_lock = threading.Lock()
+
+                def fake_runner(command, **_kwargs):
+                    nonlocal active_workers, max_active_workers
+                    with active_workers_lock:
+                        active_workers += 1
+                        max_active_workers = max(max_active_workers, active_workers)
+                    time.sleep(0.03)
+                    with active_workers_lock:
+                        active_workers -= 1
+                    return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+                config = BackfillConfig(
+                    binary=Path("stock-select-rs"),
+                    runtime_root=Path("/tmp/runtime"),
+                    method=method,
+                    workers=4,
+                )
+
+                result = run_backfill(
+                    ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"],
+                    config=config,
+                    runner=fake_runner,
+                )
+
+                self.assertEqual(result.success_count, 4)
+                self.assertEqual(max_active_workers, 1)
+
+    def test_single_worker_backfill_does_not_start_queued_dates_after_interrupt(self):
+        calls = []
+
+        def interrupting_runner(command, **_kwargs):
+            pick_date = command[command.index("--pick-date") + 1]
+            calls.append(pick_date)
+            raise KeyboardInterrupt
+
+        config = BackfillConfig(
+            binary=Path("stock-select-rs"),
+            runtime_root=Path("/tmp/runtime"),
+            method="scm",
+            workers=1,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            run_backfill(
+                ["2026-06-01", "2026-06-02", "2026-06-03"],
+                config=config,
+                runner=interrupting_runner,
+            )
+
+        self.assertEqual(calls, ["2026-06-01"])
+
     def test_run_backfill_collects_failed_dates(self):
         def fake_runner(command, **_kwargs):
             if command[command.index("--pick-date") + 1] == "2026-06-02":

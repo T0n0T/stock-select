@@ -47,7 +47,7 @@ stock-select-rs screen --method b2 --pick-date 2026-06-05 --export-factors
 - 写入 `runtime/candidates/<date>.<method>.json`
 - `--export-factors` 额外导出因子到 `runtime/factors/`
 
-当前已接入 `screen` 的方法为 `b2`、`b3`、`lsh`、`qianlong`；各方法的股票池过滤和策略条件见 [选股筛选方法过滤条件](screening-methods.md)。其中 `qianlong` 暂不接入模型 `run` 和复盘命令。
+当前已接入 `screen` 的方法为 `b2`、`b3`、`lsh`、`scm`、`pbm`、`qianlong`；各方法的股票池过滤和策略条件见 [选股筛选方法过滤条件](screening-methods.md)。其中 `qianlong` 暂不接入模型 `run` 和复盘命令；`scm` 与 `pbm` 使用独立的模型目录。
 
 ### run
 
@@ -117,7 +117,7 @@ stock-select-rs chart --method b2 --pick-date 2026-06-05 --chart-workers 4
 
 | 参数 | 说明 |
 |------|------|
-| `--method` | 筛选方法，当前 `screen` 支持 `b2` / `b3` / `lsh` / `qianlong`，默认 `b2` |
+| `--method` | 筛选方法，当前 `screen` 支持 `b2` / `b3` / `lsh` / `scm` / `pbm` / `qianlong`，默认 `b2` |
 | `--pick-date` | 交易日（默认取当前日期） |
 | `--intraday` | 盘中模式 |
 | `--runtime-root` | runtime 根目录（默认 `~/.agents/skills/stock-select/runtime`） |
@@ -204,10 +204,14 @@ flowchart TD
     STRAT -->|b2| B2STRAT["run_b2_strategy_from_refs()<br/>src/strategies/b2.rs"]
     STRAT -->|b3| B3STRAT["run_b3_strategy_from_refs()<br/>src/strategies/b3.rs"]
     STRAT -->|lsh| LSHSTRAT["run_lsh_strategy_from_refs()<br/>src/strategies/lsh.rs"]
+    STRAT -->|scm| SCMSTRAT["run_scm_strategy_from_refs()<br/>src/strategies/scm_pbm.rs"]
+    STRAT -->|pbm| PBMSTRAT["run_pbm_strategy_from_refs()<br/>src/strategies/scm_pbm.rs"]
     STRAT -->|qianlong| QLSTRAT["run_qianlong_strategy_from_refs()<br/>src/strategies/qianlong.rs"]
     B2STRAT --> CAND["candidates JSON<br/>→ runtime/candidates/"]
     B3STRAT --> CAND
     LSHSTRAT --> CAND
+    SCMSTRAT --> CAND
+    PBMSTRAT --> CAND
     QLSTRAT --> CAND
     CAND --> EXP{"--export-factors"}
     EXP -->|yes| EFACT["build_candidate_factor_rows_from_refs()<br/>→ runtime/factors/"]
@@ -246,6 +250,7 @@ flowchart TD
             BUNDLE -->|b2| B2F["RawCommon + B2Semantic"]
             BUNDLE -->|b3| B3F["RawCommon + B3Semantic"]
             BUNDLE -->|lsh| LSHF["RawCommon + LshSemantic"]
+            BUNDLE -->|scm / pbm| LSHF
             B2F --> COMMON["RawCommon 因子<br/>macd / ma_support / volume_turnover<br/>price_position / bar_shape<br/>range_compression / zx_pullback<br/>abnormal_volume / volume_shrink"]
             B2F --> B2SEM["B2Semantic<br/>语义因子"]
             B3F --> COMMON

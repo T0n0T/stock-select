@@ -20,6 +20,8 @@ pub const MIN_DB_NATIVE_WINDOW_TRADING_DAYS: u32 = 235;
 const DB_NATIVE_MACD_CALC_VERSION: &str = "macd_qfq_12_26_9_v1";
 const DB_NATIVE_ROLLING_CALC_VERSION: &str = "rolling_qfq_v1";
 const DB_NATIVE_CZSC_CALC_VERSION: &str = "czsc_structure_qfq_min6_r7_v1";
+const DB_NATIVE_PRICE_BASIS_VERSION: &str = "asof_qfq_v1";
+const DB_NATIVE_MONTHLY_MACD_HISTORY_VERSION: &str = "previous_completed_month_v1";
 const LEGACY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRBIN1";
 const DICTIONARY_PREPARED_CACHE_MAGIC: &[u8; 8] = b"SSPRDIC2";
 const ZSTD_FRAME_MAGIC: &[u8; 4] = &[0x28, 0xb5, 0x2f, 0xfd];
@@ -408,6 +410,8 @@ fn build_metadata(
             "b2".to_string(),
             "b3".to_string(),
             "lsh".to_string(),
+            "scm".to_string(),
+            "pbm".to_string(),
             "qianlong".to_string(),
             "dribull".to_string(),
         ],
@@ -467,6 +471,14 @@ fn build_db_native_metadata(
             DB_NATIVE_ROLLING_CALC_VERSION.to_string(),
         ),
         ("czsc".to_string(), DB_NATIVE_CZSC_CALC_VERSION.to_string()),
+        (
+            "price_basis".to_string(),
+            DB_NATIVE_PRICE_BASIS_VERSION.to_string(),
+        ),
+        (
+            "monthly_macd_history".to_string(),
+            DB_NATIVE_MONTHLY_MACD_HISTORY_VERSION.to_string(),
+        ),
     ]);
     metadata.membership_sources =
         BTreeMap::from([("ths".to_string(), "current_index_ths_member".to_string())]);
@@ -847,6 +859,14 @@ fn db_native_calc_versions_match(metadata: &PreparedCacheMetadata, method: Metho
     if metadata.source_table != DB_NATIVE_PREPARED_CACHE_SOURCE {
         return true;
     }
+    if metadata
+        .calc_versions
+        .get("price_basis")
+        .map(String::as_str)
+        != Some(DB_NATIVE_PRICE_BASIS_VERSION)
+    {
+        return false;
+    }
 
     let macd_matches =
         metadata.calc_versions.get("macd").map(String::as_str) == Some(DB_NATIVE_MACD_CALC_VERSION);
@@ -854,7 +874,17 @@ fn db_native_calc_versions_match(metadata: &PreparedCacheMetadata, method: Metho
         return macd_matches;
     }
 
-    metadata.calc_versions.len() == 3
+    let monthly_history_matches = metadata
+        .calc_versions
+        .get("monthly_macd_history")
+        .map(String::as_str)
+        == Some(DB_NATIVE_MONTHLY_MACD_HISTORY_VERSION);
+    if matches!(method, Method::Scm | Method::Pbm) && !monthly_history_matches {
+        return false;
+    }
+
+    (metadata.calc_versions.len() == 4
+        || (metadata.calc_versions.len() == 5 && monthly_history_matches))
         && macd_matches
         && metadata.calc_versions.get("rolling").map(String::as_str)
             == Some(DB_NATIVE_ROLLING_CALC_VERSION)
@@ -885,11 +915,13 @@ fn metadata_method_matches(metadata: &PreparedCacheMetadata, method: Method) -> 
     {
         return true;
     }
-    matches!(method, Method::Lsh | Method::Qianlong)
-        && metadata
-            .shared_methods
-            .iter()
-            .any(|item| item == "b2" || item == "b3")
+    matches!(
+        method,
+        Method::Lsh | Method::Scm | Method::Pbm | Method::Qianlong
+    ) && metadata
+        .shared_methods
+        .iter()
+        .any(|item| item == "b2" || item == "b3")
 }
 
 pub fn history_payload_for_code(rows: &[PreparedRow], code: &str) -> Vec<Value> {

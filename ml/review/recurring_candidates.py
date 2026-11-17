@@ -14,7 +14,7 @@ from ml.dates import read_dates_file, validate_date
 from ml.env import load_dotenv_values, resolve_config_value
 from ml.paths import PROJECT_ROOT, candidate_path, select_dir
 
-SUPPORTED_METHODS = {"b2", "b3", "lsh"}
+SUPPORTED_METHODS = {"b2", "b3", "lsh", "scm", "pbm"}
 DEFAULT_METHOD = "b2"
 DEFAULT_WINDOW = 10
 DEFAULT_BINARY = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
@@ -31,7 +31,7 @@ def parse_methods(value: str) -> list[str]:
     invalid = [method for method in methods if method not in SUPPORTED_METHODS]
     if invalid:
         raise argparse.ArgumentTypeError(
-            f"candidate methods must be b2, b3, or lsh; got {', '.join(invalid)}"
+            f"candidate methods must be b2, b3, lsh, scm, or pbm; got {', '.join(invalid)}"
         )
     return list(dict.fromkeys(methods))
 

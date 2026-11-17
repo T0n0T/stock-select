@@ -26,7 +26,10 @@ def write_json(path: Path, payload: dict) -> None:
 
 class ReviewRecurringCandidatesTest(unittest.TestCase):
     def test_parse_methods_accepts_b2_b3_lsh_combinations(self):
-        self.assertEqual(parse_methods("b2,b3 lsh"), ["b2", "b3", "lsh"])
+        self.assertEqual(
+            parse_methods("b2,b3 lsh,SCM PBM"),
+            ["b2", "b3", "lsh", "scm", "pbm"],
+        )
 
     def test_recent_trade_dates_keeps_only_previous_window_dates(self):
         self.assertEqual(

@@ -492,10 +492,20 @@ def list_archived_models(target_dir: Path | None = None, *, expected_method: str
                 "decision": "blocked",
                 "error": str(exc),
             }
+        model_version = None
+        model_card_path = path / "model_card.json"
+        if model_card_path.exists():
+            try:
+                model_card = read_json(model_card_path)
+            except ValueError:
+                model_card = {}
+            model_version = model_card.get("model_version")
         rows.append(
             {
                 "mode": "list-archives",
                 "version": path.name,
+                "archive_version": path.name,
+                "model_version": model_version,
                 "source": str(path),
                 "target": str(target_dir),
                 "validation": validation,
@@ -637,7 +647,8 @@ def print_archive_list(rows: Sequence[dict[str, Any]]) -> None:
         return
     for row in rows:
         validation = row.get("validation") or {}
-        print(f"version: {row.get('version')}")
+        print(f"archive_version: {row.get('archive_version') or row.get('version')}")
+        print(f"model_version: {row.get('model_version') or 'unknown'}")
         print(f"source: {row.get('source')}")
         print(f"label: {validation.get('label_column')}")
         print(f"feature_count: {validation.get('feature_count')}")

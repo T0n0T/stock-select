@@ -12,7 +12,28 @@ fn lightgbm_default_model_dirs_match_runtime_contract() {
     assert_eq!(default_model_dir(Method::B2).unwrap(), "models/b2");
     assert_eq!(default_model_dir(Method::B3).unwrap(), "models/b3");
     assert_eq!(default_model_dir(Method::Lsh).unwrap(), "models/lsh");
+    assert_eq!(default_model_dir(Method::Scm).unwrap(), "models/scm");
+    assert_eq!(default_model_dir(Method::Pbm).unwrap(), "models/pbm");
     assert!(default_model_dir(Method::B1).is_none());
+}
+
+#[test]
+fn scm_and_pbm_model_resolution_uses_distinct_default_artifacts() {
+    let temp = tempfile::tempdir().unwrap();
+    for method in [Method::Scm, Method::Pbm] {
+        let model_dir = temp.path().join(default_model_dir(method).unwrap());
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
+        std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
+
+        let resolved = resolve_method_model_artifacts(method, temp.path()).unwrap();
+        assert_eq!(resolved.model_dir, Some(model_dir.clone()));
+        assert_eq!(resolved.model_path, Some(model_dir.join("model.txt")));
+        assert_eq!(
+            resolved.metadata_path,
+            Some(model_dir.join("model_metadata.json"))
+        );
+    }
 }
 
 #[test]

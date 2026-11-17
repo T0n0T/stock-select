@@ -4,7 +4,7 @@
 
 当前生产主路径是 **b2 LightGBM model-first** 架构。模型使用 LambdaRank 算法训练，对候选股进行排序，`model_rank` 和 `model_score` 决定最终展示顺序。LLM/人工复盘只做 annotation（风险标记、备注），不改 rank。
 
-训练、导出、发布和回滚统一通过 `stock-select-ml` Python CLI 按 `--method` 维护产物，可用于 b2/b3 等类别；生产 `run/review` 是否能实际使用某个 method，取决于 Rust CLI 对该 method 的 capability，不接入 Python predict。
+训练、导出、发布和回滚统一通过 `stock-select-ml` Python CLI 按 `--method` 维护产物，可用于 b2/b3 等类别。`scm` 和 `pbm` 是 LSH 分流后的两种方法，应分别以 `--method scm` 和 `--method pbm` 构建数据集、训练及发布，模型目录互相独立；生产 `run/review` 是否能实际使用某个 method，取决于 Rust CLI 对该 method 的 capability，不接入 Python predict。
 
 ```mermaid
 flowchart LR
@@ -53,6 +53,7 @@ uv run stock-select-ml dataset build \
 
 - 加载候选 → 按 code+date 关联因子
 - 从 DB 获取未来 3 日/5 日涨幅作为 label
+- `stock_stk_factor_pro` 的标签行情使用 `close_qfq` / `low_qfq`，读取时显式标记 `price_basis=qfq`，直接按同基准价格计算收益和最低价回撤，不再乘一次 `adj_factor`。未标记的原始行情兼容按复权因子换算；混用价格基准时明确报错。修正此口径后必须重建 dataset 和日内分档标签，旧报告的收益统计不能直接沿用。
 - 每个交易日独立排序，生成分档标签：
 
 | label | quartile | 含义 |

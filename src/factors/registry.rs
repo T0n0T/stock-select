@@ -92,9 +92,9 @@ pub fn factor_profile_for_method(method: Method) -> FactorProfile {
             name: "b3",
             bundles: B3_FACTOR_BUNDLES,
         },
-        Method::Lsh => FactorProfile {
+        Method::Lsh | Method::Scm | Method::Pbm => FactorProfile {
             method,
-            name: "lsh",
+            name: method.as_str(),
             bundles: LSH_FACTOR_BUNDLES,
         },
         _ => FactorProfile {

@@ -48,6 +48,7 @@ const STOCK_STK_FACTOR_PRO_COLUMNS: &[DbColumnSpec] = &[
     ("high", "double precision"),
     ("low", "double precision"),
     ("close", "double precision"),
+    ("close_qfq", "double precision"),
     ("adj_factor", "double precision"),
     ("vol", "double precision"),
     ("amount", "double precision"),
@@ -741,6 +742,24 @@ fn relation_placeholder(table: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn price_basis_reference_is_required_by_db_preflight() {
+        let mut inspection = DbRelationInspection::available_for_spec("stock_stk_factor_pro");
+        inspection.columns.remove("close_qfq");
+        let plan = plan_from_inspections(&BTreeMap::from([(
+            "stock_stk_factor_pro".to_string(),
+            inspection,
+        )]));
+        let error = finish_preflight(
+            plan,
+            &BTreeSet::from(["stock_stk_factor_pro".to_string()]),
+            test_pick_date(),
+        )
+        .expect_err("missing qfq reference must stop mixed-basis preparation")
+        .to_string();
+        assert!(error.contains("close_qfq"), "{error}");
+    }
 
     #[test]
     fn adapted_query_uses_resolved_relations_and_typed_empty_ctes() {

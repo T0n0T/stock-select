@@ -419,23 +419,25 @@ METHOD_RAW_FACTOR_COLUMNS = {
     "b2": B2_RAW_FACTOR_COLUMNS,
     "b3": B3_RAW_FACTOR_COLUMNS,
     "lsh": LSH_RAW_FACTOR_COLUMNS,
+    "scm": LSH_RAW_FACTOR_COLUMNS,
+    "pbm": LSH_RAW_FACTOR_COLUMNS,
 }
 
 
 def training_categorical_columns_for_method(method: str) -> list[str]:
-    if method == "lsh":
+    if method in {"lsh", "scm", "pbm"}:
         return list(LSH_TRAINING_CATEGORICAL_COLUMNS)
     return list(TRAINING_CATEGORICAL_COLUMNS)
 
 
 def training_macd_numeric_columns_for_method(method: str) -> list[str]:
-    if method == "lsh":
+    if method in {"lsh", "scm", "pbm"}:
         return []
     return list(TRAINING_MACD_NUMERIC_COLUMNS)
 
 
 def context_numeric_columns_for_method(method: str) -> list[str]:
-    if method == "lsh":
+    if method in {"lsh", "scm", "pbm"}:
         return []
     return list(CONTEXT_NUMERIC_COLUMNS)
 
@@ -530,10 +532,13 @@ def format_csv_value(value: Any) -> str:
 
 def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str) -> dict[str, float | None]:
     history = sorted(price_rows, key=lambda row: str(row.get("trade_date")))
+    price_bases = {row.get("price_basis", "raw") for row in history}
+    if len(price_bases) > 1 or not price_bases.issubset({"raw", "qfq"}):
+        raise ValueError("Forward labels require one consistent raw or qfq price basis.")
     current = [row for row in history if str(row.get("trade_date")) <= pick_date]
     if not current:
         return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
-    entry_adj_factor = valid_adj_factor(current[-1].get("adj_factor"))
+    entry_adj_factor = None if price_bases == {"qfq"} else valid_adj_factor(current[-1].get("adj_factor"))
     entry_close = adjusted_price(
         current[-1].get("close"),
         current[-1].get("adj_factor"),
@@ -1123,6 +1128,7 @@ def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date
                         "turnover_rate": as_float(turnover_rate),
                         "pct_chg": as_float(pct_chg),
                         "adj_factor": as_float(adj_factor),
+                        "price_basis": "qfq",
                     }
                 )
     return dict(grouped)

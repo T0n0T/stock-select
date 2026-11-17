@@ -31,6 +31,7 @@ use crate::strategies::b2::run_b2_strategy_from_refs;
 use crate::strategies::b3::run_b3_strategy_from_refs;
 use crate::strategies::lsh::run_lsh_strategy_from_refs;
 use crate::strategies::qianlong::run_qianlong_strategy_from_refs;
+use crate::strategies::scm_pbm::{run_pbm_strategy_from_refs, run_scm_strategy_from_refs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolSource {
@@ -270,7 +271,7 @@ where
         anyhow::bail!("No market rows found between {start_date} and {previous_trade_date}.");
     }
     let market_rows = build_intraday_market_rows(history, &snapshot, request.pick_date);
-    let prepared = prepare_rows(market_rows);
+    let prepared = prepare_rows(market_rows)?;
     write_intraday_screen_output(request, fallback_trade_time, start_date, prepared)
 }
 
@@ -350,7 +351,7 @@ where
         &macd_states,
     );
     let prepared = PreparedDataset {
-        rows: prepare_rows(market_rows),
+        rows: prepare_rows(market_rows)?,
         db_data_gaps: history_dataset.db_data_gaps,
     };
     write_intraday_screen_output_with_extra_stats(
@@ -586,7 +587,9 @@ fn screen_artifact_key(pick_date: NaiveDate, intraday: bool) -> String {
 
 fn ensure_screen_supported(method: Method) -> anyhow::Result<()> {
     match method {
-        Method::B2 | Method::B3 | Method::Lsh | Method::Qianlong => Ok(()),
+        Method::B2 | Method::B3 | Method::Lsh | Method::Scm | Method::Pbm | Method::Qianlong => {
+            Ok(())
+        }
         _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
     }
 }
@@ -600,6 +603,8 @@ fn run_screen_strategy(
         Method::B2 => Ok(run_b2_strategy_from_refs(rows, pick_date)),
         Method::B3 => Ok(run_b3_strategy_from_refs(rows, pick_date)),
         Method::Lsh => Ok(run_lsh_strategy_from_refs(rows, pick_date)),
+        Method::Scm => Ok(run_scm_strategy_from_refs(rows, pick_date)),
+        Method::Pbm => Ok(run_pbm_strategy_from_refs(rows, pick_date)),
         Method::Qianlong => Ok(run_qianlong_strategy_from_refs(rows, pick_date)),
         _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
     }
@@ -621,7 +626,7 @@ where
         anyhow::bail!("No market rows found between {start_date} and {end_date}.");
     }
     let prepared = PreparedDataset {
-        rows: prepare_rows(market_dataset.rows),
+        rows: prepare_rows(market_dataset.rows)?,
         db_data_gaps: market_dataset.db_data_gaps,
     };
     if db_native_source {
@@ -698,20 +703,28 @@ fn db_table_unavailable(db_data_gaps: &BTreeMap<String, DbDataGap>, table: &str)
     })
 }
 
-fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
-    let mut grouped = BTreeMap::<String, Vec<MarketRow>>::new();
-    for row in rows {
-        let code = row.ts_code.clone();
-        grouped.entry(code).or_default().push(row);
-    }
-    let mut prepared = Vec::with_capacity(grouped.values().map(Vec::len).sum());
-    for (_code, mut rows) in grouped {
-        rows.sort_by_key(|row| row.trade_date);
+fn prepare_rows(mut rows: Vec<MarketRow>) -> anyhow::Result<Vec<PreparedRow>> {
+    rows.sort_unstable_by(|left, right| {
+        left.ts_code
+            .cmp(&right.ts_code)
+            .then(left.trade_date.cmp(&right.trade_date))
+    });
+    let mut prepared = Vec::with_capacity(rows.len());
+    let mut remaining = rows.into_iter().peekable();
+    while let Some(first_row) = remaining.next() {
+        let mut rows = vec![first_row];
+        while remaining
+            .peek()
+            .is_some_and(|row| row.ts_code == rows[0].ts_code)
+        {
+            rows.push(remaining.next().expect("peeked market row"));
+        }
+
         let turnover_daily = rows
             .iter()
             .map(|row| ((row.open + row.close) / 2.0) * row.vol)
             .collect::<Vec<_>>();
-        front_adjust_rows(&mut rows);
+        front_adjust_rows(&mut rows)?;
         enrich_local_market_factors(&mut rows);
         let high = rows.iter().map(|row| row.high).collect::<Vec<_>>();
         let low = rows.iter().map(|row| row.low).collect::<Vec<_>>();
@@ -766,12 +779,7 @@ fn prepare_rows(rows: Vec<MarketRow>) -> Vec<PreparedRow> {
             });
         }
     }
-    prepared.sort_by(|left, right| {
-        left.ts_code
-            .cmp(&right.ts_code)
-            .then(left.trade_date.cmp(&right.trade_date))
-    });
-    prepared
+    Ok(prepared)
 }
 
 fn db_factor_or(factors: &BTreeMap<String, f64>, key: &str, fallback: f64) -> f64 {
@@ -794,19 +802,57 @@ fn db_factor_option_or(
         .or(fallback)
 }
 
-fn front_adjust_rows(rows: &mut [MarketRow]) {
-    let Some(latest_factor) = rows
+fn front_adjust_rows(rows: &mut [MarketRow]) -> anyhow::Result<()> {
+    let has_qfq_reference = rows
         .iter()
-        .rev()
-        .find_map(|row| valid_adj_factor(row.adj_factor))
-    else {
-        return;
+        .any(|row| row.db_factors.contains_key("_source_close_qfq"));
+    let latest_factor = if has_qfq_reference {
+        rows.last().and_then(|row| valid_adj_factor(row.adj_factor))
+    } else {
+        rows.iter()
+            .rev()
+            .find_map(|row| valid_adj_factor(row.adj_factor))
+    };
+    let qfq_multiplier = if has_qfq_reference {
+        let multiplier = rows.iter().rev().find_map(|row| {
+            let reference = valid_adj_factor(row.db_factors.get("_source_close_qfq").copied())?;
+            let close = valid_adj_factor(Some(row.close))?;
+            let adjustment = if Some(row.trade_date) == rows.last().map(|last| last.trade_date) {
+                1.0
+            } else {
+                valid_adj_factor(row.adj_factor)? / latest_factor?
+            };
+            valid_adj_factor(Some(close / reference * adjustment))
+        });
+        Some(multiplier.ok_or_else(|| anyhow::anyhow!(
+            "Cannot align DB qfq price basis for {}: no usable close_qfq reference in the window.",
+            rows[0].ts_code,
+        ))?)
+    } else {
+        None
     };
     for row in rows {
-        let Some(adj_factor) = valid_adj_factor(row.adj_factor) else {
-            continue;
+        let reference = row.db_factors.remove("_source_close_qfq");
+        let multiplier = match (valid_adj_factor(row.adj_factor), latest_factor) {
+            (Some(adj_factor), Some(latest_factor)) => adj_factor / latest_factor,
+            _ => match (
+                valid_adj_factor(reference),
+                qfq_multiplier,
+                valid_adj_factor(Some(row.close)),
+            ) {
+                (Some(reference), Some(qfq_multiplier), Some(close)) => {
+                    reference * qfq_multiplier / close
+                }
+                _ if qfq_multiplier.is_some() && row.close.is_finite() && row.close > 0.0 => {
+                    anyhow::bail!(
+                        "Cannot align DB qfq price basis for {} on {}: missing adj_factor and close_qfq.",
+                        row.ts_code,
+                        row.trade_date
+                    );
+                }
+                _ => 1.0,
+            },
         };
-        let multiplier = adj_factor / latest_factor;
         row.open = adjust_price(row.open, multiplier);
         row.high = adjust_price(row.high, multiplier);
         row.low = adjust_price(row.low, multiplier);
@@ -814,7 +860,57 @@ fn front_adjust_rows(rows: &mut [MarketRow]) {
         if let Some(chip_vwap) = row.db_factors.get_mut("chip_vwap") {
             *chip_vwap = adjust_price(*chip_vwap, multiplier);
         }
+        if let Some(qfq_multiplier) = qfq_multiplier {
+            let has_live_macd = row.db_factors.contains_key("intraday_price_live_qfq");
+            for (key, value) in &mut row.db_factors {
+                if is_db_qfq_price_factor(key) && !(has_live_macd && key.starts_with("macd_")) {
+                    *value = adjust_price(*value, qfq_multiplier);
+                }
+            }
+        }
     }
+    Ok(())
+}
+
+fn is_db_qfq_price_factor(key: &str) -> bool {
+    matches!(
+        key,
+        "_czsc_last_bi_high"
+            | "_czsc_last_bi_low"
+            | "_czsc_last_bi_mid"
+            | "_czsc_latest_zs_zg"
+            | "_czsc_latest_zs_zd"
+            | "_czsc_latest_zs_zz"
+            | "_czsc_recent_peak_high"
+            | "_czsc_post_peak_first_bear_open"
+            | "_czsc_post_peak_first_bear_high"
+            | "_czsc_post_peak_first_bear_low"
+            | "_czsc_post_peak_first_bear_close"
+            | "boll_upper_qfq"
+            | "boll_mid_qfq"
+            | "boll_lower_qfq"
+            | "mtm_qfq"
+            | "tushare_macd_dif_qfq"
+            | "tushare_macd_dea_qfq"
+            | "tushare_macd_qfq"
+            | "macd_daily_dif"
+            | "macd_daily_dea"
+            | "macd_daily_hist"
+            | "macd_weekly_dif"
+            | "macd_weekly_dea"
+            | "macd_weekly_hist"
+            | "macd_monthly_dif"
+            | "macd_monthly_dea"
+            | "macd_monthly_hist"
+            | "rolling_ma25_qfq"
+            | "rolling_ma144_qfq"
+            | "rolling_ma220_qfq"
+            | "rolling_high_20_qfq"
+            | "rolling_high_90_qfq"
+            | "rolling_low_90_qfq"
+            | "rolling_high_120_qfq"
+            | "rolling_low_120_qfq"
+    )
 }
 
 fn valid_adj_factor(value: Option<f64>) -> Option<f64> {
@@ -855,7 +951,7 @@ fn turnover_top_pool_row_allowed(row: &PreparedRow, method: Method) -> bool {
             .ma25
             .zip(row.ma60)
             .is_some_and(|(ma25, ma60)| ma25 > ma60),
-        Method::Lsh | Method::Qianlong => true,
+        Method::Lsh | Method::Scm | Method::Pbm | Method::Qianlong => true,
         _ => true,
     }
 }

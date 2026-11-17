@@ -1,8 +1,8 @@
 # 选股筛选方法过滤条件
 
-本文整理当前 Rust CLI 中各个选股筛选方法的实际硬过滤条件。口径以代码实现为准，主要来源为 `src/screening.rs`、`src/strategies/b2.rs`、`src/strategies/b3.rs`、`src/strategies/lsh.rs`、`src/strategies/qianlong.rs` 和 `src/engine/run.rs`。
+本文整理当前 Rust CLI 中各个选股筛选方法的实际硬过滤条件。口径以代码实现为准，主要来源为 `src/screening.rs`、`src/strategies/b2.rs`、`src/strategies/b3.rs`、`src/strategies/lsh.rs`、`src/strategies/scm_pbm.rs`、`src/strategies/qianlong.rs` 和 `src/engine/run.rs`。
 
-实际接入 screen 的方法：`b2`、`b3`、`lsh`、`qianlong`。
+实际接入 screen 的方法：`b2`、`b3`、`lsh`、`scm`、`pbm`、`qianlong`。
 
 `b1`、`dribull` 当前没有 screen 策略实现；在 CLI 执行 `screen` 时会返回未实现错误，因此本文不列独立过滤条件。`qianlong` 当前只接入 `screen` 和因子导出，不接入模型 `run`、`review-list` 或 LLM 复盘。
 
@@ -29,7 +29,7 @@
 
 - 只取 `pick_date` 当天有 prepared 行情的股票。
 - `b2` / `b3`：要求当日 `MA25 > MA60`，否则不会进入策略判断。
-- `lsh` / `qianlong`：不做 `MA25 > MA60` 前置过滤。
+- `lsh` / `scm` / `pbm` / `qianlong`：不做 `MA25 > MA60` 前置过滤。
 - 按 `turnover_n` 从高到低排序，同分按代码升序，取 `turnover_n` 最高的前 5000 只。
 
 `custom` 股票池：
@@ -125,7 +125,7 @@
 
 ## `lsh`
 
-`lsh` 是昨日 MA25 回踩后当日收回，并叠加周线/月线 MACD 多头状态的筛选，候选信号写为 `LSH`。
+`lsh` 保留原策略和模型路径，供旧候选与模型兼容。新策略使用 `scm`（Sustained Cross MA25）和 `pbm`（Pullback MA25），两者分别训练和加载模型。
 
 ### 基础过滤
 
@@ -144,12 +144,46 @@
 
 ### 周线/月线 MACD 条件
 
-`lsh` 会在日线视角聚合周线/月线收盘序列：
+旧 `lsh` 会在日线视角聚合周线/月线收盘序列：
 
 - 周线：按 ISO 自然周分组，取已结束周的最后一个日线收盘价；最新未结束周使用当前最新日线收盘价。
 - 月线：按自然月分组，取已结束月的最后一个日线收盘价；最新未结束月使用当前最新日线收盘价。
 
 分别对周线和月线模拟收盘序列计算 MACD，参数为 12/26/9。周线和月线最新 DIF 与 DEA 都大于 0 时，才通过过滤。
+
+## `scm` / `pbm`
+
+`scm`（Sustained Cross MA25）与 `pbm`（Pullback MA25）共享昨日 MA25 回踩、当日阳线收复和当日放量日线形态，候选信号分别写为 `SCM` 和 `PBM`。
+
+- 昨日最低价低于昨日 `MA25`：`REF(low, 1) < REF(MA25, 1)`。
+- 入选日为阳线：`close > open`，且收盘价高于当日 `MA25`。
+- 入选日成交量严格大于前一交易日：`volume > REF(volume, 1)`。
+
+按最近 20 个交易日收盘价相对 `MA25` 的状态区分 SCM 与 PBM：
+
+- `scm`：最近 20 日中至少 16 日收盘高于当日 `MA25`，且最近 10 日中至少 8 日收盘高于当日 `MA25`。
+- `pbm`：不满足 SCM 条件，但最近 5 日内至少发生一次有效收盘上穿，即前一日 `close <= MA25`、当日 `close > MA25`。
+- 选股日收盘必须高于当日 `MA25`；否则不进入 SCM 或 PBM。最近 20 日所需 MA25 数据不足时也不进入任一类别。
+- 两个方法都不做 `MA25 > MA60` 股票池前置过滤。
+
+### 周线/月线 MACD 条件
+
+- 月 MACD 柱体必须较上一个月增加：当前月 `macd_monthly_hist` 大于前一个月；月线按自然月聚合。
+- 周 MACD 柱体必须大于 0，即红柱；周线按 ISO 自然周聚合。
+- 周线使用选股日的 prepared `macd_weekly_hist`；字段缺失时，按日线聚合周收盘价并用 12/26/9 参数计算。
+- 月线比较上一完整月最后交易日与选股日的 prepared `macd_monthly_hist`。DB-native 加载会额外读取上月最后交易日的数据库月柱，与本月柱一起换算到选股日的前复权基准。周期内每天都从上一完整周期状态推演一次，本月未结束时使用截至选股日的临时月柱。
+- 月柱比较的两侧必须同源：数据库值均有效时直接比较；两侧均无数据库值时，统一按窗口内月收盘价计算；仅缺一侧时不通过，禁止混用长历史预热值和短窗口重算值。
+- 不要求周线/月线 DIF 或 DEA 为正。
+
+### 周线最大成交量 K 线条件
+
+- 检查最近 10 根 ISO 周 K 线，包含截至选股日的当前未结束周。
+- 周 K 开盘价取该周首个日线开盘价，收盘价取该周最后一个日线收盘价，成交量为周内日成交量之和。
+- 最近 10 周中成交量最大的一根周 K 必须为红 K（收盘价高于开盘价）。
+- 选股日当前价格必须严格高于该最大量红周 K 的开盘价；盘中优先使用实时前复权价，EOD 使用选股日收盘价。
+- SCM/PBM 回填会将日期任务限制为单 worker，因为每个 screen 需要加载全市场历史窗口；`--workers` 对其他方法保持原行为。
+
+`scm` 和 `pbm` 是两个独立的 `--method` 值，模型产物分别位于 `runtime/models/scm/` 和 `runtime/models/pbm/`。
 
 ## `qianlong`
 
@@ -170,7 +204,7 @@
 - 周线和月线的最新 DIF 与 DEA 都大于 0 时，才通过过滤。
 - 任一周期字段缺失时按日线聚合周线/月线收盘价，再以 12/26/9 参数计算对应周期 MACD；聚合口径与 LSH 相同。
 
-已有 schema 11 prepared cache 可以直接复用，不需要为 `qianlong` 重建整份缓存。潜龙不依赖潜龙专用的上一周期字段，EOD 缓存命中后不会为潜龙补查周期状态，也不改写原缓存文件。
+通过 `calc_versions.price_basis = asof_qfq_v1` 校验后，已有 schema 11 prepared cache 可以直接复用，不需要为 `qianlong` 重建整份缓存。缺少此价格基准标记的旧 DB-native 缓存会按需重建，这属于共享数据纠错，而非潜龙专用升级。潜龙不依赖潜龙专用的上一周期字段，EOD 缓存命中后不会为潜龙补查周期状态，也不改写原缓存文件。
 
 ### 日线绿柱背离条件
 

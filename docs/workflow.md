@@ -92,6 +92,14 @@ stock-select-rs clean-intraday
 
 EOD prepared cache 默认只保留最近 30 个交易日 artifact，以减少 `runtime/prepared/` 的磁盘占用；可在当前目录 `.env` 或 shell 环境中设置 `STOCK_SELECT_PREPARED_CACHE_LIMIT=<正整数>` 调整。这个限制只作用于 EOD cache，盘中 `.intraday.` cache 不计入也不会被自动删除。
 
+### 历史行情价格基准校验
+
+DB-native EOD 加载保留原始 OHLC，再将每只股票的历史行情统一复权到该次窗口末日；选股日收盘仍是当日实际收盘价。数据库当前前复权基准的 CZSC 价格锚点、均线、布林线、MTM 和个股日/周/月 MACD 价格值，使用 `close / close_qfq` 换算到同一窗口基准。参考值取自较早日期时，还需乘该日 `adj_factor / 窗口末日 adj_factor`。日期、周期数、百分位、成交量、成交额、无量纲指标和行业指数因子不参与价格缩放，原始成交额在行情复权前计算。缺少有效参考且无法回退时明确报错，不落盘混合基准的缓存。
+
+二进制格式仍为 schema 11，DB-native 元数据增加 `calc_versions.price_basis = asof_qfq_v1`。缺失或不匹配此标记的旧缓存，下一次请求该日期时按需重建，不会自动扫描或冲刷全年。SCM、PBM、B2 等共享同日修正后的 prepared cache；SCM 重建完成后，PBM 正常读取不需要再次刷新。`--force` 覆盖 candidate/factor 的语义不变，但它不会绕过价格基准校验；旧 candidate/factor 不会因修改此标记自动更新，重训前需要另行刷新并重新构建数据集。
+
+SCM/PBM 的 DB-native 缓存还需带有 `calc_versions.monthly_macd_history = previous_completed_month_v1`，标识加载逻辑已包含上月最后交易日的数据库月柱；源数据缺失时按策略的月柱缺失规则处理。缺少或不匹配此标记时，仅 SCM/PBM 请求会触发按需重建；新缓存继续使用 schema 11 并在各方法间共享。此修复不需要运行 stock-cache refresh；数据库行情缺行仍需先补行情、重算指标，再重新生成 prepared 和 candidate/factor。
+
 ## 场景三：模型更新
 
 当需要重新训练或更新模型时：
@@ -102,7 +110,7 @@ METHOD=b2
 TRAIN_START=2025-06-01
 TRAIN_END=2026-06-04
 
-# 训练/补数据前查看核心数，workers 至少取可用核心数的 1/2，除非机器负载不允许
+# 训练/补数据前查看核心数，workers 至少取可用核心数的 1/2，除非机器负载不允许；SCM/PBM 回填会强制单 worker 控制内存峰值
 nproc
 
 # 2. 补齐历史候选（如果缺失）
@@ -179,7 +187,7 @@ uv run stock-select-ml backfill runs \
 
 ## 场景五：仅筛选候选
 
-当前 `screen` 支持 `b2`、`b3`、`lsh`、`qianlong`。各方法的公共股票池过滤、具体策略条件和 `run` 阶段排序口径见 [选股筛选方法过滤条件](screening-methods.md)。
+当前 `screen` 支持 `b2`、`b3`、`lsh`、`scm`、`pbm`、`qianlong`。`scm` 和 `pbm` 分别使用独立模型；各方法的公共股票池过滤、具体策略条件和 `run` 阶段排序口径见 [选股筛选方法过滤条件](screening-methods.md)。
 
 ```bash
 # 只生成候选（不跑模型）
@@ -208,7 +216,7 @@ stock-select-rs chart \
   --chart-workers 4
 ```
 
-`qianlong` 可直接复用现有 schema 11 prepared cache 中 B2/B3/LSH 已使用的周线/月线 DIF、DEA 字段；字段缺失时按日线聚合回算，不需要潜龙专用字段，不重建也不改写原缓存。
+`qianlong` 可直接复用通过价格基准校验的 schema 11 prepared cache 中 B2/B3/LSH 已使用的周线/月线 DIF、DEA 字段；字段缺失时按日线聚合回算，不需要潜龙专用字段。正常缓存命中不改写原缓存；缺少 `price_basis` 标记的旧 DB-native 缓存仍须按需重建。
 
 ## 场景六：复盘
 

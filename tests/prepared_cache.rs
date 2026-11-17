@@ -18,6 +18,118 @@ fn prepared_cache_schema_version_remains_compatible_with_existing_db_native_cach
 }
 
 #[test]
+fn db_native_cache_rejects_missing_price_basis_without_changing_binary_schema() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 2, 1).unwrap();
+    let rows = (0..245)
+        .map(|offset| {
+            prepared_row(
+                "603409.SH",
+                start_date + chrono::Duration::days(offset),
+                40.04,
+            )
+        })
+        .chain(std::iter::once(prepared_row("603409.SH", pick_date, 40.04)))
+        .collect::<Vec<_>>();
+    write_db_native_prepared_cache(
+        root.path(),
+        Method::Scm,
+        pick_date,
+        start_date,
+        pick_date,
+        246,
+        &rows,
+    )
+    .unwrap();
+    let path = prepared_cache_meta_path(root.path(), pick_date);
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(metadata["calc_versions"]["price_basis"], "asof_qfq_v1");
+    for method in [Method::Scm, Method::Pbm, Method::B2, Method::Qianlong] {
+        assert_eq!(
+            load_prepared_cache(root.path(), method, pick_date, start_date, pick_date)
+                .unwrap()
+                .unwrap()
+                .len(),
+            rows.len()
+        );
+    }
+    metadata["calc_versions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("price_basis");
+    std::fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+    for method in [Method::Scm, Method::Pbm, Method::B2, Method::Qianlong] {
+        assert!(
+            load_prepared_cache(root.path(), method, pick_date, start_date, pick_date)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn scm_and_pbm_rebuild_db_native_cache_without_completed_month_macd() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 2, 1).unwrap();
+    let rows = (0..245)
+        .map(|offset| {
+            prepared_row(
+                "603409.SH",
+                start_date + chrono::Duration::days(offset),
+                40.04,
+            )
+        })
+        .chain(std::iter::once(prepared_row("603409.SH", pick_date, 40.04)))
+        .collect::<Vec<_>>();
+    write_db_native_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        start_date,
+        pick_date,
+        246,
+        &rows,
+    )
+    .unwrap();
+    let path = prepared_cache_meta_path(root.path(), pick_date);
+    let original = std::fs::read(&path).unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    metadata["calc_versions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("monthly_macd_history");
+    std::fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+    for method in [Method::Scm, Method::Pbm] {
+        assert!(
+            load_prepared_cache(root.path(), method, pick_date, start_date, pick_date)
+                .unwrap()
+                .is_none(),
+            "{method:?} must rebuild a cache that only carries pick-date MACD"
+        );
+    }
+    for method in [Method::B2, Method::B3, Method::Lsh, Method::Qianlong] {
+        assert!(
+            load_prepared_cache(root.path(), method, pick_date, start_date, pick_date)
+                .unwrap()
+                .is_some()
+        );
+    }
+    std::fs::write(path, original).unwrap();
+    for method in [Method::Scm, Method::Pbm, Method::B2, Method::Qianlong] {
+        assert!(
+            load_prepared_cache(root.path(), method, pick_date, start_date, pick_date)
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[test]
 fn prepared_cache_paths_use_zstd_data_extension() {
     let root = tempfile::tempdir().unwrap();
     let date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
@@ -1042,7 +1154,7 @@ fn b3_can_read_shared_prepared_cache_written_for_b2() {
 }
 
 #[test]
-fn lsh_can_read_legacy_shared_prepared_cache_without_lsh_metadata_entry() {
+fn lsh_scm_and_pbm_can_read_legacy_shared_prepared_cache_without_method_entries() {
     let root = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 6, 4).unwrap();
     let start_date = NaiveDate::from_ymd_opt(2025, 6, 3).unwrap();
@@ -1073,11 +1185,13 @@ fn lsh_can_read_legacy_shared_prepared_cache_without_lsh_metadata_entry() {
     )
     .unwrap();
 
-    let rows = load_prepared_cache(root.path(), Method::Lsh, pick_date, start_date, pick_date)
-        .unwrap()
-        .unwrap();
+    for method in [Method::Lsh, Method::Scm, Method::Pbm] {
+        let rows = load_prepared_cache(root.path(), method, pick_date, start_date, pick_date)
+            .unwrap()
+            .unwrap();
 
-    assert_eq!(rows[0].ts_code, "000001.SZ");
+        assert_eq!(rows[0].ts_code, "000001.SZ");
+    }
 }
 
 #[test]

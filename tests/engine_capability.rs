@@ -101,6 +101,25 @@ fn lsh_supports_model_first_run() {
 }
 
 #[test]
+fn scm_and_pbm_are_independent_model_first_methods() {
+    for method_name in ["scm", "pbm"] {
+        let method = Method::from_str(method_name).unwrap();
+        assert_eq!(method.as_str(), method_name);
+
+        let capability = method_capability(method);
+        assert!(capability.screen);
+        assert!(capability.factor_extraction);
+        assert!(capability.model_inference);
+        assert!(capability.llm_review);
+        assert!(capability.review_merge);
+        assert!(capability.review_list);
+        assert!(capability.run);
+        assert_eq!(capability.model_family.as_deref(), Some("lightgbm"));
+        ensure_model_run_supported(method).unwrap();
+    }
+}
+
+#[test]
 fn capability_struct_is_copyable_for_cli_checks() {
     let capability: SelectionCapability = method_capability(Method::B2);
     let copy = capability;

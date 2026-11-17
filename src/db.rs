@@ -26,6 +26,7 @@ const DB_NATIVE_DAILY_WINDOW_QUERY: &str = "
             s.high::double precision AS high,
             s.low::double precision AS low,
             s.close::double precision AS close,
+            s.close_qfq::double precision AS _source_close_qfq,
             s.adj_factor::double precision AS adj_factor,
             s.vol::double precision AS vol,
             s.amount::double precision AS amount,
@@ -262,6 +263,18 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
         LEFT JOIN index_market_factors imf
           ON imf.trade_date = s.trade_date
         WHERE s.trade_date = $1
+        ";
+
+const DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY: &str = "
+        SELECT DISTINCT ON (a.ts_code)
+            a.ts_code,
+            a.trade_date,
+            a.monthly_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist
+        FROM {{stock_daily_asof_indicators}} a
+        WHERE a.trade_date >= (date_trunc('month', $1::date) - INTERVAL '1 month')::date
+          AND a.trade_date < date_trunc('month', $1::date)::date
+          AND a.calc_version = 'macd_qfq_12_26_9_v1'
+        ORDER BY a.ts_code, a.trade_date DESC
         ";
 
 const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
@@ -700,6 +713,7 @@ struct DbNativeDailyRow {
 }
 
 const DB_NATIVE_FACTOR_COLUMNS: &[&str] = &[
+    "_source_close_qfq",
     "amount",
     "_czsc_snapshot_available",
     "_czsc_source_bar_valid",
@@ -950,6 +964,13 @@ fn fetch_db_native_daily_dataset_with_preflight(
         end_date,
         &mut market_rows,
     )?;
+    let previous_month_macd_query = plan.adapt_query(DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY);
+    merge_previous_month_macd(
+        &mut transaction,
+        &previous_month_macd_query,
+        end_date,
+        &mut market_rows,
+    )?;
     let ths_sector_extras_query = plan.adapt_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY);
     merge_ths_sector_extras(
         &mut transaction,
@@ -1041,6 +1062,34 @@ fn merge_pick_date_extras<C: postgres::GenericClient>(
     Ok(())
 }
 
+fn merge_previous_month_macd<C: postgres::GenericClient>(
+    client: &mut C,
+    query: &str,
+    end_date: NaiveDate,
+    market_rows: &mut [MarketRow],
+) -> anyhow::Result<()> {
+    let mut previous_by_code = BTreeMap::new();
+    for row in client.query(query, &[&end_date])? {
+        let ts_code: String = row.try_get("ts_code")?;
+        let trade_date: NaiveDate = row.try_get("trade_date")?;
+        if let Some(histogram) =
+            optional_option_f64(&row, "macd_monthly_hist")?.filter(|value| value.is_finite())
+        {
+            previous_by_code.insert(ts_code, (trade_date, histogram));
+        }
+    }
+    // 挂在原日期上，由 prepare_rows 与本月柱一起换算到选股日的前复权基准。
+    for row in market_rows {
+        if let Some(&(trade_date, histogram)) = previous_by_code.get(row.ts_code.as_str())
+            && row.trade_date == trade_date
+        {
+            row.db_factors
+                .insert("macd_monthly_hist".to_string(), histogram);
+        }
+    }
+    Ok(())
+}
+
 fn merge_ths_sector_extras<C: postgres::GenericClient>(
     client: &mut C,
     query: &str,
@@ -1073,6 +1122,14 @@ fn merge_ths_sector_extras<C: postgres::GenericClient>(
 }
 
 fn db_native_market_row_from_values(row: DbNativeDailyRow) -> anyhow::Result<MarketRow> {
+    let source_close_qfq = row.db_factors.get("_source_close_qfq").copied();
+    let mut db_factors = db_factor_values_iter(row.db_factors);
+    if let Some(reference) = source_close_qfq {
+        db_factors.insert(
+            "_source_close_qfq".to_string(),
+            reference.unwrap_or(f64::NAN),
+        );
+    }
     Ok(MarketRow {
         ts_code: row.ts_code,
         trade_date: row.trade_date,
@@ -1083,7 +1140,7 @@ fn db_native_market_row_from_values(row: DbNativeDailyRow) -> anyhow::Result<Mar
         vol: row.vol,
         turnover_rate: row.turnover_rate,
         adj_factor: row.adj_factor,
-        db_factors: db_factor_values_iter(row.db_factors),
+        db_factors,
     })
 }
 
@@ -1266,6 +1323,45 @@ mod tests {
     }
 
     #[test]
+    fn db_native_daily_window_keeps_raw_ohlc_and_carries_qfq_reference_for_alignment() {
+        assert!(DB_NATIVE_DAILY_WINDOW_QUERY.contains("s.close::double precision AS close"));
+        assert!(
+            DB_NATIVE_DAILY_WINDOW_QUERY
+                .contains("s.close_qfq::double precision AS _source_close_qfq")
+        );
+        assert!(DB_NATIVE_FACTOR_COLUMNS.contains(&"_source_close_qfq"));
+    }
+
+    #[test]
+    fn db_native_row_preserves_missing_qfq_reference_for_price_basis_validation() {
+        for reference in [None, Some(f64::NAN), Some(5.0)] {
+            let mapped = db_native_market_row_from_values(DbNativeDailyRow {
+                ts_code: "000001.SZ".to_string(),
+                trade_date: NaiveDate::from_ymd_opt(2026, 1, 30).unwrap(),
+                open: 10.0,
+                high: 11.0,
+                low: 9.0,
+                close: 10.0,
+                adj_factor: Some(1.0),
+                vol: 100.0,
+                turnover_rate: None,
+                db_factors: BTreeMap::from([("_source_close_qfq".to_string(), reference)]),
+            })
+            .unwrap();
+            let actual = mapped
+                .db_factors
+                .get("_source_close_qfq")
+                .copied()
+                .expect("reference must remain present even when missing");
+            if reference.is_some_and(f64::is_finite) {
+                assert_eq!(Some(actual), reference);
+            } else {
+                assert!(actual.is_nan());
+            }
+        }
+    }
+
+    #[test]
     fn db_native_pick_date_extras_query_maps_wide_db_native_factors() {
         for fragment in [
             "WHERE s.trade_date = $1",
@@ -1368,6 +1464,7 @@ mod tests {
         for query in [
             DB_NATIVE_DAILY_WINDOW_QUERY,
             DB_NATIVE_PICK_DATE_EXTRAS_QUERY,
+            DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY,
             DB_NATIVE_THS_SECTOR_EXTRAS_QUERY,
         ] {
             let adapted = plan.adapt_query(query);
@@ -1778,6 +1875,331 @@ mod tests {
         assert_eq!(mapped.db_factors["market_broad_volatility20_pct"], 1.1);
         assert!(!mapped.db_factors.contains_key("ignored_nan"));
         assert!(!mapped.db_factors.contains_key("ignored_null"));
+    }
+
+    #[test]
+    #[ignore = "需本地 .env 数据库；只读核对 2026-11-13 的 17 只 SCM 样本，使用临时 runtime"]
+    fn scm_previous_month_macd_database_regression() -> anyhow::Result<()> {
+        use crate::cache::prepared_cache_start_date;
+        use crate::model::Method;
+        use crate::screening::{
+            PoolSource, ScreenRequest, run_db_native_screen_with_dataset_loader,
+        };
+
+        let codes = [
+            "688475.SH",
+            "601985.SH",
+            "601668.SH",
+            "601288.SH",
+            "601077.SH",
+            "600993.SH",
+            "600900.SH",
+            "600377.SH",
+            "600028.SH",
+            "600019.SH",
+            "300138.SZ",
+            "003816.SZ",
+            "002299.SZ",
+            "000999.SZ",
+            "000895.SZ",
+            "000429.SZ",
+            "000423.SZ",
+        ];
+        let pick_date = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        let start_date = prepared_cache_start_date(pick_date);
+        let dsn = crate::config::resolve_dsn_from_env(None)?;
+        let mut client = Client::connect(&dsn, NoTls)?;
+        configure_daily_window_session(&mut client)?;
+        let mut transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()?;
+        transaction.batch_execute("SET LOCAL statement_timeout = '60s'")?;
+        let plan = preflight_db_native_load(
+            &mut transaction,
+            start_date,
+            pick_date,
+            &resolve_db_check_tables()?,
+        )?;
+        let code_filter = codes.map(|code| format!("'{code}'")).join(", ");
+        let scope_query = |query: &str| {
+            format!(
+                "SELECT sampled.* FROM ({}) sampled WHERE sampled.ts_code IN ({code_filter})",
+                plan.adapt_query(query)
+            )
+        };
+        let mut rows = transaction
+            .query(
+                &scope_query(DB_NATIVE_DAILY_WINDOW_QUERY),
+                &[&start_date, &pick_date],
+            )?
+            .into_iter()
+            .map(db_native_market_row_from_db_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        merge_pick_date_extras(
+            &mut transaction,
+            &scope_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY),
+            pick_date,
+            &mut rows,
+        )?;
+        merge_previous_month_macd(
+            &mut transaction,
+            &scope_query(DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY),
+            pick_date,
+            &mut rows,
+        )?;
+        transaction.commit()?;
+
+        let root = tempfile::tempdir()?;
+        let request = ScreenRequest {
+            method: Method::Scm,
+            pick_date,
+            runtime_root: root.path().to_path_buf(),
+            dsn,
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        };
+        let output = run_db_native_screen_with_dataset_loader(request, |_, _, _| {
+            Ok(MarketDataset {
+                rows,
+                db_data_gaps: plan.db_data_gaps,
+            })
+        })?;
+        let result: serde_json::Value = serde_json::from_slice(&std::fs::read(output)?)?;
+        assert_eq!(result["stats"]["total_symbols"], 17);
+        assert_eq!(result["stats"]["fail_macd"], 0, "{result}");
+        assert!(
+            result["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["code"] == "601985.SH")
+        );
+        println!("SCM_MONTHLY_DATABASE_PROBE {}", result["stats"]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "需本地 .env 数据库；仅四只股票并使用临时 runtime"]
+    fn historical_qfq_price_basis_samples_match_formal_czsc_and_reuse_cache() {
+        let samples = [
+            ("603409.SH", (2026, 1, 30)),
+            ("003026.SZ", (2026, 2, 25)),
+            ("301328.SZ", (2026, 2, 11)),
+            ("688268.SH", (2026, 4, 20)),
+        ];
+        std::thread::scope(|scope| {
+            let workers = samples
+                .into_iter()
+                .map(|(code, (year, month, day))| {
+                    scope.spawn(move || {
+                        historical_qfq_price_basis_probe(
+                            code,
+                            NaiveDate::from_ymd_opt(year, month, day).unwrap(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            for worker in workers {
+                let report = worker
+                    .join()
+                    .expect("price basis worker panicked")
+                    .expect("price basis probe failed");
+                println!("PRICE_BASIS_PROBE {report}");
+            }
+        });
+    }
+
+    fn historical_qfq_price_basis_probe(
+        code: &str,
+        pick_date: NaiveDate,
+    ) -> anyhow::Result<serde_json::Value> {
+        use crate::cache::{
+            load_prepared_cache, prepared_cache_data_path, prepared_cache_meta_path,
+            prepared_cache_start_date,
+        };
+        use crate::factors::registry::build_candidate_factor_rows;
+        use crate::factors::types::FactorValue;
+        use crate::model::{Candidate, Method};
+        use crate::screening::{
+            PoolSource, ScreenRequest, run_db_native_screen_with_dataset_loader,
+        };
+
+        let dsn = crate::config::resolve_dsn_from_env(None)?;
+        let root = tempfile::tempdir()?;
+        let start_date = prepared_cache_start_date(pick_date);
+        let mut client = Client::connect(&dsn, NoTls)?;
+        configure_daily_window_session(&mut client)?;
+        let mut transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()?;
+        transaction.batch_execute("SET LOCAL statement_timeout = '60s'")?;
+        let plan = preflight_db_native_load(
+            &mut transaction,
+            start_date,
+            pick_date,
+            &resolve_db_check_tables()?,
+        )?;
+        let scope_query = |query: &str| {
+            format!(
+                "SELECT sampled.* FROM ({}) sampled WHERE sampled.ts_code IN ('{code}', '000001.SZ')",
+                plan.adapt_query(query)
+            )
+        };
+        let mut rows = transaction
+            .query(
+                &scope_query(DB_NATIVE_DAILY_WINDOW_QUERY),
+                &[&start_date, &pick_date],
+            )?
+            .into_iter()
+            .map(db_native_market_row_from_db_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        merge_pick_date_extras(
+            &mut transaction,
+            &scope_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY),
+            pick_date,
+            &mut rows,
+        )?;
+        merge_ths_sector_extras(
+            &mut transaction,
+            &scope_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY),
+            pick_date,
+            &mut rows,
+        )?;
+        transaction.commit()?;
+        rows.sort_by_key(|row| row.trade_date);
+        let latest = rows
+            .iter()
+            .rev()
+            .find(|row| row.ts_code == code)
+            .expect("sample history is empty");
+        assert_eq!(latest.trade_date, pick_date);
+        let close = latest.close;
+        let qfq_close = latest.db_factors["_source_close_qfq"];
+        let qfq_peak = latest.db_factors["_czsc_recent_peak_high"];
+        let peak_day = latest.db_factors["_czsc_recent_peak_day"];
+        let qfq_ma25 = latest.db_factors["rolling_ma25_qfq"];
+        let qfq_dif = latest.db_factors["macd_daily_dif"];
+        let expected_distance = 100.0 * (qfq_close / qfq_peak - 1.0);
+        let multiplier = close / qfq_close;
+        let expected_turnover = rows
+            .iter()
+            .rev()
+            .filter(|row| row.ts_code == code)
+            .take(43)
+            .map(|row| (row.open + row.close) / 2.0 * row.vol)
+            .sum::<f64>();
+        let loaded_rows = rows.len();
+        let request = |method| ScreenRequest {
+            method,
+            pick_date,
+            runtime_root: root.path().to_path_buf(),
+            dsn: dsn.clone(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: true,
+            environment_state: Some("weak".to_string()),
+        };
+        let candidate_path =
+            run_db_native_screen_with_dataset_loader(request(Method::Scm), |_, _, _| {
+                Ok(MarketDataset {
+                    rows,
+                    db_data_gaps: plan.db_data_gaps,
+                })
+            })?;
+        let selected_scm: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(candidate_path)?)?;
+        let prepared =
+            load_prepared_cache(root.path(), Method::Scm, pick_date, start_date, pick_date)?
+                .unwrap();
+        let latest = prepared
+            .iter()
+            .rev()
+            .find(|row| row.ts_code == code)
+            .unwrap();
+        assert_eq!(latest.close, close);
+        assert!((latest.ma25.unwrap() - qfq_ma25 * multiplier).abs() < 1e-8);
+        assert!((latest.dif - qfq_dif * multiplier).abs() < 1e-8);
+        assert!((latest.turnover_n / expected_turnover - 1.0).abs() < 1e-10);
+        assert!(
+            prepared
+                .iter()
+                .all(|row| !row.db_factors.contains_key("_source_close_qfq"))
+        );
+        let local_ma25 = prepared
+            .iter()
+            .rev()
+            .filter(|row| row.ts_code == code)
+            .take(25)
+            .map(|row| row.close)
+            .sum::<f64>()
+            / 25.0;
+        assert!((latest.ma25.unwrap() - local_ma25).abs() < 0.0001 * multiplier);
+        let factors = build_candidate_factor_rows(
+            &[Candidate {
+                code: code.to_string(),
+                pick_date,
+                close,
+                turnover_n: latest.turnover_n,
+                signal: Some("SCM".to_string()),
+                yellow_b1: Some(false),
+            }],
+            &prepared,
+            Method::Scm,
+            Some("weak"),
+        );
+        let FactorValue::Number(actual_distance) =
+            factors[0].factors["czsc_close_to_recent_peak_pct"]
+        else {
+            panic!("formal peak distance is missing");
+        };
+        assert!(
+            (100.0 * (latest.close / latest.db_factors["_czsc_recent_peak_high"] - 1.0)
+                - expected_distance)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (actual_distance - expected_distance).abs() < 0.00005,
+            "{code}: exported={actual_distance} expected={expected_distance}"
+        );
+        let data_path = prepared_cache_data_path(root.path(), pick_date);
+        let meta_path = prepared_cache_meta_path(root.path(), pick_date);
+        let data_before = std::fs::read(&data_path)?;
+        let meta_before = std::fs::read(&meta_path)?;
+        let data_modified = std::fs::metadata(&data_path)?.modified()?;
+        let meta_modified = std::fs::metadata(&meta_path)?.modified()?;
+        let pbm_path =
+            run_db_native_screen_with_dataset_loader(request(Method::Pbm), |_, _, _| {
+                panic!("PBM must reuse the corrected SCM cache without loading the database")
+            })?;
+        let selected_pbm: serde_json::Value = serde_json::from_slice(&std::fs::read(pbm_path)?)?;
+        assert_eq!(std::fs::read(&data_path)?, data_before);
+        assert_eq!(std::fs::read(&meta_path)?, meta_before);
+        assert_eq!(std::fs::metadata(data_path)?.modified()?, data_modified);
+        assert_eq!(std::fs::metadata(meta_path)?.modified()?, meta_modified);
+        Ok(serde_json::json!({
+            "code": code, "pick_date": pick_date, "rows_loaded": loaded_rows,
+            "raw_close": close, "source_close_qfq": qfq_close,
+            "peak_day": peak_day, "source_peak_qfq": qfq_peak,
+            "aligned_peak": latest.db_factors["_czsc_recent_peak_high"],
+            "old_distance_pct": 100.0 * (close / qfq_peak - 1.0),
+            "new_distance_pct": actual_distance, "expected_distance_pct": expected_distance,
+            "old_ma25_distance_pct": 100.0 * (close / qfq_ma25 - 1.0),
+            "new_ma25_distance_pct": 100.0 * (close / latest.ma25.unwrap() - 1.0),
+            "ma25_after": latest.ma25, "local_ma25": local_ma25,
+            "dif_before": qfq_dif, "dif_after": latest.dif,
+            "selected_scm": selected_scm["candidates"].as_array().unwrap().iter().any(|row| row["code"] == code),
+            "selected_pbm": selected_pbm["candidates"].as_array().unwrap().iter().any(|row| row["code"] == code),
+            "shared_cache_untouched": true,
+        }))
     }
 
     #[test]

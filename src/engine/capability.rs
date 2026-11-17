@@ -56,7 +56,7 @@ pub fn method_capability(method: Method) -> SelectionCapability {
             analyze_symbol: true,
             model_family: Some("lightgbm"),
         },
-        Method::Lsh => SelectionCapability {
+        Method::Lsh | Method::Scm | Method::Pbm => SelectionCapability {
             method,
             screen: true,
             chart: true,

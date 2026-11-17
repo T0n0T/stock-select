@@ -319,6 +319,14 @@ class RankDatasetTest(unittest.TestCase):
         ]:
             self.assertIn(included, columns)
 
+    def test_scm_and_pbm_use_independent_lsh_training_schemas(self):
+        lsh_columns = dataset_columns_for_method("lsh")
+        lsh_raw_columns = raw_factor_columns_for_method("lsh")
+
+        for method in ["scm", "pbm"]:
+            self.assertEqual(dataset_columns_for_method(method), lsh_columns)
+            self.assertEqual(raw_factor_columns_for_method(method), lsh_raw_columns)
+
     def test_b2_dataset_schema_includes_db_and_market_state_factors(self):
         expected = [
             "boll_width_pct",
@@ -1376,6 +1384,49 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(labels["ret3"], 20.0)
         self.assertEqual(labels["max_drawdown_5d"], 0.0)
 
+    def test_forward_labels_do_not_adjust_qfq_prices_twice(self):
+        raw_rows = [
+            {"trade_date": "2026-06-01", "close": 10.0, "low": 9.8, "adj_factor": 1.0},
+            {"trade_date": "2026-06-02", "close": 5.5, "low": 5.0, "adj_factor": 2.0},
+            {"trade_date": "2026-06-03", "close": 5.75, "low": 5.4, "adj_factor": 2.0},
+            {"trade_date": "2026-06-04", "close": 6.0, "low": 5.8, "adj_factor": 2.0},
+            {"trade_date": "2026-06-05", "close": 6.25, "low": 6.0, "adj_factor": 2.0},
+            {"trade_date": "2026-06-08", "close": 6.5, "low": 6.1, "adj_factor": 2.0},
+        ]
+        qfq_rows = [
+            {
+                **row,
+                "close": row["close"] * row["adj_factor"] / 2.0,
+                "low": row["low"] * row["adj_factor"] / 2.0,
+                "price_basis": "qfq",
+            }
+            for row in raw_rows
+        ]
+
+        labels = compute_forward_labels(qfq_rows, "2026-06-01")
+
+        self.assertEqual(labels["ret3"], 20.0)
+        self.assertEqual(labels["ret5"], 30.0)
+        self.assertEqual(labels["max_drawdown_5d"], 0.0)
+        self.assertEqual(labels, compute_forward_labels(raw_rows, "2026-06-01"))
+        self.assertEqual(qfq_rows[0]["adj_factor"], 1.0)
+        self.assertEqual(qfq_rows[1]["adj_factor"], 2.0)
+
+    def test_forward_labels_reject_mixed_price_bases(self):
+        rows = [
+            {"trade_date": "2026-06-01", "close": 5.0, "price_basis": "qfq"},
+            {"trade_date": "2026-06-02", "close": 11.0},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "price basis"):
+            compute_forward_labels(rows, "2026-06-01")
+
+    def test_forward_labels_reject_unknown_price_basis(self):
+        rows = [{"trade_date": "2026-06-01", "close": 5.0, "price_basis": "unknown"}]
+
+        with self.assertRaisesRegex(ValueError, "price basis"):
+            compute_forward_labels(rows, "2026-06-01")
+
     def test_fetch_price_rows_uses_stock_cache_factor_table_for_labels(self):
         captured: dict[str, object] = {}
 
@@ -1430,6 +1481,8 @@ class RankDatasetTest(unittest.TestCase):
         self.assertIn("stock_stk_factor_pro", query)
         self.assertNotIn("daily_market", query)
         self.assertEqual(rows["000001.SZ"][0]["adj_factor"], 1.2)
+        self.assertEqual(rows["000001.SZ"][0]["price_basis"], "qfq")
+        self.assertIn("close_qfq", query)
 
     def test_build_dataset_rows_merges_labels_and_runtime_factors(self):
         selection_rows = [

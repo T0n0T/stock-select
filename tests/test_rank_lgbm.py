@@ -258,6 +258,14 @@ class RankLgbmTest(unittest.TestCase):
         )
         self.assertEqual(categorical, ["env", "signal"])
 
+    def test_select_feature_columns_uses_lsh_schema_for_scm_and_pbm(self):
+        columns = ["env", "signal", "signal_type", "lsh_daily_macd_wave_index"]
+
+        for method in ["scm", "pbm"]:
+            numeric, categorical = select_feature_columns(columns, feature_set="all", method=method)
+            self.assertEqual(numeric, ["lsh_daily_macd_wave_index"])
+            self.assertEqual(categorical, ["env", "signal"])
+
     def test_validate_selected_feature_coverage_fails_zero_coverage_feature(self):
         rows = [
             {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "b3_volume_shrink_ratio": ""},

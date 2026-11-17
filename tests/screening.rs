@@ -153,7 +153,7 @@ fn screen_qianlong_writes_candidate_artifact_and_excludes_beijing_exchange() {
 }
 
 #[test]
-fn db_native_qianlong_reuses_legacy_prepared_cache_without_database_loaders() {
+fn db_native_qianlong_reuses_price_aligned_prepared_cache_without_database_loaders() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
     let qianlong_rows = qianlong_prepared_rows("000001.SZ", first_date);
@@ -189,7 +189,8 @@ fn db_native_qianlong_reuses_legacy_prepared_cache_without_database_loaders() {
     metadata["calc_versions"] = serde_json::json!({
         "macd": "macd_qfq_12_26_9_v1",
         "rolling": "rolling_qfq_v1",
-        "left_peak": "left_peak_qfq_v1"
+        "czsc": "czsc_structure_qfq_min6_r7_v1",
+        "price_basis": "asof_qfq_v1"
     });
     std::fs::write(
         &metadata_path,
@@ -217,7 +218,7 @@ fn db_native_qianlong_reuses_legacy_prepared_cache_without_database_loaders() {
             export_factors: true,
             environment_state: Some("neutral".to_string()),
         },
-        |_dsn, _start, _end| panic!("legacy prepared cache should be reused"),
+        |_dsn, _start, _end| panic!("price-aligned prepared cache should be reused"),
         |_dsn, _symbols, _trade_date| {
             panic!("prepared cache reuse must not query period indicator state")
         },
@@ -768,6 +769,153 @@ fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
 }
 
 #[test]
+fn screen_prepare_aligns_db_qfq_prices_to_the_window_basis() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+    let mut source = market_row_at_date(pick_date, 40.04, 100.0);
+    source.adj_factor = Some(1.0146);
+    source.db_factors.extend([
+        ("_source_close_qfq".to_string(), 26.61289),
+        ("_czsc_snapshot_available".to_string(), 1.0),
+        ("_czsc_recent_peak_high".to_string(), 25.25699),
+        ("_czsc_recent_peak_day".to_string(), 20452.0),
+        ("_czsc_last_bi_high".to_string(), 25.25699),
+        ("_czsc_latest_zs_zg".to_string(), 23.96987),
+        ("_czsc_post_peak_first_bear_open".to_string(), 24.99113),
+        ("rolling_ma25_qfq".to_string(), 25.0267564),
+        ("macd_daily_dif".to_string(), 0.44374441884686533),
+        ("macd_weekly_hist".to_string(), 0.25),
+        ("macd_monthly_dea".to_string(), -0.5),
+        ("macd_daily_dea_pctile".to_string(), 0.7),
+        ("mtm_qfq".to_string(), 0.9),
+        ("boll_upper_qfq".to_string(), 27.0),
+        ("volume_ratio".to_string(), 1.5),
+        ("ths_main_macd_daily_hist".to_string(), 0.3),
+    ]);
+    run_screen_with_loader(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: true,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_, _, _| Ok(vec![source]),
+    )
+    .unwrap();
+    let prepared = load_prepared_cache(
+        temp.path(),
+        Method::B2,
+        pick_date,
+        prepared_cache_start_date(pick_date),
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    let latest = prepared.last().unwrap();
+    let multiplier = 40.04 / 26.61289;
+    let distance = 100.0 * (latest.close / latest.db_factors["_czsc_recent_peak_high"] - 1.0);
+
+    assert!((distance - 5.368414842782143).abs() < 1e-9);
+    assert_eq!(latest.close, 40.04);
+    assert!((latest.ma25.unwrap() - 25.0267564 * multiplier).abs() < 1e-9);
+    assert!((latest.dif - 0.44374441884686533 * multiplier).abs() < 1e-9);
+    for (key, value) in [
+        ("_czsc_last_bi_high", 25.25699),
+        ("_czsc_latest_zs_zg", 23.96987),
+        ("_czsc_post_peak_first_bear_open", 24.99113),
+        ("macd_weekly_hist", 0.25),
+        ("macd_monthly_dea", -0.5),
+        ("mtm_qfq", 0.9),
+        ("boll_upper_qfq", 27.0),
+    ] {
+        assert!(
+            (latest.db_factors[key] - value * multiplier).abs() < 1e-9,
+            "{key}"
+        );
+    }
+    assert_eq!(latest.db_factors["_czsc_recent_peak_day"], 20452.0);
+    assert_eq!(latest.db_factors["macd_daily_dea_pctile"], 0.7);
+    assert_eq!(latest.db_factors["volume_ratio"], 1.5);
+    assert_eq!(latest.db_factors["ths_main_macd_daily_hist"], 0.3);
+    assert!(!latest.db_factors.contains_key("_source_close_qfq"));
+}
+
+#[test]
+fn screen_prepare_qfq_alignment_is_per_symbol_and_uses_one_basis_across_splits() {
+    let first_date = NaiveDate::from_ymd_opt(2026, 1, 29).unwrap();
+    let pick_date = first_date + Duration::days(1);
+    let specifications = [
+        ("000001.SZ", first_date, 10.0, Some(1.0), 5.0, 5.0),
+        ("000001.SZ", pick_date, 6.0, Some(2.0), f64::NAN, 5.0),
+        ("000002.SZ", first_date, 20.0, Some(2.0), 5.0, 5.0),
+        ("000002.SZ", pick_date, 12.0, Some(4.0), 6.0, 5.0),
+        ("000003.SZ", first_date, 10.0, None, 2.5, 2.5),
+        ("000003.SZ", pick_date, 6.0, None, 3.0, 2.5),
+    ];
+    let source = specifications
+        .into_iter()
+        .rev()
+        .map(|(code, date, close, adj_factor, qfq_close, peak)| {
+            let mut row = market_row_at_date(date, close, 100.0);
+            row.ts_code = code.to_string();
+            row.open = close;
+            row.adj_factor = adj_factor;
+            row.db_factors.extend([
+                ("_source_close_qfq".to_string(), qfq_close),
+                ("_czsc_recent_peak_high".to_string(), peak),
+                ("chip_vwap".to_string(), close),
+                ("amount".to_string(), close * 100.0),
+            ]);
+            row
+        })
+        .collect();
+    let prepared = prepare_test_market_rows(source).unwrap();
+
+    for (code, first_close, last_close, peak, turnover) in [
+        ("000001.SZ", 5.0, 6.0, 5.0, 1600.0),
+        ("000002.SZ", 10.0, 12.0, 10.0, 3200.0),
+        ("000003.SZ", 5.0, 6.0, 5.0, 1600.0),
+    ] {
+        let rows = prepared
+            .iter()
+            .filter(|row| row.ts_code == code)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].close, first_close, "{code}");
+        assert_eq!(rows[1].close, last_close, "{code}");
+        assert_eq!(rows[1].turnover_n, turnover, "{code}");
+        for row in rows {
+            assert_eq!(row.db_factors["_czsc_recent_peak_high"], peak, "{code}");
+            assert_eq!(row.db_factors["chip_vwap"], row.close, "{code}");
+            assert_eq!(row.volume, 100.0);
+            assert!(!row.db_factors.contains_key("_source_close_qfq"));
+        }
+    }
+}
+
+#[test]
+fn screen_prepare_rejects_unusable_qfq_reference_instead_of_caching_mixed_prices() {
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+    for reference in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+        let mut row = market_row_at_date(pick_date, 40.04, 100.0);
+        row.adj_factor = Some(1.0146);
+        row.db_factors.extend([
+            ("_source_close_qfq".to_string(), reference),
+            ("_czsc_recent_peak_high".to_string(), 25.25699),
+        ]);
+
+        let error = prepare_test_market_rows(vec![row]).unwrap_err().to_string();
+        assert!(error.contains("price basis"), "{error}");
+        assert!(error.contains("000001.SZ"), "{error}");
+    }
+}
+
+#[test]
 fn screen_prepare_prefers_db_native_kdj_macd_and_rolling_values() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
@@ -1094,6 +1242,314 @@ fn screen_lsh_writes_lsh_candidate_artifact() {
     assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
     assert_eq!(payload["candidates"][0]["signal"], "LSH");
     assert_eq!(payload["stats"]["selected_lsh"], 1);
+}
+
+#[test]
+fn screen_scm_and_pbm_partition_lsh_candidates_by_recent_ma25_path() {
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+    let start_date = prepared_cache_start_date(pick_date);
+
+    for (method_name, signal) in [("scm", "SCM"), ("pbm", "PBM")] {
+        let temp = tempfile::tempdir().unwrap();
+        let method: Method = method_name.parse().unwrap();
+        let mut rows = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+        let focus_week = (pick_date - Duration::days(28)).iso_week();
+        for row in &mut rows {
+            if row.trade_date.iso_week() == focus_week {
+                row.volume = 10_000.0;
+            }
+        }
+        let path_start = rows.len() - 20;
+        for (offset, row) in rows[path_start..].iter_mut().enumerate() {
+            let above_ma25 = if method_name == "scm" {
+                offset != 18
+            } else {
+                matches!(offset, 0..=5 | 19)
+            };
+            if !above_ma25 {
+                let ma25 = row.ma25.unwrap();
+                row.close = ma25 - 0.1;
+                row.open = row.close - 0.05;
+                row.high = row.close + 0.1;
+                row.low = row.close - 0.2;
+            }
+        }
+        write_prepared_cache(temp.path(), method, pick_date, start_date, pick_date, &rows).unwrap();
+
+        let output_path = run_screen_with_loader(
+            ScreenRequest {
+                method,
+                pick_date,
+                runtime_root: temp.path().to_path_buf(),
+                dsn: "postgresql://fixture".to_string(),
+                recompute: false,
+                pool_source: PoolSource::TurnoverTop,
+                pool_file: None,
+                export_factors: false,
+                environment_state: None,
+            },
+            |_dsn, _start_date, _end_date| {
+                panic!("{method_name} screen test should reuse prepared cache")
+            },
+        )
+        .unwrap();
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
+        assert_eq!(payload["method"], method_name);
+        assert_eq!(payload["count"], 1, "payload={payload}");
+        assert_eq!(payload["candidates"][0]["signal"], signal);
+    }
+}
+
+#[test]
+fn scm_requires_pick_date_volume_to_exceed_previous_day() {
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+
+    let mut pick_day_volume_increased = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    add_scm_period_histograms(&mut pick_day_volume_increased);
+    let focus_week = (pick_date - Duration::days(28)).iso_week();
+    for row in &mut pick_day_volume_increased {
+        if row.trade_date.iso_week() == focus_week {
+            row.volume = 10_000.0;
+        }
+    }
+    let latest = pick_day_volume_increased.len() - 1;
+    pick_day_volume_increased[latest - 2].volume = 1_100.0;
+    pick_day_volume_increased[latest - 1].volume = 1_200.0;
+    pick_day_volume_increased[latest].volume = 1_300.0;
+
+    let payload = run_screen_with_prepared_rows("scm", pick_date, pick_day_volume_increased);
+    assert_eq!(payload["count"], 1, "payload={payload}");
+
+    let mut pick_day_volume_not_increased = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    add_scm_period_histograms(&mut pick_day_volume_not_increased);
+    for row in &mut pick_day_volume_not_increased {
+        if row.trade_date.iso_week() == focus_week {
+            row.volume = 10_000.0;
+        }
+    }
+    let latest = pick_day_volume_not_increased.len() - 1;
+    pick_day_volume_not_increased[latest - 2].volume = 1_200.0;
+    pick_day_volume_not_increased[latest - 1].volume = 1_000.0;
+    pick_day_volume_not_increased[latest].volume = 900.0;
+
+    let payload = run_screen_with_prepared_rows("scm", pick_date, pick_day_volume_not_increased);
+    assert_eq!(payload["count"], 0);
+    assert_eq!(payload["stats"]["fail_daily_shape"], 1);
+}
+
+#[test]
+fn scm_requires_increasing_monthly_and_positive_weekly_macd_histograms() {
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+
+    let mut monthly_not_increasing = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    add_scm_period_histograms(&mut monthly_not_increasing);
+    let latest_date = monthly_not_increasing.last().unwrap().trade_date;
+    let previous_month_key = i64::from((latest_date - Duration::days(31)).year()) * 12
+        + i64::from((latest_date - Duration::days(31)).month());
+    for row in monthly_not_increasing.iter_mut().filter(|row| {
+        row.trade_date.year() == latest_date.year() && row.trade_date.month() == latest_date.month()
+    }) {
+        row.db_factors.insert(
+            "macd_monthly_hist".to_string(),
+            previous_month_key as f64 - 1.0,
+        );
+    }
+    let payload = run_screen_with_prepared_rows("scm", pick_date, monthly_not_increasing);
+    assert_eq!(payload["count"], 0);
+    assert_eq!(payload["stats"]["fail_macd"], 1);
+
+    let mut weekly_not_red = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    add_scm_period_histograms(&mut weekly_not_red);
+    let latest_week = weekly_not_red.last().unwrap().trade_date.iso_week();
+    for row in weekly_not_red
+        .iter_mut()
+        .filter(|row| row.trade_date.iso_week() == latest_week)
+    {
+        row.db_factors.insert("macd_weekly_hist".to_string(), 0.0);
+    }
+    let payload = run_screen_with_prepared_rows("scm", pick_date, weekly_not_red);
+    assert_eq!(payload["count"], 0);
+    assert_eq!(payload["stats"]["fail_macd"], 1);
+}
+
+#[test]
+fn scm_and_pbm_reject_mixed_database_monthly_histograms() {
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+
+    for method in ["scm", "pbm"] {
+        for missing_current in [false, true] {
+            let mut rows = scm_pbm_macd_fixture(method, first_date);
+            let latest = rows.len() - 1;
+            let previous_month = rows
+                .iter()
+                .rposition(|row| row.trade_date.month() != pick_date.month())
+                .unwrap();
+            if missing_current {
+                rows[previous_month]
+                    .db_factors
+                    .insert("macd_monthly_hist".to_string(), -100_000.0);
+            } else {
+                rows[latest]
+                    .db_factors
+                    .insert("macd_monthly_hist".to_string(), 100_000.0);
+            }
+
+            let payload = run_screen_with_prepared_rows(method, pick_date, rows);
+            assert_eq!(payload["count"], 0, "method={method}, payload={payload}");
+            assert_eq!(payload["stats"]["fail_macd"], 1);
+        }
+    }
+}
+
+#[test]
+fn scm_and_pbm_compare_database_month_end_with_current_month_asof() {
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+
+    for method in ["scm", "pbm"] {
+        let mut rows = scm_pbm_macd_fixture(method, first_date);
+        let latest = rows.len() - 1;
+        let previous_month = rows
+            .iter()
+            .rposition(|row| row.trade_date.month() != pick_date.month())
+            .unwrap();
+        // 萤石网络审计值：本月仍为负柱，但较上一个完整月增加。
+        for (index, histogram) in [
+            (previous_month - 1, 0.5),
+            (previous_month, -0.444_011),
+            (latest - 1, -0.1),
+            (latest, -0.324_087),
+        ] {
+            rows[index]
+                .db_factors
+                .insert("macd_monthly_hist".to_string(), histogram);
+        }
+
+        let payload = run_screen_with_prepared_rows(method, pick_date, rows);
+        assert_eq!(payload["count"], 1, "method={method}, payload={payload}");
+    }
+}
+
+fn scm_pbm_macd_fixture(method: &str, first_date: NaiveDate) -> Vec<PreparedRow> {
+    let mut rows = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let path_start = rows.len() - 20;
+    for (offset, row) in rows[path_start..].iter_mut().enumerate() {
+        if method == "pbm" && !matches!(offset, 0..=5 | 19) {
+            row.close = row.ma25.unwrap() - 0.1;
+            row.open = row.close - 0.05;
+            row.high = row.close + 0.1;
+            row.low = row.close - 0.2;
+        }
+    }
+    rows.last_mut()
+        .unwrap()
+        .db_factors
+        .insert("macd_weekly_hist".to_string(), 0.2);
+    rows
+}
+
+#[test]
+fn scm_requires_recent_largest_volume_weekly_candle_to_be_red_and_reclaimed() {
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+    let focus_week = (pick_date - Duration::days(28)).iso_week();
+
+    let mut bearish_largest_week = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    add_scm_period_histograms(&mut bearish_largest_week);
+    for row in bearish_largest_week
+        .iter_mut()
+        .filter(|row| row.trade_date.iso_week() == focus_week)
+    {
+        row.volume = 10_000.0;
+        row.open = row.close + 1.0;
+    }
+    let payload = run_screen_with_prepared_rows("scm", pick_date, bearish_largest_week);
+    assert_eq!(payload["count"], 0);
+    assert_eq!(payload["stats"]["fail_weekly_volume_candle"], 1);
+
+    let mut unreclaimed_largest_week = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    add_scm_period_histograms(&mut unreclaimed_largest_week);
+    let current_price = unreclaimed_largest_week.last().unwrap().close;
+    let mut focus_rows = unreclaimed_largest_week
+        .iter_mut()
+        .filter(|row| row.trade_date.iso_week() == focus_week)
+        .collect::<Vec<_>>();
+    for row in focus_rows.iter_mut() {
+        row.volume = 10_000.0;
+    }
+    focus_rows.first_mut().unwrap().open = current_price + 1.0;
+    focus_rows.last_mut().unwrap().close = current_price + 2.0;
+    let payload = run_screen_with_prepared_rows("scm", pick_date, unreclaimed_largest_week);
+    assert_eq!(payload["count"], 0);
+    assert_eq!(payload["stats"]["fail_weekly_volume_candle"], 1);
+
+    let mut live_price_reclaims_largest_week =
+        lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    add_scm_period_histograms(&mut live_price_reclaims_largest_week);
+    let selection_close = live_price_reclaims_largest_week.last().unwrap().close;
+    {
+        let mut focus_rows = live_price_reclaims_largest_week
+            .iter_mut()
+            .filter(|row| row.trade_date.iso_week() == focus_week)
+            .collect::<Vec<_>>();
+        for row in &mut focus_rows {
+            row.volume = 10_000.0;
+        }
+        focus_rows.first_mut().unwrap().open = selection_close + 1.0;
+        focus_rows.last_mut().unwrap().close = selection_close + 2.0;
+    }
+    live_price_reclaims_largest_week
+        .last_mut()
+        .unwrap()
+        .db_factors
+        .insert("intraday_price_live_qfq".to_string(), selection_close + 1.5);
+    let payload = run_screen_with_prepared_rows("scm", pick_date, live_price_reclaims_largest_week);
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["candidates"][0]["close"], selection_close + 1.5);
+}
+
+fn add_scm_period_histograms(rows: &mut [PreparedRow]) {
+    for row in rows {
+        let month_key = i64::from(row.trade_date.year()) * 12 + i64::from(row.trade_date.month());
+        row.db_factors
+            .insert("macd_monthly_hist".to_string(), month_key as f64);
+        row.db_factors.insert("macd_weekly_hist".to_string(), 0.2);
+    }
+}
+
+fn run_screen_with_prepared_rows(
+    method_name: &str,
+    pick_date: NaiveDate,
+    rows: Vec<PreparedRow>,
+) -> serde_json::Value {
+    let temp = tempfile::tempdir().unwrap();
+    let start_date = prepared_cache_start_date(pick_date);
+    let method: Method = method_name.parse().unwrap();
+    write_prepared_cache(temp.path(), method, pick_date, start_date, pick_date, &rows).unwrap();
+    let output_path = run_screen_with_loader(
+        ScreenRequest {
+            method,
+            pick_date,
+            runtime_root: temp.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_dsn, _start_date, _end_date| {
+            panic!("{method_name} screen test should reuse prepared cache")
+        },
+    )
+    .unwrap();
+    serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap()
 }
 
 #[test]
@@ -2427,6 +2883,33 @@ fn market_row_with_open_delta(day: u32, close: f64, vol: f64, open_delta: f64) -
         adj_factor: None,
         db_factors: Default::default(),
     }
+}
+
+fn prepare_test_market_rows(rows: Vec<MarketRow>) -> anyhow::Result<Vec<PreparedRow>> {
+    let root = tempfile::tempdir()?;
+    let pick_date = rows.iter().map(|row| row.trade_date).max().unwrap();
+    run_screen_with_loader(
+        ScreenRequest {
+            method: Method::B2,
+            pick_date,
+            runtime_root: root.path().to_path_buf(),
+            dsn: "postgresql://fixture".to_string(),
+            recompute: true,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: false,
+            environment_state: None,
+        },
+        |_, _, _| Ok(rows),
+    )?;
+    Ok(load_prepared_cache(
+        root.path(),
+        Method::B2,
+        pick_date,
+        prepared_cache_start_date(pick_date),
+        pick_date,
+    )?
+    .unwrap())
 }
 
 fn market_row_at_date(trade_date: NaiveDate, close: f64, vol: f64) -> MarketRow {

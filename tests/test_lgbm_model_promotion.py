@@ -350,6 +350,27 @@ class LgbmModelPromotionTest(unittest.TestCase):
             self.assertEqual(rows[0]["validation"]["feature_count"], 3)
             self.assertEqual(rows[0]["validation"]["label_column"], "rank_label_3d")
 
+    def test_list_archived_models_distinguishes_archive_key_from_model_version(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "runtime" / "models" / "b2"
+            archive = target.parent / "archive" / "b2" / "20260602T000000Z"
+            write_candidate_model(archive, report=passing_report())
+            (archive / "model_card.json").write_text(
+                json.dumps(
+                    {
+                        "model_version": "20260601T000000Z",
+                        "target": "runtime/models/b2",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            rows = list_archived_models(target)
+
+        self.assertEqual(rows[0]["version"], "20260602T000000Z")
+        self.assertEqual(rows[0]["archive_version"], "20260602T000000Z")
+        self.assertEqual(rows[0]["model_version"], "20260601T000000Z")
+
     def test_list_archived_models_keeps_rows_with_validation_error(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "runtime" / "models" / "b2"
