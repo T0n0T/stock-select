@@ -17,7 +17,7 @@ fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: false,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -25,7 +25,7 @@ fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok((1..=130)
             .map(|day| {
                 let close = 100.0 + day as f64;
@@ -66,7 +66,6 @@ fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
         close: latest.close,
         turnover_n: latest.turnover_n,
         signal: Some("B2".to_string()),
-        yellow_b1: None,
     };
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
     let factors = &rows[0].factors;
@@ -106,7 +105,7 @@ fn db_factor_extras_flow_from_screen_loader_into_candidate_factors() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -114,7 +113,7 @@ fn db_factor_extras_flow_from_screen_loader_into_candidate_factors() {
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok((1..=130)
             .map(|day| {
                 let close = 100.0 + day as f64;
@@ -182,7 +181,6 @@ fn db_factor_extras_flow_from_screen_loader_into_candidate_factors() {
         close: latest.close,
         turnover_n: latest.turnover_n,
         signal: Some("B2".to_string()),
-        yellow_b1: None,
     };
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
     let factors = &rows[0].factors;
@@ -266,7 +264,6 @@ fn factor_artifact_no_longer_exports_legacy_sw_l2_relative_factors() {
         close: prepared.last().unwrap().close,
         turnover_n: prepared.last().unwrap().turnover_n,
         signal: Some("B2".to_string()),
-        yellow_b1: None,
     };
 
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
@@ -306,7 +303,6 @@ fn factor_artifact_exports_db_native_special_structure_factor_family_names() {
         close: prepared.last().unwrap().close,
         turnover_n: prepared.last().unwrap().turnover_n,
         signal: Some("B2".to_string()),
-        yellow_b1: None,
     };
 
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, Some("neutral"));
@@ -358,13 +354,9 @@ fn factor_artifact_exports_db_native_special_structure_factor_family_names() {
         "volume_event_redundant_position_pct",
         "bar_close_position_pct",
         "bar_upper_shadow_pct",
-        "bar_amplitude_pct",
-        "bar_body_pct",
         "signal_bullish_engulf_prev_bearish_flag",
         "signal_bullish_engulf_volume_ratio",
         "signal_yang_engulf_ma25_flag",
-        "signal_prev_b2_flag",
-        "signal_b3_plus_flag",
         "czsc_snapshot_available",
         "czsc_status",
         "czsc_close_to_zs_zz_pct",
@@ -415,7 +407,6 @@ fn candidate_factor_rows_include_market_state_from_prepared_cross_section() {
             close: 11.0,
             turnover_n: 1.0,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         },
         Candidate {
             code: "000002.SZ".to_string(),
@@ -423,7 +414,6 @@ fn candidate_factor_rows_include_market_state_from_prepared_cross_section() {
             close: 21.0,
             turnover_n: 1.0,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         },
     ];
 
@@ -474,7 +464,7 @@ fn market_amount_ma5_ratio_uses_raw_price_basis_after_qfq_prepare() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -482,7 +472,7 @@ fn market_amount_ma5_ratio_uses_raw_price_basis_after_qfq_prepare() {
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok((0..5)
             .map(|offset| {
                 let trade_date = first_date + Duration::days(offset);
@@ -512,7 +502,6 @@ fn market_amount_ma5_ratio_uses_raw_price_basis_after_qfq_prepare() {
         close: latest.close,
         turnover_n: latest.turnover_n,
         signal: Some("B2".to_string()),
-        yellow_b1: None,
     };
 
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
@@ -546,7 +535,6 @@ fn b2_factor_profile_does_not_add_chip_age_summary_even_when_chip_inputs_are_ava
         close: prepared.last().unwrap().close,
         turnover_n: prepared.last().unwrap().turnover_n,
         signal: Some("B2".to_string()),
-        yellow_b1: None,
     };
 
     let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
@@ -577,241 +565,6 @@ fn b2_factor_profile_does_not_add_chip_age_summary_even_when_chip_inputs_are_ava
 }
 
 #[test]
-fn b3_uses_method_registered_factor_profile_matching_b2_for_now() {
-    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-    let prepared = (0..3)
-        .map(|offset| {
-            let mut row = prepared_row(
-                "000001.SZ",
-                pick_date - Duration::days(2 - offset),
-                10.0 + offset as f64,
-                1000.0 + offset as f64,
-            );
-            row.db_factors
-                .insert("chip_vwap".to_string(), 10.0 + offset as f64);
-            row.db_factors.insert("chip_turnover".to_string(), 0.20);
-            row
-        })
-        .collect::<Vec<_>>();
-    let candidate = Candidate {
-        code: "000001.SZ".to_string(),
-        pick_date,
-        close: prepared.last().unwrap().close,
-        turnover_n: prepared.last().unwrap().turnover_n,
-        signal: Some("B3".to_string()),
-        yellow_b1: None,
-    };
-
-    let b2_profile = factor_profile_for_method(Method::B2);
-    let b3_profile = factor_profile_for_method(Method::B3);
-    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B3, None);
-
-    assert_ne!(b2_profile.bundles, b3_profile.bundles);
-    assert_eq!(rows[0].method, Method::B3);
-    assert_eq!(rows[0].diagnostics["factor_profile"], "b3");
-    assert_eq!(
-        rows[0].diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "b3_semantic"])
-    );
-    assert!(!rows[0].factors.contains_key("chip_age_ultrashort_ratio"));
-    assert!(!rows[0].factors.contains_key("chip_entropy"));
-    assert!(!rows[0].factors.contains_key("trend_structure"));
-    assert_eq!(
-        rows[0].factors.get("signal"),
-        Some(&FactorValue::Category("B3".to_string()))
-    );
-}
-
-#[test]
-fn b3_factor_profile_adds_b3_specific_raw_factors_only_for_b3() {
-    let first_date = NaiveDate::from_ymd_opt(2026, 5, 22).unwrap();
-    let pick_date = first_date + Duration::days(3);
-    let prepared = vec![
-        PreparedRow {
-            high: 10.0,
-            low: 9.5,
-            open: 10.0,
-            j: 30.0,
-            ..prepared_row("000001.SZ", first_date, 10.0, 1000.0)
-        },
-        PreparedRow {
-            high: 10.1,
-            low: 9.6,
-            open: 9.8,
-            j: 35.0,
-            ..prepared_row("000001.SZ", first_date + Duration::days(1), 10.1, 900.0)
-        },
-        PreparedRow {
-            high: 10.6,
-            low: 10.0,
-            open: 9.8,
-            j: 45.0,
-            ..prepared_row("000001.SZ", first_date + Duration::days(2), 10.6, 1200.0)
-        },
-        PreparedRow {
-            high: 10.9,
-            low: 10.1,
-            open: 10.2,
-            j: 46.0,
-            ..prepared_row("000001.SZ", pick_date, 10.7, 600.0)
-        },
-    ];
-    let candidate = Candidate {
-        code: "000001.SZ".to_string(),
-        pick_date,
-        close: 10.7,
-        turnover_n: prepared[3].turnover_n,
-        signal: Some("B3+".to_string()),
-        yellow_b1: None,
-    };
-
-    let b3_rows = build_candidate_factor_rows(&[candidate.clone()], &prepared, Method::B3, None);
-    let b2_rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
-    let b3_factors = &b3_rows[0].factors;
-    let b2_factors = &b2_rows[0].factors;
-
-    assert_eq!(
-        b3_factors.get("b3_volume_shrink_ratio"),
-        Some(&FactorValue::Number(0.5))
-    );
-    assert_eq!(
-        b3_factors.get("b3_amplitude_pct"),
-        Some(&FactorValue::Number(7.5472))
-    );
-    assert_eq!(
-        b3_factors.get("b3_body_pct"),
-        Some(&FactorValue::Number(4.717))
-    );
-    assert_eq!(
-        b3_factors.get("b3_upper_shadow_pct"),
-        Some(&FactorValue::Number(1.8868))
-    );
-    assert_eq!(
-        b3_factors.get("b3_lower_shadow_pct"),
-        Some(&FactorValue::Number(0.9434))
-    );
-    assert_eq!(
-        b3_factors.get("b3_j_delta"),
-        Some(&FactorValue::Number(1.0))
-    );
-    assert_eq!(
-        b3_factors.get("b3_prev_b2_flag"),
-        Some(&FactorValue::Bool(true))
-    );
-    assert_eq!(
-        b3_factors.get("b3_plus_flag"),
-        Some(&FactorValue::Bool(true))
-    );
-    assert!(!b3_factors.contains_key("structure_hl90_position"));
-    assert!(!b3_factors.contains_key("structure_hl90_range_pct"));
-    assert_eq!(
-        b3_factors.get("bar_upper_shadow_pct"),
-        Some(&FactorValue::Number(0.0))
-    );
-    assert_eq!(
-        b3_factors.get("signal_bullish_engulf_prev_bearish_flag"),
-        Some(&FactorValue::Bool(false))
-    );
-    assert_eq!(
-        b3_factors.get("signal_bullish_engulf_volume_ratio"),
-        Some(&FactorValue::Number(1.3333))
-    );
-    assert_eq!(
-        b3_factors.get("signal_yang_engulf_ma25_flag"),
-        Some(&FactorValue::Bool(false))
-    );
-    assert!(!b2_factors.contains_key("b3_volume_shrink_ratio"));
-    assert!(!b2_factors.contains_key("b3_prev_b2_flag"));
-}
-
-#[test]
-fn b3_factor_artifact_excludes_review_scores_but_keeps_training_context() {
-    let first_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
-    let pick_date = first_date + Duration::days(130);
-    let prepared = (0..=130)
-        .map(|offset| PreparedRow {
-            open: 10.0 + offset as f64 * 0.03,
-            high: 10.4 + offset as f64 * 0.03,
-            low: 9.8 + offset as f64 * 0.03,
-            close: 10.2 + offset as f64 * 0.03,
-            volume: if offset == 130 { 600.0 } else { 1000.0 },
-            j: 30.0 + offset as f64 * 0.1,
-            ..prepared_row(
-                "000001.SZ",
-                first_date + Duration::days(offset),
-                10.2 + offset as f64 * 0.03,
-                if offset == 130 { 600.0 } else { 1000.0 },
-            )
-        })
-        .collect::<Vec<_>>();
-    let latest = prepared.last().unwrap();
-    let candidate = Candidate {
-        code: "000001.SZ".to_string(),
-        pick_date,
-        close: latest.close,
-        turnover_n: latest.turnover_n,
-        signal: Some("B3+".to_string()),
-        yellow_b1: None,
-    };
-
-    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B3, Some("neutral"));
-    let factors = &rows[0].factors;
-
-    for key in [
-        "trend_structure",
-        "price_position",
-        "volume_behavior",
-        "previous_abnormal_move",
-        "weekly_daily_combo_score",
-        "total_score",
-        "verdict",
-    ] {
-        assert!(
-            !factors.contains_key(key),
-            "review-only key leaked into factors: {key}"
-        );
-    }
-
-    for key in [
-        "signal_type",
-        "daily_macd_phase_type",
-        "daily_macd_wave_stage",
-        "weekly_macd_phase_type",
-        "weekly_macd_wave_stage",
-        "weekly_daily_combo_type",
-        "macd_phase",
-        "daily_macd_wave_index",
-        "weekly_macd_wave_index",
-        "near_ma25_support_flag",
-        "ma_aligned_flag",
-        "zxdkx_up_1d_flag",
-        "breakout_distance_120d_pct",
-        "range_floor_distance_120d_pct",
-        "price_up_1d_flag",
-        "volume_up_1d_flag",
-        "b3_volume_shrink_ratio",
-        "b3_prev_b2_flag",
-        "b3_plus_flag",
-        "env",
-        "listing_board",
-    ] {
-        assert!(
-            factors.contains_key(key),
-            "training key missing from factors: {key}"
-        );
-    }
-
-    assert!(matches!(
-        factors.get("box_mid_position_120d_pct"),
-        Some(FactorValue::Number(value)) if value.is_finite()
-    ));
-    assert_eq!(
-        factors.get("listing_board"),
-        Some(&FactorValue::Category("main".to_string()))
-    );
-}
-
-#[test]
 fn factor_artifact_derives_listing_board_from_stock_code() {
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
     let candidates = [
@@ -830,7 +583,6 @@ fn factor_artifact_derives_listing_board_from_stock_code() {
         close: 10.0,
         turnover_n: 1_000_000.0,
         signal: Some("B2".to_string()),
-        yellow_b1: None,
     })
     .collect::<Vec<_>>();
 
@@ -852,7 +604,7 @@ fn factor_artifact_derives_listing_board_from_stock_code() {
     }
 }
 #[test]
-fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only_for_lsh() {
+fn ma25_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only_for_scm() {
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(120);
     let mut prepared = Vec::new();
@@ -896,30 +648,29 @@ fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only
         pick_date,
         close: 16.2,
         turnover_n: prepared.last().unwrap().turnover_n,
-        signal: Some("LSH".to_string()),
-        yellow_b1: None,
+        signal: Some("SCM".to_string()),
     };
 
-    let lsh_profile = factor_profile_for_method(Method::Lsh);
-    let lsh_rows = build_candidate_factor_rows(&[candidate.clone()], &prepared, Method::Lsh, None);
+    let ma25_profile = factor_profile_for_method(Method::Scm);
+    let ma25_rows = build_candidate_factor_rows(&[candidate.clone()], &prepared, Method::Scm, None);
     let b2_rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
-    let lsh_factors = &lsh_rows[0].factors;
+    let ma25_factors = &ma25_rows[0].factors;
     let b2_factors = &b2_rows[0].factors;
 
-    assert_eq!(lsh_profile.name, "lsh");
+    assert_eq!(ma25_profile.name, "scm");
     assert_eq!(
-        lsh_profile.bundle_names(),
-        vec!["raw_common", "lsh_semantic"]
+        ma25_profile.bundle_names(),
+        vec!["raw_common", "ma25_semantic"]
     );
     assert_eq!(
-        lsh_rows[0].diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "lsh_semantic"])
+        ma25_rows[0].diagnostics["factor_bundles"],
+        serde_json::json!(["raw_common", "ma25_semantic"])
     );
-    assert!(!lsh_factors.contains_key("chip_age_long_ratio"));
-    assert!(!lsh_factors.contains_key("chip_entropy"));
-    assert!(lsh_factors.contains_key("lsh_daily_macd_wave_index"));
-    assert!(lsh_factors.contains_key("lsh_weekly_macd_wave_index"));
-    assert!(lsh_factors.contains_key("lsh_weekly_daily_constructive_combo_flag"));
+    assert!(!ma25_factors.contains_key("chip_age_long_ratio"));
+    assert!(!ma25_factors.contains_key("chip_entropy"));
+    assert!(ma25_factors.contains_key("ma25_daily_macd_wave_index"));
+    assert!(ma25_factors.contains_key("ma25_weekly_macd_wave_index"));
+    assert!(ma25_factors.contains_key("ma25_weekly_daily_constructive_combo_flag"));
     for key in [
         "czsc_status",
         "czsc_snapshot_available",
@@ -940,38 +691,38 @@ fn lsh_factor_profile_adds_macd_state_machine_and_bullish_engulfing_factors_only
         "turnover_to_ma5_ratio",
     ] {
         assert!(
-            lsh_factors.contains_key(key),
-            "missing LSH runtime factor {key}"
+            ma25_factors.contains_key(key),
+            "missing MA25 runtime factor {key}"
         );
     }
     assert_eq!(
-        lsh_factors.get("lsh_bullish_engulf_prev_bearish_flag"),
+        ma25_factors.get("ma25_bullish_engulf_prev_bearish_flag"),
         Some(&FactorValue::Bool(true))
     );
     assert_eq!(
-        lsh_factors.get("lsh_volume_bullish_engulf_prev_bearish_flag"),
+        ma25_factors.get("ma25_volume_bullish_engulf_prev_bearish_flag"),
         Some(&FactorValue::Bool(true))
     );
     assert_eq!(
-        lsh_factors.get("lsh_bullish_engulf_volume_ratio"),
+        ma25_factors.get("ma25_bullish_engulf_volume_ratio"),
         Some(&FactorValue::Number(1.5))
     );
-    assert!(!b2_factors.contains_key("lsh_daily_macd_wave_index"));
-    assert!(!b2_factors.contains_key("lsh_volume_bullish_engulf_prev_bearish_flag"));
+    assert!(!b2_factors.contains_key("ma25_daily_macd_wave_index"));
+    assert!(!b2_factors.contains_key("ma25_volume_bullish_engulf_prev_bearish_flag"));
 }
 
 #[test]
-fn scm_and_pbm_have_independent_lsh_factor_profiles() {
+fn scm_and_pbm_have_independent_ma25_factor_profiles() {
     for (method, expected_name) in [(Method::Scm, "scm"), (Method::Pbm, "pbm")] {
         let profile = factor_profile_for_method(method);
         assert_eq!(profile.name, expected_name);
         assert_eq!(profile.method, method);
-        assert_eq!(profile.bundle_names(), vec!["raw_common", "lsh_semantic"]);
+        assert_eq!(profile.bundle_names(), vec!["raw_common", "ma25_semantic"]);
     }
 }
 
 #[test]
-fn lsh_factor_profile_uses_neutral_model_feature_fallbacks_for_short_history() {
+fn ma25_factor_profile_uses_neutral_model_feature_fallbacks_for_short_history() {
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(29);
     let prepared = (0..30)
@@ -993,11 +744,10 @@ fn lsh_factor_profile_uses_neutral_model_feature_fallbacks_for_short_history() {
         pick_date,
         close: prepared.last().unwrap().close,
         turnover_n: prepared.last().unwrap().turnover_n,
-        signal: Some("LSH".to_string()),
-        yellow_b1: None,
+        signal: Some("SCM".to_string()),
     };
 
-    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::Lsh, None);
+    let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::Scm, None);
     let factors = &rows[0].factors;
 
     for key in [
@@ -1014,7 +764,7 @@ fn lsh_factor_profile_uses_neutral_model_feature_fallbacks_for_short_history() {
                 factors.get(key),
                 Some(FactorValue::Number(_)) | Some(FactorValue::Bool(_))
             ),
-            "LSH short-history factor {key} must be explicit, got {:?}",
+            "MA25 short-history factor {key} must be explicit, got {:?}",
             factors.get(key)
         );
     }
@@ -1029,7 +779,7 @@ fn turnover_top_pool_uses_real_ma25_ma60_trend_filter() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -1037,7 +787,7 @@ fn turnover_top_pool_uses_real_ma25_ma60_trend_filter() {
         environment_state: None,
     };
 
-    let output_path = run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    let output_path = run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         let mut rows = Vec::new();
         for offset in 0..130 {
             let trade_date = first_date + Duration::days(offset);
@@ -1105,7 +855,6 @@ fn prepared_row(ts_code: &str, trade_date: NaiveDate, close: f64, volume: f64) -
         v_shrink: true,
         safe_mode: true,
         lt_filter: true,
-        yellow_b1: false,
         db_factors: Default::default(),
     }
 }

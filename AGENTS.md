@@ -12,9 +12,11 @@
 - 执行模型训练、候选补齐、因子补齐等可并行任务前，先查看机器可用核心数（例如 `nproc` 或 `getconf _NPROCESSORS_ONLN`）；并发 worker 数应至少使用 4，除非用户明确指定更低并发或机器负载不允许。
 - 常用变量包括：
   - `STOCK_SELECT_RUNTIME_ROOT`
-  - `POSTGRES_DSN`
+  - `DUCKDB_PATH`
+  - `QUACK_AUTH_TOKEN`
+  - `QUACK_SSL_FINGERPRINT`
   - `TUSHARE_TOKEN`
-- 涉及凭据时，不要打印 `.env`、DSN 或 token 的具体值。
+- 涉及凭据时，不要打印 `.env`、数据库路径或 token 的具体值。
 
 ## 开发约束
 

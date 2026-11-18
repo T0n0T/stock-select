@@ -8,10 +8,11 @@ use serde_json::{Value, json};
 use crate::cache::{
     history_payload_for_code, load_prepared_dataset_for_mode, prepared_cache_start_date,
 };
+use crate::engine::artifacts::artifact_key_for_run;
 use crate::engine::artifacts::{SelectionRunPaths, write_selection_json};
-use crate::engine::b2::{
-    B2FactorProvider, CandidatePayloadFactorProvider, adjust_b2_cyq_post_rerank_score,
-    artifact_key_for_run, candidate_from_legacy_json,
+use crate::engine::b2::adjust_b2_cyq_post_rerank_score;
+use crate::engine::candidates::{
+    CandidateFactorProvider, CandidatePayloadFactorProvider, candidate_from_json,
 };
 use crate::engine::capability::ensure_model_run_supported;
 use crate::engine::inference::{
@@ -231,22 +232,26 @@ fn read_candidates(
     pick_date: NaiveDate,
     method: Method,
 ) -> anyhow::Result<Vec<SelectionCandidate>> {
-    let payload: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-    let rows = payload
-        .get("rows")
-        .and_then(Value::as_array)
-        .or_else(|| payload.get("candidates").and_then(Value::as_array))
-        .or_else(|| payload.as_array())
-        .ok_or_else(|| {
-            anyhow::anyhow!("candidate input must be an array or contain rows/candidates")
-        })?;
+    #[derive(serde::Deserialize)]
+    struct ScreenCandidates {
+        method: Method,
+        pick_date: NaiveDate,
+        candidates: Vec<Value>,
+    }
 
-    rows.iter()
-        .map(|row| {
-            let mut candidate = candidate_from_legacy_json(row, pick_date)?;
-            candidate.method = method;
-            Ok(candidate)
-        })
+    let payload: ScreenCandidates = serde_json::from_slice(&std::fs::read(path)?)?;
+    anyhow::ensure!(
+        payload.method == method,
+        "candidate method does not match {method}"
+    );
+    anyhow::ensure!(
+        payload.pick_date == pick_date,
+        "candidate pick_date does not match {pick_date}"
+    );
+    payload
+        .candidates
+        .iter()
+        .map(|row| candidate_from_json(row, pick_date, method))
         .collect()
 }
 
@@ -359,7 +364,6 @@ fn candidate_from_prepared(
             .turnover_n
             .or_else(|| latest.map(|row| row.turnover_n))?,
         signal: candidate.signal.clone(),
-        yellow_b1: None,
     })
 }
 
@@ -688,6 +692,34 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use serde_json::json;
+
+    #[test]
+    fn candidate_reader_requires_current_screen_contract() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("candidates.json");
+        let pick_date = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
+        for payload in [
+            json!([]),
+            json!({"rows": []}),
+            json!({"method": "b3", "pick_date": pick_date, "candidates": []}),
+            json!({"method": "scm", "pick_date": pick_date, "candidates": []}),
+            json!({"method": "b2", "pick_date": "2026-06-04", "candidates": []}),
+        ] {
+            std::fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+            assert!(
+                read_candidates(&path, pick_date, Method::B2).is_err(),
+                "{payload}"
+            );
+        }
+        std::fs::write(&path, serde_json::to_vec(&json!({
+            "method": "b2", "pick_date": pick_date,
+            "candidates": [{"code": "000001.SZ", "close": 10.0, "turnover_n": 1.0, "signal": "B2"}]
+        })).unwrap()).unwrap();
+        assert_eq!(
+            read_candidates(&path, pick_date, Method::B2).unwrap().len(),
+            1
+        );
+    }
 
     fn factor_row(code: &str, env: &str, base_score: f64) -> FactorRow {
         let mut row = FactorRow::new(code, Method::B2);

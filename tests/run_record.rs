@@ -34,7 +34,7 @@ fn run_record_writes_top_thirty_and_replaces_same_code_records() {
         temp.path().join("record.csv"),
         [
             "code,name,method,selected_date,model_rank,model_score",
-            "000001.SZ,old-name,lsh,2026-06-04,12,0.2",
+            "000001.SZ,old-name,scm,2026-06-04,12,0.2",
             "000002.SZ,same-run-old-name,b2,2026-06-05,12,0.2",
         ]
         .join("\n")
@@ -194,7 +194,7 @@ fn run_record_keeps_one_row_per_code_and_replaces_with_newer_selection() {
         [
             "code,name,method,selected_date,model_rank,model_score",
             "000001.SZ,name-old,b2,2026-06-04,1,0.9",
-            "000001.SZ,name-lsh,lsh,2026-06-04,1,0.8",
+            "000001.SZ,name-scm,scm,2026-06-04,1,0.8",
         ]
         .join("\n")
             + "\n",
@@ -228,7 +228,7 @@ fn run_record_backfill_does_not_replace_newer_same_code_record() {
         temp.path().join("record.csv"),
         [
             "code,name,method,selected_date,model_rank,model_score",
-            "000001.SZ,name-new,lsh,2026-06-16,8,0.8",
+            "000001.SZ,name-new,scm,2026-06-16,8,0.8",
         ]
         .join("\n")
             + "\n",
@@ -250,7 +250,7 @@ fn run_record_backfill_does_not_replace_newer_same_code_record() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0][0], "000001.SZ");
     assert_eq!(records[0][1], "name-new");
-    assert_eq!(records[0][2], "lsh");
+    assert_eq!(records[0][2], "scm");
     assert_eq!(records[0][3], "2026-06-16");
     assert_eq!(records[0][4], "8");
 }

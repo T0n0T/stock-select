@@ -1,10 +1,11 @@
 use assert_cmd::Command;
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Duration, NaiveDate};
 use predicates::prelude::*;
 use serde_json::{Value, json};
 use stock_select::cache::{
-    LOCAL_DERIVED_PREPARED_CACHE_SOURCE, PREPARED_CACHE_SCHEMA_VERSION, prepared_cache_start_date,
+    prepared_cache_start_date, write_prepared_cache, write_prepared_cache_for_mode,
 };
+use stock_select::model::{Method, PreparedRow};
 
 const B2_MODEL_FIXTURE_DIR: &str = "tests/fixtures/b2_model";
 
@@ -32,11 +33,17 @@ fn write_default_b2_model(root: &std::path::Path) {
 }
 
 fn write_candidates(root: &std::path::Path) -> std::path::PathBuf {
+    write_candidates_for_date(root, "2026-05-25")
+}
+
+fn write_candidates_for_date(root: &std::path::Path, pick_date: &str) -> std::path::PathBuf {
     let path = root.join("candidates.json");
     std::fs::write(
         &path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "b2",
+            "pick_date": pick_date,
+            "candidates": [
                 {"code": "000001.SZ", "name": "测试一", "close": 10.0, "turnover_n": 1000.0, "signal": "B2", "model_score": 0.40},
                 {"code": "000002.SZ", "name": "测试二", "close": 11.0, "turnover_n": 1100.0, "signal": "B2", "model_score": 0.90}
             ]
@@ -100,43 +107,32 @@ PY
 }
 
 fn write_prepared_cache_fixture(root: &std::path::Path, pick_date: NaiveDate) {
-    let prepared_dir = root.join("prepared");
-    std::fs::create_dir_all(&prepared_dir).unwrap();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"SSPRBIN1");
-    write_u64(&mut bytes, 25);
-    for day in 1..=25 {
-        let trade_date = NaiveDate::from_ymd_opt(2026, 5, day).unwrap();
-        let close = 100.0 + day as f64;
-        write_prepared_row(&mut bytes, "000001.SZ", trade_date, close, Some(100.0));
-    }
-    std::fs::write(
-        prepared_dir.join(format!("{}.bin", pick_date.format("%Y-%m-%d"))),
-        bytes,
+    let rows = (1..=25)
+        .map(|day| {
+            let trade_date = NaiveDate::from_ymd_opt(2026, 5, day).unwrap();
+            let close = 100.0 + day as f64;
+            prepared_row_fixture("000001.SZ", trade_date, close, Some(100.0))
+        })
+        .collect::<Vec<_>>();
+    write_prepared_cache(
+        root,
+        Method::B2,
+        pick_date,
+        prepared_cache_start_date(pick_date),
+        pick_date,
+        &rows,
     )
     .unwrap();
 }
 
 fn write_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
-    let prepared_dir = root.join("prepared");
-    std::fs::create_dir_all(&prepared_dir).unwrap();
-    std::fs::write(
-        prepared_dir.join(format!("{}.meta.json", pick_date.format("%Y-%m-%d"))),
-        serde_json::to_vec_pretty(&json!({
-            "artifact_version": 1,
-            "method": "b2",
-            "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": pick_date,
-            "start_date": prepared_cache_start_date(pick_date),
-            "end_date": pick_date,
-            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
-            "row_count": 25,
-            "symbol_count": 1,
-            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    assert!(
+        root.join(format!(
+            "prepared/{}.meta.json",
+            pick_date.format("%Y-%m-%d")
+        ))
+        .exists()
+    );
 }
 
 fn write_prepared_cache_metadata_with_db_data_gaps(root: &std::path::Path, pick_date: NaiveDate) {
@@ -157,124 +153,71 @@ fn write_prepared_cache_metadata_with_db_data_gaps(root: &std::path::Path, pick_
 }
 
 fn write_intraday_prepared_cache_fixture(root: &std::path::Path, pick_date: NaiveDate) {
-    let prepared_dir = root.join("prepared");
-    std::fs::create_dir_all(&prepared_dir).unwrap();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"SSPRBIN1");
-    write_u64(&mut bytes, 25);
-    for day in 1..=25 {
-        let trade_date = NaiveDate::from_ymd_opt(2026, 5, day).unwrap();
-        let close = 200.0 + day as f64;
-        write_prepared_row(&mut bytes, "000001.SZ", trade_date, close, Some(200.0));
-    }
-    std::fs::write(
-        prepared_dir.join(format!("{}.intraday.bin", pick_date.format("%Y-%m-%d"))),
-        bytes,
+    let rows = (1..=25)
+        .map(|day| {
+            let trade_date = NaiveDate::from_ymd_opt(2026, 5, day).unwrap();
+            let close = 200.0 + day as f64;
+            prepared_row_fixture("000001.SZ", trade_date, close, Some(200.0))
+        })
+        .collect::<Vec<_>>();
+    write_prepared_cache_for_mode(
+        root,
+        Method::B2,
+        pick_date,
+        prepared_cache_start_date(pick_date),
+        pick_date,
+        true,
+        &rows,
     )
     .unwrap();
 }
 
 fn write_intraday_prepared_cache_metadata(root: &std::path::Path, pick_date: NaiveDate) {
-    let prepared_dir = root.join("prepared");
-    std::fs::create_dir_all(&prepared_dir).unwrap();
-    std::fs::write(
-        prepared_dir.join(format!(
-            "{}.intraday.meta.json",
+    assert!(
+        root.join(format!(
+            "prepared/{}.intraday.meta.json",
             pick_date.format("%Y-%m-%d")
-        )),
-        serde_json::to_vec_pretty(&json!({
-            "artifact_version": 1,
-            "method": "b2",
-            "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": pick_date,
-            "start_date": prepared_cache_start_date(pick_date),
-            "end_date": pick_date,
-            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
-            "row_count": 25,
-            "symbol_count": 1,
-            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE,
-            "mode": "intraday_snapshot",
-            "source": "tushare_rt_k"
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        ))
+        .exists()
+    );
 }
 
 fn write_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) {
-    let prepared_dir = root.join("prepared");
-    std::fs::create_dir_all(&prepared_dir).unwrap();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"SSPRBIN1");
-    let rows = selecting_rows(pick_date, 10.0);
-    let row_count = rows.len();
-    write_u64(&mut bytes, row_count as u64);
-    for (trade_date, close, volume, j) in rows {
-        write_selecting_prepared_row(&mut bytes, "000001.SZ", trade_date, close, volume, j);
-    }
-    std::fs::write(
-        prepared_dir.join(format!("{}.bin", pick_date.format("%Y-%m-%d"))),
-        bytes,
-    )
-    .unwrap();
-    std::fs::write(
-        prepared_dir.join(format!("{}.meta.json", pick_date.format("%Y-%m-%d"))),
-        serde_json::to_vec_pretty(&json!({
-            "artifact_version": 1,
-            "method": "b2",
-            "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": pick_date,
-            "start_date": prepared_cache_start_date(pick_date),
-            "end_date": pick_date,
-            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
-            "row_count": row_count,
-            "symbol_count": 1,
-            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
-        }))
-        .unwrap(),
+    let rows = selecting_rows(pick_date, 10.0)
+        .into_iter()
+        .map(|(trade_date, close, volume, j)| {
+            selecting_prepared_row("000001.SZ", trade_date, close, volume, j)
+        })
+        .collect::<Vec<_>>();
+    write_prepared_cache(
+        root,
+        Method::B2,
+        pick_date,
+        prepared_cache_start_date(pick_date),
+        pick_date,
+        &rows,
     )
     .unwrap();
 }
 
 fn write_two_code_selecting_prepared_cache(root: &std::path::Path, pick_date: NaiveDate) {
-    let prepared_dir = root.join("prepared");
-    std::fs::create_dir_all(&prepared_dir).unwrap();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"SSPRBIN1");
-    let rows_by_code = [
-        ("000001.SZ", selecting_rows(pick_date, 10.0)),
-        ("000002.SZ", selecting_rows(pick_date, 20.0)),
-    ];
-    let row_count = rows_by_code
-        .iter()
-        .map(|(_, rows)| rows.len())
-        .sum::<usize>();
-    write_u64(&mut bytes, row_count as u64);
-    for (code, rows) in rows_by_code {
-        for (trade_date, close, volume, j) in rows {
-            write_selecting_prepared_row(&mut bytes, code, trade_date, close, volume, j);
-        }
-    }
-    std::fs::write(
-        prepared_dir.join(format!("{}.bin", pick_date.format("%Y-%m-%d"))),
-        bytes,
-    )
-    .unwrap();
-    std::fs::write(
-        prepared_dir.join(format!("{}.meta.json", pick_date.format("%Y-%m-%d"))),
-        serde_json::to_vec_pretty(&json!({
-            "artifact_version": 1,
-            "method": "b2",
-            "shared_methods": ["b1", "b2", "dribull"],
-            "pick_date": pick_date,
-            "start_date": prepared_cache_start_date(pick_date),
-            "end_date": pick_date,
-            "schema_version": PREPARED_CACHE_SCHEMA_VERSION,
-            "row_count": row_count,
-            "symbol_count": 2,
-            "source_table": LOCAL_DERIVED_PREPARED_CACHE_SOURCE
-        }))
-        .unwrap(),
+    let rows = [("000001.SZ", 10.0), ("000002.SZ", 20.0)]
+        .into_iter()
+        .flat_map(|(code, base_close)| {
+            selecting_rows(pick_date, base_close).into_iter().map(
+                move |(trade_date, close, volume, j)| {
+                    selecting_prepared_row(code, trade_date, close, volume, j)
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    write_prepared_cache(
+        root,
+        Method::B2,
+        pick_date,
+        prepared_cache_start_date(pick_date),
+        pick_date,
+        &rows,
     )
     .unwrap();
 }
@@ -305,105 +248,79 @@ fn selecting_rows(pick_date: NaiveDate, base_close: f64) -> Vec<(NaiveDate, f64,
     rows
 }
 
-fn write_selecting_prepared_row(
-    bytes: &mut Vec<u8>,
+fn selecting_prepared_row(
     code: &str,
     trade_date: NaiveDate,
     close: f64,
     volume: f64,
     j: f64,
-) {
-    write_string(bytes, code);
-    write_i32(bytes, trade_date.num_days_from_ce());
-    for value in [
-        close - 0.2,
-        close + 0.1,
-        close - 0.3,
+) -> PreparedRow {
+    PreparedRow {
+        ts_code: code.to_string(),
+        trade_date,
+        open: close - 0.2,
+        high: close + 0.1,
+        low: close - 0.3,
         close,
         volume,
-        volume * close,
-    ] {
-        write_f64(bytes, value);
+        turnover_n: volume * close,
+        turnover_rate: Some(volume / 1000.0),
+        k: 50.0,
+        d: 40.0,
+        j,
+        zxdq: Some(close),
+        zxdkx: Some(close - 0.5),
+        dif: 0.3,
+        dea: 0.2,
+        macd_hist: 0.1,
+        ma25: Some(close),
+        ma60: Some(close - 1.0),
+        ma144: None,
+        chg_d: None,
+        weekly_ma_bull: false,
+        max_vol_not_bearish: true,
+        v_shrink: false,
+        safe_mode: true,
+        lt_filter: true,
+        db_factors: std::collections::BTreeMap::new(),
     }
-    write_option_f64(bytes, Some(volume / 1000.0));
-    for value in [50.0, 40.0, j] {
-        write_f64(bytes, value);
-    }
-    write_option_f64(bytes, Some(close));
-    write_option_f64(bytes, Some(close - 0.5));
-    for value in [0.3, 0.2, 0.1] {
-        write_f64(bytes, value);
-    }
-    write_option_f64(bytes, Some(close));
-    write_option_f64(bytes, Some(close - 1.0));
-    write_option_f64(bytes, None);
-    write_option_f64(bytes, None);
-    for value in [false, true, false, true, true, false] {
-        write_bool(bytes, value);
-    }
-    write_u64(bytes, 0);
 }
 
-fn write_prepared_row(
-    bytes: &mut Vec<u8>,
+fn prepared_row_fixture(
     code: &str,
     trade_date: NaiveDate,
     close: f64,
     ma25: Option<f64>,
-) {
-    write_string(bytes, code);
-    write_i32(bytes, trade_date.num_days_from_ce());
-    for value in [close - 0.5, close + 1.0, close - 1.0, close, 1000.0, 12.0] {
-        write_f64(bytes, value);
+) -> PreparedRow {
+    PreparedRow {
+        ts_code: code.to_string(),
+        trade_date,
+        open: close - 0.5,
+        high: close + 1.0,
+        low: close - 1.0,
+        close,
+        volume: 1000.0,
+        turnover_n: 12.0,
+        turnover_rate: Some(1.5),
+        k: 50.0,
+        d: 40.0,
+        j: 60.0,
+        zxdq: Some(close - 1.0),
+        zxdkx: Some(close - 2.0),
+        dif: 0.3,
+        dea: 0.2,
+        macd_hist: 0.1,
+        ma25,
+        ma60: None,
+        ma144: None,
+        chg_d: None,
+        weekly_ma_bull: true,
+        max_vol_not_bearish: false,
+        v_shrink: true,
+        safe_mode: false,
+        lt_filter: true,
+        db_factors: std::collections::BTreeMap::new(),
     }
-    write_option_f64(bytes, Some(1.5));
-    for value in [50.0, 40.0, 60.0] {
-        write_f64(bytes, value);
-    }
-    write_option_f64(bytes, Some(close - 1.0));
-    write_option_f64(bytes, Some(close - 2.0));
-    for value in [0.3, 0.2, 0.1] {
-        write_f64(bytes, value);
-    }
-    write_option_f64(bytes, ma25);
-    write_option_f64(bytes, None);
-    write_option_f64(bytes, None);
-    write_option_f64(bytes, None);
-    for value in [true, false, true, false, true, false] {
-        write_bool(bytes, value);
-    }
-    write_u64(bytes, 0);
-}
-
-fn write_string(out: &mut Vec<u8>, value: &str) {
-    out.extend_from_slice(&(value.len() as u16).to_le_bytes());
-    out.extend_from_slice(value.as_bytes());
-}
-
-fn write_bool(out: &mut Vec<u8>, value: bool) {
-    out.push(u8::from(value));
-}
-
-fn write_option_f64(out: &mut Vec<u8>, value: Option<f64>) {
-    match value {
-        Some(value) => {
-            write_bool(out, true);
-            write_f64(out, value);
-        }
-        None => write_bool(out, false),
-    }
-}
-
-fn write_u64(out: &mut Vec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn write_i32(out: &mut Vec<u8>, value: i32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn write_f64(out: &mut Vec<u8>, value: f64) {
-    out.extend_from_slice(&value.to_le_bytes());
 }
 
 #[test]
@@ -469,19 +386,21 @@ fn b2_run_writes_model_first_selection_artifacts() {
 }
 
 #[test]
-fn b3_run_uses_method_model_dir_and_factor_profile() {
+fn scm_run_uses_method_model_dir_and_factor_profile() {
     let temp = tempfile::tempdir().unwrap();
     let candidates_path = temp.path().join("candidates.json");
     std::fs::write(
         &candidates_path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "scm",
+            "pick_date": "2026-05-25",
+            "candidates": [
                 {
                     "code": "000001.SZ",
                     "name": "测试一",
                     "close": 10.0,
                     "turnover_n": 1000.0,
-                    "signal": "B3",
+                    "signal": "SCM",
                     "history": [
                         {"open": 9.0, "high": 10.5, "low": 8.8, "close": 10.0, "volume": 100.0, "turnover_n": 10.0, "turnover_rate": 1.0, "ma25": 8.0, "zxdkx": 7.0, "macd_hist": 0.5, "dif": 1.0, "dea": 0.5}
                     ]
@@ -491,8 +410,7 @@ fn b3_run_uses_method_model_dir_and_factor_profile() {
         .unwrap(),
     )
     .unwrap();
-    copy_fixture_model_artifacts(temp.path(), "b3");
-
+    copy_fixture_model_artifacts(temp.path(), "scm");
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.args([
         "run",
@@ -501,7 +419,7 @@ fn b3_run_uses_method_model_dir_and_factor_profile() {
         "--pick-date",
         "2026-05-25",
         "--method",
-        "b3",
+        "scm",
         "--environment-state",
         "strong",
         "--candidates-path",
@@ -510,35 +428,21 @@ fn b3_run_uses_method_model_dir_and_factor_profile() {
     .assert()
     .success()
     .stdout(predicate::str::contains(
-        "selection run complete: select/2026-05-25.b3",
+        "selection run complete: select/2026-05-25.scm",
     ));
 
-    let run_dir = temp.path().join("select/2026-05-25.b3");
+    let run_dir = temp.path().join("select/2026-05-25.scm");
     let run: Value =
         serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
     assert_eq!(
         run["model_path"].as_str(),
-        Some(temp.path().join("models/b3/model.txt").to_str().unwrap())
-    );
-    assert_eq!(
-        run["metadata_path"].as_str(),
-        Some(
-            temp.path()
-                .join("models/b3/model_metadata.json")
-                .to_str()
-                .unwrap()
-        )
+        Some(temp.path().join("models/scm/model.txt").to_str().unwrap())
     );
 
     let factors: Value =
         serde_json::from_slice(&std::fs::read(run_dir.join("factors.json")).unwrap()).unwrap();
-    assert_eq!(factors["method"], "b3");
-    assert_eq!(factors["rows"][0]["method"], "b3");
-    assert_eq!(factors["rows"][0]["diagnostics"]["factor_profile"], "b3");
-    assert_eq!(
-        factors["rows"][0]["diagnostics"]["factor_bundles"],
-        serde_json::json!(["raw_common", "b3_semantic"])
-    );
+    assert_eq!(factors["method"], "scm");
+    assert_eq!(factors["rows"][0]["diagnostics"]["factor_profile"], "scm");
 }
 
 #[test]
@@ -594,7 +498,7 @@ fn b2_run_recompute_forces_auto_screen_to_reload_data_source() {
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
-        .env_remove("POSTGRES_DSN")
+        .env_remove("DUCKDB_PATH")
         .args([
             "run",
             "--runtime-root",
@@ -607,7 +511,9 @@ fn b2_run_recompute_forces_auto_screen_to_reload_data_source() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("A database DSN is required."));
+        .stderr(predicate::str::contains(
+            "DUCKDB_PATH is required; set it in .env or pass --duckdb-path.",
+        ));
 }
 
 #[test]
@@ -911,7 +817,7 @@ fn b2_run_persists_environment_and_injects_env_factor() {
 }
 
 #[test]
-fn b2_eod_run_without_manual_environment_or_dsn_uses_prepared_market_state() {
+fn b2_eod_run_without_manual_environment_or_duckdb_path_uses_prepared_market_state() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let candidates_path = write_candidates(temp.path());
@@ -921,7 +827,7 @@ fn b2_eod_run_without_manual_environment_or_dsn_uses_prepared_market_state() {
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
-        .env_remove("POSTGRES_DSN")
+        .env_remove("DUCKDB_PATH")
         .args([
             "run",
             "--runtime-root",
@@ -956,15 +862,15 @@ fn b2_eod_run_writes_environment_for_each_pick_date() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     let second_date = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
-    let candidates_path = write_candidates(temp.path());
     write_lightgbm_model_artifacts(temp.path());
     write_selecting_prepared_cache(temp.path(), first_date);
     write_selecting_prepared_cache(temp.path(), second_date);
 
     for date in ["2026-05-25", "2026-05-26"] {
+        let candidates_path = write_candidates_for_date(temp.path(), date);
         let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
         cmd.current_dir(temp.path())
-            .env_remove("POSTGRES_DSN")
+            .env_remove("DUCKDB_PATH")
             .args([
                 "run",
                 "--runtime-root",
@@ -1100,7 +1006,9 @@ fn b2_run_uses_default_lightgbm_model_instead_of_input_model_score() {
     std::fs::write(
         &candidates_path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "b2",
+            "pick_date": "2026-05-25",
+            "candidates": [
                 {"code": "000001.SZ", "name": "测试一", "model_score": 0.99, "factors": {"signal_strength": 1.0}},
                 {"code": "000002.SZ", "name": "测试二", "model_score": 0.01, "factors": {"signal_strength": 2.0}}
             ]
@@ -1328,9 +1236,9 @@ fn b2_intraday_run_warns_and_stops_when_model_state_is_blocked() {
 #[test]
 fn b2_intraday_run_infers_pick_date_when_omitted() {
     let temp = tempfile::tempdir().unwrap();
-    let candidates_path = write_candidates(temp.path());
     write_lightgbm_model_artifacts(temp.path());
     let today = chrono::Local::now().date_naive();
+    let candidates_path = write_candidates_for_date(temp.path(), &today.to_string());
     let artifact_key = format!("{}.intraday.b2", today.format("%Y-%m-%d"));
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
@@ -1490,7 +1398,7 @@ fn review_list_record_flag_updates_record_when_it_auto_runs_selection() {
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
-        .env_remove("POSTGRES_DSN")
+        .env_remove("DUCKDB_PATH")
         .args([
             "review-list",
             "--runtime-root",
@@ -1521,28 +1429,6 @@ fn review_list_record_flag_updates_record_when_it_auto_runs_selection() {
     assert_eq!(run["record"]["enabled"], true);
     assert_eq!(run["record"]["window_trading_days"], 4);
     assert_eq!(run["record"]["limit"], 30);
-}
-
-#[test]
-fn b1_run_still_rejects_without_model_support() {
-    let temp = tempfile::tempdir().unwrap();
-    let candidates_path = write_candidates(temp.path());
-
-    let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
-    cmd.args([
-        "run",
-        "--runtime-root",
-        temp.path().to_str().unwrap(),
-        "--pick-date",
-        "2026-05-25",
-        "--method",
-        "b1",
-        "--candidates-path",
-        candidates_path.to_str().unwrap(),
-    ])
-    .assert()
-    .failure()
-    .stderr(predicate::str::contains("b1 model review is not available"));
 }
 
 #[test]
@@ -1614,7 +1500,9 @@ fn b2_run_injects_history_from_prepared_cache_when_candidate_has_no_history() {
     std::fs::write(
         &candidates_path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "b2",
+            "pick_date": "2026-05-25",
+            "candidates": [
                 {"code": "000001.SZ", "name": "测试一"},
                 {"code": "000002.SZ", "name": "测试二"}
             ]
@@ -1717,7 +1605,9 @@ fn b2_run_uses_prepared_cache_factor_path_for_market_state_factors() {
     std::fs::write(
         &candidates_path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "b2",
+            "pick_date": "2026-05-25",
+            "candidates": [
                 {"code": "000001.SZ", "name": "测试一", "close": 10.6, "turnover_n": 1300.0, "signal": "B2"},
                 {"code": "000002.SZ", "name": "测试二", "close": 21.0, "turnover_n": 1300.0, "signal": "B2"}
             ]
@@ -1766,7 +1656,9 @@ fn b2_run_replaces_incomplete_candidate_history_from_prepared_cache() {
     std::fs::write(
         &candidates_path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "b2",
+            "pick_date": "2026-05-25",
+            "candidates": [
                 {
                     "code": "000001.SZ",
                     "name": "测试一",
@@ -1819,7 +1711,9 @@ fn b2_intraday_run_injects_history_from_intraday_prepared_cache() {
     std::fs::write(
         &candidates_path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "b2",
+            "pick_date": "2026-05-25",
+            "candidates": [
                 {"code": "000001.SZ", "name": "测试一"}
             ]
         }))
@@ -1862,11 +1756,18 @@ fn b2_run_skips_prepared_cache_when_metadata_is_missing() {
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     write_close_to_ma25_model(temp.path());
     write_prepared_cache_fixture(temp.path(), pick_date);
+    std::fs::remove_file(temp.path().join(format!(
+        "prepared/{}.meta.json",
+        pick_date.format("%Y-%m-%d")
+    )))
+    .unwrap();
     let candidates_path = temp.path().join("candidates.json");
     std::fs::write(
         &candidates_path,
         serde_json::to_vec_pretty(&json!({
-            "rows": [
+            "method": "b2",
+            "pick_date": "2026-05-25",
+            "candidates": [
                 {"code": "000001.SZ", "name": "测试一"}
             ]
         }))

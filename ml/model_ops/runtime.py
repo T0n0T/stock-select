@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Mapping
 
 from ml.env import load_dotenv_values
+from ml.methods import validate_method
 
 
 RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
@@ -37,6 +38,7 @@ def resolve_default_target_dir(
     dotenv_path: Path = Path(".env"),
     env: Mapping[str, str] | None = None,
 ) -> Path:
+    validate_method(method)
     return resolve_runtime_root(
         cli_runtime_root,
         env_runtime_root=env_runtime_root,

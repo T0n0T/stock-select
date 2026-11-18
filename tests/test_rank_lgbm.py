@@ -36,8 +36,8 @@ from ml.training.train_lgbm_rank import (
 
 class RankLgbmTest(unittest.TestCase):
     def test_default_paths_are_method_scoped(self):
-        self.assertTrue(resolve_dataset_path(None, method="b1").as_posix().endswith("diagnostics/ml/b1/rank_dataset.csv"))
-        self.assertTrue(resolve_output_dir(None, method="b1").as_posix().endswith("diagnostics/ml/b1/model"))
+        self.assertTrue(resolve_dataset_path(None, method="pbm").as_posix().endswith("diagnostics/ml/pbm/rank_dataset.csv"))
+        self.assertTrue(resolve_output_dir(None, method="pbm").as_posix().endswith("diagnostics/ml/pbm/model"))
 
     def test_parse_args_accepts_comma_separated_label_gain(self):
         args = parse_args(["--label-gain", "0,1,5,15"])
@@ -169,19 +169,19 @@ class RankLgbmTest(unittest.TestCase):
         )
 
     def test_select_feature_columns_uses_method_registered_raw_factors(self):
-        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"]
         try:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
-            columns = ["close_to_zxdkx_pct", "b3_only_raw_factor"]
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = [*original, "scm_only_raw_factor"]
+            columns = ["close_to_zxdkx_pct", "scm_only_raw_factor"]
 
             b2_numeric, _b2_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="b2")
-            b3_numeric, _b3_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="b3")
+            scm_numeric, _scm_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="scm")
 
             self.assertEqual(b2_numeric, ["close_to_zxdkx_pct"])
-            self.assertEqual(b3_numeric, ["close_to_zxdkx_pct", "b3_only_raw_factor"])
+            self.assertEqual(scm_numeric, ["close_to_zxdkx_pct", "scm_only_raw_factor"])
         finally:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
-    def test_select_feature_columns_uses_b3_training_factors(self):
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = original
+    def test_select_feature_columns_uses_b2_training_factors(self):
         columns = [
             "env",
             "signal",
@@ -202,7 +202,7 @@ class RankLgbmTest(unittest.TestCase):
             "close_to_zxdkx_pct",
         ]
 
-        numeric, categorical = select_feature_columns(columns, feature_set="all", method="b3")
+        numeric, categorical = select_feature_columns(columns, feature_set="all", method="b2")
 
         self.assertEqual(
             numeric,
@@ -229,7 +229,7 @@ class RankLgbmTest(unittest.TestCase):
             ],
         )
 
-    def test_select_feature_columns_uses_lsh_specific_training_schema(self):
+    def test_select_feature_columns_uses_ma25_specific_training_schema(self):
         columns = [
             "env",
             "signal",
@@ -239,43 +239,43 @@ class RankLgbmTest(unittest.TestCase):
             "daily_macd_wave_index",
             "weekly_macd_wave_index",
             "price_vs_90d_high",
-            "lsh_daily_macd_wave_index",
-            "lsh_weekly_macd_wave_index",
-            "lsh_daily_macd_rising_initial_flag",
+            "ma25_daily_macd_wave_index",
+            "ma25_weekly_macd_wave_index",
+            "ma25_daily_macd_rising_initial_flag",
             "close_to_zxdkx_pct",
         ]
 
-        numeric, categorical = select_feature_columns(columns, feature_set="all", method="lsh")
+        numeric, categorical = select_feature_columns(columns, feature_set="all", method="scm")
 
         self.assertEqual(
             numeric,
             [
-                "lsh_daily_macd_wave_index",
-                "lsh_weekly_macd_wave_index",
-                "lsh_daily_macd_rising_initial_flag",
+                "ma25_daily_macd_wave_index",
+                "ma25_weekly_macd_wave_index",
+                "ma25_daily_macd_rising_initial_flag",
                 "close_to_zxdkx_pct",
             ],
         )
         self.assertEqual(categorical, ["env", "signal"])
 
-    def test_select_feature_columns_uses_lsh_schema_for_scm_and_pbm(self):
-        columns = ["env", "signal", "signal_type", "lsh_daily_macd_wave_index"]
+    def test_select_feature_columns_uses_ma25_schema_for_scm_and_pbm(self):
+        columns = ["env", "signal", "signal_type", "ma25_daily_macd_wave_index"]
 
         for method in ["scm", "pbm"]:
             numeric, categorical = select_feature_columns(columns, feature_set="all", method=method)
-            self.assertEqual(numeric, ["lsh_daily_macd_wave_index"])
+            self.assertEqual(numeric, ["ma25_daily_macd_wave_index"])
             self.assertEqual(categorical, ["env", "signal"])
 
     def test_validate_selected_feature_coverage_fails_zero_coverage_feature(self):
         rows = [
-            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "b3_volume_shrink_ratio": ""},
-            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "close_to_zxdkx_pct": "0.8", "b3_volume_shrink_ratio": ""},
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "test_no_coverage_factor": ""},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "close_to_zxdkx_pct": "0.8", "test_no_coverage_factor": ""},
         ]
 
-        with self.assertRaisesRegex(ValueError, "zero coverage.*b3_volume_shrink_ratio"):
+        with self.assertRaisesRegex(ValueError, "zero coverage.*test_no_coverage_factor"):
             validate_selected_feature_coverage(
                 rows,
-                numeric_columns=["close_to_zxdkx_pct", "b3_volume_shrink_ratio"],
+                numeric_columns=["close_to_zxdkx_pct", "test_no_coverage_factor"],
                 categorical_columns=[],
             )
 
@@ -764,15 +764,15 @@ class RankLgbmTest(unittest.TestCase):
         self.assertEqual(categorical, [])
 
     def test_load_feature_manifest_uses_method_registered_raw_factors(self):
-        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"]
         try:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = [*original, "scm_only_raw_factor"]
             with tempfile.TemporaryDirectory() as temp_dir:
                 path = Path(temp_dir) / "feature_manifest.json"
                 path.write_text(
                     json.dumps(
                         {
-                            "numeric_features": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                            "numeric_features": ["close_to_zxdkx_pct", "scm_only_raw_factor"],
                             "categorical_features": [],
                         }
                     ),
@@ -781,19 +781,19 @@ class RankLgbmTest(unittest.TestCase):
 
                 b2_numeric, _b2_categorical = load_feature_manifest(
                     path,
-                    available_columns={"close_to_zxdkx_pct", "b3_only_raw_factor"},
+                    available_columns={"close_to_zxdkx_pct", "scm_only_raw_factor"},
                     method="b2",
                 )
-                b3_numeric, _b3_categorical = load_feature_manifest(
+                scm_numeric, _scm_categorical = load_feature_manifest(
                     path,
-                    available_columns={"close_to_zxdkx_pct", "b3_only_raw_factor"},
-                    method="b3",
+                    available_columns={"close_to_zxdkx_pct", "scm_only_raw_factor"},
+                    method="scm",
                 )
 
             self.assertEqual(b2_numeric, ["close_to_zxdkx_pct"])
-            self.assertEqual(b3_numeric, ["close_to_zxdkx_pct", "b3_only_raw_factor"])
+            self.assertEqual(scm_numeric, ["close_to_zxdkx_pct", "scm_only_raw_factor"])
         finally:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = original
 
     def test_train_report_uses_fixed_categorical_levels_from_feature_manifest(self):
         class DummyModel:

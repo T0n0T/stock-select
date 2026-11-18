@@ -27,7 +27,7 @@ class BackfillCliTest(unittest.TestCase):
                         "--binary",
                         "stock-select-rs",
                         "--method",
-                        "b3",
+                        "scm",
                         "--dates-file",
                         str(dates_file),
                         "--dry-run",
@@ -35,7 +35,7 @@ class BackfillCliTest(unittest.TestCase):
                 )
 
         self.assertEqual(rc, 0)
-        self.assertIn("screen --method b3 --pick-date 2026-06-01", stdout.getvalue())
+        self.assertIn("screen --method scm --pick-date 2026-06-01", stdout.getvalue())
 
     def test_backfill_runs_dry_run_prints_run_command(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -56,7 +56,7 @@ class BackfillCliTest(unittest.TestCase):
                         "--binary",
                         "stock-select-rs",
                         "--method",
-                        "b3",
+                        "scm",
                         "--dates-file",
                         str(dates_file),
                         "--dry-run",
@@ -64,7 +64,7 @@ class BackfillCliTest(unittest.TestCase):
                 )
 
         self.assertEqual(rc, 0)
-        self.assertIn("run --method b3 --pick-date 2026-06-01", stdout.getvalue())
+        self.assertIn("run --method scm --pick-date 2026-06-01", stdout.getvalue())
 
     def test_backfill_records_dry_run_prints_record_run_command(self):
         stdout = io.StringIO()
@@ -74,7 +74,7 @@ class BackfillCliTest(unittest.TestCase):
                     "backfill",
                     "records",
                     "--methods",
-                    "b2,lsh",
+                    "b2,pbm",
                     "--dates",
                     "2026-06-01,2026-06-02",
                     "--runtime-root",
@@ -88,7 +88,7 @@ class BackfillCliTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         output = stdout.getvalue()
         self.assertIn("run --method b2 --pick-date 2026-06-01", output)
-        self.assertIn("run --method lsh --pick-date 2026-06-02", output)
+        self.assertIn("run --method pbm --pick-date 2026-06-02", output)
         self.assertIn("--record", output)
 
     def test_backfill_help_lists_only_records_command(self):

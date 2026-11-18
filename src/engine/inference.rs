@@ -80,11 +80,8 @@ fn default_model_status() -> String {
 pub fn default_model_dir(method: Method) -> Option<&'static str> {
     match method {
         Method::B2 => Some("models/b2"),
-        Method::B3 => Some("models/b3"),
-        Method::Lsh => Some("models/lsh"),
         Method::Scm => Some("models/scm"),
         Method::Pbm => Some("models/pbm"),
-        Method::B1 | Method::Qianlong | Method::Dribull => None,
     }
 }
 
@@ -349,22 +346,13 @@ fn route_value_matches(actual: Option<&Option<String>>, expected: &Value) -> boo
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelFeatureMetadata {
-    #[serde(default)]
     pub numeric_columns: Vec<String>,
-    #[serde(default)]
     pub categorical_columns: Vec<String>,
-    #[serde(default)]
     pub categorical_levels: BTreeMap<String, Vec<String>>,
-    #[serde(default = "default_categorical_encoding")]
     pub categorical_encoding: String,
     #[serde(default)]
     pub categorical_code_maps: BTreeMap<String, BTreeMap<String, i64>>,
-    #[serde(default)]
     pub feature_names: Vec<String>,
-}
-
-fn default_categorical_encoding() -> String {
-    "one_hot".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -428,7 +416,7 @@ pub fn build_feature_vector(
         }
     }
 
-    if !metadata.feature_names.is_empty() && metadata.feature_names != feature_names {
+    if metadata.feature_names != feature_names {
         anyhow::bail!("metadata feature_names do not match computed feature order");
     }
 

@@ -109,7 +109,7 @@ def generate_native_parity_report(
     model_path = candidate_dir / "model.txt"
     metadata_path = candidate_dir / "model_metadata.json"
     metadata = read_json(metadata_path)
-    if str(metadata.get("categorical_encoding") or "one_hot") != "native":
+    if metadata.get("categorical_encoding") != "native":
         raise ValueError("native parity only applies to native categorical models")
     rows = select_sample_rows(read_dataset_rows(dataset), sample_size)
     if not rows:

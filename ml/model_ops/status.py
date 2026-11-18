@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import json
 import sys
@@ -283,7 +285,7 @@ def print_status(*, method: str, runtime_root: Path, target_dir: Path | None = N
 
 def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     parser = subparsers.add_parser("status", description="查看当前激活模型摘要和路由状态")
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--target-dir", type=Path)
     parser.set_defaults(handler=main_from_args)

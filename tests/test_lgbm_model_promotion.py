@@ -28,6 +28,7 @@ def write_candidate_model(path: Path, *, report: dict | None = None) -> None:
         "numeric_columns": ["close_to_zxdkx_pct"],
         "categorical_columns": ["env"],
         "categorical_levels": {"env": ["weak", "strong"]},
+        "categorical_encoding": "one_hot",
         "one_hot_levels": {"env": ["env=weak", "env=strong"]},
         "feature_names": ["close_to_zxdkx_pct", "env=weak", "env=strong"],
         "lightgbm_feature_names": ["close_to_zxdkx_pct", "env_weak", "env_strong"],
@@ -105,9 +106,9 @@ class LgbmModelPromotionTest(unittest.TestCase):
             dotenv = root / ".env"
             dotenv.write_text(f"STOCK_SELECT_RUNTIME_ROOT={dotenv_runtime}\n", encoding="utf-8")
 
-            target = resolve_default_target_dir(method="b1", dotenv_path=dotenv, env_runtime_root=str(shell_runtime))
+            target = resolve_default_target_dir(method="scm", dotenv_path=dotenv, env_runtime_root=str(shell_runtime))
 
-        self.assertEqual(target, shell_runtime / "models" / "b1")
+        self.assertEqual(target, shell_runtime / "models" / "scm")
 
     def test_default_target_dir_requires_runtime_root_without_home_fallback(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -130,9 +131,9 @@ class LgbmModelPromotionTest(unittest.TestCase):
     def test_validate_model_artifacts_accepts_routed_candidate(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             candidate = Path(temp_dir) / "candidate"
-            write_routed_candidate_model(candidate, report={**passing_report(), "method": "b3"})
+            write_routed_candidate_model(candidate, report={**passing_report(), "method": "scm"})
 
-            summary = validate_model_artifacts(candidate, expected_method="b3")
+            summary = validate_model_artifacts(candidate, expected_method="scm")
 
         self.assertEqual(summary["routing"]["default_model"], "neutral_rf")
         self.assertEqual(summary["routing"]["model_count"], 2)
@@ -143,10 +144,10 @@ class LgbmModelPromotionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             candidate = root / "candidate"
-            target = root / "runtime" / "models" / "b3"
-            write_routed_candidate_model(candidate, report={**passing_report(), "method": "b3"})
+            target = root / "runtime" / "models" / "scm"
+            write_routed_candidate_model(candidate, report={**passing_report(), "method": "scm"})
 
-            promote_model(candidate, target, expected_method="b3", now="20260616T230000Z")
+            promote_model(candidate, target, expected_method="scm", now="20260616T230000Z")
 
             card = json.loads((target / "model_card.json").read_text(encoding="utf-8"))
             self.assertEqual(card["artifact_type"], "routed")
@@ -398,40 +399,23 @@ class LgbmModelPromotionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             b2_target = root / "runtime" / "models" / "b2"
-            b3_target = root / "runtime" / "models" / "b3"
+            scm_target = root / "runtime" / "models" / "scm"
             b2_archive = b2_target.parent / "archive" / "b2" / "20260601T000000Z"
-            b3_archive = b3_target.parent / "archive" / "b3" / "20260602T000000Z"
+            scm_archive = scm_target.parent / "archive" / "scm" / "20260602T000000Z"
             write_candidate_model(b2_archive, report=passing_report())
-            write_candidate_model(b3_archive, report={**passing_report(), "method": "b3"})
+            write_candidate_model(scm_archive, report={**passing_report(), "method": "scm"})
 
             b2_rows = list_archived_models(b2_target)
-            b3_rows = list_archived_models(b3_target)
+            scm_rows = list_archived_models(scm_target)
 
         self.assertEqual([row["version"] for row in b2_rows], ["20260601T000000Z"])
-        self.assertEqual([row["version"] for row in b3_rows], ["20260602T000000Z"])
+        self.assertEqual([row["version"] for row in scm_rows], ["20260602T000000Z"])
 
-    def test_legacy_archive_is_listed_only_when_model_card_target_matches_method(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            b2_target = root / "runtime" / "models" / "b2"
-            b3_target = root / "runtime" / "models" / "b3"
-            legacy_archive = b2_target.parent / "archive" / "20260601T000000Z"
-            write_candidate_model(legacy_archive, report=passing_report())
-            (legacy_archive / "model_card.json").write_text(
-                json.dumps({"target": str(b2_target)}),
-                encoding="utf-8",
-            )
-
-            b2_rows = list_archived_models(b2_target)
-            b3_rows = list_archived_models(b3_target)
-
-        self.assertEqual([row["version"] for row in b2_rows], ["20260601T000000Z"])
-        self.assertEqual(b3_rows, [])
 
     def test_validate_model_artifacts_rejects_report_method_mismatch(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             candidate = Path(temp_dir) / "candidate"
-            write_candidate_model(candidate, report={**passing_report(), "method": "b3"})
+            write_candidate_model(candidate, report={**passing_report(), "method": "scm"})
 
             with self.assertRaisesRegex(ValueError, "method"):
                 validate_model_artifacts(candidate, expected_method="b2")
@@ -462,15 +446,15 @@ class LgbmModelPromotionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             candidate = root / "candidate"
-            target = root / "runtime" / "models" / "lsh_intraday"
-            write_candidate_model(candidate, report={**passing_report(), "method": "lsh"})
+            target = root / "runtime" / "models" / "pbm_intraday"
+            write_candidate_model(candidate, report={**passing_report(), "method": "pbm"})
 
-            promote_model(candidate, target, expected_method="lsh", now="20260617T010203Z")
+            promote_model(candidate, target, expected_method="pbm", now="20260617T010203Z")
 
-            state_path = root / "runtime" / "models" / "lsh" / "model_state.json"
+            state_path = root / "runtime" / "models" / "pbm" / "model_state.json"
             state = json.loads(state_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(state["intraday"], {"status": "ready", "model_dir": "models/lsh_intraday"})
+        self.assertEqual(state["intraday"], {"status": "ready", "model_dir": "models/pbm_intraday"})
         self.assertEqual(state["eod"]["status"], "blocked")
 
     def test_cli_list_archives_accepts_mode_specific_target_dir_for_same_method(self):

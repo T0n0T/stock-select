@@ -1,14 +1,14 @@
 # 选股筛选方法过滤条件
 
-本文整理当前 Rust CLI 中各个选股筛选方法的实际硬过滤条件。口径以代码实现为准，主要来源为 `src/screening.rs`、`src/strategies/b2.rs`、`src/strategies/b3.rs`、`src/strategies/lsh.rs`、`src/strategies/scm_pbm.rs`、`src/strategies/qianlong.rs` 和 `src/engine/run.rs`。
+本文整理当前 Rust CLI 中可运行的选股筛选方法及其实际硬过滤条件。口径以代码实现为准，主要来源为 `src/screening.rs`、`src/strategies/b2.rs`、`src/strategies/scm_pbm.rs` 和 `src/engine/run.rs`。
 
-实际接入 screen 的方法：`b2`、`b3`、`lsh`、`scm`、`pbm`、`qianlong`。
+当前 `screen` 支持：`b2`、`scm`、`pbm`。旧策略及历史产物兼容代码已删除。 Parquet 缓存通过 `calc_versions.price_basis = asof_qfq_v1` 校验价格基准；缺失或不匹配时按需重建。
 
-`b1`、`dribull` 当前没有 screen 策略实现；在 CLI 执行 `screen` 时会返回未实现错误，因此本文不列独立过滤条件。`qianlong` 当前只接入 `screen` 和因子导出，不接入模型 `run`、`review-list` 或 LLM 复盘。
+所有 Rust 与 Python 入口仅接受当前三种方法。旧策略名、旧候选结构、未声明类别编码的模型及旧缓存均不再兼容。
 
 ## 公共流程
 
-`screen` 以 stock-cache DB-native 日线窗口为主路径，读取截至 `pick_date` 的约 252 个交易日预计算行情和指标，并在进入具体策略前先完成预处理和股票池裁剪。EOD prepared cache 写入后会按日期保留最近 30 个 EOD artifact；可用 `STOCK_SELECT_PREPARED_CACHE_LIMIT` 调整保留数量。盘中 prepared cache 不计入这个保留数量，也不会被该策略清理。
+`screen` 通过 `duckdb-neo` 从本地 DuckDB 文件或 Quack 服务读取 stock-cache 日线窗口，取截至 `pick_date` 的约 252 个交易日预计算行情和指标，并在进入具体策略前完成预处理和股票池裁剪。prepared 中间缓存统一使用 Parquet（`.parquet`，schema 14），不再读取旧二进制缓存。EOD cache 写入后会按日期保留最近 30 个 artifact；可用 `STOCK_SELECT_PREPARED_CACHE_LIMIT` 调整保留数量。盘中 prepared cache 不计入这个保留数量，也不会被该策略清理。
 
 ### 预处理字段
 
@@ -28,8 +28,8 @@
 默认股票池是 `turnover-top` 股票池：
 
 - 只取 `pick_date` 当天有 prepared 行情的股票。
-- `b2` / `b3`：要求当日 `MA25 > MA60`，否则不会进入策略判断。
-- `lsh` / `scm` / `pbm` / `qianlong`：不做 `MA25 > MA60` 前置过滤。
+- `b2`：要求当日 `MA25 > MA60`，否则不会进入策略判断。
+- `scm` / `pbm`：不做 `MA25 > MA60` 前置过滤。
 - 按 `turnover_n` 从高到低排序，同分按代码升序，取 `turnover_n` 最高的前 5000 只。
 
 `custom` 股票池：
@@ -37,7 +37,7 @@
 - 来源为 `--pool-file`、`STOCK_SELECT_POOL_FILE` 或 `runtime/custom-pool.txt`。
 - 文件中的股票代码会被标准化为 `.SH` / `.SZ` 代码。
 - 只保留在 `pick_date` 有 prepared 行情的股票。
-- 不执行 `turnover-top` 排名，也不执行 `b2` / `b3` 的 `MA25 > MA60` 前置股票池过滤；后续仍会执行各方法自身的策略条件。
+- 不执行 `turnover-top` 排名，也不执行 `b2` 的 `MA25 > MA60` 前置股票池过滤；后续仍会执行各方法自身的策略条件。
 
 ## `b2`
 
@@ -89,68 +89,6 @@
 
 实现口径：用 `J` 从非上升转为上升的位置作为周期起点，统计当前周期内 raw B2 出现次数；同一轮 `J` 转强周期内只保留第一次 raw B2，即 `raw_b2_count == 1`。
 
-## `b3`
-
-`b3` 是 B2 次日缩量震荡类筛选，候选信号写为 `B3` 或 `B3+`。当前实现依赖前一交易日已经触发 `B2`，并非完全独立的 B3 公式。
-
-### 基础过滤
-
-- 股票在 `pick_date` 必须有行情行。
-- 当前索引至少为 3。
-- 若使用默认 `turnover-top` 股票池，进入策略前还必须满足当日 `MA25 > MA60`。
-
-### B3 条件
-
-当前日同时满足以下条件时，输出 `B3`：
-
-| 条件 | 口径 |
-|------|------|
-| 前置信号 | 前一交易日已经触发 `B2` |
-| 当日震荡 | `abs(pct) < 5.05%`，其中 `pct = (close - prev_close) / prev_close * 100` |
-| 当日振幅 | 当前振幅 `amp` 小于阈值，`amp = (high - low) / prev_close * 100` |
-| 振幅阈值 | `300` 或 `688` 开头股票阈值为 12%，其他股票阈值为 8% |
-| 缩量 | 当前成交量不超过前一日的 `90%` |
-| J 值 | 当前 `J` 值大于前一日 `J` 值 |
-| 趋势结构 | 沿用 B2 的 `tr_ok`，当前日必须为真 |
-| 长期参考位 | 沿用 B2 的 `above_lt`，当前日必须为真 |
-
-### B3+ 条件
-
-`B3+`：在 `B3` 基础上，再同时满足：
-
-- 当前成交量不超过前一日的 `52%`。
-- 当前收盘价高于前一日收盘价。
-
-当同一天同时满足 `B3` 和 `B3+` 时，候选信号优先写为 `B3+`。
-
-## `lsh`
-
-`lsh` 保留原策略和模型路径，供旧候选与模型兼容。新策略使用 `scm`（Sustained Cross MA25）和 `pbm`（Pullback MA25），两者分别训练和加载模型。
-
-### 基础过滤
-
-- 股票在 `pick_date` 必须有行情行。
-- 当前索引至少为 25，且昨日、当日 `MA25` 均已计算出来。
-- 默认 `turnover-top` 股票池不对 `lsh` 做 `MA25 > MA60` 前置过滤。
-
-### 日线形态条件
-
-当前日必须同时满足：
-
-- 昨日最低价低于昨日 `MA25`：`REF(low, 1) < REF(MA25, 1)`。
-- 当日为阳线：`close > open`。
-- 当日收盘价高于 `MA25`：`close > MA25`。
-- 昨日成交量低于前一日成交量：`REF(volume, 1) < REF(volume, 2)`。
-
-### 周线/月线 MACD 条件
-
-旧 `lsh` 会在日线视角聚合周线/月线收盘序列：
-
-- 周线：按 ISO 自然周分组，取已结束周的最后一个日线收盘价；最新未结束周使用当前最新日线收盘价。
-- 月线：按自然月分组，取已结束月的最后一个日线收盘价；最新未结束月使用当前最新日线收盘价。
-
-分别对周线和月线模拟收盘序列计算 MACD，参数为 12/26/9。周线和月线最新 DIF 与 DEA 都大于 0 时，才通过过滤。
-
 ## `scm` / `pbm`
 
 `scm`（Sustained Cross MA25）与 `pbm`（Pullback MA25）共享昨日 MA25 回踩、当日阳线收复和当日放量日线形态，候选信号分别写为 `SCM` 和 `PBM`。
@@ -185,61 +123,9 @@
 
 `scm` 和 `pbm` 是两个独立的 `--method` 值，模型产物分别位于 `runtime/models/scm/` 和 `runtime/models/pbm/`。
 
-## `qianlong`
-
-`qianlong` 是三级别 MACD 反转叠加阳包阴和放量大涨的筛选，候选信号写为 `QIANLONG`。
-
-### 基础过滤
-
-- 股票在 `pick_date` 必须有行情行，且代码不能以 `.BJ` 结尾。
-- 当前索引至少为 14，即至少有 15 条日线记录用于判断绿柱背离。
-- 默认 `turnover-top` 股票池不对 `qianlong` 做 `MA25 > MA60` 前置过滤。
-
-### 周线/月线 MACD 条件
-
-`qianlong` 跟随 B2/B3/LSH 的既有 MACD 取值方式，复用 shared prepared cache 中已有的周期字段：
-
-- 周线优先读取 `macd_weekly_dif` / `macd_weekly_dea`。
-- 月线优先读取 `macd_monthly_dif` / `macd_monthly_dea`。
-- 周线和月线的最新 DIF 与 DEA 都大于 0 时，才通过过滤。
-- 任一周期字段缺失时按日线聚合周线/月线收盘价，再以 12/26/9 参数计算对应周期 MACD；聚合口径与 LSH 相同。
-
-通过 `calc_versions.price_basis = asof_qfq_v1` 校验后，已有 schema 11 prepared cache 可以直接复用，不需要为 `qianlong` 重建整份缓存。缺少此价格基准标记的旧 DB-native 缓存会按需重建，这属于共享数据纠错，而非潜龙专用升级。潜龙不依赖潜龙专用的上一周期字段，EOD 缓存命中后不会为潜龙补查周期状态，也不改写原缓存文件。
-
-### 日线绿柱背离条件
-
-日线只统计 `macd_hist < 0` 的绿柱段。允许两种形态：
-
-- 最近两段绿柱：两段都必须已经出现峰值后的缩短，第二段绝对峰值小于第一段绝对峰值。
-- 最近一段连续绿柱：段内必须出现两个已经缩短的局部峰，第二个绝对峰值小于第一个绝对峰值。
-
-第二段峰值必须已经开始缩短；如果第二段仍在继续放大，则不通过。峰值后跨到红柱或零轴以上，也视为已经缩短；最新一根不要求仍处于绿柱段。
-
-### K 线和量能条件
-
-当前最新 K 线必须为阳包阴：
-
-- 昨日为阴线：`REF(close, 1) < REF(open, 1)`。
-- 今日为阳线：`close > open`。
-- 今日收盘价高于昨日最高价：`close > REF(high, 1)`。
-- 今日开盘价低于昨日收盘价：`open < REF(close, 1)`。
-
-近 22 条记录内还必须出现至少一次放量大涨：
-
-- 当日涨幅 `pct >= 9.5%`。
-- 当日成交量 / 前 3 到 5 条记录均量 `>= 1.5`。
-
-### 盘中口径
-
-盘中 `screen --method qianlong --intraday` 会把 Tushare `rt_k` 快照接入最新日线：
-
-- 实时日线 MACD 可作为第二段峰值后的缩短柱。
-- 实时周线/月线 DIF 和 DEA 从本周/本月开始前的已完成周期状态外推，并沿用上述正值条件。
-- 实时 K 线可触发阳包阴；实时成交量可触发近 22 条记录内的放量大涨。
-
 ## run 阶段
 
-对支持模型推理的方法，`run` 阶段不再增加硬过滤。它会读取 `screen` 产出的候选，补 prepared history，计算因子，然后使用对应 method 的 LightGBM 模型打分排序。`qianlong` 当前没有已发布模型，执行 `run` 或 `review-list` 会被 capability 保护拒绝。
+`b2`、`scm`、`pbm` 的 `run` 阶段不再增加硬过滤。它会读取 `screen` 产出的候选，补 prepared history，计算因子，然后使用对应方法的 LightGBM 模型打分排序。
 
 当前排序阶段还有一个后置分数调整：在模型原始分排序后先归一化分数，再根据筹码因子调整排名分数。该调整只改变排序，不剔除候选：
 

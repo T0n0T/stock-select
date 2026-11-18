@@ -19,18 +19,18 @@ class FakeModel:
 
 class LgbmScoreExportTest(unittest.TestCase):
     def test_default_paths_are_method_scoped(self):
-        paths = resolve_default_paths("b1")
+        paths = resolve_default_paths("scm")
 
-        self.assertIn("diagnostics/ml/b1", str(paths["output"]))
+        self.assertIn("diagnostics/ml/scm", str(paths["output"]))
         self.assertEqual(paths["model_output_dir"].name, "model")
         self.assertEqual(paths["dataset"].name, "rank_dataset.csv")
 
     def test_default_paths_follow_explicit_model_output_dir_for_trial_exports(self):
-        model_output_dir = Path("diagnostics/ml/b3/tuning/trial-001")
+        model_output_dir = Path("diagnostics/ml/scm/tuning/trial-001")
 
-        paths = resolve_default_paths("b3", model_output_dir=model_output_dir)
+        paths = resolve_default_paths("scm", model_output_dir=model_output_dir)
 
-        self.assertEqual(paths["dataset"], Path("diagnostics/ml/b3/rank_dataset.csv"))
+        self.assertEqual(paths["dataset"], Path("diagnostics/ml/scm/rank_dataset.csv"))
         self.assertEqual(paths["feature_manifest"], model_output_dir / "feature_manifest.json")
         self.assertEqual(paths["output"], model_output_dir / "lgbm_scores.csv")
         self.assertEqual(paths["summary_output"], model_output_dir / "lgbm_scores_summary.json")
@@ -590,16 +590,16 @@ class LgbmScoreExportTest(unittest.TestCase):
         import json
         import tempfile
 
-        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"]
         try:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = [*original, "scm_only_raw_factor"]
             with tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
                 dataset = root / "dataset.csv"
                 with dataset.open("w", encoding="utf-8", newline="") as handle:
                     writer = csv.DictWriter(
                         handle,
-                        fieldnames=["date", "code", "rank_label_3d", "close_to_zxdkx_pct", "b3_only_raw_factor"],
+                        fieldnames=["date", "code", "rank_label_3d", "close_to_zxdkx_pct", "scm_only_raw_factor"],
                     )
                     writer.writeheader()
                     writer.writerows(
@@ -609,14 +609,14 @@ class LgbmScoreExportTest(unittest.TestCase):
                                 "code": "a",
                                 "rank_label_3d": "1",
                                 "close_to_zxdkx_pct": "1",
-                                "b3_only_raw_factor": "11",
+                                "scm_only_raw_factor": "11",
                             },
                             {
                                 "date": "2026-03-01",
                                 "code": "b",
                                 "rank_label_3d": "2",
                                 "close_to_zxdkx_pct": "2",
-                                "b3_only_raw_factor": "12",
+                                "scm_only_raw_factor": "12",
                             },
                         ]
                     )
@@ -624,7 +624,7 @@ class LgbmScoreExportTest(unittest.TestCase):
                 feature_manifest.write_text(
                     json.dumps(
                         {
-                            "numeric_features": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                            "numeric_features": ["close_to_zxdkx_pct", "scm_only_raw_factor"],
                             "categorical_features": [],
                         }
                     ),
@@ -641,8 +641,8 @@ class LgbmScoreExportTest(unittest.TestCase):
                             "top_features": [],
                             "feature_count": 2,
                             "model": FakeModel(),
-                            "feature_names": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
-                            "lightgbm_feature_names": ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                            "feature_names": ["close_to_zxdkx_pct", "scm_only_raw_factor"],
+                            "lightgbm_feature_names": ["close_to_zxdkx_pct", "scm_only_raw_factor"],
                             "category_levels": {},
                             "categorical_code_maps": {},
                         },
@@ -663,15 +663,15 @@ class LgbmScoreExportTest(unittest.TestCase):
                         learning_rate=0.05,
                         num_threads=1,
                         label_column="rank_label_3d",
-                        method="b3",
+                        method="scm",
                     )
 
             self.assertEqual(
                 train_model_result.call_args.kwargs["numeric_columns"],
-                ["close_to_zxdkx_pct", "b3_only_raw_factor"],
+                ["close_to_zxdkx_pct", "scm_only_raw_factor"],
             )
         finally:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = original
 
 
 if __name__ == "__main__":

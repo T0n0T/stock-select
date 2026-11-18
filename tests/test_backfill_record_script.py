@@ -14,7 +14,7 @@ from ml.backfill.record import (
 
 class BackfillRecordScriptTest(unittest.TestCase):
     def test_parse_methods_accepts_common_separators(self):
-        self.assertEqual(parse_methods("b2,lsh b3\n"), ["b2", "lsh", "b3"])
+        self.assertEqual(parse_methods("b2,pbm scm\n"), ["b2", "pbm", "scm"])
 
     def test_empty_record_methods_env_overrides_dotenv_methods(self):
         self.assertEqual(
@@ -36,7 +36,7 @@ class BackfillRecordScriptTest(unittest.TestCase):
 
         with contextlib.redirect_stdout(io.StringIO()):
             rc = run_for_methods_and_dates(
-                methods=["b2", "lsh"],
+                methods=["b2", "pbm"],
                 dates=["2026-06-10", "2026-06-11"],
                 binary=Path("stock-select-rs"),
                 runtime_root=Path("runtime"),

@@ -6,20 +6,12 @@ use crate::indicators::macd;
 use crate::model::{Candidate, PreparedRow};
 
 pub mod b2;
-pub mod b3;
-pub mod lsh;
-pub mod qianlong;
 pub mod scm_pbm;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrategyOutput {
     pub candidates: Vec<Candidate>,
     pub stats: BTreeMap<String, usize>,
-}
-
-pub(crate) fn group_by_symbol(rows: &[PreparedRow]) -> BTreeMap<&str, Vec<&PreparedRow>> {
-    let refs = rows.iter().collect::<Vec<_>>();
-    group_refs_by_symbol(&refs)
 }
 
 pub(crate) fn group_refs_by_symbol<'a>(
@@ -46,21 +38,6 @@ pub(crate) fn latest_monthly_macd_dea_positive(history: &[&PreparedRow]) -> bool
     latest_macd_dea_positive(&monthly_asof_closes(history))
 }
 
-pub(crate) fn latest_period_macd_dif_and_dea_positive(
-    history: &[&PreparedRow],
-    dif_key: &str,
-    dea_key: &str,
-    fallback_closes: &[f64],
-) -> bool {
-    match (
-        latest_db_factor(history, dif_key),
-        latest_db_factor(history, dea_key),
-    ) {
-        (Some(dif), Some(dea)) => dif > 0.0 && dea > 0.0,
-        _ => latest_macd_dif_and_dea_positive(fallback_closes),
-    }
-}
-
 fn latest_db_factor(history: &[&PreparedRow], key: &str) -> Option<f64> {
     history
         .last()
@@ -74,16 +51,6 @@ pub(crate) fn latest_macd_dea_positive(closes: &[f64]) -> bool {
     }
     let (_dif, dea, _hist) = macd(closes, 12, 26, 9);
     dea.last().is_some_and(|dea| dea.is_finite() && *dea > 0.0)
-}
-
-pub(crate) fn latest_macd_dif_and_dea_positive(closes: &[f64]) -> bool {
-    if closes.is_empty() {
-        return false;
-    }
-    let (dif, dea, _hist) = macd(closes, 12, 26, 9);
-    dif.last()
-        .zip(dea.last())
-        .is_some_and(|(dif, dea)| dif.is_finite() && dea.is_finite() && *dif > 0.0 && *dea > 0.0)
 }
 
 pub(crate) fn weekly_asof_closes(history: &[&PreparedRow]) -> Vec<f64> {

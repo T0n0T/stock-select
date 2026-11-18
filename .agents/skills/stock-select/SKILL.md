@@ -11,7 +11,9 @@ description: Use when operating the local stock-select Rust CLI workspace for A-
 /home/tiger/Documents/agents/stock-select
 ```
 
-二进制是 `stock-select-rs`。开始操作前进入该目录，先运行 `git status --short --branch`，并把现有未提交改动视为用户改动。CLI、训练脚本和维护脚本默认读取当前目录 `.env`；不要打印 `POSTGRES_DSN`、`TUSHARE_TOKEN` 或 DSN/token 的具体值。
+二进制是 `stock-select-rs`。开始操作前进入该目录，先运行 `git status --short --branch`，并把现有未提交改动视为用户改动。CLI、训练脚本和维护脚本默认读取当前目录 `.env`；不要打印 `.env` 中的数据库路径、`DUCKDB_PATH` 或 token 的具体值。
+
+数据从 `DUCKDB_PATH` 指向的本地 DuckDB 文件或 Quack 服务读取；Quack 凭据使用 `QUACK_AUTH_TOKEN` 和可选的 `QUACK_SSL_FINGERPRINT`。当前 `screen` 只支持 `b2`、`scm`、`pbm`，prepared 中间缓存为 Parquet。
 
 ## 何时使用
 

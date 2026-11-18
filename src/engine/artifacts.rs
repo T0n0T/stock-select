@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use chrono::NaiveDate;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -67,4 +68,12 @@ pub fn write_selection_json<T: Serialize>(path: &Path, payload: &T) -> anyhow::R
 pub fn read_selection_json(path: &Path) -> anyhow::Result<Value> {
     let bytes = std::fs::read(path)?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+pub fn artifact_key_for_run(pick_date: NaiveDate, intraday: bool) -> String {
+    if intraday {
+        format!("{}.intraday", pick_date.format("%Y-%m-%d"))
+    } else {
+        pick_date.format("%Y-%m-%d").to_string()
+    }
 }

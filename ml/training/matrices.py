@@ -75,7 +75,9 @@ def build_feature_matrix_from_metadata(
         for column, values in (metadata.get("categorical_levels") or {}).items()
         if isinstance(values, list)
     }
-    categorical_encoding = str(metadata.get("categorical_encoding") or DEFAULT_CATEGORICAL_ENCODING)
+    categorical_encoding = metadata.get("categorical_encoding")
+    if categorical_encoding not in CATEGORICAL_ENCODINGS:
+        raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
     return build_feature_matrix(
         rows,
         numeric_columns=numeric_columns,

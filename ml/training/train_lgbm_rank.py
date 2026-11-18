@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import csv
 import json
@@ -642,7 +644,7 @@ def train_and_report(
 
 def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     parser = subparsers.add_parser("lgbm-rank", description="Train offline LightGBM ranker.")
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--dataset", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--test-ratio", type=float, default=0.2)

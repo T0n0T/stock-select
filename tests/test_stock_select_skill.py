@@ -26,7 +26,8 @@ class StockSelectSkillTests(unittest.TestCase):
         self.assertIn("--pick-date", combined)
         self.assertIn("--intraday", combined)
         self.assertIn("STOCK_SELECT_RUNTIME_ROOT", combined)
-        self.assertIn("POSTGRES_DSN", combined)
+        self.assertIn("DUCKDB_PATH", combined)
+        self.assertNotIn("postgres://", combined)
         self.assertIn("TUSHARE_TOKEN", combined)
         self.assertNotIn("stock-select-new", combined)
 

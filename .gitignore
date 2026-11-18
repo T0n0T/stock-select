@@ -4,3 +4,5 @@
 runtime/
 __pycache*
 .env
+
+*.egg-info/

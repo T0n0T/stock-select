@@ -49,11 +49,6 @@ UNSTABLE_ZERO_COVERAGE_RAW_COLUMNS = {
     "cyq_weight_avg_to_close_pct",
     "cyq_cost_70_width_pct",
     "cyq_cost_90_width_pct",
-    "bar_lower_shadow_pct",
-    "bar_amplitude_pct",
-    "bar_body_pct",
-    "signal_prev_b2_flag",
-    "signal_b3_plus_flag",
 }
 OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS = {
     "macd_state_phase_score",

@@ -19,8 +19,8 @@ class ScanMacdReversalReferenceTests(unittest.TestCase):
     def test_reference_script_no_longer_requires_postgres(self):
         source = SCRIPT_PATH.read_text(encoding="utf-8")
 
-        self.assertNotIn("POSTGRES_DSN", source)
-        self.assertNotIn("--dsn", source)
+        self.assertNotIn("postgres://", source)
+        self.assertNotIn("postgresql://", source)
 
     def test_tushare_rest_payload_uses_comma_separated_fields(self):
         payload = REFERENCE.tushare_request_payload(

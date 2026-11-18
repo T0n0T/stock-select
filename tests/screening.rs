@@ -9,265 +9,9 @@ use stock_select::model::{DbDataGap, MarketDataset, MarketRow, Method, PreparedR
 use stock_select::screening::{
     PoolSource, ScreenRequest, prepared_cache_start_date,
     run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_dataset_loader,
-    run_db_native_screen_with_loader, run_db_native_screen_with_loaders,
-    run_intraday_screen_with_loaders, run_intraday_screen_with_provider, run_screen_with_loader,
-    screen_window,
+    run_db_native_screen_with_loader, run_intraday_screen_with_loaders,
+    run_intraday_screen_with_provider, run_screen_with_loader, screen_window,
 };
-use stock_select::strategies::qianlong::run_qianlong_strategy;
-
-#[test]
-fn qianlong_selects_stock_when_all_five_conditions_hold() {
-    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-    let rows = qianlong_prepared_rows("000001.SZ", first_date);
-    let pick_date = rows.last().unwrap().trade_date;
-
-    let output = run_qianlong_strategy(&rows, pick_date);
-
-    assert_eq!(output.candidates.len(), 1);
-    assert_eq!(output.candidates[0].code, "000001.SZ");
-    assert_eq!(output.candidates[0].signal.as_deref(), Some("QIANLONG"));
-    assert_eq!(output.stats["selected_qianlong"], 1);
-}
-
-#[test]
-fn qianlong_uses_shared_db_period_macd_fields_when_available() {
-    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-
-    let mut monthly_rejected = qianlong_prepared_rows("000001.SZ", first_date);
-    let latest = monthly_rejected.last_mut().unwrap();
-    latest
-        .db_factors
-        .insert("macd_monthly_dea".to_string(), -0.01);
-    let pick_date = latest.trade_date;
-    let output = run_qianlong_strategy(&monthly_rejected, pick_date);
-    assert!(output.candidates.is_empty());
-    assert_eq!(output.stats["fail_monthly_macd"], 1);
-
-    let mut weekly_rejected = qianlong_prepared_rows("000001.SZ", first_date);
-    let latest = weekly_rejected.last_mut().unwrap();
-    latest
-        .db_factors
-        .insert("macd_weekly_dif".to_string(), -0.01);
-    let pick_date = latest.trade_date;
-    let output = run_qianlong_strategy(&weekly_rejected, pick_date);
-    assert!(output.candidates.is_empty());
-    assert_eq!(output.stats["fail_weekly_macd"], 1);
-}
-
-#[test]
-fn qianlong_accepts_red_bar_as_contraction_after_second_green_peak() {
-    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
-    for (idx, value) in [-0.04, -0.08, -0.16, 0.02].into_iter().enumerate() {
-        rows[7 + idx].macd_hist = value;
-    }
-    let pick_date = rows.last().unwrap().trade_date;
-
-    let output = run_qianlong_strategy(&rows, pick_date);
-
-    assert_eq!(output.candidates.len(), 1);
-    assert_eq!(output.stats["selected_qianlong"], 1);
-}
-
-#[test]
-fn qianlong_rejects_second_green_peak_before_it_starts_contracting() {
-    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
-    let latest = rows.len() - 1;
-    for row in &mut rows[7..latest] {
-        row.macd_hist = 0.02;
-    }
-    rows[latest - 3].macd_hist = -0.04;
-    rows[latest - 2].macd_hist = -0.08;
-    rows[latest - 1].macd_hist = -0.12;
-    rows[latest].macd_hist = -0.16;
-    let pick_date = rows[latest].trade_date;
-
-    let output = run_qianlong_strategy(&rows, pick_date);
-
-    assert!(output.candidates.is_empty());
-    assert_eq!(output.stats["fail_daily_divergence"], 1);
-}
-
-#[test]
-fn qianlong_accepts_two_contracting_peaks_in_one_green_segment() {
-    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
-    let single_segment = [
-        -0.05, -0.10, -0.20, -0.35, -0.25, -0.12, -0.08, -0.10, -0.14, -0.18, 0.02, 0.03,
-    ];
-    for (row, value) in rows.iter_mut().zip(single_segment) {
-        row.macd_hist = value;
-    }
-    let pick_date = rows.last().unwrap().trade_date;
-
-    let output = run_qianlong_strategy(&rows, pick_date);
-
-    assert_eq!(output.candidates.len(), 1);
-    assert_eq!(output.stats["selected_qianlong"], 1);
-}
-
-#[test]
-fn screen_qianlong_writes_candidate_artifact_and_excludes_beijing_exchange() {
-    let temp = tempfile::tempdir().unwrap();
-    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-    let mut rows = qianlong_prepared_rows("000001.SZ", first_date);
-    rows.extend(qianlong_prepared_rows("920001.BJ", first_date));
-    let pick_date = rows.last().unwrap().trade_date;
-    let start_date = prepared_cache_start_date(pick_date);
-    write_prepared_cache(
-        temp.path(),
-        Method::Qianlong,
-        pick_date,
-        start_date,
-        pick_date,
-        &rows,
-    )
-    .unwrap();
-
-    let output_path = run_screen_with_loader(
-        ScreenRequest {
-            method: Method::Qianlong,
-            pick_date,
-            runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
-            recompute: false,
-            pool_source: PoolSource::TurnoverTop,
-            pool_file: None,
-            export_factors: false,
-            environment_state: None,
-        },
-        |_dsn, _start, _end| panic!("qianlong screen should reuse prepared cache"),
-    )
-    .unwrap();
-
-    assert_eq!(
-        output_path,
-        temp.path().join("candidates/2026-04-28.qianlong.json")
-    );
-    let payload: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
-    assert_eq!(payload["method"], "qianlong");
-    assert_eq!(payload["count"], 1);
-    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
-}
-
-#[test]
-fn db_native_qianlong_reuses_price_aligned_prepared_cache_without_database_loaders() {
-    let temp = tempfile::tempdir().unwrap();
-    let first_date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-    let qianlong_rows = qianlong_prepared_rows("000001.SZ", first_date);
-    let pick_date = qianlong_rows.last().unwrap().trade_date;
-    let start_date = prepared_cache_start_date(pick_date);
-    let mut rows = (0..240)
-        .map(|offset| {
-            prepared_row_at_date(
-                "000001.SZ",
-                start_date + Duration::days(offset),
-                9.0,
-                100.0,
-                45.0,
-            )
-        })
-        .collect::<Vec<_>>();
-    rows.extend(qianlong_rows);
-    stock_select::cache::write_db_native_prepared_cache(
-        temp.path(),
-        Method::B2,
-        pick_date,
-        start_date,
-        pick_date,
-        252,
-        &rows,
-    )
-    .unwrap();
-    let metadata_path = prepared_cache_meta_path(temp.path(), pick_date);
-    let mut metadata: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
-    metadata["shared_methods"] = serde_json::json!(["b1", "b2", "b3", "lsh", "gkxy", "dribull"]);
-    metadata["schema_version"] = serde_json::json!(11);
-    metadata["calc_versions"] = serde_json::json!({
-        "macd": "macd_qfq_12_26_9_v1",
-        "rolling": "rolling_qfq_v1",
-        "czsc": "czsc_structure_qfq_min6_r7_v1",
-        "price_basis": "asof_qfq_v1"
-    });
-    std::fs::write(
-        &metadata_path,
-        serde_json::to_vec_pretty(&metadata).unwrap(),
-    )
-    .unwrap();
-    let data_path = prepared_cache_data_path(temp.path(), pick_date);
-    let cached_data_before = std::fs::read(&data_path).unwrap();
-    let cached_metadata_before = std::fs::read(&metadata_path).unwrap();
-    let data_modified_before = std::fs::metadata(&data_path).unwrap().modified().unwrap();
-    let metadata_modified_before = std::fs::metadata(&metadata_path)
-        .unwrap()
-        .modified()
-        .unwrap();
-
-    let output_path = run_db_native_screen_with_loaders(
-        ScreenRequest {
-            method: Method::Qianlong,
-            pick_date,
-            runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
-            recompute: false,
-            pool_source: PoolSource::TurnoverTop,
-            pool_file: None,
-            export_factors: true,
-            environment_state: Some("neutral".to_string()),
-        },
-        |_dsn, _start, _end| panic!("price-aligned prepared cache should be reused"),
-        |_dsn, _symbols, _trade_date| {
-            panic!("prepared cache reuse must not query period indicator state")
-        },
-    )
-    .unwrap();
-
-    let payload: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
-    assert_eq!(payload["method"], "qianlong");
-    assert_eq!(payload["count"], 1);
-    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
-    assert_eq!(std::fs::read(&data_path).unwrap(), cached_data_before);
-    assert_eq!(
-        std::fs::read(&metadata_path).unwrap(),
-        cached_metadata_before
-    );
-    assert_eq!(
-        std::fs::metadata(&data_path).unwrap().modified().unwrap(),
-        data_modified_before
-    );
-    assert_eq!(
-        std::fs::metadata(&metadata_path)
-            .unwrap()
-            .modified()
-            .unwrap(),
-        metadata_modified_before
-    );
-
-    let cached = load_prepared_cache(
-        temp.path(),
-        Method::Qianlong,
-        pick_date,
-        start_date,
-        pick_date,
-    )
-    .unwrap()
-    .unwrap();
-    let cached_latest = cached.last().unwrap();
-    assert!(
-        !cached_latest
-            .db_factors
-            .contains_key("macd_weekly_prev_hist")
-    );
-    assert!(
-        !cached_latest
-            .db_factors
-            .contains_key("macd_monthly_prev_hist")
-    );
-}
 
 #[test]
 fn screen_window_uses_one_year_prepared_history() {
@@ -291,7 +35,7 @@ fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: false,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -299,8 +43,8 @@ fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
         environment_state: None,
     };
 
-    let output_path = run_screen_with_loader(request, |dsn, start_date, end_date| {
-        assert_eq!(dsn, "postgresql://fixture");
+    let output_path = run_screen_with_loader(request, |duckdb_path, start_date, end_date| {
+        assert_eq!(duckdb_path, "fixture.duckdb");
         assert_eq!(start_date, prepared_cache_start_date(pick_date));
         assert_eq!(end_date, pick_date);
         Ok(vec![
@@ -345,7 +89,7 @@ fn db_native_screen_writes_db_native_prepared_cache_metadata() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -353,7 +97,7 @@ fn db_native_screen_writes_db_native_prepared_cache_metadata() {
         environment_state: None,
     };
 
-    run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+    run_db_native_screen_with_loader(request, |_duckdb_path, start_date, end_date| {
         assert_eq!(start_date, requested_window_start);
         assert_eq!(end_date, pick_date);
         Ok((0..365)
@@ -396,7 +140,7 @@ fn db_native_screen_propagates_table_gaps_to_cache_and_factor_manifest_only() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -405,7 +149,7 @@ fn db_native_screen_propagates_table_gaps_to_cache_and_factor_manifest_only() {
     };
 
     let output_path =
-        run_db_native_screen_with_dataset_loader(request, |_dsn, start_date, end_date| {
+        run_db_native_screen_with_dataset_loader(request, |_duckdb_path, start_date, end_date| {
             assert_eq!(start_date, requested_window_start);
             assert_eq!(end_date, pick_date);
             Ok(MarketDataset {
@@ -463,7 +207,7 @@ fn db_native_screen_rejects_joined_window_missing_requested_start_date() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -471,7 +215,7 @@ fn db_native_screen_rejects_joined_window_missing_requested_start_date() {
         environment_state: None,
     };
 
-    let err = run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+    let err = run_db_native_screen_with_loader(request, |_duckdb_path, start_date, end_date| {
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((1..750)
@@ -495,7 +239,7 @@ fn db_native_screen_allows_window_start_on_next_trading_date() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -503,7 +247,7 @@ fn db_native_screen_allows_window_start_on_next_trading_date() {
         environment_state: None,
     };
 
-    run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+    run_db_native_screen_with_loader(request, |_duckdb_path, start_date, end_date| {
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((0..365)
@@ -532,7 +276,7 @@ fn db_native_screen_allows_window_start_after_long_holiday_when_trading_days_are
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -540,7 +284,7 @@ fn db_native_screen_allows_window_start_after_long_holiday_when_trading_days_are
         environment_state: None,
     };
 
-    run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+    run_db_native_screen_with_loader(request, |_duckdb_path, start_date, end_date| {
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((0..235)
@@ -569,7 +313,7 @@ fn db_native_screen_rejects_window_with_too_few_trading_days() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -577,7 +321,7 @@ fn db_native_screen_rejects_window_with_too_few_trading_days() {
         environment_state: None,
     };
 
-    let err = run_db_native_screen_with_loader(request, |_dsn, start_date, end_date| {
+    let err = run_db_native_screen_with_loader(request, |_duckdb_path, start_date, end_date| {
         assert_eq!(start_date, requested_start);
         assert_eq!(end_date, pick_date);
         Ok((0..200)
@@ -599,7 +343,7 @@ fn screen_prepare_matches_old_indicator_basics() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: false,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -607,7 +351,7 @@ fn screen_prepare_matches_old_indicator_basics() {
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok(vec![
             market_row_with_open_delta(1, 10.0, 10.0, 0.5),
             market_row_with_open_delta(2, 11.0, 20.0, 0.5),
@@ -640,7 +384,7 @@ fn screen_prepare_front_adjusts_ohlc_indicators_and_preserves_raw_turnover_basis
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -648,7 +392,7 @@ fn screen_prepare_front_adjusts_ohlc_indicators_and_preserves_raw_turnover_basis
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         let mut first = market_row_with_open_delta(1, 10.0, 10.0, 0.5);
         first.adj_factor = Some(0.5);
         let mut latest = market_row_with_open_delta(2, 6.0, 20.0, 0.5);
@@ -686,7 +430,7 @@ fn screen_prepare_front_adjusts_local_qfq_factor_fallbacks() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -694,7 +438,7 @@ fn screen_prepare_front_adjusts_local_qfq_factor_fallbacks() {
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok((0..13)
             .map(|offset| {
                 let mut row = market_row_at_date(
@@ -732,7 +476,7 @@ fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -740,7 +484,7 @@ fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok((0..25)
             .map(|offset| {
                 let close = if offset == 7 {
@@ -797,7 +541,7 @@ fn screen_prepare_aligns_db_qfq_prices_to_the_window_basis() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -924,7 +668,7 @@ fn screen_prepare_prefers_db_native_kdj_macd_and_rolling_values() {
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -932,7 +676,7 @@ fn screen_prepare_prefers_db_native_kdj_macd_and_rolling_values() {
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok((0..2)
             .map(|offset| {
                 let mut row = market_row_at_date(
@@ -992,7 +736,7 @@ fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting
         method: Method::B2,
         pick_date,
         runtime_root: temp.path().to_path_buf(),
-        dsn: "postgresql://fixture".to_string(),
+        duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
@@ -1000,7 +744,7 @@ fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting
         environment_state: None,
     };
 
-    run_screen_with_loader(request, |_dsn, _start_date, _end_date| {
+    run_screen_with_loader(request, |_duckdb_path, _start_date, _end_date| {
         Ok((0..25)
             .map(|offset| {
                 let close = 10.0 + offset as f64;
@@ -1073,14 +817,16 @@ fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::Custom,
             pool_file: Some(pool_file.clone()),
             export_factors: false,
             environment_state: None,
         },
-        |_dsn, _start_date, _end_date| panic!("custom pool test should reuse prepared cache"),
+        |_duckdb_path, _start_date, _end_date| {
+            panic!("custom pool test should reuse prepared cache")
+        },
     )
     .unwrap();
 
@@ -1119,14 +865,14 @@ fn screen_missing_pick_date_rows_reports_latest_cached_date() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
             environment_state: None,
         },
-        |_dsn, _start_date, _end_date| {
+        |_duckdb_path, _start_date, _end_date| {
             Ok(vec![market_row_at_date(
                 NaiveDate::from_ymd_opt(2026, 6, 5).unwrap(),
                 10.0,
@@ -1146,106 +892,7 @@ fn screen_missing_pick_date_rows_reports_latest_cached_date() {
 }
 
 #[test]
-fn screen_b3_writes_b3_candidate_artifact() {
-    let temp = tempfile::tempdir().unwrap();
-    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
-    let start_date = prepared_cache_start_date(pick_date);
-    write_prepared_cache(
-        temp.path(),
-        Method::B3,
-        pick_date,
-        start_date,
-        pick_date,
-        &[
-            prepared_row("000001.SZ", 1, 10.0, 1000.0, 30.0),
-            prepared_row("000001.SZ", 2, 10.1, 900.0, 35.0),
-            prepared_row("000001.SZ", 3, 10.6, 1200.0, 45.0),
-            prepared_row("000001.SZ", 4, 10.7, 600.0, 46.0),
-        ],
-    )
-    .unwrap();
-
-    let output_path = run_screen_with_loader(
-        ScreenRequest {
-            method: Method::B3,
-            pick_date,
-            runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
-            recompute: false,
-            pool_source: PoolSource::TurnoverTop,
-            pool_file: None,
-            export_factors: false,
-            environment_state: None,
-        },
-        |_dsn, _start_date, _end_date| panic!("b3 screen test should reuse prepared cache"),
-    )
-    .unwrap();
-
-    assert_eq!(
-        output_path,
-        temp.path().join("candidates/2026-05-04.b3.json")
-    );
-    let payload: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
-    assert_eq!(payload["method"], "b3");
-    assert_eq!(payload["count"], 1);
-    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
-    assert_eq!(payload["candidates"][0]["signal"], "B3+");
-    assert_eq!(payload["stats"]["selected_b2"], 0);
-    assert_eq!(payload["stats"]["selected_b3"], 0);
-    assert_eq!(payload["stats"]["selected_b3_plus"], 1);
-}
-
-#[test]
-fn screen_lsh_writes_lsh_candidate_artifact() {
-    let temp = tempfile::tempdir().unwrap();
-    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
-    let pick_date = first_date + Duration::days(429);
-    let start_date = prepared_cache_start_date(pick_date);
-    let mut rows = lsh_prepared_rows("000001.SZ", first_date, 430, true);
-    let latest = rows.last_mut().unwrap();
-    latest.ma60 = latest.ma25.map(|ma25| ma25 + 1.0);
-    write_prepared_cache(
-        temp.path(),
-        Method::Lsh,
-        pick_date,
-        start_date,
-        pick_date,
-        &rows,
-    )
-    .unwrap();
-
-    let output_path = run_screen_with_loader(
-        ScreenRequest {
-            method: Method::Lsh,
-            pick_date,
-            runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
-            recompute: false,
-            pool_source: PoolSource::TurnoverTop,
-            pool_file: None,
-            export_factors: false,
-            environment_state: None,
-        },
-        |_dsn, _start_date, _end_date| panic!("lsh screen test should reuse prepared cache"),
-    )
-    .unwrap();
-
-    assert_eq!(
-        output_path,
-        temp.path().join("candidates/2026-03-06.lsh.json")
-    );
-    let payload: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
-    assert_eq!(payload["method"], "lsh");
-    assert_eq!(payload["count"], 1);
-    assert_eq!(payload["candidates"][0]["code"], "000001.SZ");
-    assert_eq!(payload["candidates"][0]["signal"], "LSH");
-    assert_eq!(payload["stats"]["selected_lsh"], 1);
-}
-
-#[test]
-fn screen_scm_and_pbm_partition_lsh_candidates_by_recent_ma25_path() {
+fn screen_scm_and_pbm_partition_candidates_by_recent_ma25_path() {
     let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(429);
     let start_date = prepared_cache_start_date(pick_date);
@@ -1253,7 +900,7 @@ fn screen_scm_and_pbm_partition_lsh_candidates_by_recent_ma25_path() {
     for (method_name, signal) in [("scm", "SCM"), ("pbm", "PBM")] {
         let temp = tempfile::tempdir().unwrap();
         let method: Method = method_name.parse().unwrap();
-        let mut rows = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+        let mut rows = ma25_prepared_rows("000001.SZ", first_date, 430, true);
         let focus_week = (pick_date - Duration::days(28)).iso_week();
         for row in &mut rows {
             if row.trade_date.iso_week() == focus_week {
@@ -1282,14 +929,14 @@ fn screen_scm_and_pbm_partition_lsh_candidates_by_recent_ma25_path() {
                 method,
                 pick_date,
                 runtime_root: temp.path().to_path_buf(),
-                dsn: "postgresql://fixture".to_string(),
+                duckdb_path: "fixture.duckdb".to_string(),
                 recompute: false,
                 pool_source: PoolSource::TurnoverTop,
                 pool_file: None,
                 export_factors: false,
                 environment_state: None,
             },
-            |_dsn, _start_date, _end_date| {
+            |_duckdb_path, _start_date, _end_date| {
                 panic!("{method_name} screen test should reuse prepared cache")
             },
         )
@@ -1308,7 +955,7 @@ fn scm_requires_pick_date_volume_to_exceed_previous_day() {
     let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(429);
 
-    let mut pick_day_volume_increased = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let mut pick_day_volume_increased = ma25_prepared_rows("000001.SZ", first_date, 430, true);
     add_scm_period_histograms(&mut pick_day_volume_increased);
     let focus_week = (pick_date - Duration::days(28)).iso_week();
     for row in &mut pick_day_volume_increased {
@@ -1324,7 +971,7 @@ fn scm_requires_pick_date_volume_to_exceed_previous_day() {
     let payload = run_screen_with_prepared_rows("scm", pick_date, pick_day_volume_increased);
     assert_eq!(payload["count"], 1, "payload={payload}");
 
-    let mut pick_day_volume_not_increased = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let mut pick_day_volume_not_increased = ma25_prepared_rows("000001.SZ", first_date, 430, true);
     add_scm_period_histograms(&mut pick_day_volume_not_increased);
     for row in &mut pick_day_volume_not_increased {
         if row.trade_date.iso_week() == focus_week {
@@ -1346,7 +993,7 @@ fn scm_requires_increasing_monthly_and_positive_weekly_macd_histograms() {
     let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
     let pick_date = first_date + Duration::days(429);
 
-    let mut monthly_not_increasing = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let mut monthly_not_increasing = ma25_prepared_rows("000001.SZ", first_date, 430, true);
     add_scm_period_histograms(&mut monthly_not_increasing);
     let latest_date = monthly_not_increasing.last().unwrap().trade_date;
     let previous_month_key = i64::from((latest_date - Duration::days(31)).year()) * 12
@@ -1363,7 +1010,7 @@ fn scm_requires_increasing_monthly_and_positive_weekly_macd_histograms() {
     assert_eq!(payload["count"], 0);
     assert_eq!(payload["stats"]["fail_macd"], 1);
 
-    let mut weekly_not_red = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let mut weekly_not_red = ma25_prepared_rows("000001.SZ", first_date, 430, true);
     add_scm_period_histograms(&mut weekly_not_red);
     let latest_week = weekly_not_red.last().unwrap().trade_date.iso_week();
     for row in weekly_not_red
@@ -1437,7 +1084,7 @@ fn scm_and_pbm_compare_database_month_end_with_current_month_asof() {
 }
 
 fn scm_pbm_macd_fixture(method: &str, first_date: NaiveDate) -> Vec<PreparedRow> {
-    let mut rows = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let mut rows = ma25_prepared_rows("000001.SZ", first_date, 430, true);
     let path_start = rows.len() - 20;
     for (offset, row) in rows[path_start..].iter_mut().enumerate() {
         if method == "pbm" && !matches!(offset, 0..=5 | 19) {
@@ -1460,7 +1107,7 @@ fn scm_requires_recent_largest_volume_weekly_candle_to_be_red_and_reclaimed() {
     let pick_date = first_date + Duration::days(429);
     let focus_week = (pick_date - Duration::days(28)).iso_week();
 
-    let mut bearish_largest_week = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let mut bearish_largest_week = ma25_prepared_rows("000001.SZ", first_date, 430, true);
     add_scm_period_histograms(&mut bearish_largest_week);
     for row in bearish_largest_week
         .iter_mut()
@@ -1473,7 +1120,7 @@ fn scm_requires_recent_largest_volume_weekly_candle_to_be_red_and_reclaimed() {
     assert_eq!(payload["count"], 0);
     assert_eq!(payload["stats"]["fail_weekly_volume_candle"], 1);
 
-    let mut unreclaimed_largest_week = lsh_prepared_rows("000001.SZ", first_date, 430, true);
+    let mut unreclaimed_largest_week = ma25_prepared_rows("000001.SZ", first_date, 430, true);
     add_scm_period_histograms(&mut unreclaimed_largest_week);
     let current_price = unreclaimed_largest_week.last().unwrap().close;
     let mut focus_rows = unreclaimed_largest_week
@@ -1490,7 +1137,7 @@ fn scm_requires_recent_largest_volume_weekly_candle_to_be_red_and_reclaimed() {
     assert_eq!(payload["stats"]["fail_weekly_volume_candle"], 1);
 
     let mut live_price_reclaims_largest_week =
-        lsh_prepared_rows("000001.SZ", first_date, 430, true);
+        ma25_prepared_rows("000001.SZ", first_date, 430, true);
     add_scm_period_histograms(&mut live_price_reclaims_largest_week);
     let selection_close = live_price_reclaims_largest_week.last().unwrap().close;
     {
@@ -1537,14 +1184,14 @@ fn run_screen_with_prepared_rows(
             method,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
             environment_state: None,
         },
-        |_dsn, _start_date, _end_date| {
+        |_duckdb_path, _start_date, _end_date| {
             panic!("{method_name} screen test should reuse prepared cache")
         },
     )
@@ -1578,14 +1225,14 @@ fn screen_b2_does_not_repeat_signal_in_same_j_turn_up_cycle() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
             environment_state: None,
         },
-        |_dsn, _start_date, _end_date| panic!("b2 repeat test should reuse prepared cache"),
+        |_duckdb_path, _start_date, _end_date| panic!("b2 repeat test should reuse prepared cache"),
     )
     .unwrap();
 
@@ -1647,14 +1294,14 @@ fn screen_b2_requires_close_above_long_term_reference_after_new_stock_window() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
             environment_state: None,
         },
-        |_dsn, _start_date, _end_date| panic!("above_lt test should reuse prepared cache"),
+        |_duckdb_path, _start_date, _end_date| panic!("above_lt test should reuse prepared cache"),
     )
     .unwrap();
 
@@ -1716,14 +1363,14 @@ fn screen_b2_golden_fixture_selects_mature_trend_start() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
             environment_state: None,
         },
-        |_dsn, _start_date, _end_date| panic!("golden fixture should reuse prepared cache"),
+        |_duckdb_path, _start_date, _end_date| panic!("golden fixture should reuse prepared cache"),
     )
     .unwrap();
 
@@ -1792,14 +1439,16 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: true,
             environment_state: Some("strong".to_string()),
         },
-        |_dsn, _start_date, _end_date| panic!("factor export test should reuse prepared cache"),
+        |_duckdb_path, _start_date, _end_date| {
+            panic!("factor export test should reuse prepared cache")
+        },
     )
     .unwrap();
 
@@ -1829,8 +1478,8 @@ fn screen_export_factors_derives_environment_from_prepared_cross_section() {
     let mut rows = vec![
         prepared_row("000001.SZ", 1, 10.0, 1000.0, 30.0),
         prepared_row("000001.SZ", 2, 10.1, 900.0, 35.0),
-        prepared_row("000001.SZ", 3, 10.6, 1200.0, 45.0),
-        prepared_row("000001.SZ", 4, 10.7, 600.0, 46.0),
+        prepared_row("000001.SZ", 3, 10.3, 1200.0, 35.0),
+        prepared_row("000001.SZ", 4, 10.7, 1300.0, 46.0),
         prepared_row("000002.SZ", 3, 20.0, 1000.0, 35.0),
         prepared_row("000002.SZ", 4, 21.0, 1000.0, 40.0),
         prepared_row("000003.SZ", 3, 30.0, 1000.0, 35.0),
@@ -1839,9 +1488,12 @@ fn screen_export_factors_derives_environment_from_prepared_cross_section() {
     for row in rows.iter_mut().filter(|row| row.trade_date == pick_date) {
         row.chg_d = Some(5.0);
     }
+    rows[3]
+        .db_factors
+        .insert("macd_monthly_dea".to_string(), 0.1);
     write_prepared_cache(
         temp.path(),
-        Method::B3,
+        Method::B2,
         pick_date,
         start_date,
         pick_date,
@@ -1851,24 +1503,24 @@ fn screen_export_factors_derives_environment_from_prepared_cross_section() {
 
     run_screen_with_loader(
         ScreenRequest {
-            method: Method::B3,
+            method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: true,
             environment_state: None,
         },
-        |_dsn, _start_date, _end_date| {
+        |_duckdb_path, _start_date, _end_date| {
             panic!("environment export test should reuse prepared cache")
         },
     )
     .unwrap();
 
     let factors: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(temp.path().join("factors/2026-05-04.b3/factors.json")).unwrap(),
+        &std::fs::read(temp.path().join("factors/2026-05-04.b2/factors.json")).unwrap(),
     )
     .unwrap();
 
@@ -1907,7 +1559,7 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -1916,8 +1568,8 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
         },
         &provider,
         "15:00:00",
-        |dsn, actual_start, actual_end| {
-            assert_eq!(dsn, "postgresql://fixture");
+        |duckdb_path, actual_start, actual_end| {
+            assert_eq!(duckdb_path, "fixture.duckdb");
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
             Ok(vec![MarketRow {
@@ -1998,7 +1650,7 @@ fn intraday_screen_export_factors_runs_through_local_factor_fill() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::Custom,
             pool_file: Some(pool_file),
@@ -2007,9 +1659,9 @@ fn intraday_screen_export_factors_runs_through_local_factor_fill() {
         },
         &provider,
         "15:00:00",
-        |_dsn, _trade_date| Ok(previous_trade_date),
-        |dsn, actual_start, actual_end| {
-            assert_eq!(dsn, "postgresql://fixture");
+        |_duckdb_path, _trade_date| Ok(previous_trade_date),
+        |duckdb_path, actual_start, actual_end| {
+            assert_eq!(duckdb_path, "fixture.duckdb");
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
             Ok(intraday_b2_positive_monthly_market_rows(
@@ -2069,7 +1721,7 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2078,11 +1730,11 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
         },
         &provider,
         "15:00:00",
-        |_dsn, trade_date| {
+        |_duckdb_path, trade_date| {
             assert_eq!(trade_date, pick_date);
             Ok(previous_trade_date)
         },
-        |_dsn, actual_start, actual_end| {
+        |_duckdb_path, actual_start, actual_end| {
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
             let mut row = MarketRow {
@@ -2110,7 +1762,7 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
                 )]),
             })
         },
-        |_dsn, symbols, trade_date| {
+        |_duckdb_path, symbols, trade_date| {
             assert_eq!(symbols, &["000001.SZ".to_string()]);
             assert_eq!(trade_date, pick_date);
             Ok(vec![
@@ -2237,7 +1889,7 @@ fn db_native_intraday_screen_skips_period_state_loader_when_table_is_unavailable
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2246,8 +1898,8 @@ fn db_native_intraday_screen_skips_period_state_loader_when_table_is_unavailable
         },
         &provider,
         "15:00:00",
-        |_dsn, _trade_date| Ok(previous_trade_date),
-        |_dsn, actual_start, actual_end| {
+        |_duckdb_path, _trade_date| Ok(previous_trade_date),
+        |_duckdb_path, actual_start, actual_end| {
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
             Ok(MarketDataset {
@@ -2264,12 +1916,14 @@ fn db_native_intraday_screen_skips_period_state_loader_when_table_is_unavailable
                     db_factors: Default::default(),
                 }],
                 db_data_gaps: std::collections::BTreeMap::from([(
-                    "stock_period_indicator_state".to_string(),
+                    "calc_indicator_state".to_string(),
                     DbDataGap::missing_table(),
                 )]),
             })
         },
-        |_dsn, _symbols, _trade_date| panic!("unavailable period state table must not be queried"),
+        |_duckdb_path, _symbols, _trade_date| {
+            panic!("unavailable period state table must not be queried")
+        },
     )
     .unwrap();
 
@@ -2291,7 +1945,7 @@ fn db_native_intraday_screen_skips_period_state_loader_when_table_is_unavailable
     assert_eq!(latest.trade_date, pick_date);
     assert!(!latest.db_factors.contains_key("macd_weekly_prev_hist"));
     assert_eq!(
-        dataset.db_data_gaps["stock_period_indicator_state"],
+        dataset.db_data_gaps["calc_indicator_state"],
         DbDataGap::missing_table()
     );
     let manifest: serde_json::Value = serde_json::from_slice(
@@ -2303,126 +1957,9 @@ fn db_native_intraday_screen_skips_period_state_loader_when_table_is_unavailable
     )
     .unwrap();
     assert_eq!(
-        manifest["db_data_gaps"]["stock_period_indicator_state"],
+        manifest["db_data_gaps"]["calc_indicator_state"],
         serde_json::json!({"reason": "missing_table"})
     );
-}
-
-#[test]
-fn db_native_intraday_qianlong_uses_live_contraction_and_period_macd() {
-    let temp = tempfile::tempdir().unwrap();
-    let pick_date = NaiveDate::from_ymd_opt(2026, 4, 29).unwrap();
-    let previous_trade_date = NaiveDate::from_ymd_opt(2026, 4, 28).unwrap();
-    let start_date = prepared_cache_start_date(previous_trade_date);
-    let provider = StaticRtKProvider::new([
-        ("*.SH", vec![]),
-        (
-            "*.SZ",
-            vec![RawRtKRow::from_value(serde_json::json!({
-                "ts_code": "000001.SZ",
-                "name": "平安银行",
-                "open": 9.9,
-                "high": 11.1,
-                "low": 9.8,
-                "close": 11.0,
-                "vol": 30000.0,
-                "amount": 330000.0,
-                "trade_time": "14:59:59"
-            }))],
-        ),
-        ("*.BJ", vec![]),
-    ]);
-
-    let output_path = run_db_native_intraday_screen_with_loaders(
-        ScreenRequest {
-            method: Method::Qianlong,
-            pick_date,
-            runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
-            recompute: false,
-            pool_source: PoolSource::TurnoverTop,
-            pool_file: None,
-            export_factors: false,
-            environment_state: None,
-        },
-        &provider,
-        "15:00:00",
-        |_dsn, trade_date| {
-            assert_eq!(trade_date, pick_date);
-            Ok(previous_trade_date)
-        },
-        |_dsn, actual_start, actual_end| {
-            assert_eq!(actual_start, start_date);
-            assert_eq!(actual_end, previous_trade_date);
-            Ok(qianlong_intraday_history_rows(previous_trade_date))
-        },
-        |_dsn, symbols, trade_date| {
-            assert_eq!(symbols, &["000001.SZ".to_string()]);
-            assert_eq!(trade_date, pick_date);
-            Ok(vec![
-                MacdPeriodState {
-                    ts_code: "000001.SZ".to_string(),
-                    period_type: "daily".to_string(),
-                    ema12: 10.0,
-                    ema26: 10.0,
-                    dea: 0.205,
-                    period_count: 240,
-                },
-                MacdPeriodState {
-                    ts_code: "000001.SZ".to_string(),
-                    period_type: "weekly".to_string(),
-                    ema12: 10.0,
-                    ema26: 10.0,
-                    dea: 0.02,
-                    period_count: 40,
-                },
-                MacdPeriodState {
-                    ts_code: "000001.SZ".to_string(),
-                    period_type: "monthly".to_string(),
-                    ema12: 10.0,
-                    ema26: 10.0,
-                    dea: 0.01,
-                    period_count: 30,
-                },
-            ])
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        output_path,
-        temp.path()
-            .join("candidates/2026-04-29.intraday.qianlong.json")
-    );
-    let result: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(output_path).unwrap()).unwrap();
-    assert_eq!(result["mode"], "intraday_snapshot");
-    assert_eq!(result["method"], "qianlong");
-    assert_eq!(result["count"], 1);
-    assert_eq!(result["candidates"][0]["code"], "000001.SZ");
-    assert_eq!(result["candidates"][0]["signal"], "QIANLONG");
-
-    let prepared = load_prepared_cache_for_mode(
-        temp.path(),
-        Method::Qianlong,
-        pick_date,
-        start_date,
-        pick_date,
-        true,
-    )
-    .unwrap()
-    .unwrap();
-    let latest = prepared.last().unwrap();
-    assert_eq!(latest.close, 11.0);
-    assert_eq!(latest.volume, 300.0);
-    assert!(latest.macd_hist < 0.0);
-    assert!(latest.macd_hist.abs() < 0.16);
-    assert!(latest.db_factors["macd_weekly_dif"] > 0.0);
-    assert!(latest.db_factors["macd_weekly_dea"] > 0.0);
-    assert!(latest.db_factors["macd_monthly_dif"] > 0.0);
-    assert!(latest.db_factors["macd_monthly_dea"] > 0.0);
-    assert!(!latest.db_factors.contains_key("macd_weekly_prev_hist"));
-    assert!(!latest.db_factors.contains_key("macd_monthly_prev_hist"));
 }
 
 #[test]
@@ -2488,7 +2025,7 @@ fn db_native_intraday_screen_filters_snapshot_universe_and_skips_incomplete_peri
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2497,8 +2034,8 @@ fn db_native_intraday_screen_filters_snapshot_universe_and_skips_incomplete_peri
         },
         &provider,
         "15:00:00",
-        |_dsn, _trade_date| Ok(previous_trade_date),
-        |_dsn, actual_start, actual_end| {
+        |_duckdb_path, _trade_date| Ok(previous_trade_date),
+        |_duckdb_path, actual_start, actual_end| {
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
             Ok(vec![
@@ -2528,7 +2065,7 @@ fn db_native_intraday_screen_filters_snapshot_universe_and_skips_incomplete_peri
                 },
             ])
         },
-        |_dsn, _symbols, _trade_date| {
+        |_duckdb_path, _symbols, _trade_date| {
             assert_eq!(
                 _symbols,
                 &["000001.SZ".to_string(), "000002.SZ".to_string()]
@@ -2644,7 +2181,7 @@ fn db_native_intraday_screen_skips_snapshot_rows_without_live_qfq_price() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2653,8 +2190,8 @@ fn db_native_intraday_screen_skips_snapshot_rows_without_live_qfq_price() {
         },
         &provider,
         "15:00:00",
-        |_dsn, _trade_date| Ok(previous_trade_date),
-        |_dsn, actual_start, actual_end| {
+        |_duckdb_path, _trade_date| Ok(previous_trade_date),
+        |_duckdb_path, actual_start, actual_end| {
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
             Ok(vec![
@@ -2684,7 +2221,7 @@ fn db_native_intraday_screen_skips_snapshot_rows_without_live_qfq_price() {
                 },
             ])
         },
-        |_dsn, symbols, _trade_date| {
+        |_duckdb_path, symbols, _trade_date| {
             assert_eq!(symbols, &["000001.SZ".to_string(), "000002.SZ".to_string()]);
             Ok(vec![
                 macd_state("000001.SZ", "daily"),
@@ -2766,42 +2303,6 @@ fn intraday_b2_positive_monthly_market_rows(
         .collect()
 }
 
-fn qianlong_intraday_history_rows(previous_trade_date: NaiveDate) -> Vec<MarketRow> {
-    let hist = [
-        -0.05, -0.10, -0.20, -0.35, -0.25, -0.12, 0.04, 0.03, 0.02, 0.03, 0.04, 0.03, 0.02, 0.01,
-        0.02, 0.03, 0.04, 0.05, 0.04, 0.03, 0.02, 0.01, 0.02, 0.03, -0.04, -0.08, -0.16,
-    ];
-    let first_date = previous_trade_date - Duration::days((hist.len() - 1) as i64);
-    let mut rows = hist
-        .into_iter()
-        .enumerate()
-        .map(|(offset, macd_hist)| {
-            let mut row = MarketRow {
-                ts_code: "000001.SZ".to_string(),
-                trade_date: first_date + Duration::days(offset as i64),
-                open: 9.9,
-                high: 10.1,
-                low: 9.8,
-                close: 10.0,
-                vol: 100.0,
-                turnover_rate: Some(1.0),
-                adj_factor: Some(1.0),
-                db_factors: Default::default(),
-            };
-            row.db_factors
-                .insert("macd_daily_hist".to_string(), macd_hist);
-            row
-        })
-        .collect::<Vec<_>>();
-
-    let latest = rows.len() - 1;
-    rows[latest].open = 10.4;
-    rows[latest].high = 10.5;
-    rows[latest].low = 9.9;
-    rows[latest].close = 10.0;
-    rows
-}
-
 #[test]
 fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
     let temp = tempfile::tempdir().unwrap();
@@ -2831,7 +2332,7 @@ fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
             method: Method::B2,
             pick_date,
             runtime_root: temp.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2840,13 +2341,13 @@ fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
         },
         &provider,
         "15:00:00",
-        |dsn, trade_date| {
-            assert_eq!(dsn, "postgresql://fixture");
+        |duckdb_path, trade_date| {
+            assert_eq!(duckdb_path, "fixture.duckdb");
             assert_eq!(trade_date, pick_date);
             Ok(previous_trade_date)
         },
-        |dsn, actual_start, actual_end| {
-            assert_eq!(dsn, "postgresql://fixture");
+        |duckdb_path, actual_start, actual_end| {
+            assert_eq!(duckdb_path, "fixture.duckdb");
             assert_eq!(actual_start, start_date);
             assert_eq!(actual_end, previous_trade_date);
             Ok(vec![MarketRow {
@@ -2893,7 +2394,7 @@ fn prepare_test_market_rows(rows: Vec<MarketRow>) -> anyhow::Result<Vec<Prepared
             method: Method::B2,
             pick_date,
             runtime_root: root.path().to_path_buf(),
-            dsn: "postgresql://fixture".to_string(),
+            duckdb_path: "fixture.duckdb".to_string(),
             recompute: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2982,7 +2483,6 @@ fn prepared_row_at_date(
         v_shrink: false,
         safe_mode: true,
         lt_filter: true,
-        yellow_b1: false,
         db_factors: Default::default(),
     }
 }
@@ -3028,7 +2528,7 @@ fn b2_positive_monthly_rows(
     rows
 }
 
-fn lsh_prepared_rows(
+fn ma25_prepared_rows(
     code: &str,
     first_date: NaiveDate,
     len: usize,
@@ -3090,57 +2590,8 @@ fn lsh_prepared_rows(
                 v_shrink: false,
                 safe_mode: true,
                 lt_filter: true,
-                yellow_b1: false,
                 db_factors: Default::default(),
             }
         })
         .collect()
-}
-
-fn qianlong_prepared_rows(code: &str, first_date: NaiveDate) -> Vec<PreparedRow> {
-    let hist = [
-        -0.05, -0.10, -0.20, -0.35, -0.25, -0.12, 0.04, -0.04, -0.08, -0.16, -0.11, -0.05, 0.03,
-        0.04, 0.05, 0.04, 0.03, 0.02, 0.01, 0.02, 0.03, 0.04, 0.05, 0.04, 0.03, 0.02, 0.01, 0.02,
-    ];
-    let mut rows = hist
-        .iter()
-        .enumerate()
-        .map(|(offset, macd_hist)| {
-            let mut row = prepared_row_at_date(
-                code,
-                first_date + Duration::days(offset as i64),
-                10.0 + offset as f64 * 0.01,
-                100.0,
-                45.0,
-            );
-            row.macd_hist = *macd_hist;
-            row
-        })
-        .collect::<Vec<_>>();
-
-    // 近 22 个交易日内存在一次放量涨停。
-    rows[8].close = rows[7].close * 1.10;
-    rows[8].volume = 200.0;
-
-    // 筛选日阳包阴。
-    let latest = rows.len() - 1;
-    rows[latest - 1].open = 10.8;
-    rows[latest - 1].high = 10.9;
-    rows[latest - 1].low = 10.4;
-    rows[latest - 1].close = 10.5;
-    rows[latest].open = 10.4;
-    rows[latest].high = 11.1;
-    rows[latest].low = 10.3;
-    rows[latest].close = 11.0;
-    rows[latest].db_factors.extend([
-        ("macd_weekly_dif".to_string(), 0.12),
-        ("macd_weekly_dea".to_string(), 0.08),
-        ("macd_weekly_hist".to_string(), 0.12),
-        ("macd_weekly_period_count".to_string(), 40.0),
-        ("macd_monthly_dif".to_string(), 0.10),
-        ("macd_monthly_dea".to_string(), 0.06),
-        ("macd_monthly_hist".to_string(), 0.10),
-        ("macd_monthly_period_count".to_string(), 30.0),
-    ]);
-    rows
 }

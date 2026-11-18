@@ -8,6 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ml.db import query_rows
+from ml.env import load_dotenv_values, resolve_config_value
+
 from .rank_dataset import IDENTITY_COLUMNS, LABEL_COLUMNS, REVIEW_METADATA_COLUMNS
 
 
@@ -92,16 +95,16 @@ LIVE_RECOMPUTED_FROM_RT_K = [
     "market_amount_ma5_ratio",
     "market_approx_limit_up_count",
     "market_approx_limit_down_count",
-    "lsh_daily_macd_wave_index",
-    "lsh_weekly_macd_wave_index",
-    "lsh_daily_macd_rising_initial_flag",
-    "lsh_weekly_macd_rising_initial_flag",
-    "lsh_daily_macd_top_divergence_flag",
-    "lsh_weekly_macd_top_divergence_flag",
-    "lsh_weekly_daily_constructive_combo_flag",
-    "lsh_bullish_engulf_prev_bearish_flag",
-    "lsh_volume_bullish_engulf_prev_bearish_flag",
-    "lsh_bullish_engulf_volume_ratio",
+    "ma25_daily_macd_wave_index",
+    "ma25_weekly_macd_wave_index",
+    "ma25_daily_macd_rising_initial_flag",
+    "ma25_weekly_macd_rising_initial_flag",
+    "ma25_daily_macd_top_divergence_flag",
+    "ma25_weekly_macd_top_divergence_flag",
+    "ma25_weekly_daily_constructive_combo_flag",
+    "ma25_bullish_engulf_prev_bearish_flag",
+    "ma25_volume_bullish_engulf_prev_bearish_flag",
+    "ma25_bullish_engulf_volume_ratio",
 ]
 
 # Available from the same live path, but excluded from the selected model after
@@ -170,14 +173,9 @@ UNAVAILABLE_INTRADAY = [
     "macd_state_daily_rising_initial_flag",
     "macd_state_top_divergence_flag",
     "bar_upper_shadow_pct",
-    "bar_lower_shadow_pct",
-    "bar_amplitude_pct",
-    "bar_body_pct",
     "signal_bullish_engulf_prev_bearish_flag",
     "signal_bullish_engulf_volume_ratio",
     "signal_yang_engulf_ma25_flag",
-    "signal_prev_b2_flag",
-    "signal_b3_plus_flag",
 ]
 
 DUPLICATE_RUNTIME_ALIASES = [
@@ -323,23 +321,21 @@ def _czsc_proxy_values(snapshot: Mapping[str, Any]) -> dict[str, str]:
 def load_previous_eod_czsc_lookup(
     *,
     source_dataset: Path,
-    dsn: str | None = None,
+    duckdb_path: str | None = None,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Load previous-trading-day CZSC anchors for each dataset (date, code)."""
-
-    import psycopg
 
     with source_dataset.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     dates = sorted({str(row.get("date") or "") for row in rows if row.get("date")})
     if not dates:
         return {}
-    resolved_dsn = dsn or os.getenv("POSTGRES_DSN")
-    if not resolved_dsn:
-        raise ValueError("POSTGRES_DSN is required to load previous-EOD CZSC anchors")
+    resolved_duckdb_path = resolve_config_value(duckdb_path, "DUCKDB_PATH", load_dotenv_values())
+    if not resolved_duckdb_path:
+        raise ValueError("DUCKDB_PATH is required to load previous-EOD CZSC anchors")
     sql = """
         WITH requested AS (
-            SELECT * FROM unnest(%s::date[], %s::text[]) AS r(sample_date, ts_code)
+            SELECT unnest($1::date[]) AS sample_date, unnest($2::text[]) AS ts_code
         ),
         resolved AS (
             SELECT
@@ -357,46 +353,42 @@ def load_previous_eod_czsc_lookup(
             r.ts_code,
             current.close_qfq AS current_close_qfq,
             (c.ts_code IS NOT NULL) AS snapshot_available,
-            c.source_bar_valid,
-            c.status,
-            c.available_finished_bi_count,
-            c.recent_bi_count,
-            c.last_bi_direction,
-            c.last_bi_high,
-            c.last_bi_low,
-            c.last_bi_mid,
-            c.latest_zs_zg,
-            c.latest_zs_zd,
-            c.latest_zs_zz,
-            c.latest_zs_bi_count,
-            c.recent_peak_high,
-            (c.recent_peak_date IS NOT NULL) AS recent_peak_date_present,
-            c.post_peak_first_bear_open,
-            c.post_peak_first_bear_high,
-            c.post_peak_first_bear_low,
-            c.post_peak_first_bear_close,
-            (c.post_peak_first_bear_date IS NOT NULL) AS post_peak_first_bear_date_present,
-            c.post_peak_first_bear_missing
+            c.daily_source_bar_valid AS source_bar_valid,
+            c.daily_status AS status,
+            c.daily_available_finished_bi_count AS available_finished_bi_count,
+            c.daily_recent_bi_count AS recent_bi_count,
+            c.daily_last_bi_direction AS last_bi_direction,
+            c.daily_last_bi_high AS last_bi_high,
+            c.daily_last_bi_low AS last_bi_low,
+            c.daily_last_bi_mid AS last_bi_mid,
+            c.daily_latest_zs_zg AS latest_zs_zg,
+            c.daily_latest_zs_zd AS latest_zs_zd,
+            c.daily_latest_zs_zz AS latest_zs_zz,
+            c.daily_latest_zs_bi_count AS latest_zs_bi_count,
+            c.daily_recent_peak_high AS recent_peak_high,
+            (c.daily_recent_peak_date IS NOT NULL) AS recent_peak_date_present,
+            c.daily_post_peak_first_bear_open AS post_peak_first_bear_open,
+            c.daily_post_peak_first_bear_high AS post_peak_first_bear_high,
+            c.daily_post_peak_first_bear_low AS post_peak_first_bear_low,
+            c.daily_post_peak_first_bear_close AS post_peak_first_bear_close,
+            (c.daily_post_peak_first_bear_date IS NOT NULL) AS post_peak_first_bear_date_present,
+            c.daily_post_peak_first_bear_missing AS post_peak_first_bear_missing
         FROM resolved r
         JOIN stock_stk_factor_pro current
           ON current.trade_date = r.sample_date
          AND current.ts_code = r.ts_code
-        LEFT JOIN stock_daily_czsc_structure c
+        LEFT JOIN calc_daily_czsc_structure c
           ON c.trade_date = r.previous_trade_date
          AND c.ts_code = r.ts_code
-         AND c.calc_version = 'czsc_structure_qfq_min6_r7_v1'
+         AND c.source_dataset = 'stock_stk_factor_pro'
+         AND c.calc_version = 'v3-macd-kdj-czsc-1'
     """
     requested_dates = [str(row["date"]) for row in rows]
     requested_codes = [str(row["code"]) for row in rows]
     lookup: dict[tuple[str, str], dict[str, Any]] = {}
-    with psycopg.connect(resolved_dsn) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(sql, (requested_dates, requested_codes))
-            columns = [description.name for description in cursor.description or []]
-            for values in cursor.fetchall():
-                record = dict(zip(columns, values, strict=True))
-                key = (str(record.pop("sample_date")), str(record.pop("ts_code")))
-                lookup[key] = record
+    for record in query_rows(resolved_duckdb_path, sql, [requested_dates, requested_codes]):
+        key = (str(record.pop("sample_date")), str(record.pop("ts_code")))
+        lookup[key] = record
     return lookup
 
 
@@ -455,7 +447,7 @@ def build_intraday_proxy_dataset(
         if column in derived_czsc_keys
     ]
     proxy_aliases = {
-        column: "previous_eod_stock_daily_czsc_structure"
+        column: "previous_eod_calc_daily_czsc_structure"
         for column in LIVE_PRICE_AGAINST_PREVIOUS_STRUCTURE
         if previous_eod_czsc_lookup
     }
@@ -558,7 +550,7 @@ def build_intraday_proxy_dataset(
         "selection_policy": (
             "静态 rt_k 能力清单；当前 EOD proxy 仅保留公式同源的实时重算因子。"
             "上一日快照和实时价对结构因子仅在完成历史 as-of 重建时进入训练；"
-            "策略 signal 虽盘中可得，但对 LSH 候选恒定，作为元数据剔除。"
+            "策略 signal 虽盘中可得，但对 SCM/PBM 候选恒定，作为元数据剔除。"
         ),
         "capability_basis": {
             "rt_k_fields": [
@@ -575,9 +567,9 @@ def build_intraday_proxy_dataset(
             ],
             "previous_eod_tables": [
                 "stock_stk_factor_pro",
-                "stock_daily_czsc_structure",
-                "stock_daily_rolling_factors",
-                "stock_period_indicator_state",
+                "calc_daily_czsc_structure",
+                "calc_daily_rolling_factors",
+                "calc_indicator_state",
             ],
             "runtime_paths": [
                 "src/intraday.rs::build_intraday_market_rows_with_macd_states",

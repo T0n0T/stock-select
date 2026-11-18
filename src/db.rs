@@ -1,15 +1,477 @@
-use chrono::NaiveDate;
-use postgres::{Client, IsolationLevel, NoTls, fallible_iterator::FallibleIterator};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use chrono::NaiveDate;
+use duckdb_neo::{
+    Parameters, QueryParameter, ToValue,
+    connection::Connection,
+    environment::{Environment, StorageLocation},
+    instance::{AttachBuilder, Instance},
+    types::DateValue,
+    value::Value as NativeValue,
+    vector::Unknown,
+};
 
 use crate::config::resolve_db_check_tables;
 use crate::db_check::preflight_db_native_load;
 use crate::intraday::MacdPeriodState;
 use crate::model::{InstrumentInfo, MarketDataset, MarketRow};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DuckDbLocation {
+    Memory,
+    File(PathBuf),
+    Quack(String),
+}
+
+impl DuckDbLocation {
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        let value = value.trim();
+        if value.is_empty() {
+            anyhow::bail!("DuckDB path is empty");
+        }
+        if value == ":memory:" {
+            return Ok(Self::Memory);
+        }
+        if value.starts_with("quack://") {
+            return Ok(Self::Quack(value.to_string()));
+        }
+        if value.starts_with("quack:") {
+            return Ok(Self::Quack(value.to_string()));
+        }
+        if value.starts_with("postgres://") || value.starts_with("postgresql://") {
+            anyhow::bail!("PostgreSQL connection strings are no longer supported; set DUCKDB_PATH");
+        }
+        Ok(Self::File(PathBuf::from(value)))
+    }
+}
+
+pub struct DuckDbConnection {
+    connection: Connection,
+    is_quack: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum DuckDbParameter {
+    Text(String),
+    TextList(Vec<String>),
+    Date(NaiveDate),
+}
+
+fn quack_text_literal(value: &str) -> anyhow::Result<String> {
+    if value.contains('\0') {
+        anyhow::bail!("DuckDB query text parameters cannot contain NUL");
+    }
+    Ok(format!("'{}'", value.replace('\'', "''")))
+}
+
+fn quack_parameter_literal(parameter: &DuckDbParameter) -> anyhow::Result<String> {
+    match parameter {
+        DuckDbParameter::Text(value) => quack_text_literal(value),
+        DuckDbParameter::TextList(values) => {
+            let values = values
+                .iter()
+                .map(|value| quack_text_literal(value))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(format!("CAST([{}] AS VARCHAR[])", values.join(", ")))
+        }
+        DuckDbParameter::Date(value) => Ok(format!("DATE '{}'", value.format("%Y-%m-%d"))),
+    }
+}
+
+fn is_sql_identifier_byte(value: u8) -> bool {
+    value.is_ascii_alphanumeric() || value == b'_' || value == b'$' || !value.is_ascii()
+}
+
+/// Quack currently forwards the query but not DuckDB's positional bindings.
+/// Render only parameter tokens; literals, quoted identifiers and comments are opaque.
+fn inline_quack_parameters(sql: &str, parameters: &[DuckDbParameter]) -> anyhow::Result<String> {
+    let bytes = sql.as_bytes();
+    let mut output = String::with_capacity(sql.len());
+    let mut copied = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' | b'"' => {
+                let quote = bytes[index];
+                let escaped = quote == b'\''
+                    && index > 0
+                    && matches!(bytes[index - 1], b'E' | b'e')
+                    && (index < 2 || !is_sql_identifier_byte(bytes[index - 2]));
+                index += 1;
+                while index < bytes.len() {
+                    if escaped && bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if bytes[index] == quote {
+                        index += 1;
+                        if index < bytes.len() && bytes[index] == quote {
+                            index += 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            b'-' if bytes.get(index + 1) == Some(&b'-') => {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                let mut depth = 1usize;
+                while index < bytes.len() && depth > 0 {
+                    if bytes[index..].starts_with(b"/*") {
+                        depth += 1;
+                        index += 2;
+                    } else if bytes[index..].starts_with(b"*/") {
+                        depth -= 1;
+                        index += 2;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            b'$' if index == 0 || !is_sql_identifier_byte(bytes[index - 1]) => {
+                let start = index;
+                index += 1;
+                if bytes.get(index).is_some_and(u8::is_ascii_digit) {
+                    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+                        index += 1;
+                    }
+                    let number = sql[start + 1..index].parse::<usize>()?;
+                    let parameter = number
+                        .checked_sub(1)
+                        .and_then(|offset| parameters.get(offset))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("missing DuckDB query parameter {}", number)
+                        })?;
+                    output.push_str(&sql[copied..start]);
+                    output.push_str(&quack_parameter_literal(parameter)?);
+                    copied = index;
+                } else {
+                    let mut end = index;
+                    if bytes
+                        .get(end)
+                        .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+                    {
+                        end += 1;
+                        while bytes
+                            .get(end)
+                            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                        {
+                            end += 1;
+                        }
+                    }
+                    if bytes.get(end) == Some(&b'$') {
+                        let delimiter = &bytes[start..=end];
+                        index = end + 1;
+                        if let Some(offset) = bytes[index..]
+                            .windows(delimiter.len())
+                            .position(|candidate| candidate == delimiter)
+                        {
+                            index += offset + delimiter.len();
+                        } else {
+                            index = bytes.len();
+                        }
+                    }
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    output.push_str(&sql[copied..]);
+    Ok(output)
+}
+
+#[derive(Debug)]
+pub(crate) enum DuckDbCell {
+    Native(NativeValue),
+}
+
+#[derive(Debug)]
+pub(crate) struct DuckDbRow {
+    values: Vec<DuckDbCell>,
+    columns: std::sync::Arc<BTreeMap<String, usize>>,
+}
+
+pub(crate) trait DuckDbDecode: Sized {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self>;
+}
+
+impl DuckDbRow {
+    pub(crate) fn try_get<T: DuckDbDecode>(&self, column: &str) -> anyhow::Result<T> {
+        let index = self
+            .columns
+            .get(column)
+            .ok_or_else(|| anyhow::anyhow!("DuckDB query did not return column {column}"))?;
+        T::decode(&self.values[*index])
+    }
+}
+
+impl DuckDbDecode for String {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        value
+            .get::<String>()?
+            .ok_or_else(|| anyhow::anyhow!("DuckDB returned NULL for required text"))
+    }
+}
+impl DuckDbDecode for Option<String> {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        Ok(value.get::<String>()?)
+    }
+}
+impl DuckDbDecode for NaiveDate {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        value
+            .get::<DateValue>()?
+            .and_then(|date| NaiveDate::from_epoch_days(date.0))
+            .ok_or_else(|| anyhow::anyhow!("DuckDB returned NULL or out-of-range DATE"))
+    }
+}
+impl DuckDbDecode for Option<NaiveDate> {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        Ok(value
+            .get::<DateValue>()?
+            .and_then(|date| NaiveDate::from_epoch_days(date.0)))
+    }
+}
+impl DuckDbDecode for f64 {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        value
+            .get::<f64>()?
+            .ok_or_else(|| anyhow::anyhow!("DuckDB returned NULL for required DOUBLE"))
+    }
+}
+impl DuckDbDecode for Option<f64> {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        Ok(value.get::<f64>()?)
+    }
+}
+impl DuckDbDecode for i64 {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        value
+            .get::<i64>()?
+            .ok_or_else(|| anyhow::anyhow!("DuckDB returned NULL for required BIGINT"))
+    }
+}
+impl DuckDbDecode for i32 {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        Ok(value
+            .get::<i64>()?
+            .ok_or_else(|| anyhow::anyhow!("DuckDB returned NULL for required INTEGER"))?
+            .try_into()?)
+    }
+}
+impl DuckDbDecode for bool {
+    fn decode(value: &DuckDbCell) -> anyhow::Result<Self> {
+        let DuckDbCell::Native(value) = value;
+        value
+            .get::<bool>()?
+            .ok_or_else(|| anyhow::anyhow!("DuckDB returned NULL for required BOOLEAN"))
+    }
+}
+
+impl DuckDbConnection {
+    pub fn execute(&self, sql: &str) -> anyhow::Result<()> {
+        self.connection.execute(sql, Parameters::None)?;
+        Ok(())
+    }
+
+    pub fn execute_batch(&self, sql: &str) -> anyhow::Result<()> {
+        for statement in sql
+            .split(';')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+        {
+            self.execute(statement)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn query_rows(
+        &self,
+        sql: &str,
+        parameters: &[DuckDbParameter],
+    ) -> anyhow::Result<Vec<DuckDbRow>> {
+        self.query_map(sql, parameters, Ok)
+    }
+
+    pub(crate) fn query_map<T>(
+        &self,
+        sql: &str,
+        parameters: &[DuckDbParameter],
+        mut map: impl FnMut(DuckDbRow) -> anyhow::Result<T>,
+    ) -> anyhow::Result<Vec<T>> {
+        let connection = &self.connection;
+        let quack_sql = if self.is_quack && !parameters.is_empty() {
+            Some(inline_quack_parameters(sql, parameters)?)
+        } else {
+            None
+        };
+        let sql = quack_sql.as_deref().unwrap_or(sql);
+        let bind_parameters = if self.is_quack { &[][..] } else { parameters };
+        let values = bind_parameters
+            .iter()
+            .map(|parameter| match parameter {
+                DuckDbParameter::Text(value) => value.value(connection),
+                DuckDbParameter::TextList(values) => {
+                    duckdb_neo::types::List(values.iter().cloned().map(Some).collect())
+                        .value(connection)
+                }
+                DuckDbParameter::Date(value) => DateValue(value.to_epoch_days()).value(connection),
+            })
+            .collect::<duckdb_neo::Result<Vec<_>>>()?;
+        let parameter_refs = values
+            .iter()
+            .map(|value| value as &dyn QueryParameter)
+            .collect::<Vec<_>>();
+        let mut result = if parameter_refs.is_empty() {
+            connection.query(sql, Parameters::None)?
+        } else {
+            connection.query(sql, Parameters::positional(&parameter_refs))?
+        };
+        let schema = result.schema()?;
+        let column_count = schema.len()?;
+        let columns: std::sync::Arc<BTreeMap<String, usize>> = std::sync::Arc::new(
+            (0..column_count)
+                .map(|index| schema.name(index).map(str::to_owned))
+                .collect::<duckdb_neo::Result<Vec<String>>>()?
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| (name, index))
+                .collect(),
+        );
+        let mut rows = Vec::new();
+        while let Some(chunk) = result.next_chunk()? {
+            for row_index in 0..chunk.row_count()? {
+                let values = (0..column_count)
+                    .map(|column_index| {
+                        chunk
+                            .get_vector_at::<Unknown>(column_index)?
+                            .get_value_slow(row_index)
+                            .map(DuckDbCell::Native)
+                    })
+                    .collect::<duckdb_neo::Result<Vec<_>>>()?;
+                rows.push(map(DuckDbRow {
+                    values,
+                    columns: columns.clone(),
+                })?);
+            }
+        }
+        Ok(rows)
+    }
+}
+
+/// Execute a parameterized read query for the Python training CLI.
+pub fn query_json(
+    source: &str,
+    sql: &str,
+    parameters: &[serde_json::Value],
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let parameters = parameters
+        .iter()
+        .map(|parameter| match parameter {
+            serde_json::Value::String(value) => Ok(DuckDbParameter::Text(value.clone())),
+            serde_json::Value::Array(values) => Ok(DuckDbParameter::TextList(
+                values
+                    .iter()
+                    .map(|value| {
+                        value.as_str().map(str::to_owned).ok_or_else(|| {
+                            anyhow::anyhow!("query list parameters must contain strings")
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?,
+            )),
+            _ => anyhow::bail!("query parameters must be strings or lists of strings"),
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let sql =
+        format!("SELECT CAST(to_json(result_row) AS VARCHAR) AS row_json FROM ({sql}) result_row");
+    open_duckdb(source)?.query_map(&sql, &parameters, |row| {
+        Ok(serde_json::from_str(&row.try_get::<String>("row_json")?)?)
+    })
+}
+
+pub fn open_duckdb(source: &str) -> anyhow::Result<DuckDbConnection> {
+    let token = crate::config::resolve_config_value(None, "QUACK_AUTH_TOKEN");
+    let fingerprint = crate::config::resolve_config_value(None, "QUACK_SSL_FINGERPRINT");
+    open_duckdb_with_auth(source, token.as_deref(), fingerprint.as_deref())
+}
+
+/// Open stock-cache read-only through duckdb-neo for both files and native Quack.
+pub fn open_duckdb_with_auth(
+    source: &str,
+    token: Option<&str>,
+    fingerprint: Option<&str>,
+) -> anyhow::Result<DuckDbConnection> {
+    let is_quack = matches!(DuckDbLocation::parse(source)?, DuckDbLocation::Quack(_));
+    let environment = Environment::new()?;
+    let instance = match DuckDbLocation::parse(source)? {
+        DuckDbLocation::Memory => environment.open(StorageLocation::InMemory)?,
+        DuckDbLocation::File(path) => {
+            if !path.is_file() {
+                anyhow::bail!("DuckDB database file does not exist: {}", path.display());
+            }
+            let path = path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("DuckDB path must be valid UTF-8"))?;
+            let instance = Instance::new(&environment)?;
+            instance.attach(
+                AttachBuilder::new(StorageLocation::OnDisk(path.to_owned()))
+                    .options([("read_only", "true")])
+                    .make_default(),
+            )?;
+            instance
+        }
+        DuckDbLocation::Quack(_) => environment.open(StorageLocation::InMemory)?,
+    };
+    let connection = instance.connect()?;
+    if let DuckDbLocation::Quack(uri) = DuckDbLocation::parse(source)? {
+        let token = token
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("QUACK_AUTH_TOKEN is required for Quack"))?;
+        let uri = uri
+            .strip_prefix("quack://")
+            .map(|rest| format!("quack:{rest}"))
+            .unwrap_or(uri);
+        let literal = |value: &str| format!("'{}'", value.replace('\'', "''"));
+        let mut options = vec![format!("TOKEN {}", literal(token)), "READ_ONLY".to_string()];
+        if let Some(fingerprint) = fingerprint.filter(|value| !value.is_empty()) {
+            options.push(format!("SSL_FINGERPRINT {}", literal(fingerprint)));
+        }
+        let sql = format!(
+            "ATTACH {} AS market ({})",
+            literal(&uri),
+            options.join(", ")
+        );
+        connection.execute(sql, Parameters::None).map_err(|_| {
+            anyhow::anyhow!(
+                "failed to attach Quack server; check address, token and TLS fingerprint"
+            )
+        })?;
+        connection.execute("USE market", Parameters::None)?;
+    }
+    Ok(DuckDbConnection {
+        connection,
+        is_quack,
+    })
+}
+
 const DAILY_WINDOW_SESSION_SETTINGS_SQL: &str = "
-    SET max_parallel_workers_per_gather = 0;
-    SET work_mem = '16MB';
+    SET threads = 4;
+    SET memory_limit = '1GB';
 ";
 
 const DB_NATIVE_DAILY_WINDOW_QUERY: &str = "
@@ -32,41 +494,42 @@ const DB_NATIVE_DAILY_WINDOW_QUERY: &str = "
             s.amount::double precision AS amount,
             s.turnover_rate::double precision AS turnover_rate,
             CASE WHEN c.ts_code IS NOT NULL THEN 1.0 ELSE 0.0 END::double precision AS _czsc_snapshot_available,
-            CASE WHEN c.source_bar_valid THEN 1.0 WHEN c.source_bar_valid = false THEN 0.0 END::double precision AS _czsc_source_bar_valid,
-            CASE c.status
+            CASE WHEN c.daily_source_bar_valid THEN 1.0 WHEN c.daily_source_bar_valid = false THEN 0.0 END::double precision AS _czsc_source_bar_valid,
+            CASE c.daily_status
                 WHEN 'invalid_source_bar' THEN 0.0
                 WHEN 'no_finished_bi' THEN 1.0
                 WHEN 'insufficient_bis_for_zs' THEN 2.0
                 WHEN 'no_valid_zs' THEN 3.0
                 WHEN 'ok' THEN 4.0
             END::double precision AS _czsc_status_code,
-            c.available_finished_bi_count::double precision AS _czsc_available_finished_bi_count,
-            c.recent_bi_count::double precision AS _czsc_recent_bi_count,
-            CASE c.last_bi_direction WHEN 'up' THEN 1.0 WHEN 'down' THEN -1.0 END::double precision AS _czsc_last_bi_direction_code,
-            (c.last_bi_start_date - DATE '1970-01-01')::double precision AS _czsc_last_bi_start_day,
-            (c.last_bi_end_date - DATE '1970-01-01')::double precision AS _czsc_last_bi_end_day,
-            c.last_bi_high::double precision AS _czsc_last_bi_high,
-            c.last_bi_low::double precision AS _czsc_last_bi_low,
-            c.last_bi_mid::double precision AS _czsc_last_bi_mid,
-            (c.latest_zs_start_date - DATE '1970-01-01')::double precision AS _czsc_latest_zs_start_day,
-            (c.latest_zs_end_date - DATE '1970-01-01')::double precision AS _czsc_latest_zs_end_day,
-            c.latest_zs_bi_count::double precision AS _czsc_latest_zs_bi_count,
-            c.latest_zs_zg::double precision AS _czsc_latest_zs_zg,
-            c.latest_zs_zd::double precision AS _czsc_latest_zs_zd,
-            c.latest_zs_zz::double precision AS _czsc_latest_zs_zz,
-            (c.recent_peak_date - DATE '1970-01-01')::double precision AS _czsc_recent_peak_day,
-            c.recent_peak_high::double precision AS _czsc_recent_peak_high,
-            (c.post_peak_first_bear_date - DATE '1970-01-01')::double precision AS _czsc_post_peak_first_bear_day,
-            c.post_peak_first_bear_open::double precision AS _czsc_post_peak_first_bear_open,
-            c.post_peak_first_bear_high::double precision AS _czsc_post_peak_first_bear_high,
-            c.post_peak_first_bear_low::double precision AS _czsc_post_peak_first_bear_low,
-            c.post_peak_first_bear_close::double precision AS _czsc_post_peak_first_bear_close,
-            CASE WHEN c.post_peak_first_bear_missing THEN 1.0 WHEN c.post_peak_first_bear_missing = false THEN 0.0 END::double precision AS _czsc_post_peak_first_bear_missing
+            c.daily_available_finished_bi_count::double precision AS _czsc_available_finished_bi_count,
+            c.daily_recent_bi_count::double precision AS _czsc_recent_bi_count,
+            CASE c.daily_last_bi_direction WHEN 'up' THEN 1.0 WHEN 'down' THEN -1.0 END::double precision AS _czsc_last_bi_direction_code,
+            (c.daily_last_bi_start_date - DATE '1970-01-01')::double precision AS _czsc_last_bi_start_day,
+            (c.daily_last_bi_end_date - DATE '1970-01-01')::double precision AS _czsc_last_bi_end_day,
+            c.daily_last_bi_high::double precision AS _czsc_last_bi_high,
+            c.daily_last_bi_low::double precision AS _czsc_last_bi_low,
+            c.daily_last_bi_mid::double precision AS _czsc_last_bi_mid,
+            (c.daily_latest_zs_start_date - DATE '1970-01-01')::double precision AS _czsc_latest_zs_start_day,
+            (c.daily_latest_zs_end_date - DATE '1970-01-01')::double precision AS _czsc_latest_zs_end_day,
+            c.daily_latest_zs_bi_count::double precision AS _czsc_latest_zs_bi_count,
+            c.daily_latest_zs_zg::double precision AS _czsc_latest_zs_zg,
+            c.daily_latest_zs_zd::double precision AS _czsc_latest_zs_zd,
+            c.daily_latest_zs_zz::double precision AS _czsc_latest_zs_zz,
+            (c.daily_recent_peak_date - DATE '1970-01-01')::double precision AS _czsc_recent_peak_day,
+            c.daily_recent_peak_high::double precision AS _czsc_recent_peak_high,
+            (c.daily_post_peak_first_bear_date - DATE '1970-01-01')::double precision AS _czsc_post_peak_first_bear_day,
+            c.daily_post_peak_first_bear_open::double precision AS _czsc_post_peak_first_bear_open,
+            c.daily_post_peak_first_bear_high::double precision AS _czsc_post_peak_first_bear_high,
+            c.daily_post_peak_first_bear_low::double precision AS _czsc_post_peak_first_bear_low,
+            c.daily_post_peak_first_bear_close::double precision AS _czsc_post_peak_first_bear_close,
+            CASE WHEN c.daily_post_peak_first_bear_missing THEN 1.0 WHEN c.daily_post_peak_first_bear_missing = false THEN 0.0 END::double precision AS _czsc_post_peak_first_bear_missing
         FROM {{stock_stk_factor_pro}} s
-        LEFT JOIN {{stock_daily_czsc_structure}} c
+        LEFT JOIN {{calc_daily_czsc_structure}} c
           ON c.ts_code = s.ts_code
          AND c.trade_date = s.trade_date
-         AND c.calc_version = 'czsc_structure_qfq_min6_r7_v1'
+         AND c.source_dataset = 'stock_stk_factor_pro'
+         AND c.calc_version = 'v3-macd-kdj-czsc-1'
         WHERE s.trade_date BETWEEN (SELECT start_date FROM query_params) AND (SELECT end_date FROM query_params)
         ";
 
@@ -177,21 +640,21 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             s.circ_mv::double precision AS circ_mv,
             s.total_share::double precision AS total_share,
             s.free_share::double precision AS free_share,
-            a.daily_dif_asof::double precision AS macd_daily_dif,
-            a.daily_dea_asof::double precision AS macd_daily_dea,
-            a.daily_hist_x2_asof::double precision / 2.0 AS macd_daily_hist,
-            a.daily_dea_pctile_asof::double precision AS macd_daily_dea_pctile,
-            a.daily_period_count::double precision AS macd_daily_period_count,
-            a.weekly_dif_asof::double precision AS macd_weekly_dif,
-            a.weekly_dea_asof::double precision AS macd_weekly_dea,
-            a.weekly_hist_x2_asof::double precision / 2.0 AS macd_weekly_hist,
-            a.weekly_dea_pctile_asof::double precision AS macd_weekly_dea_pctile,
-            a.weekly_period_count::double precision AS macd_weekly_period_count,
-            a.monthly_dif_asof::double precision AS macd_monthly_dif,
-            a.monthly_dea_asof::double precision AS macd_monthly_dea,
-            a.monthly_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist,
-            a.monthly_dea_pctile_asof::double precision AS macd_monthly_dea_pctile,
-            a.monthly_period_count::double precision AS macd_monthly_period_count,
+            a.daily_macd_dif_asof::double precision AS macd_daily_dif,
+            a.daily_macd_dea_asof::double precision AS macd_daily_dea,
+            a.daily_macd_hist_x2_asof::double precision / 2.0 AS macd_daily_hist,
+            a.daily_macd_dea_pctile_asof::double precision AS macd_daily_dea_pctile,
+            a.daily_macd_period_count::double precision AS macd_daily_period_count,
+            a.weekly_macd_dif_asof::double precision AS macd_weekly_dif,
+            a.weekly_macd_dea_asof::double precision AS macd_weekly_dea,
+            a.weekly_macd_hist_x2_asof::double precision / 2.0 AS macd_weekly_hist,
+            a.weekly_macd_dea_pctile_asof::double precision AS macd_weekly_dea_pctile,
+            a.weekly_macd_period_count::double precision AS macd_weekly_period_count,
+            a.monthly_macd_dif_asof::double precision AS macd_monthly_dif,
+            a.monthly_macd_dea_asof::double precision AS macd_monthly_dea,
+            a.monthly_macd_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist,
+            a.monthly_macd_dea_pctile_asof::double precision AS macd_monthly_dea_pctile,
+            a.monthly_macd_period_count::double precision AS macd_monthly_period_count,
             r.ma25_qfq::double precision AS rolling_ma25_qfq,
             r.ma144_qfq::double precision AS rolling_ma144_qfq,
             r.ma220_qfq::double precision AS rolling_ma220_qfq,
@@ -249,14 +712,16 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             imf.market_broad_ma20_bias_pct,
             imf.market_broad_volatility20_pct
         FROM {{stock_stk_factor_pro}} s
-        LEFT JOIN {{stock_daily_asof_indicators}} a
+        LEFT JOIN {{calc_daily_indicators}} a
           ON a.ts_code = s.ts_code
          AND a.trade_date = s.trade_date
-         AND a.calc_version = 'macd_qfq_12_26_9_v1'
-        LEFT JOIN {{stock_daily_rolling_factors}} r
+         AND a.source_dataset = 'stock_stk_factor_pro'
+         AND a.calc_version = 'v3-macd-kdj-czsc-1'
+        LEFT JOIN {{calc_daily_rolling_factors}} r
           ON r.ts_code = s.ts_code
          AND r.trade_date = s.trade_date
-         AND r.calc_version = 'rolling_qfq_v1'
+         AND r.source_dataset = 'stock_stk_factor_pro'
+         AND r.calc_version = 'v3-macd-kdj-czsc-1'
         LEFT JOIN {{stock_moneyflow_ths}} smf
           ON smf.ts_code = s.ts_code
          AND smf.trade_date = s.trade_date
@@ -269,11 +734,12 @@ const DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY: &str = "
         SELECT DISTINCT ON (a.ts_code)
             a.ts_code,
             a.trade_date,
-            a.monthly_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist
-        FROM {{stock_daily_asof_indicators}} a
+            a.monthly_macd_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist
+        FROM {{calc_daily_indicators}} a
         WHERE a.trade_date >= (date_trunc('month', $1::date) - INTERVAL '1 month')::date
           AND a.trade_date < date_trunc('month', $1::date)::date
-          AND a.calc_version = 'macd_qfq_12_26_9_v1'
+          AND a.source_dataset = 'stock_stk_factor_pro'
+          AND a.calc_version = 'v3-macd-kdj-czsc-1'
         ORDER BY a.ts_code, a.trade_date DESC
         ";
 
@@ -407,15 +873,15 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
                 il.pct_chg::double precision AS ths_limit_pct_chg,
                 il.rank::double precision AS ths_limit_rank,
                 mf.pct_change_stock::double precision AS ths_lead_stock_pct_change,
-                ia.daily_dif_asof::double precision AS ths_macd_daily_dif,
-                ia.daily_dea_asof::double precision AS ths_macd_daily_dea,
-                ia.daily_hist_x2_asof::double precision / 2.0 AS ths_macd_daily_hist,
-                ia.weekly_dif_asof::double precision AS ths_macd_weekly_dif,
-                ia.weekly_dea_asof::double precision AS ths_macd_weekly_dea,
-                ia.weekly_hist_x2_asof::double precision / 2.0 AS ths_macd_weekly_hist,
-                ia.monthly_dif_asof::double precision AS ths_macd_monthly_dif,
-                ia.monthly_dea_asof::double precision AS ths_macd_monthly_dea,
-                ia.monthly_hist_x2_asof::double precision / 2.0 AS ths_macd_monthly_hist,
+                ia.daily_macd_dif_asof::double precision AS ths_macd_daily_dif,
+                ia.daily_macd_dea_asof::double precision AS ths_macd_daily_dea,
+                ia.daily_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_daily_hist,
+                ia.weekly_macd_dif_asof::double precision AS ths_macd_weekly_dif,
+                ia.weekly_macd_dea_asof::double precision AS ths_macd_weekly_dea,
+                ia.weekly_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_weekly_hist,
+                ia.monthly_macd_dif_asof::double precision AS ths_macd_monthly_dif,
+                ia.monthly_macd_dea_asof::double precision AS ths_macd_monthly_dea,
+                ia.monthly_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_monthly_hist,
                 ROW_NUMBER() OVER (
                     PARTITION BY d.trade_date
                     ORDER BY mf.net_amount DESC NULLS LAST, d.pct_change DESC NULLS LAST, d.ts_code ASC
@@ -427,10 +893,11 @@ const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
             LEFT JOIN index_limit_cpt_daily il
               ON il.ts_code = d.ts_code
              AND il.trade_date = d.trade_date
-            LEFT JOIN {{index_daily_asof_indicators}} ia
+            LEFT JOIN {{calc_daily_indicators}} ia
               ON ia.ts_code = d.ts_code
              AND ia.trade_date = d.trade_date
-             AND ia.calc_version = 'macd_qfq_12_26_9_v1'
+             AND ia.source_dataset = 'index_ths_daily'
+             AND ia.calc_version = 'v3-macd-kdj-czsc-1'
             LEFT JOIN ths_sector_rolling tr
               ON tr.ts_code = d.ts_code
              AND tr.trade_date = d.trade_date
@@ -644,19 +1111,20 @@ const STOCK_PERIOD_MACD_STATE_QUERY: &str = "
         SELECT DISTINCT ON (p.ts_code, p.period_type)
             p.ts_code,
             p.period_type,
-            p.ema12::double precision AS ema12,
-            p.ema26::double precision AS ema26,
-            p.dea::double precision AS dea,
-            p.period_count::integer AS period_count
-        FROM stock_period_indicator_state p
-        WHERE p.ts_code = ANY($1)
+            p.macd_ema12::double precision AS ema12,
+            p.macd_ema26::double precision AS ema26,
+            p.macd_dea::double precision AS dea,
+            p.macd_period_count::integer AS period_count
+        FROM calc_indicator_state p
+        WHERE p.source_dataset = 'stock_stk_factor_pro'
+          AND p.ts_code = ANY($1)
           AND (
               (p.period_type = 'daily' AND p.period_end_date < $2)
               OR (p.period_type = 'weekly' AND p.period_end_date < date_trunc('week', $2::date)::date)
               OR (p.period_type = 'monthly' AND p.period_end_date < date_trunc('month', $2::date)::date)
           )
-          AND p.calc_version = 'macd_qfq_12_26_9_v1'
-          AND p.period_count IS NOT NULL
+          AND p.calc_version = 'v3-macd-kdj-czsc-1'
+          AND p.macd_period_count IS NOT NULL
         ORDER BY p.ts_code, p.period_type, p.period_end_date DESC
         ";
 
@@ -903,82 +1371,71 @@ const DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS: &[&str] = &[
 ];
 
 pub fn fetch_db_native_daily_window(
-    dsn: &str,
+    duckdb_path: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<Vec<MarketRow>> {
-    Ok(fetch_db_native_daily_dataset(dsn, start_date, end_date)?.rows)
+    Ok(fetch_db_native_daily_dataset(duckdb_path, start_date, end_date)?.rows)
 }
 
 pub fn fetch_db_native_daily_dataset(
-    dsn: &str,
+    duckdb_path: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<MarketDataset> {
-    fetch_db_native_daily_dataset_with_preflight(dsn, start_date, end_date)
+    fetch_db_native_daily_dataset_with_preflight(duckdb_path, start_date, end_date)
 }
 
 pub fn fetch_db_native_daily_window_for_intraday(
-    dsn: &str,
+    duckdb_path: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<Vec<MarketRow>> {
-    Ok(fetch_db_native_daily_dataset_for_intraday(dsn, start_date, end_date)?.rows)
+    Ok(fetch_db_native_daily_dataset_for_intraday(duckdb_path, start_date, end_date)?.rows)
 }
 
 pub fn fetch_db_native_daily_dataset_for_intraday(
-    dsn: &str,
+    duckdb_path: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<MarketDataset> {
-    fetch_db_native_daily_dataset_with_preflight(dsn, start_date, end_date)
+    fetch_db_native_daily_dataset_with_preflight(duckdb_path, start_date, end_date)
 }
 
 fn fetch_db_native_daily_dataset_with_preflight(
-    dsn: &str,
+    duckdb_path: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<MarketDataset> {
     let strict_tables = resolve_db_check_tables()?;
-    let mut client = Client::connect(dsn, NoTls)?;
-    configure_daily_window_session(&mut client)?;
-    let mut transaction = client
-        .build_transaction()
-        .isolation_level(IsolationLevel::RepeatableRead)
-        .read_only(true)
-        .start()?;
-    let plan = preflight_db_native_load(&mut transaction, start_date, end_date, &strict_tables)?;
-
-    let mut market_rows = Vec::new();
-    {
-        let query = plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY);
-        let mut rows = transaction.query_raw(&query, &[&start_date, &end_date])?;
-        while let Some(row) = rows.next()? {
-            market_rows.push(db_native_market_row_from_db_row(row)?);
-        }
-    }
-    let pick_date_extras_query = plan.adapt_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY);
-    merge_pick_date_extras(
-        &mut transaction,
-        &pick_date_extras_query,
-        end_date,
-        &mut market_rows,
+    let client = open_duckdb(duckdb_path)?;
+    configure_daily_window_session(&client)?;
+    let plan = preflight_db_native_load(&client, start_date, end_date, &strict_tables)?;
+    let query = plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY);
+    let mut market_rows = client.query_map(
+        &query,
+        &[
+            DuckDbParameter::Date(start_date),
+            DuckDbParameter::Date(end_date),
+        ],
+        db_native_market_row_from_db_row,
     )?;
+    let pick_date_extras_query = plan.adapt_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY);
+    merge_pick_date_extras(&client, &pick_date_extras_query, end_date, &mut market_rows)?;
     let previous_month_macd_query = plan.adapt_query(DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY);
     merge_previous_month_macd(
-        &mut transaction,
+        &client,
         &previous_month_macd_query,
         end_date,
         &mut market_rows,
     )?;
     let ths_sector_extras_query = plan.adapt_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY);
     merge_ths_sector_extras(
-        &mut transaction,
+        &client,
         &ths_sector_extras_query,
         end_date,
         &mut market_rows,
     )?;
-    transaction.commit()?;
     Ok(MarketDataset {
         rows: market_rows,
         db_data_gaps: plan.db_data_gaps,
@@ -986,17 +1443,21 @@ fn fetch_db_native_daily_dataset_with_preflight(
 }
 
 pub fn fetch_stock_period_macd_states(
-    dsn: &str,
+    duckdb_path: &str,
     symbols: &[String],
     pick_date: NaiveDate,
 ) -> anyhow::Result<Vec<MacdPeriodState>> {
     if symbols.is_empty() {
         return Ok(Vec::new());
     }
-    let mut client = Client::connect(dsn, NoTls)?;
-    let rows = client.query(STOCK_PERIOD_MACD_STATE_QUERY, &[&symbols, &pick_date])?;
-    rows.into_iter()
-        .map(|row| {
+    let client = open_duckdb(duckdb_path)?;
+    client.query_map(
+        STOCK_PERIOD_MACD_STATE_QUERY,
+        &[
+            DuckDbParameter::TextList(symbols.to_vec()),
+            DuckDbParameter::Date(pick_date),
+        ],
+        |row| {
             Ok(MacdPeriodState {
                 ts_code: row.try_get("ts_code")?,
                 period_type: row.try_get("period_type")?,
@@ -1005,11 +1466,11 @@ pub fn fetch_stock_period_macd_states(
                 dea: optional_f64(&row, "dea")?,
                 period_count: row.try_get("period_count")?,
             })
-        })
-        .collect()
+        },
+    )
 }
 
-fn db_native_market_row_from_db_row(row: postgres::Row) -> anyhow::Result<MarketRow> {
+fn db_native_market_row_from_db_row(row: DuckDbRow) -> anyhow::Result<MarketRow> {
     let mut db_factors = BTreeMap::new();
     for column in DB_NATIVE_FACTOR_COLUMNS {
         db_factors.insert((*column).to_string(), optional_option_f64(&row, column)?);
@@ -1028,14 +1489,14 @@ fn db_native_market_row_from_db_row(row: postgres::Row) -> anyhow::Result<Market
     })
 }
 
-fn merge_pick_date_extras<C: postgres::GenericClient>(
-    client: &mut C,
+fn merge_pick_date_extras(
+    client: &DuckDbConnection,
     query: &str,
     end_date: NaiveDate,
     market_rows: &mut [MarketRow],
 ) -> anyhow::Result<()> {
     let mut extras_by_key: BTreeMap<(String, NaiveDate), BTreeMap<String, f64>> = BTreeMap::new();
-    let rows = client.query(query, &[&end_date])?;
+    let rows = client.query_rows(query, &[DuckDbParameter::Date(end_date)])?;
     for row in rows {
         let ts_code: String = row.try_get("ts_code")?;
         let trade_date: NaiveDate = row.try_get("trade_date")?;
@@ -1062,14 +1523,14 @@ fn merge_pick_date_extras<C: postgres::GenericClient>(
     Ok(())
 }
 
-fn merge_previous_month_macd<C: postgres::GenericClient>(
-    client: &mut C,
+fn merge_previous_month_macd(
+    client: &DuckDbConnection,
     query: &str,
     end_date: NaiveDate,
     market_rows: &mut [MarketRow],
 ) -> anyhow::Result<()> {
     let mut previous_by_code = BTreeMap::new();
-    for row in client.query(query, &[&end_date])? {
+    for row in client.query_rows(query, &[DuckDbParameter::Date(end_date)])? {
         let ts_code: String = row.try_get("ts_code")?;
         let trade_date: NaiveDate = row.try_get("trade_date")?;
         if let Some(histogram) =
@@ -1090,14 +1551,14 @@ fn merge_previous_month_macd<C: postgres::GenericClient>(
     Ok(())
 }
 
-fn merge_ths_sector_extras<C: postgres::GenericClient>(
-    client: &mut C,
+fn merge_ths_sector_extras(
+    client: &DuckDbConnection,
     query: &str,
     end_date: NaiveDate,
     market_rows: &mut [MarketRow],
 ) -> anyhow::Result<()> {
     let mut extras_by_key: BTreeMap<(String, NaiveDate), BTreeMap<String, f64>> = BTreeMap::new();
-    let rows = client.query(query, &[&end_date])?;
+    let rows = client.query_rows(query, &[DuckDbParameter::Date(end_date)])?;
     for row in rows {
         let ts_code: String = row.try_get("ts_code")?;
         let trade_date: NaiveDate = row.try_get("trade_date")?;
@@ -1122,14 +1583,7 @@ fn merge_ths_sector_extras<C: postgres::GenericClient>(
 }
 
 fn db_native_market_row_from_values(row: DbNativeDailyRow) -> anyhow::Result<MarketRow> {
-    let source_close_qfq = row.db_factors.get("_source_close_qfq").copied();
-    let mut db_factors = db_factor_values_iter(row.db_factors);
-    if let Some(reference) = source_close_qfq {
-        db_factors.insert(
-            "_source_close_qfq".to_string(),
-            reference.unwrap_or(f64::NAN),
-        );
-    }
+    let db_factors = db_factor_values_iter(row.db_factors);
     Ok(MarketRow {
         ts_code: row.ts_code,
         trade_date: row.trade_date,
@@ -1144,19 +1598,18 @@ fn db_native_market_row_from_values(row: DbNativeDailyRow) -> anyhow::Result<Mar
     })
 }
 
-fn configure_daily_window_session(client: &mut Client) -> anyhow::Result<()> {
-    client.batch_execute(DAILY_WINDOW_SESSION_SETTINGS_SQL)?;
-    Ok(())
+fn configure_daily_window_session(client: &DuckDbConnection) -> anyhow::Result<()> {
+    client.execute_batch(DAILY_WINDOW_SESSION_SETTINGS_SQL)
 }
 
 pub fn fetch_index_history(
-    dsn: &str,
+    duckdb_path: &str,
     ts_code: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<Vec<MarketRow>> {
-    let mut client = Client::connect(dsn, NoTls)?;
-    let rows = client.query(
+    let client = open_duckdb(duckdb_path)?;
+    client.query_map(
         "
         SELECT
             ts_code,
@@ -1171,10 +1624,12 @@ pub fn fetch_index_history(
           AND trade_date BETWEEN $2 AND $3
         ORDER BY trade_date ASC
         ",
-        &[&ts_code, &start_date, &end_date],
-    )?;
-    rows.into_iter()
-        .map(|row| {
+        &[
+            DuckDbParameter::Text(ts_code.to_string()),
+            DuckDbParameter::Date(start_date),
+            DuckDbParameter::Date(end_date),
+        ],
+        |row| {
             Ok(MarketRow {
                 ts_code: row.try_get("ts_code")?,
                 trade_date: row.try_get("trade_date")?,
@@ -1187,27 +1642,40 @@ pub fn fetch_index_history(
                 adj_factor: None,
                 db_factors: BTreeMap::new(),
             })
-        })
-        .collect()
+        },
+    )
 }
 
-pub fn resolve_previous_trade_date(dsn: &str, trade_date: NaiveDate) -> anyhow::Result<NaiveDate> {
-    let mut client = Client::connect(dsn, NoTls)?;
-    let row = client.query_one(PREVIOUS_TRADE_DATE_QUERY, &[&trade_date])?;
-    row.try_get::<_, Option<NaiveDate>>("trade_date")?
+pub fn resolve_previous_trade_date(
+    duckdb_path: &str,
+    trade_date: NaiveDate,
+) -> anyhow::Result<NaiveDate> {
+    let client = open_duckdb(duckdb_path)?;
+    let row = client
+        .query_rows(
+            PREVIOUS_TRADE_DATE_QUERY,
+            &[DuckDbParameter::Date(trade_date)],
+        )?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No previous trade date found before {trade_date}."))?;
+    row.try_get::<Option<NaiveDate>>("trade_date")?
         .ok_or_else(|| anyhow::anyhow!("No previous trade date found before {trade_date}."))
 }
 
 pub fn fetch_instrument_info(
-    dsn: &str,
+    duckdb_path: &str,
     symbols: &[String],
 ) -> anyhow::Result<BTreeMap<String, InstrumentInfo>> {
     if symbols.is_empty() {
         return Ok(BTreeMap::new());
     }
 
-    let mut client = Client::connect(dsn, NoTls)?;
-    let rows = client.query(INSTRUMENT_INFO_QUERY, &[&symbols])?;
+    let client = open_duckdb(duckdb_path)?;
+    let rows = client.query_rows(
+        INSTRUMENT_INFO_QUERY,
+        &[DuckDbParameter::TextList(symbols.to_vec())],
+    )?;
     let mut instruments = BTreeMap::new();
     for row in rows {
         let code: String = row.try_get("ts_code")?;
@@ -1230,12 +1698,12 @@ fn clean_optional_text(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn optional_f64(row: &postgres::Row, column: &str) -> anyhow::Result<f64> {
-    Ok(row.try_get::<_, Option<f64>>(column)?.unwrap_or(f64::NAN))
+fn optional_f64(row: &DuckDbRow, column: &str) -> anyhow::Result<f64> {
+    Ok(row.try_get::<Option<f64>>(column)?.unwrap_or(f64::NAN))
 }
 
-fn optional_option_f64(row: &postgres::Row, column: &str) -> anyhow::Result<Option<f64>> {
-    Ok(row.try_get::<_, Option<f64>>(column)?)
+fn optional_option_f64(row: &DuckDbRow, column: &str) -> anyhow::Result<Option<f64>> {
+    row.try_get::<Option<f64>>(column)
 }
 
 fn db_factor_values_iter<I, K>(values: I) -> BTreeMap<String, f64>
@@ -1258,31 +1726,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quack_parameters_preserve_sql_literals_comments_and_identifiers() {
+        let sql = concat!(
+            r#"SELECT $1, $2, $3, '$1', "ident$2", $$ $3 $$, "#,
+            r#"$body$ $1 $body$, E'escaped \' $1', foo$1, "#,
+            "/* $1 /* $2 */ $3 */ -- $2\n$1"
+        );
+        let parameters = [
+            DuckDbParameter::Text("汉字 O'Brien".into()),
+            DuckDbParameter::TextList(vec!["a'b".into(), "x".into()]),
+            DuckDbParameter::Date(NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()),
+        ];
+        let expected = concat!(
+            r#"SELECT '汉字 O''Brien', CAST(['a''b', 'x'] AS VARCHAR[]), DATE '2026-06-01', "#,
+            r#"'$1', "ident$2", $$ $3 $$, $body$ $1 $body$, "#,
+            r#"E'escaped \' $1', foo$1, /* $1 /* $2 */ $3 */ -- $2"#,
+            "\n'汉字 O''Brien'"
+        );
+        assert_eq!(inline_quack_parameters(sql, &parameters).unwrap(), expected);
+    }
+
+    #[test]
+    fn quack_parameters_validate_missing_null_and_empty_list_values() {
+        assert!(
+            inline_quack_parameters("SELECT $2", &[DuckDbParameter::Text("x".into())]).is_err()
+        );
+        assert!(
+            inline_quack_parameters("SELECT $0", &[DuckDbParameter::Text("x".into())]).is_err()
+        );
+        assert!(
+            inline_quack_parameters("SELECT $1", &[DuckDbParameter::Text("a\0b".into())]).is_err()
+        );
+        assert_eq!(
+            inline_quack_parameters("SELECT $1", &[DuckDbParameter::TextList(vec![])]).unwrap(),
+            "SELECT CAST([] AS VARCHAR[])"
+        );
+    }
+
+    #[test]
     fn db_native_daily_window_query_maps_stock_cache_contract_fields() {
         for fragment in [
             "SELECT $1::date AS start_date, $2::date AS end_date",
             "FROM {{stock_stk_factor_pro}} s",
+            "s.close_qfq::double precision AS _source_close_qfq",
+            "s.adj_factor::double precision AS adj_factor",
             "s.trade_date BETWEEN (SELECT start_date FROM query_params) AND (SELECT end_date FROM query_params)",
             "s.open::double precision AS open",
             "s.high::double precision AS high",
             "s.low::double precision AS low",
             "s.close::double precision AS close",
-            "s.adj_factor::double precision AS adj_factor",
             "s.vol::double precision AS vol",
             "s.amount::double precision AS amount",
             "s.turnover_rate::double precision AS turnover_rate",
-            "LEFT JOIN {{stock_daily_czsc_structure}} c",
+            "LEFT JOIN {{calc_daily_czsc_structure}} c",
             "c.ts_code = s.ts_code",
             "c.trade_date = s.trade_date",
-            "c.calc_version = 'czsc_structure_qfq_min6_r7_v1'",
-            "c.source_bar_valid",
-            "c.available_finished_bi_count",
-            "c.last_bi_direction",
-            "c.latest_zs_zg",
-            "c.latest_zs_zd",
-            "c.latest_zs_zz",
-            "c.recent_peak_high",
-            "c.post_peak_first_bear_open",
+            "c.calc_version = 'v3-macd-kdj-czsc-1'",
+            "c.daily_source_bar_valid",
+            "c.daily_available_finished_bi_count",
+            "c.daily_last_bi_direction",
+            "c.daily_latest_zs_zg",
+            "c.daily_latest_zs_zd",
+            "c.daily_latest_zs_zz",
+            "c.daily_recent_peak_high",
+            "c.daily_post_peak_first_bear_open",
         ] {
             assert!(
                 DB_NATIVE_DAILY_WINDOW_QUERY.contains(fragment),
@@ -1292,8 +1799,8 @@ mod tests {
         for fragment in [
             "stock_moneyflow_ths",
             "index_market_base AS",
-            "stock_daily_asof_indicators",
-            "stock_daily_rolling_factors",
+            "calc_daily_indicators",
+            "calc_daily_rolling_factors",
             "stock_daily_left_peak",
             "kdj_k_qfq",
             "large_net_amount_to_amount_pct",
@@ -1317,13 +1824,13 @@ mod tests {
         ] {
             assert!(
                 !DB_NATIVE_DAILY_WINDOW_QUERY.contains(fragment),
-                "main DB-native window must feed raw prices into Rust front-adjustment, not pre-adjusted prices: {fragment}"
+                "the source query should keep raw OHLC and use close_qfq only as a reference: {fragment}"
             );
         }
     }
 
     #[test]
-    fn db_native_daily_window_keeps_raw_ohlc_and_carries_qfq_reference_for_alignment() {
+    fn db_native_daily_window_keeps_raw_ohlc_and_qfq_reference_for_alignment() {
         assert!(DB_NATIVE_DAILY_WINDOW_QUERY.contains("s.close::double precision AS close"));
         assert!(
             DB_NATIVE_DAILY_WINDOW_QUERY
@@ -1333,8 +1840,8 @@ mod tests {
     }
 
     #[test]
-    fn db_native_row_preserves_missing_qfq_reference_for_price_basis_validation() {
-        for reference in [None, Some(f64::NAN), Some(5.0)] {
+    fn db_native_row_keeps_only_a_finite_qfq_close_reference() {
+        for source_close_qfq in [None, Some(f64::NAN), Some(12.5)] {
             let mapped = db_native_market_row_from_values(DbNativeDailyRow {
                 ts_code: "000001.SZ".to_string(),
                 trade_date: NaiveDate::from_ymd_opt(2026, 1, 30).unwrap(),
@@ -1345,18 +1852,16 @@ mod tests {
                 adj_factor: Some(1.0),
                 vol: 100.0,
                 turnover_rate: None,
-                db_factors: BTreeMap::from([("_source_close_qfq".to_string(), reference)]),
+                db_factors: BTreeMap::from([("_source_close_qfq".to_string(), source_close_qfq)]),
             })
             .unwrap();
-            let actual = mapped
-                .db_factors
-                .get("_source_close_qfq")
-                .copied()
-                .expect("reference must remain present even when missing");
-            if reference.is_some_and(f64::is_finite) {
-                assert_eq!(Some(actual), reference);
+            if source_close_qfq.is_some_and(f64::is_finite) {
+                assert_eq!(
+                    mapped.db_factors.get("_source_close_qfq"),
+                    source_close_qfq.as_ref()
+                );
             } else {
-                assert!(actual.is_nan());
+                assert!(!mapped.db_factors.contains_key("_source_close_qfq"));
             }
         }
     }
@@ -1389,13 +1894,13 @@ mod tests {
             "max(ret5_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret5_pct",
             "CASE WHEN count(ret5_pct) = 2 THEN avg(ret5_pct)::double precision END AS market_broad_ret5_pct",
             "LEFT JOIN index_market_factors imf",
-            "LEFT JOIN {{stock_daily_asof_indicators}} a",
-            "LEFT JOIN {{stock_daily_rolling_factors}} r",
-            "a.calc_version = 'macd_qfq_12_26_9_v1'",
-            "a.daily_hist_x2_asof::double precision / 2.0 AS macd_daily_hist",
-            "a.weekly_hist_x2_asof::double precision / 2.0 AS macd_weekly_hist",
-            "a.monthly_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist",
-            "r.calc_version = 'rolling_qfq_v1'",
+            "LEFT JOIN {{calc_daily_indicators}} a",
+            "LEFT JOIN {{calc_daily_rolling_factors}} r",
+            "a.calc_version = 'v3-macd-kdj-czsc-1'",
+            "a.daily_macd_hist_x2_asof::double precision / 2.0 AS macd_daily_hist",
+            "a.weekly_macd_hist_x2_asof::double precision / 2.0 AS macd_weekly_hist",
+            "a.monthly_macd_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist",
+            "r.calc_version = 'v3-macd-kdj-czsc-1'",
             "r.position_90d::double precision AS rolling_position_90d",
             "r.close_to_20d_max_close_pct::double precision AS close_to_20d_max_close_pct",
         ] {
@@ -1509,7 +2014,10 @@ mod tests {
             "FROM {{index_limit_cpt_list}}",
             "GROUP BY ts_code, trade_date",
             "LEFT JOIN index_limit_cpt_daily il",
-            "LEFT JOIN {{index_daily_asof_indicators}} ia",
+            "LEFT JOIN {{calc_daily_indicators}} ia",
+            "ia.source_dataset = 'index_ths_daily'",
+            "ia.calc_version = 'v3-macd-kdj-czsc-1'",
+            "ia.daily_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_daily_hist",
             "stock_ths_sector_candidates AS",
             "ROW_NUMBER() OVER (",
             "PARTITION BY s.ts_code, s.trade_date",
@@ -1598,7 +2106,7 @@ mod tests {
             );
         }
         assert!(!PREVIOUS_TRADE_DATE_QUERY.contains("daily_market"));
-        assert!(!PREVIOUS_TRADE_DATE_QUERY.contains("POSTGRES_DSN"));
+        assert!(!PREVIOUS_TRADE_DATE_QUERY.contains("postgres://"));
         assert!(!PREVIOUS_TRADE_DATE_QUERY.contains("postgres://"));
         assert!(!PREVIOUS_TRADE_DATE_QUERY.contains("postgresql://"));
     }
@@ -1606,12 +2114,12 @@ mod tests {
     #[test]
     fn stock_period_macd_state_query_reads_completed_period_states_only() {
         for fragment in [
-            "FROM stock_period_indicator_state p",
+            "FROM calc_indicator_state p",
             "p.period_type = 'daily' AND p.period_end_date < $2",
             "p.period_type = 'weekly' AND p.period_end_date < date_trunc('week', $2::date)::date",
             "p.period_type = 'monthly' AND p.period_end_date < date_trunc('month', $2::date)::date",
-            "p.calc_version = 'macd_qfq_12_26_9_v1'",
-            "p.period_count IS NOT NULL",
+            "p.calc_version = 'v3-macd-kdj-czsc-1'",
+            "p.macd_period_count IS NOT NULL",
             "ORDER BY p.ts_code, p.period_type, p.period_end_date DESC",
         ] {
             assert!(
@@ -1620,8 +2128,8 @@ mod tests {
             );
         }
         assert!(!STOCK_PERIOD_MACD_STATE_QUERY.contains("daily_asof"));
-        assert!(!STOCK_PERIOD_MACD_STATE_QUERY.contains("stock_daily_asof_indicators"));
-        assert!(!STOCK_PERIOD_MACD_STATE_QUERY.contains("POSTGRES_DSN"));
+        assert!(!STOCK_PERIOD_MACD_STATE_QUERY.contains("calc_daily_indicators"));
+        assert!(!STOCK_PERIOD_MACD_STATE_QUERY.contains("postgres://"));
         assert!(!STOCK_PERIOD_MACD_STATE_QUERY.contains("postgres://"));
         assert!(!STOCK_PERIOD_MACD_STATE_QUERY.contains("postgresql://"));
     }
@@ -1907,21 +2415,11 @@ mod tests {
         ];
         let pick_date = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
         let start_date = prepared_cache_start_date(pick_date);
-        let dsn = crate::config::resolve_dsn_from_env(None)?;
-        let mut client = Client::connect(&dsn, NoTls)?;
-        configure_daily_window_session(&mut client)?;
-        let mut transaction = client
-            .build_transaction()
-            .isolation_level(IsolationLevel::RepeatableRead)
-            .read_only(true)
-            .start()?;
-        transaction.batch_execute("SET LOCAL statement_timeout = '60s'")?;
-        let plan = preflight_db_native_load(
-            &mut transaction,
-            start_date,
-            pick_date,
-            &resolve_db_check_tables()?,
-        )?;
+        let duckdb_path = crate::config::resolve_duckdb_path_from_env(None)?;
+        let client = open_duckdb(&duckdb_path)?;
+        configure_daily_window_session(&client)?;
+        let plan =
+            preflight_db_native_load(&client, start_date, pick_date, &resolve_db_check_tables()?)?;
         let code_filter = codes.map(|code| format!("'{code}'")).join(", ");
         let scope_query = |query: &str| {
             format!(
@@ -1929,34 +2427,32 @@ mod tests {
                 plan.adapt_query(query)
             )
         };
-        let mut rows = transaction
-            .query(
-                &scope_query(DB_NATIVE_DAILY_WINDOW_QUERY),
-                &[&start_date, &pick_date],
-            )?
-            .into_iter()
-            .map(db_native_market_row_from_db_row)
-            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut rows = client.query_map(
+            &scope_query(DB_NATIVE_DAILY_WINDOW_QUERY),
+            &[
+                DuckDbParameter::Date(start_date),
+                DuckDbParameter::Date(pick_date),
+            ],
+            db_native_market_row_from_db_row,
+        )?;
         merge_pick_date_extras(
-            &mut transaction,
+            &client,
             &scope_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY),
             pick_date,
             &mut rows,
         )?;
         merge_previous_month_macd(
-            &mut transaction,
+            &client,
             &scope_query(DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY),
             pick_date,
             &mut rows,
         )?;
-        transaction.commit()?;
-
         let root = tempfile::tempdir()?;
         let request = ScreenRequest {
             method: Method::Scm,
             pick_date,
             runtime_root: root.path().to_path_buf(),
-            dsn,
+            duckdb_path,
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2029,50 +2525,39 @@ mod tests {
             PoolSource, ScreenRequest, run_db_native_screen_with_dataset_loader,
         };
 
-        let dsn = crate::config::resolve_dsn_from_env(None)?;
+        let duckdb_path = crate::config::resolve_duckdb_path_from_env(None)?;
         let root = tempfile::tempdir()?;
         let start_date = prepared_cache_start_date(pick_date);
-        let mut client = Client::connect(&dsn, NoTls)?;
-        configure_daily_window_session(&mut client)?;
-        let mut transaction = client
-            .build_transaction()
-            .isolation_level(IsolationLevel::RepeatableRead)
-            .read_only(true)
-            .start()?;
-        transaction.batch_execute("SET LOCAL statement_timeout = '60s'")?;
-        let plan = preflight_db_native_load(
-            &mut transaction,
-            start_date,
-            pick_date,
-            &resolve_db_check_tables()?,
-        )?;
+        let client = open_duckdb(&duckdb_path)?;
+        configure_daily_window_session(&client)?;
+        let plan =
+            preflight_db_native_load(&client, start_date, pick_date, &resolve_db_check_tables()?)?;
         let scope_query = |query: &str| {
             format!(
                 "SELECT sampled.* FROM ({}) sampled WHERE sampled.ts_code IN ('{code}', '000001.SZ')",
                 plan.adapt_query(query)
             )
         };
-        let mut rows = transaction
-            .query(
-                &scope_query(DB_NATIVE_DAILY_WINDOW_QUERY),
-                &[&start_date, &pick_date],
-            )?
-            .into_iter()
-            .map(db_native_market_row_from_db_row)
-            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut rows = client.query_map(
+            &scope_query(DB_NATIVE_DAILY_WINDOW_QUERY),
+            &[
+                DuckDbParameter::Date(start_date),
+                DuckDbParameter::Date(pick_date),
+            ],
+            db_native_market_row_from_db_row,
+        )?;
         merge_pick_date_extras(
-            &mut transaction,
+            &client,
             &scope_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY),
             pick_date,
             &mut rows,
         )?;
         merge_ths_sector_extras(
-            &mut transaction,
+            &client,
             &scope_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY),
             pick_date,
             &mut rows,
         )?;
-        transaction.commit()?;
         rows.sort_by_key(|row| row.trade_date);
         let latest = rows
             .iter()
@@ -2100,7 +2585,7 @@ mod tests {
             method,
             pick_date,
             runtime_root: root.path().to_path_buf(),
-            dsn: dsn.clone(),
+            duckdb_path: duckdb_path.clone(),
             recompute: false,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
@@ -2149,7 +2634,6 @@ mod tests {
                 close,
                 turnover_n: latest.turnover_n,
                 signal: Some("SCM".to_string()),
-                yellow_b1: Some(false),
             }],
             &prepared,
             Method::Scm,
@@ -2203,14 +2687,14 @@ mod tests {
     }
 
     #[test]
-    fn db_native_loader_reads_local_stock_cache_when_dsn_is_available() {
-        let Ok(dsn) = std::env::var("POSTGRES_DSN") else {
-            eprintln!("skipping local stock-cache DB-native loader probe: POSTGRES_DSN is not set");
+    fn db_native_loader_reads_local_stock_cache_when_duckdb_path_is_available() {
+        let Ok(duckdb_path) = std::env::var("DUCKDB_PATH") else {
+            eprintln!("skipping local stock-cache DB-native loader probe: DUCKDB_PATH is not set");
             return;
         };
         let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
 
-        let rows = fetch_db_native_daily_window(&dsn, pick_date, pick_date).unwrap();
+        let rows = fetch_db_native_daily_window(&duckdb_path, pick_date, pick_date).unwrap();
 
         assert!(!rows.is_empty());
         let row = rows
@@ -2275,8 +2759,28 @@ mod tests {
     }
 
     #[test]
-    fn db_native_window_session_settings_avoid_parallel_dsm_with_bounded_work_mem() {
-        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("max_parallel_workers_per_gather = 0"));
-        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("work_mem = '16MB'"));
+    fn db_native_window_session_settings_bound_duckdb_threads_and_memory() {
+        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("SET threads = 4"));
+        assert!(DAILY_WINDOW_SESSION_SETTINGS_SQL.contains("SET memory_limit = '1GB'"));
+    }
+}
+#[cfg(test)]
+mod duckdb_neo_tests {
+    use super::{DuckDbParameter, NaiveDate, open_duckdb};
+
+    #[test]
+    fn duckdb_query_maps_date_parameters_and_integer_columns() {
+        let connection = open_duckdb(":memory:").unwrap();
+        let trade_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        let row = connection
+            .query_rows(
+                "SELECT $1::DATE AS trade_date, 3::INTEGER AS period_count",
+                &[DuckDbParameter::Date(trade_date)],
+            )
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(row.try_get::<NaiveDate>("trade_date").unwrap(), trade_date);
+        assert_eq!(row.try_get::<i32>("period_count").unwrap(), 3);
     }
 }

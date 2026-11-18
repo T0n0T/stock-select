@@ -5,15 +5,15 @@ description: Use when retraining, validating, exporting, promoting, rolling back
 
 # Model Maintenance
 
-本 skill 用于新 Rust CLI 仓库的模型维护。LightGBM 训练维护通过 `stock-select-ml` Python CLI 按 `--method` 组织，可维护 b2/b3 等 method 的候选模型产物；生产 `run/review` 仍只走 Rust capability，不接入 Python predict。
+本 skill 用于新 Rust CLI 仓库的模型维护。LightGBM 训练维护通过 `stock-select-ml` Python CLI 按 `--method` 组织，仅维护 b2/scm/pbm 的候选模型产物；生产 `run/review` 仍只走 Rust capability，不接入 Python predict。
 
 ## 边界
 
 - 默认发布目标来自当前仓库 `.env` 的 `STOCK_SELECT_RUNTIME_ROOT`，发布到 `<runtime>/models/<method>/`。
-- 归档目录按 method 隔离，写入 `<runtime>/models/archive/<method>/<version>/`；旧共享 archive 只在 `model_card.json.target` 匹配当前 method 时兼容读取。
+- 归档目录按 method 隔离，写入 `<runtime>/models/archive/<method>/<version>/`；不读取旧版共享 archive。
 - dataset 默认从当前 `candidates/<date>.<method>.json` 构建样本集合，但训练因子必须来自 Rust 生成的 `<runtime>/factors/<artifact_key>.<method>/factors.json`；`--source select` 只用于回放线上 run/display 样本上下文。
 - `diagnostics/ml/<method>/` 下的 dataset、score CSV、report 只用于训练、回测和维护，不进入 Rust 生产推理。
-- 不打印 `.env`、DSN、token 的具体值。
+- 不打印 `.env`、数据库路径、token 的具体值。
 
 ## 快速流程
 
@@ -23,7 +23,7 @@ description: Use when retraining, validating, exporting, promoting, rolling back
 git status --short --branch
 ```
 
-训练窗口在每次训练时确定，默认取截至 `TRAIN_END_DATE` 的近一年 EOD 数据；不要依赖脚本内置日期。重训前补齐历史 EOD candidates；脚本从 `.env`/环境读取 `POSTGRES_DSN` 和 `STOCK_SELECT_RUNTIME_ROOT`，命令行不携带 DSN/token：
+训练窗口在每次训练时确定，默认取截至 `TRAIN_END_DATE` 的近一年 EOD 数据；不要依赖脚本内置日期。重训前补齐历史 EOD candidates；脚本从 `.env`/环境读取 `DUCKDB_PATH` 和 `STOCK_SELECT_RUNTIME_ROOT`，命令行不携带数据库路径或 token：
 
 ```bash
 METHOD=b2

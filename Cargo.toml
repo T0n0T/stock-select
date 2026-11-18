@@ -9,17 +9,22 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
+arrow = { version = "60.1.0", default-features = false }
+bytes = "1.11"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 lightgbm3 = "1.0.10"
-postgres = { version = "0.19", features = ["with-chrono-0_4"] }
+duckdb-neo = { version = "0.20000.2", features = ["chrono"] }
+parquet = { version = "60.1.0", default-features = false, features = ["arrow", "zstd"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-zstd = "0.13"
 
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.10"
+
+[build-dependencies]
+libduckdb-sys = { version = "=1.20000.2", default-features = false, features = ["capi-v2", "download-lib"] }

@@ -77,7 +77,7 @@ fn review_list_prefers_selection_display_artifact() {
         display_dir.join("display.json"),
         serde_json::to_vec_pretty(&json!({
             "rows": [
-                {"code": "000002.SZ", "name": "测试二", "model_rank": 1, "model_score": 0.7, "llm_action": "KEEP", "llm_risk_flags": []},
+                {"code": "000002.SZ", "name": "测试二", "industry": "全国地产", "model_rank": 1, "model_score": 0.7, "llm_action": "KEEP", "llm_risk_flags": []},
                 {"code": "000001.SZ", "name": "测试一", "model_rank": 2, "model_score": 0.6, "llm_action": "CAUTION", "llm_risk_flags": ["高位"]}
             ]
         }))
@@ -120,7 +120,7 @@ fn review_list_recompute_ignores_existing_display_artifact() {
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
-        .env_remove("POSTGRES_DSN")
+        .env_remove("DUCKDB_PATH")
         .args([
             "review-list",
             "--runtime-root",
@@ -134,7 +134,9 @@ fn review_list_recompute_ignores_existing_display_artifact() {
         .assert()
         .failure()
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("A database DSN is required."));
+        .stderr(predicate::str::contains(
+            "DUCKDB_PATH is required; set it in .env or pass --duckdb-path.",
+        ));
 }
 
 #[test]

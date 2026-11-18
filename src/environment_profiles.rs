@@ -19,65 +19,6 @@ pub fn get_method_environment_profile(
     let method = method.trim().to_ascii_lowercase();
     let state = state.trim().to_ascii_lowercase();
     match (method.as_str(), state.as_str()) {
-        ("b1", "weak") => Ok(MethodEnvironmentProfile {
-            method,
-            state,
-            weights: weights([
-                ("trend_structure", 0.23),
-                ("price_position", 0.22),
-                ("volume_behavior", 0.22),
-                ("previous_abnormal_move", 0.20),
-                ("macd_phase", 0.13),
-            ]),
-            signal_weight: None,
-            pass_threshold: 4.25,
-            watch_threshold: 3.3,
-            subscore_mode: modes([
-                ("price_position", "left_side_favored"),
-                ("trend_structure", "support_preserving"),
-            ]),
-            llm_focus:
-                "优先高分给回调充分、支撑有效、赔率优先的结构，弱环境下更严格压制高位和追高样本。"
-                    .to_string(),
-        }),
-        ("b1", "neutral") => Ok(MethodEnvironmentProfile {
-            method,
-            state,
-            weights: weights([
-                ("trend_structure", 0.23),
-                ("price_position", 0.20),
-                ("volume_behavior", 0.22),
-                ("previous_abnormal_move", 0.20),
-                ("macd_phase", 0.15),
-            ]),
-            signal_weight: None,
-            pass_threshold: 4.0,
-            watch_threshold: 3.2,
-            subscore_mode: modes([
-                ("price_position", "default"),
-                ("trend_structure", "default"),
-            ]),
-            llm_focus: "优先高分给结构完整且赔率仍可接受的回调低点。".to_string(),
-        }),
-        ("b1", "strong") => Ok(MethodEnvironmentProfile {
-            method,
-            state,
-            weights: weights([
-                ("trend_structure", 0.25),
-                ("price_position", 0.17),
-                ("volume_behavior", 0.23),
-                ("previous_abnormal_move", 0.20),
-                ("macd_phase", 0.15),
-            ]),
-            signal_weight: None,
-            pass_threshold: 4.0,
-            watch_threshold: 3.2,
-            subscore_mode: modes([
-                ("price_position", "less_left_bias"),
-                ("trend_structure", "restart_favored"),
-            ]),
-            llm_focus: "优先高分给回调后接近再启动，而不是纯防守抄底。".to_string(),
-        }),
         ("b2", "weak") => Ok(MethodEnvironmentProfile {
             method,
             state,

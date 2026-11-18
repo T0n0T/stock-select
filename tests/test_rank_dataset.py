@@ -33,7 +33,7 @@ from ml.dataset import schema as rank_dataset_schema
 from ml.dataset import rank_dataset
 
 TEST_FACTOR_ARTIFACT_VERSION = 2
-TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v4"
+TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v5"
 
 
 class RankDatasetTest(unittest.TestCase):
@@ -65,7 +65,7 @@ class RankDatasetTest(unittest.TestCase):
         self.assertTrue(args.intraday)
 
     def test_output_dir_defaults_to_method_scoped_diagnostics(self):
-        self.assertEqual(resolve_output_dir(None, method="b1").as_posix().split("/")[-3:], ["diagnostics", "ml", "b1"])
+        self.assertEqual(resolve_output_dir(None, method="scm").as_posix().split("/")[-3:], ["diagnostics", "ml", "scm"])
 
     def test_runtime_root_resolves_from_shell_env_then_dotenv_without_legacy_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -82,32 +82,6 @@ class RankDatasetTest(unittest.TestCase):
                 Path("cli-runtime"),
             )
 
-    def test_b3_dataset_schema_has_independent_method_entry_with_b3_specific_factors(self):
-        b3_specific = [
-            "b3_volume_shrink_ratio",
-            "b3_amplitude_pct",
-            "b3_body_pct",
-            "b3_upper_shadow_pct",
-            "b3_lower_shadow_pct",
-            "b3_j_delta",
-            "b3_prev_b2_flag",
-            "b3_plus_flag",
-        ]
-
-        for column in b3_specific:
-            self.assertIn(column, dataset_columns_for_method("b3"))
-            self.assertIn(column, raw_factor_columns_for_method("b3"))
-            self.assertNotIn(column, dataset_columns_for_method("b2"))
-            self.assertNotIn(column, raw_factor_columns_for_method("b2"))
-
-        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
-        try:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
-
-            self.assertIn("b3_only_raw_factor", dataset_columns_for_method("b3"))
-            self.assertNotIn("b3_only_raw_factor", dataset_columns_for_method("b2"))
-        finally:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
 
     def test_stock_environment_factors_are_registered_for_all_screening_methods(self):
         stock_env_factors = [
@@ -125,7 +99,7 @@ class RankDatasetTest(unittest.TestCase):
             "stock_env_overall_score",
         ]
 
-        for method in ["b2", "b3", "lsh"]:
+        for method in ["b2", "scm", "pbm"]:
             with self.subTest(method=method):
                 columns = dataset_columns_for_method(method)
                 raw_columns = raw_factor_columns_for_method(method)
@@ -133,8 +107,8 @@ class RankDatasetTest(unittest.TestCase):
                     self.assertIn(factor, columns)
                     self.assertIn(factor, raw_columns)
 
-    def test_b3_dataset_schema_excludes_review_scores_but_keeps_training_factors(self):
-        columns = dataset_columns_for_method("b3")
+    def test_b2_dataset_schema_excludes_review_scores_but_keeps_training_factors(self):
+        columns = dataset_columns_for_method("b2")
 
         for review_score in [
             "trend_structure",
@@ -163,13 +137,13 @@ class RankDatasetTest(unittest.TestCase):
         ]:
             self.assertIn(training_column, columns)
 
-    def test_listing_board_is_b2_b3_categorical_training_feature(self):
-        for method in ["b2", "b3"]:
+    def test_listing_board_is_b2_categorical_training_feature(self):
+        for method in ["b2"]:
             with self.subTest(method=method):
                 self.assertIn("listing_board", dataset_columns_for_method(method))
                 self.assertNotIn("listing_board", raw_factor_columns_for_method(method))
 
-        self.assertNotIn("listing_board", dataset_columns_for_method("lsh"))
+        self.assertNotIn("listing_board", dataset_columns_for_method("scm"))
 
     def test_infer_listing_board_from_a_share_code(self):
         cases = {
@@ -188,106 +162,34 @@ class RankDatasetTest(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(infer_listing_board(code), expected)
 
-    def test_b3_factor_artifact_merge_ignores_review_scores_and_keeps_training_features(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            candidate_dir = root / "candidates"
-            factor_dir = root / "factors" / "2026-05-25.b3"
-            candidate_dir.mkdir(parents=True)
-            factor_dir.mkdir(parents=True)
-            (candidate_dir / "2026-05-25.b3.json").write_text(
-                json.dumps(
-                    {
-                        "method": "b3",
-                        "pick_date": "2026-05-25",
-                        "candidates": [{"code": "000001.SZ", "name": "平安银行", "signal": "B3+"}],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            self.write_factor_artifact(
-                factor_dir,
-                {
-                    "method": "b3",
-                    "artifact_key": "2026-05-25",
-                    "rows": [
-                        {
-                            "code": "000001.SZ",
-                            "factors": {
-                                "env": "neutral",
-                                "signal_type": "trend_start",
-                                "daily_macd_phase_type": "rising",
-                                "daily_macd_wave_index": 2,
-                                "daily_macd_wave_stage": "early",
-                                "weekly_macd_phase_type": "rising",
-                                "weekly_macd_wave_index": 1,
-                                "weekly_macd_wave_stage": "early",
-                                "weekly_daily_combo_type": "rising:1|rising:2",
-                                "czsc_zs_region": "above_zg",
-                                "macd_phase": 4.5,
-                                "box_mid_position_120d_pct": 74.0,
-                                "b3_volume_shrink_ratio": 0.5,
-                                "close_to_zxdkx_pct": 1.25,
-                                "trend_structure": 4.0,
-                                "price_position": 3.0,
-                                "volume_behavior": 5.0,
-                            },
-                        }
-                    ],
-                    }
-            )
-
-            rows, warnings = load_candidate_rows(
-                root,
-                method="b3",
-                start_date="2026-05-25",
-                end_date="2026-05-25",
-            )
-
-        self.assertEqual(warnings, [])
-        self.assertEqual(rows[0]["listing_board"], "main")
-        self.assertEqual(rows[0]["signal_type"], "trend_start")
-        self.assertEqual(rows[0]["daily_macd_phase_type"], "rising")
-        self.assertEqual(rows[0]["daily_macd_wave_index"], 2)
-        self.assertEqual(rows[0]["weekly_macd_phase_type"], "rising")
-        self.assertEqual(rows[0]["weekly_macd_wave_index"], 1)
-        self.assertEqual(rows[0]["weekly_daily_combo_type"], "rising:1|rising:2")
-        self.assertEqual(rows[0]["czsc_zs_region"], "above_zg")
-        self.assertEqual(rows[0]["macd_phase"], 4.5)
-        self.assertEqual(rows[0]["box_mid_position_120d_pct"], 74.0)
-        self.assertEqual(rows[0]["b3_volume_shrink_ratio"], 0.5)
-        self.assertEqual(rows[0]["close_to_zxdkx_pct"], 1.25)
-        self.assertNotIn("trend_structure", rows[0])
-        self.assertNotIn("price_position", rows[0])
-        self.assertNotIn("volume_behavior", rows[0])
-    def test_lsh_dataset_schema_has_independent_method_entry_with_lsh_specific_factors(self):
-        lsh_specific = [
-            "lsh_daily_macd_wave_index",
-            "lsh_weekly_macd_wave_index",
-            "lsh_daily_macd_rising_initial_flag",
-            "lsh_weekly_macd_rising_initial_flag",
-            "lsh_daily_macd_top_divergence_flag",
-            "lsh_weekly_macd_top_divergence_flag",
-            "lsh_weekly_daily_constructive_combo_flag",
-            "lsh_bullish_engulf_prev_bearish_flag",
-            "lsh_volume_bullish_engulf_prev_bearish_flag",
-            "lsh_bullish_engulf_volume_ratio",
+    def test_ma25_dataset_schema_has_independent_method_entry_with_ma25_specific_factors(self):
+        ma25_specific = [
+            "ma25_daily_macd_wave_index",
+            "ma25_weekly_macd_wave_index",
+            "ma25_daily_macd_rising_initial_flag",
+            "ma25_weekly_macd_rising_initial_flag",
+            "ma25_daily_macd_top_divergence_flag",
+            "ma25_weekly_macd_top_divergence_flag",
+            "ma25_weekly_daily_constructive_combo_flag",
+            "ma25_bullish_engulf_prev_bearish_flag",
+            "ma25_volume_bullish_engulf_prev_bearish_flag",
+            "ma25_bullish_engulf_volume_ratio",
         ]
 
-        for column in lsh_specific:
-            self.assertIn(column, dataset_columns_for_method("lsh"))
-            self.assertIn(column, raw_factor_columns_for_method("lsh"))
+        for column in ma25_specific:
+            self.assertIn(column, dataset_columns_for_method("scm"))
+            self.assertIn(column, raw_factor_columns_for_method("scm"))
             self.assertNotIn(column, dataset_columns_for_method("b2"))
             self.assertNotIn(column, raw_factor_columns_for_method("b2"))
 
-        lsh_excluded_after_ablation = ["vr_qfq", "cyq_cost_85_to_close_pct"]
-        for column in lsh_excluded_after_ablation:
-            self.assertNotIn(column, dataset_columns_for_method("lsh"))
-            self.assertNotIn(column, raw_factor_columns_for_method("lsh"))
+        ma25_excluded_after_ablation = ["vr_qfq", "cyq_cost_85_to_close_pct"]
+        for column in ma25_excluded_after_ablation:
+            self.assertNotIn(column, dataset_columns_for_method("scm"))
+            self.assertNotIn(column, raw_factor_columns_for_method("scm"))
             self.assertIn(column, dataset_columns_for_method("b2"))
 
-    def test_lsh_schema_uses_lsh_state_machine_not_b2_family_semantics(self):
-        columns = dataset_columns_for_method("lsh")
+    def test_scm_schema_uses_ma25_state_machine_not_b2_family_semantics(self):
+        columns = dataset_columns_for_method("scm")
 
         for excluded in [
             "signal_type",
@@ -309,23 +211,23 @@ class RankDatasetTest(unittest.TestCase):
         for included in [
             "env",
             "signal",
-            "lsh_daily_macd_wave_index",
-            "lsh_weekly_macd_wave_index",
-            "lsh_daily_macd_rising_initial_flag",
-            "lsh_weekly_macd_rising_initial_flag",
-            "lsh_daily_macd_top_divergence_flag",
-            "lsh_weekly_macd_top_divergence_flag",
-            "lsh_weekly_daily_constructive_combo_flag",
+            "ma25_daily_macd_wave_index",
+            "ma25_weekly_macd_wave_index",
+            "ma25_daily_macd_rising_initial_flag",
+            "ma25_weekly_macd_rising_initial_flag",
+            "ma25_daily_macd_top_divergence_flag",
+            "ma25_weekly_macd_top_divergence_flag",
+            "ma25_weekly_daily_constructive_combo_flag",
         ]:
             self.assertIn(included, columns)
 
-    def test_scm_and_pbm_use_independent_lsh_training_schemas(self):
-        lsh_columns = dataset_columns_for_method("lsh")
-        lsh_raw_columns = raw_factor_columns_for_method("lsh")
+    def test_scm_and_pbm_use_independent_ma25_training_schemas(self):
+        ma25_columns = dataset_columns_for_method("scm")
+        ma25_raw_columns = raw_factor_columns_for_method("scm")
 
         for method in ["scm", "pbm"]:
-            self.assertEqual(dataset_columns_for_method(method), lsh_columns)
-            self.assertEqual(raw_factor_columns_for_method(method), lsh_raw_columns)
+            self.assertEqual(dataset_columns_for_method(method), ma25_columns)
+            self.assertEqual(raw_factor_columns_for_method(method), ma25_raw_columns)
 
     def test_b2_dataset_schema_includes_db_and_market_state_factors(self):
         expected = [
@@ -396,7 +298,7 @@ class RankDatasetTest(unittest.TestCase):
             "market_broad_volatility20_pct",
         ]
 
-        for method in ("b2", "b3", "lsh"):
+        for method in ("b2", "scm", "pbm"):
             for column in expected:
                 self.assertIn(column, dataset_columns_for_method(method))
                 self.assertIn(column, raw_factor_columns_for_method(method))
@@ -449,7 +351,7 @@ class RankDatasetTest(unittest.TestCase):
             "stock_vs_ths_avg_pct_change",
         ]
 
-        for method in ("b2", "b3", "lsh"):
+        for method in ("b2", "scm", "pbm"):
             for column in expected:
                 self.assertIn(column, dataset_columns_for_method(method))
                 self.assertIn(column, raw_factor_columns_for_method(method))
@@ -501,17 +403,12 @@ class RankDatasetTest(unittest.TestCase):
             "volume_event_redundant_position_pct",
             "bar_close_position_pct",
             "bar_upper_shadow_pct",
-            "bar_lower_shadow_pct",
-            "bar_amplitude_pct",
-            "bar_body_pct",
             "signal_bullish_engulf_prev_bearish_flag",
             "signal_bullish_engulf_volume_ratio",
             "signal_yang_engulf_ma25_flag",
-            "signal_prev_b2_flag",
-            "signal_b3_plus_flag",
         ]
 
-        for method in ("b2", "b3", "lsh"):
+        for method in ("b2", "scm", "pbm"):
             for column in expected:
                 self.assertIn(column, dataset_columns_for_method(method))
                 self.assertIn(column, raw_factor_columns_for_method(method))
@@ -605,7 +502,7 @@ class RankDatasetTest(unittest.TestCase):
             "left_peak_days_since_peak",
         ]
 
-        for method in ("b2", "b3", "lsh"):
+        for method in ("b2", "scm", "pbm"):
             columns = dataset_columns_for_method(method)
             raw_columns = raw_factor_columns_for_method(method)
             for column in retained_window_factors:
@@ -649,7 +546,7 @@ class RankDatasetTest(unittest.TestCase):
             "stock_net_mf_to_sw_l2_amount_pct",
         ]
 
-        for method in ("b2", "b3", "lsh"):
+        for method in ("b2", "scm", "pbm"):
             columns = dataset_columns_for_method(method)
             raw_columns = raw_factor_columns_for_method(method)
             for column in legacy_columns:
@@ -657,7 +554,7 @@ class RankDatasetTest(unittest.TestCase):
                 self.assertNotIn(column, raw_columns)
 
     def test_dataset_schema_no_longer_registers_legacy_sw_l2_factors(self):
-        for method in ("b2", "b3", "lsh"):
+        for method in ("b2", "scm", "pbm"):
             columns = dataset_columns_for_method(method)
             raw_columns = raw_factor_columns_for_method(method)
             for column in columns:
@@ -686,10 +583,10 @@ class RankDatasetTest(unittest.TestCase):
         for column in b2_specific:
             self.assertIn(column, dataset_columns_for_method("b2"))
             self.assertIn(column, raw_factor_columns_for_method("b2"))
-            self.assertNotIn(column, dataset_columns_for_method("b3"))
-            self.assertNotIn(column, raw_factor_columns_for_method("b3"))
-            self.assertNotIn(column, dataset_columns_for_method("lsh"))
-            self.assertNotIn(column, raw_factor_columns_for_method("lsh"))
+            self.assertNotIn(column, dataset_columns_for_method("pbm"))
+            self.assertNotIn(column, raw_factor_columns_for_method("pbm"))
+            self.assertNotIn(column, dataset_columns_for_method("scm"))
+            self.assertNotIn(column, raw_factor_columns_for_method("scm"))
 
     def test_dataset_schema_excludes_removed_chip_age_factors_for_model_methods(self):
         removed = [
@@ -708,7 +605,7 @@ class RankDatasetTest(unittest.TestCase):
             "chip_age_l3_b31",
         ]
 
-        for method in ("b2", "b3", "lsh"):
+        for method in ("b2", "scm", "pbm"):
             for column in removed:
                 self.assertNotIn(column, dataset_columns_for_method(method))
                 self.assertNotIn(column, raw_factor_columns_for_method(method))
@@ -766,6 +663,7 @@ class RankDatasetTest(unittest.TestCase):
             }
         }
 
+        prices = {code: [{**row, "price_basis": "qfq"} for row in history] for code, history in prices.items()}
         rows = build_dataset_rows(selection_rows, prices, external_features_by_key=external_features)
 
         self.assertEqual(rows[0]["env"], "neutral")
@@ -941,54 +839,6 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(rows[0]["signal_type"], "trend_start")
         self.assertEqual(rows[0]["close_to_zxdkx_pct"], 1.25)
 
-    def test_load_candidate_rows_reads_b3_factor_artifact_with_b3_schema(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            candidate_dir = root / "candidates"
-            factor_dir = root / "factors" / "2026-05-25.b3"
-            candidate_dir.mkdir(parents=True)
-            factor_dir.mkdir(parents=True)
-            (candidate_dir / "2026-05-25.b3.json").write_text(
-                json.dumps(
-                    {
-                        "method": "b3",
-                        "pick_date": "2026-05-25",
-                        "candidates": [{"code": "000001.SZ", "name": "平安银行", "signal": "B3"}],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            self.write_factor_artifact(
-                factor_dir,
-                {
-                    "method": "b3",
-                    "artifact_key": "2026-05-25",
-                    "rows": [
-                        {
-                            "code": "000001.SZ",
-                            "factors": {
-                                "env": "neutral",
-                                "signal_type": "trend_start",
-                                "close_to_zxdkx_pct": 1.25,
-                            },
-                        }
-                    ],
-                },
-            )
-
-            rows, warnings = load_candidate_rows(
-                root,
-                method="b3",
-                start_date="2026-05-25",
-                end_date="2026-05-25",
-            )
-
-        self.assertEqual(warnings, [])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["method"], "b3")
-        self.assertEqual(rows[0]["signal"], "B3")
-        self.assertEqual(rows[0]["env"], "neutral")
-        self.assertEqual(rows[0]["close_to_zxdkx_pct"], 1.25)
 
     def test_load_candidate_rows_merges_runtime_factor_artifact(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1089,6 +939,7 @@ class RankDatasetTest(unittest.TestCase):
             (candidate_dir / "2026-05-25.b2.json").write_text(
                 json.dumps(
                     {
+                        "method": "b2",
                         "pick_date": "2026-05-25",
                         "environment": {"state": "neutral"},
                         "candidates": [{"code": "000001.SZ", "name": "平安银行"}],
@@ -1116,7 +967,7 @@ class RankDatasetTest(unittest.TestCase):
                         (),
                         {
                             "runtime_root": runtime,
-                            "dsn": "postgres://fixture",
+                            "duckdb_path": "fixture.duckdb",
                             "method": "b2",
                             "start_date": "2026-05-25",
                             "end_date": "2026-05-25",
@@ -1148,6 +999,7 @@ class RankDatasetTest(unittest.TestCase):
             (candidate_dir / "2026-05-25.b2.json").write_text(
                 json.dumps(
                     {
+                        "method": "b2",
                         "pick_date": "2026-05-25",
                         "environment": {"state": "neutral"},
                         "candidates": [{"code": code} for code in codes],
@@ -1193,7 +1045,7 @@ class RankDatasetTest(unittest.TestCase):
                         (),
                         {
                             "runtime_root": runtime,
-                            "dsn": "postgres://must-not-be-used",
+                            "duckdb_path": "must-not-be-used.duckdb",
                             "method": "b2",
                             "start_date": "2026-05-25",
                             "end_date": "2026-05-25",
@@ -1252,7 +1104,7 @@ class RankDatasetTest(unittest.TestCase):
                         (),
                         {
                             "runtime_root": runtime,
-                            "dsn": "postgres://fixture",
+                            "duckdb_path": "fixture.duckdb",
                             "method": "b2",
                             "start_date": "2026-05-25",
                             "end_date": "2026-05-25",
@@ -1364,6 +1216,7 @@ class RankDatasetTest(unittest.TestCase):
             {"trade_date": "2026-06-08", "close": 17.0, "low": 16.6},
         ]
 
+        rows = [{**row, "price_basis": "qfq"} for row in rows]
         labels = compute_forward_labels(rows, "2026-05-25")
 
         self.assertEqual(labels["ret3"], 10.0)
@@ -1371,18 +1224,6 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(labels["ret10"], 70.0)
         self.assertEqual(labels["max_drawdown_5d"], -24.0)
 
-    def test_forward_labels_use_front_adjusted_prices_when_adj_factor_is_available(self):
-        rows = [
-            {"trade_date": "2026-05-25", "close": 10.0, "low": 9.8, "adj_factor": 1.0},
-            {"trade_date": "2026-05-26", "close": 5.5, "low": 5.0, "adj_factor": 2.0},
-            {"trade_date": "2026-05-27", "close": 5.75, "low": 5.5, "adj_factor": 2.0},
-            {"trade_date": "2026-05-28", "close": 6.0, "low": 5.8, "adj_factor": 2.0},
-        ]
-
-        labels = compute_forward_labels(rows, "2026-05-25")
-
-        self.assertEqual(labels["ret3"], 20.0)
-        self.assertEqual(labels["max_drawdown_5d"], 0.0)
 
     def test_forward_labels_do_not_adjust_qfq_prices_twice(self):
         raw_rows = [
@@ -1408,7 +1249,6 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(labels["ret3"], 20.0)
         self.assertEqual(labels["ret5"], 30.0)
         self.assertEqual(labels["max_drawdown_5d"], 0.0)
-        self.assertEqual(labels, compute_forward_labels(raw_rows, "2026-06-01"))
         self.assertEqual(qfq_rows[0]["adj_factor"], 1.0)
         self.assertEqual(qfq_rows[1]["adj_factor"], 2.0)
 
@@ -1428,61 +1268,16 @@ class RankDatasetTest(unittest.TestCase):
             compute_forward_labels(rows, "2026-06-01")
 
     def test_fetch_price_rows_uses_stock_cache_factor_table_for_labels(self):
-        captured: dict[str, object] = {}
-
-        class FakeCursor:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def execute(self, query, params):
-                captured["query"] = query
-                captured["params"] = params
-
-            def fetchall(self):
-                return [
-                    (
-                        "000001.SZ",
-                        date(2026, 6, 1),
-                        10.0,
-                        10.5,
-                        10.8,
-                        9.8,
-                        1000.0,
-                        2.5,
-                        5.0,
-                        1.2,
-                    )
-                ]
-
-        class FakeConnection:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def cursor(self):
-                return FakeCursor()
-
-        previous = sys.modules.get("psycopg")
-        sys.modules["psycopg"] = types.SimpleNamespace(connect=lambda _dsn: FakeConnection())
-        try:
-            rows = fetch_price_rows("postgresql://fixture", ["000001.SZ"], "2026-06-01", "2026-06-05")
-        finally:
-            if previous is None:
-                sys.modules.pop("psycopg", None)
-            else:
-                sys.modules["psycopg"] = previous
-
-        query = str(captured["query"]).lower()
-        self.assertIn("stock_stk_factor_pro", query)
-        self.assertNotIn("daily_market", query)
+        sample = {"ts_code": "000001.SZ", "trade_date": "2026-06-01", "open": 10.0,
+                  "close": 10.5, "high": 10.8, "low": 9.8, "vol": 1000.0,
+                  "turnover_rate": 2.5, "pct_chg": 5.0, "adj_factor": 1.2}
+        with patch("ml.dataset.rank_dataset.query_rows", return_value=[sample]) as query:
+            rows = fetch_price_rows("cache.duckdb", ["000001.SZ"], "2026-06-01", "2026-06-05")
+        sql = query.call_args.args[1].lower()
+        self.assertIn("stock_stk_factor_pro", sql)
+        self.assertIn("close_qfq", sql)
         self.assertEqual(rows["000001.SZ"][0]["adj_factor"], 1.2)
         self.assertEqual(rows["000001.SZ"][0]["price_basis"], "qfq")
-        self.assertIn("close_qfq", query)
 
     def test_build_dataset_rows_merges_labels_and_runtime_factors(self):
         selection_rows = [
@@ -1520,6 +1315,7 @@ class RankDatasetTest(unittest.TestCase):
             ],
         }
 
+        prices = {code: [{**row, "price_basis": "qfq"} for row in history] for code, history in prices.items()}
         rows = build_dataset_rows(selection_rows, prices)
 
         by_code = {row["code"]: row for row in rows}
@@ -1549,6 +1345,7 @@ class RankDatasetTest(unittest.TestCase):
             ]
         }
 
+        prices = {code: [{**row, "price_basis": "qfq"} for row in history] for code, history in prices.items()}
         rows = build_dataset_rows(selection_rows, prices)
 
         self.assertEqual(rows[0]["listing_board"], "manual_board")
@@ -1579,6 +1376,7 @@ class RankDatasetTest(unittest.TestCase):
             ]
         }
 
+        prices = {code: [{**row, "price_basis": "qfq"} for row in history] for code, history in prices.items()}
         rows = build_dataset_rows(selection_rows, prices)
 
         self.assertEqual(rows[0]["signal_type"], "manual_signal")

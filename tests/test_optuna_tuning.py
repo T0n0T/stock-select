@@ -38,7 +38,7 @@ class OptunaTuningTest(unittest.TestCase):
         args = argparse.Namespace(
             objective="default",
             output_root=Path("out"),
-            method="lsh",
+            method="pbm",
             dataset=Path("dataset.csv"),
             feature_manifest=Path("static.json"),
             seed=17,

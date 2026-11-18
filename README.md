@@ -8,9 +8,13 @@
 
 ```env
 STOCK_SELECT_RUNTIME_ROOT=runtime
-POSTGRES_DSN=...
+DUCKDB_PATH=../stock-cache/runtime/stock-cache.duckdb
 TUSHARE_TOKEN=...
 ```
+
+`DUCKDB_PATH` 指向本地 DuckDB 文件，也可以使用 Quack URI（`quack://host:port`）。Quack 远程连接使用 `QUACK_AUTH_TOKEN`，需要校验 TLS 时可设置 `QUACK_SSL_FINGERPRINT`。
+
+当前所有选股、训练和模型维护入口仅支持 `b2`、`scm` 和 `pbm`。旧策略及历史产物兼容代码已删除。prepared 中间缓存使用 Parquet schema 14；旧缓存、候选和模型需重新生成。
 
 Rust CLI 和 `stock-select-ml` Python CLI 都按 `CLI 参数 > shell 环境变量 > 当前目录 .env` 解析配置。
 
@@ -71,7 +75,7 @@ uv run stock-select-ml backfill runs \
 
 # 按 STOCK_SELECT_RECORD_METHODS 或 --methods 补 runtime/record.csv
 uv run stock-select-ml backfill records \
-  --methods b2,lsh \
+  --methods b2,scm \
   --days 10 \
   --workers 4
 ```
@@ -116,10 +120,10 @@ uv run stock-select-ml score evaluate-blends \
   --aux-weight 0.15
 
 uv run stock-select-ml diagnostics controlled-rerank \
-  --method b3 \
-  --dataset diagnostics/ml/b3/controlled-online-window/rank_dataset.csv \
-  --model primary=diagnostics/ml/b3/tuning/primary \
-  --model risk=diagnostics/ml/b3/tuning/risk \
+  --method scm \
+  --dataset diagnostics/ml/scm/controlled-online-window/rank_dataset.csv \
+  --model primary=diagnostics/ml/scm/tuning/primary \
+  --model risk=diagnostics/ml/scm/tuning/risk \
   --primary-model primary \
   --risk-model risk
 
@@ -130,7 +134,7 @@ uv run stock-select-ml model promote diagnostics/ml/b2/model --method b2 --requi
 uv run stock-select-ml model rollback <archive_version> --method b2
 ```
 
-模型维护入口封装当前模型查看、归档浏览、发布和回滚旧归档模型。历史补跑会优先从 DB 查询交易日历（`daily_market` 表），无 DB 连接时兜底跳过周末；`backfill runs` 默认跳过 record 写入，专门补 `record.csv` 时使用 `backfill records`。
+模型维护入口封装当前模型查看、归档浏览、发布和回滚旧归档模型。历史补跑会优先从 `DUCKDB_PATH` 指向的 stock-cache DuckDB 查询交易日历；数据源不可用时兜底跳过周末。`backfill runs` 默认跳过 record 写入，专门补 `record.csv` 时使用 `backfill records`。
 
 ## 参考
 

@@ -19,7 +19,6 @@ use crate::reviewers::b2_scoring::{
     previous_abnormal_move_mode, price_position_mode, score_b2_previous_abnormal_move,
     score_b2_price_position, score_b2_trend_structure, score_b2_volume_behavior,
 };
-use crate::strategies::b2::build_b2_signal_series;
 
 pub fn push_b2_semantic_factors(
     factors: &mut FactorList,
@@ -29,20 +28,10 @@ pub fn push_b2_semantic_factors(
     latest_ma60: Option<f64>,
 ) {
     push_b2_rdagent_rank_factors(factors, history, latest_ma60);
-    push_b2_family_semantic_factors(factors, history, signal, environment_state);
+    push_b2_review_factors(factors, history, signal, environment_state);
 }
 
-pub fn push_b3_semantic_factors(
-    factors: &mut FactorList,
-    history: &[FactorInputRow],
-    signal: Option<&str>,
-    environment_state: Option<&str>,
-) {
-    push_b2_family_semantic_factors(factors, history, signal, environment_state);
-    push_b3_signal_context_factors(factors, history, signal);
-}
-
-pub fn push_lsh_semantic_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
+pub fn push_ma25_semantic_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
     if history.is_empty() {
         return;
     }
@@ -55,40 +44,40 @@ pub fn push_lsh_semantic_factors(factors: &mut FactorList, history: &[FactorInpu
 
     push_number(
         factors,
-        "lsh_daily_macd_wave_index",
+        "ma25_daily_macd_wave_index",
         Some(daily_trend.metrics.state_machine_wave_index as f64),
     );
     push_number(
         factors,
-        "lsh_weekly_macd_wave_index",
+        "ma25_weekly_macd_wave_index",
         Some(weekly_trend.metrics.state_machine_wave_index as f64),
     );
     push_bool(
         factors,
-        "lsh_daily_macd_rising_initial_flag",
+        "ma25_daily_macd_rising_initial_flag",
         daily_trend.is_rising_initial,
     );
     push_bool(
         factors,
-        "lsh_weekly_macd_rising_initial_flag",
+        "ma25_weekly_macd_rising_initial_flag",
         weekly_trend.is_rising_initial,
     );
     push_bool(
         factors,
-        "lsh_daily_macd_top_divergence_flag",
+        "ma25_daily_macd_top_divergence_flag",
         daily_trend.is_top_divergence,
     );
     push_bool(
         factors,
-        "lsh_weekly_macd_top_divergence_flag",
+        "ma25_weekly_macd_top_divergence_flag",
         weekly_trend.is_top_divergence,
     );
     push_bool(
         factors,
-        "lsh_weekly_daily_constructive_combo_flag",
+        "ma25_weekly_daily_constructive_combo_flag",
         is_constructive_macd_trend_combo(&weekly_trend, &daily_trend),
     );
-    push_lsh_bullish_engulfing_factors(factors, history);
+    push_ma25_bullish_engulfing_factors(factors, history);
 }
 
 pub fn push_rank_runtime_common_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
@@ -206,7 +195,7 @@ pub fn push_rank_runtime_common_factors(factors: &mut FactorList, history: &[Fac
     );
 }
 
-fn push_lsh_bullish_engulfing_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
+fn push_ma25_bullish_engulfing_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
     let latest = history.last();
     let previous = history.iter().rev().nth(1);
     let bullish_engulf = latest.zip(previous).is_some_and(|(latest, previous)| {
@@ -222,15 +211,15 @@ fn push_lsh_bullish_engulfing_factors(factors: &mut FactorList, history: &[Facto
 
     push_bool(
         factors,
-        "lsh_bullish_engulf_prev_bearish_flag",
+        "ma25_bullish_engulf_prev_bearish_flag",
         bullish_engulf,
     );
     push_bool(
         factors,
-        "lsh_volume_bullish_engulf_prev_bearish_flag",
+        "ma25_volume_bullish_engulf_prev_bearish_flag",
         volume_bullish_engulf,
     );
-    push_number(factors, "lsh_bullish_engulf_volume_ratio", volume_ratio);
+    push_number(factors, "ma25_bullish_engulf_volume_ratio", volume_ratio);
 }
 
 fn push_b2_rdagent_rank_factors(
@@ -314,86 +303,7 @@ fn push_b2_bullish_engulfing_factors(factors: &mut FactorList, history: &[Factor
     push_number(factors, "b2_yang_engulf_ma25_strength", strength);
 }
 
-pub fn push_b3_signal_context_factors(
-    factors: &mut FactorList,
-    history: &[FactorInputRow],
-    signal: Option<&str>,
-) {
-    push_b3_schema_structure_factors(factors, history);
-
-    let latest_j = history.last().and_then(|row| row.j);
-    let previous_j = history.iter().rev().nth(1).and_then(|row| row.j);
-    push_number(
-        factors,
-        "b3_j_delta",
-        latest_j
-            .zip(previous_j)
-            .map(|(latest, previous)| latest - previous),
-    );
-
-    let prepared = prepared_rows(history);
-    let previous_b2 = if prepared.len() >= 2 {
-        let refs = prepared.iter().collect::<Vec<_>>();
-        let signals = build_b2_signal_series(&refs);
-        signals.cur_b2[prepared.len() - 2]
-    } else {
-        false
-    };
-    push_bool(factors, "b3_prev_b2_flag", previous_b2);
-    push_bool(factors, "b3_plus_flag", matches!(signal, Some("B3+")));
-}
-
-fn push_b3_schema_structure_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
-    let setup_end = history.len().saturating_sub(1).max(1).min(history.len());
-    let setup_history = &history[..setup_end];
-    let close = setup_history
-        .iter()
-        .map(|row| row.close)
-        .collect::<Vec<_>>();
-    let latest = setup_history.last();
-    let previous = setup_history.iter().rev().nth(1);
-    push_number(
-        factors,
-        "bar_upper_shadow_pct",
-        latest.and_then(|row| {
-            (row.close != 0.0).then_some((row.high - row.close) / row.close * 100.0)
-        }),
-    );
-
-    let bullish_engulf = latest.zip(previous).is_some_and(|(latest, previous)| {
-        previous.close < previous.open
-            && latest.close > latest.open
-            && latest.open <= previous.close
-            && latest.close >= previous.open
-    });
-    let volume_ratio = latest.zip(previous).and_then(|(latest, previous)| {
-        (previous.volume > 0.0).then_some(latest.volume / previous.volume)
-    });
-    let volume_bullish_engulf = bullish_engulf && volume_ratio.is_some_and(|ratio| ratio > 1.0);
-    let latest_ma25 = latest.and_then(|row| row.ma25).or_else(|| {
-        rolling_mean_series(&close, 25, 25)
-            .last()
-            .copied()
-            .flatten()
-    });
-    let above_ma25 = latest
-        .zip(latest_ma25)
-        .is_some_and(|(latest, ma25)| latest.close > ma25);
-
-    push_bool(
-        factors,
-        "signal_bullish_engulf_prev_bearish_flag",
-        bullish_engulf,
-    );
-    push_number(factors, "signal_bullish_engulf_volume_ratio", volume_ratio);
-    push_bool(
-        factors,
-        "signal_yang_engulf_ma25_flag",
-        volume_bullish_engulf && above_ma25,
-    );
-}
-
-fn push_b2_family_semantic_factors(
+fn push_b2_review_factors(
     factors: &mut FactorList,
     history: &[FactorInputRow],
     signal: Option<&str>,
@@ -453,17 +363,7 @@ fn push_b2_family_semantic_factors(
         prepared.len(),
         &weekly_trend,
         &daily_trend,
-        signal,
         profile.state.as_str(),
-    );
-    macd_phase = adjust_b2_weak_macd_phase_boundary(
-        macd_phase,
-        profile.state.as_str(),
-        signal,
-        trend_structure,
-        price_position,
-        volume_behavior,
-        previous_abnormal_move,
     );
     macd_phase = adjust_b2_bottom_repair_macd_phase(
         macd_phase,
@@ -592,7 +492,6 @@ fn prepared_rows(history: &[FactorInputRow]) -> Vec<PreparedRow> {
             v_shrink: false,
             safe_mode: false,
             lt_filter: false,
-            yellow_b1: false,
             db_factors: row.db_factors.clone(),
         })
         .collect()
@@ -738,29 +637,6 @@ struct B2MacdSegment {
     end: usize,
     high: f64,
     low: f64,
-}
-
-fn adjust_b2_weak_macd_phase_boundary(
-    macd_phase: f64,
-    environment_state: &str,
-    signal: Option<&str>,
-    trend_structure: f64,
-    price_position: f64,
-    volume_behavior: f64,
-    previous_abnormal_move: f64,
-) -> f64 {
-    if environment_state == "weak"
-        && signal_eq(signal, "B3")
-        && (2.60..=2.62).contains(&macd_phase)
-        && trend_structure >= 4.0
-        && price_position <= 2.0
-        && volume_behavior >= 5.0
-        && previous_abnormal_move >= 5.0
-    {
-        2.75
-    } else {
-        macd_phase
-    }
 }
 
 fn adjust_b2_bottom_repair_macd_phase(
@@ -945,8 +821,4 @@ fn b2_macd_hist_segments(history: &[PreparedRow]) -> Vec<B2MacdSegment> {
         segments.push(segment);
     }
     segments
-}
-
-fn signal_eq(signal: Option<&str>, expected: &str) -> bool {
-    signal.unwrap_or("").trim().eq_ignore_ascii_case(expected)
 }

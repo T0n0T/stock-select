@@ -6,11 +6,11 @@ use stock_select::cache::{prepared_cache_start_date, write_prepared_cache};
 use stock_select::model::{Method, PreparedRow};
 
 #[test]
-fn b2_screen_requires_resolved_dsn_instead_of_stub_success() {
+fn b2_screen_requires_resolved_duckdb_path_instead_of_stub_success() {
     let temp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
-        .env_remove("POSTGRES_DSN")
+        .env_remove("DUCKDB_PATH")
         .args([
             "screen",
             "--runtime-root",
@@ -22,15 +22,17 @@ fn b2_screen_requires_resolved_dsn_instead_of_stub_success() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("A database DSN is required."));
+        .stderr(predicate::str::contains(
+            "DUCKDB_PATH is required; set it in .env or pass --duckdb-path.",
+        ));
 }
 
 #[test]
-fn b3_screen_export_factors_without_cached_environment_reaches_daily_loader() {
+fn b3_screen_is_rejected_after_method_retirement() {
     let temp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
-        .env_remove("POSTGRES_DSN")
+        .env_remove("DUCKDB_PATH")
         .args([
             "screen",
             "--runtime-root",
@@ -43,8 +45,7 @@ fn b3_screen_export_factors_without_cached_environment_reaches_daily_loader() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("A database DSN is required."))
-        .stderr(predicate::str::contains("No manual, persisted, or prepared").not());
+        .stderr(predicate::str::contains("unsupported method: b3"));
 }
 
 #[test]
@@ -60,8 +61,8 @@ fn b2_screen_accepts_pool_file_for_custom_pool() {
         "screen",
         "--runtime-root",
         temp.path().to_str().unwrap(),
-        "--dsn",
-        "postgresql://fixture",
+        "--duckdb-path",
+        "fixture.duckdb",
         "--pick-date",
         "2026-05-25",
         "--method",
@@ -81,14 +82,14 @@ fn b2_screen_accepts_pool_file_for_custom_pool() {
 }
 
 #[test]
-fn b2_screen_reuses_prepared_cache_without_resolving_dsn_or_db_check_config() {
+fn b2_screen_reuses_prepared_cache_without_resolving_duckdb_path_or_db_check_config() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
     write_two_code_cache(temp.path(), pick_date);
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
     cmd.current_dir(temp.path())
-        .env_remove("POSTGRES_DSN")
+        .env_remove("DUCKDB_PATH")
         .env("STOCK_SELECT_DB_CHECK", "not_a_registered_table")
         .args([
             "screen",
@@ -122,8 +123,8 @@ fn b2_screen_pool_source_custom_uses_stock_select_pool_file() {
             "screen",
             "--runtime-root",
             temp.path().to_str().unwrap(),
-            "--dsn",
-            "postgresql://fixture",
+            "--duckdb-path",
+            "fixture.duckdb",
             "--pick-date",
             "2026-05-25",
             "--method",
@@ -234,7 +235,6 @@ fn prepared_row_at_date(
         v_shrink: false,
         safe_mode: true,
         lt_filter: true,
-        yellow_b1: false,
         db_factors: Default::default(),
     }
 }

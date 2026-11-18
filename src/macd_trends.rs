@@ -2,7 +2,6 @@ use chrono::{Datelike, Duration, NaiveDate};
 
 use crate::indicators::macd;
 use crate::model::PreparedRow;
-use crate::review_types::WaveTaskContext;
 
 const RISING_INITIAL_BARS: usize = 3;
 const MIN_TREND_PERIODS: usize = 4;
@@ -132,129 +131,43 @@ pub fn is_constructive_macd_trend_combo(weekly: &MacdTrendState, daily: &MacdTre
     weekly.phase == "rising" && daily.phase == "falling"
 }
 
-pub(crate) fn describe_b2_macd_score_context(
-    weekly: &MacdTrendState,
-    daily: &MacdTrendState,
-    signal: &str,
-) -> WaveTaskContext {
-    let daily_stage = derive_score_stage(daily);
-    let weekly_stage = adjust_b2_context_weekly_stage(derive_score_stage(weekly), &daily_stage);
-    let setup_tag = derive_setup_tag(&weekly_stage, &daily_stage);
-    let risk_flags = score_risk_flags(&weekly_stage, &daily_stage);
-    let reason = build_score_reason(
-        "b2",
-        &weekly_stage,
-        &daily_stage,
-        signal,
-        &setup_tag,
-        &risk_flags,
-    );
-    WaveTaskContext {
-        weekly_wave_context: render_stage_context("周线", &weekly_stage),
-        daily_wave_context: render_stage_context("日线", &daily_stage),
-        wave_combo_context: format!(
-            "b2 组合：{}；{}",
-            describe_setup_tag(&setup_tag),
-            render_combo_reason(&reason)
-        ),
-    }
-}
-
-fn adjust_b2_context_weekly_stage(
-    mut weekly_stage: ScoreStage,
-    daily_stage: &ScoreStage,
-) -> ScoreStage {
-    let above_water_pre_odd = weekly_stage
-        .reason
-        .contains("even wave ended with above-water golden cross")
-        || weekly_stage
-            .reason
-            .contains("above-water golden cross starts next pre odd push");
-    let daily_late_push = matches!(
-        daily_stage.wave_cycle_phase.as_str(),
-        "pre_odd_pushing" | "odd_confirmed"
-    ) && daily_stage.odd_push_stage == "stage3_hist_lagging";
-    if weekly_stage.wave_cycle_phase == "pre_odd_pushing"
-        && weekly_stage.odd_push_stage == "stage2_line_extending"
-        && above_water_pre_odd
-        && daily_late_push
-    {
-        weekly_stage.odd_push_stage = "stage1_hist_dominant".to_string();
-        if weekly_stage.current_wave_index == 5 {
-            weekly_stage.wave_cycle_phase = "odd_confirmed".to_string();
-            weekly_stage.current_opportunity_phase = "not_applicable".to_string();
-            weekly_stage.reason = "pre odd wave confirmed by macd_max above baseline_H".to_string();
-            weekly_stage.risk_flags.clear();
-        }
-    }
-    weekly_stage
-}
-
-pub fn map_b1_macd_phase_score(
-    history_len: usize,
-    weekly: &MacdTrendState,
-    daily: &MacdTrendState,
-    close: &[f64],
-    environment_state: &str,
-) -> f64 {
-    if history_len < 60 {
-        return 3.0;
-    }
-    let percent_score = calculate_dual_period_macd_score(weekly, daily);
-    let linear_score = 1.0 + percent_score.clamp(0.0, 100.0) / 25.0;
-    let mut score = nonlinear_b1_macd_phase_score(linear_score);
-    score = adjust_b1_macd_phase_score(score, environment_state);
-    if weekly.is_top_divergence {
-        score -= 0.5;
-    }
-    if daily.is_top_divergence && !daily_top_divergence_penalty_waived(close) {
-        score -= 0.5;
-    }
-    round2(score.clamp(1.0, 5.0))
-}
-
 pub fn map_b2_macd_phase_score(
     history_len: usize,
     weekly: &MacdTrendState,
     daily: &MacdTrendState,
-    signal: Option<&str>,
     environment_state: &str,
 ) -> f64 {
     if history_len < 60 {
         return 3.0;
     }
     if environment_state == "weak" || environment_state == "neutral" {
-        return score_b2_macd_state_machine_combo_with_fake_weekly(
-            daily,
-            signal.unwrap_or(""),
-            environment_state,
-        );
+        return score_b2_macd_state_machine_combo_with_fake_weekly(daily, environment_state);
     }
-    score_b2_macd_state_machine_combo(weekly, daily, signal.unwrap_or(""), environment_state)
+    score_b2_macd_state_machine_combo(weekly, daily, environment_state)
 }
 
 fn classify_macd_trend_with_state_machine_from_lines(dif: &[f64], dea: &[f64]) -> MacdTrendState {
-    let legacy = classify_macd_trend_from_lines(dif, dea);
+    let baseline = classify_macd_trend_from_lines(dif, dea);
     let state = classify_macd_state_from_lines(dif, dea);
     if state.current_state == "invalid" {
-        return legacy;
+        return baseline;
     }
     if state.events.is_empty() && state.current_wave_index <= 0 {
-        return legacy;
+        return baseline;
     }
     let (phase, direction, phase_index, state_stage) = map_state_machine_trend_fields(&state);
     if phase == "invalid" {
-        return legacy;
+        return baseline;
     }
-    let wave_stage = resolve_state_machine_wave_stage(&state_stage, &legacy.wave_stage);
-    let mut metrics = legacy.metrics.clone();
+    let wave_stage = resolve_state_machine_wave_stage(&state_stage, &baseline.wave_stage);
+    let mut metrics = baseline.metrics.clone();
     apply_state_machine_metrics(&mut metrics, &state);
     MacdTrendState {
         phase,
         direction,
         is_rising_initial: is_state_machine_rising_initial(&state, phase_index),
-        is_top_divergence: is_state_machine_top_divergence(&state, &legacy),
-        bars_in_phase: legacy.bars_in_phase,
+        is_top_divergence: is_state_machine_top_divergence(&state, &baseline),
+        bars_in_phase: baseline.bars_in_phase,
         phase_index,
         reason: state.reason.clone(),
         metrics,
@@ -267,7 +180,7 @@ fn classify_macd_trend_with_state_machine_from_lines(dif: &[f64], dea: &[f64]) -
             "neutral".to_string()
         },
         wave_stage,
-        transition_warnings: state_machine_transition_warnings(&state, &legacy),
+        transition_warnings: state_machine_transition_warnings(&state, &baseline),
     }
 }
 
@@ -1038,12 +951,12 @@ fn map_state_machine_trend_fields(state: &StateMachineResult) -> (String, String
     }
 }
 
-fn resolve_state_machine_wave_stage(state_stage: &str, legacy_stage: &str) -> String {
-    if ["修复", "金叉临近", "等待启动"].contains(&state_stage) || legacy_stage.is_empty()
+fn resolve_state_machine_wave_stage(state_stage: &str, baseline_stage: &str) -> String {
+    if ["修复", "金叉临近", "等待启动"].contains(&state_stage) || baseline_stage.is_empty()
     {
         state_stage.to_string()
     } else {
-        legacy_stage.to_string()
+        baseline_stage.to_string()
     }
 }
 
@@ -1072,18 +985,18 @@ fn is_state_machine_rising_initial(state: &StateMachineResult, phase_index: i32)
     state.current_state == "odd_wave_forming" && (phase_index == 1 || phase_index == 3)
 }
 
-fn is_state_machine_top_divergence(state: &StateMachineResult, legacy: &MacdTrendState) -> bool {
+fn is_state_machine_top_divergence(state: &StateMachineResult, baseline: &MacdTrendState) -> bool {
     if state.current_state != "odd_wave_forming" {
         return false;
     }
-    legacy.is_top_divergence
+    baseline.is_top_divergence
 }
 
 fn state_machine_transition_warnings(
     state: &StateMachineResult,
-    legacy: &MacdTrendState,
+    baseline: &MacdTrendState,
 ) -> Vec<String> {
-    let mut warnings = legacy.transition_warnings.clone();
+    let mut warnings = baseline.transition_warnings.clone();
     if state.golden_cross_imminent {
         warnings.push("金叉临近，奇数浪可能启动".to_string());
     }
@@ -1254,296 +1167,18 @@ fn update_even_repair_flags(
     }
 }
 
-fn calculate_dual_period_macd_score(weekly: &MacdTrendState, daily: &MacdTrendState) -> f64 {
-    let weekly_wave = trend_wave_number(weekly);
-    let daily_wave = trend_wave_number(daily);
-    let weekly_dir = wave_direction(weekly_wave);
-    let daily_dir = wave_direction(daily_wave);
-    let weekly_stage = normalized_wave_stage(weekly);
-    let daily_stage = normalized_wave_stage(daily);
-
-    let weekly_total = weekly_wave_score(weekly, weekly_wave)
-        + stage_score(&weekly_dir, &weekly_stage, true)
-        + weekly_zero_axis_score(weekly);
-    let daily_total =
-        daily_wave_score(daily, daily_wave) + stage_score(&daily_dir, &daily_stage, false) + 6.0;
-    let resonance_total = direction_resonance(&weekly_dir, &daily_dir)
-        + phase_resonance(
-            weekly,
-            daily,
-            &weekly_dir,
-            &daily_dir,
-            &weekly_stage,
-            &daily_stage,
-        )
-        + zero_resonance(weekly, daily);
-    let mut total = weekly_total + daily_total + resonance_total;
-    if weekly_dir == "上升"
-        && weekly_stage == "背离"
-        && daily_dir == "下跌"
-        && (daily_stage == "强势" || daily_stage == "强势转分歧")
-    {
-        if weekly.metrics.hist_change_rate >= 1.0 && daily.metrics.hist_change_rate >= 0.5 {
-            total += 14.0;
-        } else {
-            total += 6.0;
-        }
-    }
-    round2(total.min(100.0))
-}
-
-fn trend_wave_number(trend: &MacdTrendState) -> i32 {
-    match trend.phase.as_str() {
-        "ended" => -1,
-        "idle" | "invalid" => 0,
-        "rising" if trend.phase_index <= 0 => 1,
-        "falling" if trend.phase_index <= 0 => 2,
-        _ => trend.phase_index,
-    }
-}
-
-fn wave_direction(wave: i32) -> String {
-    if [1, 3, 5, 7].contains(&wave) || (wave > 7 && wave % 2 == 1) {
-        "上升"
-    } else if [2, 4, 6].contains(&wave) || (wave > 7 && wave % 2 == 0) {
-        "下跌"
-    } else {
-        "初始"
-    }
-    .to_string()
-}
-
-fn normalized_wave_stage(trend: &MacdTrendState) -> String {
-    if trend.wave_stage == "强势"
-        && trend
-            .transition_warnings
-            .iter()
-            .any(|item| item.contains("强势→分歧"))
-    {
-        return "强势转分歧".to_string();
-    }
-    if trend.wave_stage == "分歧" && trend.is_top_divergence {
-        return "分歧转背离".to_string();
-    }
-    if trend.wave_stage.is_empty() {
-        "初始".to_string()
-    } else {
-        trend.wave_stage.clone()
-    }
-}
-
-fn weekly_wave_score(trend: &MacdTrendState, wave: i32) -> f64 {
-    if trend.phase == "ended" || wave < 0 {
-        0.0
-    } else {
-        match wave {
-            0 => 2.0,
-            1 | 3 => 20.0,
-            5 => 15.0,
-            7.. => 8.0,
-            2 => 16.0,
-            4 => 14.0,
-            6 => 6.0,
-            _ => 0.0,
-        }
-    }
-}
-
-fn daily_wave_score(trend: &MacdTrendState, wave: i32) -> f64 {
-    if trend.phase == "ended" || wave <= 0 {
-        0.0
-    } else {
-        match wave {
-            1 | 3 => 12.0,
-            5 => 9.0,
-            7.. => 5.0,
-            2 => 8.0,
-            4 => 7.0,
-            6 => 4.0,
-            _ => 0.0,
-        }
-    }
-}
-
-fn stage_score(direction: &str, stage: &str, weekly: bool) -> f64 {
-    let table: &[((&str, &str), f64)] = if weekly {
-        &[
-            (("上升", "强势"), 20.0),
-            (("上升", "强势转分歧"), 15.0),
-            (("上升", "分歧"), 12.0),
-            (("上升", "分歧转背离"), 8.0),
-            (("上升", "背离"), 4.0),
-            (("下跌", "背离"), 18.0),
-            (("下跌", "分歧转背离"), 14.0),
-            (("下跌", "分歧"), 10.0),
-            (("下跌", "强势转分歧"), 6.0),
-            (("下跌", "强势"), 2.0),
-        ]
-    } else {
-        &[
-            (("上升", "强势"), 12.0),
-            (("上升", "强势转分歧"), 9.0),
-            (("上升", "分歧"), 7.0),
-            (("上升", "分歧转背离"), 5.0),
-            (("上升", "背离"), 3.0),
-            (("下跌", "背离"), 11.0),
-            (("下跌", "分歧转背离"), 9.0),
-            (("下跌", "分歧"), 6.0),
-            (("下跌", "强势转分歧"), 6.0),
-            (("下跌", "强势"), 2.0),
-        ]
-    };
-    table
-        .iter()
-        .find(|((dir, stg), _)| *dir == direction && *stg == stage)
-        .map(|(_, score)| *score)
-        .unwrap_or(0.0)
-}
-
-fn weekly_zero_axis_score(trend: &MacdTrendState) -> f64 {
-    let dif = trend.metrics.dif;
-    let dea = trend.metrics.dea;
-    let spread = dif - dea;
-    let previous_spread = trend.metrics.previous_spread;
-    if dif > 0.0 && dea > 0.0 && dif > dea {
-        if spread > previous_spread { 10.0 } else { 8.0 }
-    } else if dif > 0.0 && dea > 0.0 {
-        5.0
-    } else if dif > 0.0 || dea > 0.0 {
-        if dif > dea { 4.0 } else { 3.0 }
-    } else if dif > dea {
-        3.0
-    } else {
-        0.0
-    }
-}
-
-fn direction_resonance(weekly_dir: &str, daily_dir: &str) -> f64 {
-    match (weekly_dir, daily_dir) {
-        ("上升", "上升") => 8.0,
-        ("上升", "下跌") => 6.0,
-        ("下跌", "上升") => 4.0,
-        _ => 0.0,
-    }
-}
-
-fn phase_resonance(
-    weekly: &MacdTrendState,
-    _daily: &MacdTrendState,
-    weekly_dir: &str,
-    daily_dir: &str,
-    weekly_stage: &str,
-    daily_stage: &str,
-) -> f64 {
-    if weekly_stage == "强势" && daily_stage == "背离" && weekly.metrics.hist_change_rate >= 1.0
-    {
-        return -2.0;
-    }
-    if weekly_dir == "下跌"
-        && weekly_stage == "背离"
-        && daily_dir == "上升"
-        && daily_stage == "背离"
-    {
-        return 5.0;
-    }
-    let table = [
-        (("强势", "强势"), 7.0),
-        (("强势", "分歧"), 6.0),
-        (("强势", "强势转分歧"), 6.0),
-        (("分歧", "强势"), 6.0),
-        (("强势", "背离"), 1.0),
-        (("强势", "分歧转背离"), 4.0),
-        (("分歧", "分歧"), 4.0),
-        (("分歧", "背离"), 2.0),
-        (("分歧", "分歧转背离"), 2.0),
-        (("背离", "强势"), 8.0),
-        (("背离", "强势转分歧"), 8.0),
-        (("背离", "分歧"), 6.0),
-        (("背离", "分歧转背离"), 4.0),
-        (("背离", "背离"), 1.0),
-    ];
-    table
-        .iter()
-        .find(|((w, d), _)| *w == weekly_stage && *d == daily_stage)
-        .map(|(_, score)| *score)
-        .unwrap_or(3.0)
-}
-
-fn zero_resonance(weekly: &MacdTrendState, daily: &MacdTrendState) -> f64 {
-    let week_dif = weekly.metrics.dif;
-    let week_dea = weekly.metrics.dea;
-    let day_dif = daily.metrics.dif;
-    let day_dea = daily.metrics.dea;
-    if week_dif > 0.0 && week_dea > 0.0 {
-        if day_dif > 0.0 && day_dea > 0.0 {
-            5.0
-        } else if day_dif.abs() < daily.metrics.dif_max_20.abs().max(day_dif.abs()).max(1e-12) * 0.2
-        {
-            4.0
-        } else {
-            3.0
-        }
-    } else if week_dif > 0.0 || week_dea > 0.0 {
-        if day_dif > 0.0 { 2.0 } else { 1.0 }
-    } else {
-        0.0
-    }
-}
-
-fn nonlinear_b1_macd_phase_score(linear_score: f64) -> f64 {
-    let score = linear_score.clamp(1.0, 5.0);
-    if score < 2.4 {
-        round2(score)
-    } else if score < 2.8 {
-        round2((score + 0.3).min(5.0))
-    } else if score < 3.6 {
-        round2(score)
-    } else if score < 3.8 {
-        round2((score - 0.2).max(1.0))
-    } else if score < 4.2 {
-        round2(score)
-    } else {
-        round2((score - 0.4).max(1.0))
-    }
-}
-
-pub fn adjust_b1_macd_phase_score(score: f64, environment_state: &str) -> f64 {
-    let rounded = round2(score.clamp(1.0, 5.0));
-    let adjustment = match environment_state {
-        "weak" => match rounded {
-            3.36 | 3.48 | 3.52 | 3.80 | 3.84 | 3.92 => -0.25,
-            3.96 | 4.00 | 4.04 | 4.08 | 4.12 | 4.16 => 0.20,
-            _ => 0.0,
-        },
-        "neutral" => match rounded {
-            3.84 | 3.92 => -0.10,
-            3.96 | 4.00 | 4.04 | 4.08 | 4.12 | 4.16 => 0.10,
-            _ => 0.0,
-        },
-        "strong" => match rounded {
-            3.88 => 0.10,
-            3.96 | 4.00 | 4.04 | 4.08 | 4.12 => -0.12,
-            4.16 => -0.05,
-            _ => 0.0,
-        },
-        _ => 0.0,
-    };
-    round2((rounded + adjustment).clamp(1.0, 5.0))
-}
-
 fn score_b2_macd_state_machine_combo(
     weekly: &MacdTrendState,
     daily: &MacdTrendState,
-    signal: &str,
     environment_state: &str,
 ) -> f64 {
     let daily_stage = derive_score_stage(daily);
     let weekly_stage = derive_score_stage(weekly);
     let daily_score = score_daily_stage(&daily_stage);
     let weekly_score = round2(daily_score * weekly_coefficient(&weekly_stage, environment_state));
-    let combo_score = score_combo(&weekly_stage, &daily_stage, signal, environment_state);
+    let combo_score = score_combo(&weekly_stage, &daily_stage, environment_state);
     let risk_adjustment = score_risk_adjustment(&weekly_stage, &daily_stage);
-    let method_bias = score_b2_method_bias(&weekly_stage, &daily_stage, signal);
+    let method_bias = score_b2_method_bias(&daily_stage);
     let raw_score = (weekly_score + daily_score + combo_score + risk_adjustment + method_bias)
         .clamp(0.0, 100.0);
     round2(1.0 + ((raw_score + 8.0).min(100.0) / 25.0))
@@ -1551,16 +1186,15 @@ fn score_b2_macd_state_machine_combo(
 
 fn score_b2_macd_state_machine_combo_with_fake_weekly(
     daily: &MacdTrendState,
-    signal: &str,
     environment_state: &str,
 ) -> f64 {
     let daily_stage = derive_score_stage(daily);
     let weekly_stage = waiting_score_stage();
     let daily_score = score_daily_stage(&daily_stage);
     let weekly_score = round2(daily_score * weekly_coefficient(&weekly_stage, environment_state));
-    let combo_score = score_combo(&weekly_stage, &daily_stage, signal, environment_state);
+    let combo_score = score_combo(&weekly_stage, &daily_stage, environment_state);
     let risk_adjustment = score_risk_adjustment(&weekly_stage, &daily_stage);
-    let method_bias = score_b2_method_bias(&weekly_stage, &daily_stage, signal);
+    let method_bias = score_b2_method_bias(&daily_stage);
     let raw_score = (weekly_score + daily_score + combo_score + risk_adjustment + method_bias)
         .clamp(0.0, 100.0);
     round2(1.0 + ((raw_score + 8.0).min(100.0) / 25.0))
@@ -1826,7 +1460,6 @@ fn score_daily_stage(stage: &ScoreStage) -> f64 {
 fn score_combo(
     weekly_stage: &ScoreStage,
     daily_stage: &ScoreStage,
-    signal: &str,
     environment_state: &str,
 ) -> f64 {
     if weekly_stage.wave_cycle_phase == "cycle_ended"
@@ -1840,11 +1473,7 @@ fn score_combo(
         if weekly_stage.wave_cycle_phase == "odd_confirmed"
             && weekly_stage.odd_push_stage == "stage1_hist_dominant"
         {
-            let score = if matches!(signal, "B3" | "B3+") {
-                20.0
-            } else {
-                18.0
-            };
+            let score = 18.0;
             return match environment_state {
                 "weak" => score - 15.0,
                 "strong" => score - 12.0,
@@ -1854,11 +1483,7 @@ fn score_combo(
         if weekly_stage.wave_cycle_phase == "odd_confirmed"
             && weekly_stage.odd_push_stage == "stage3_hist_lagging"
         {
-            let score = if matches!(signal, "B3" | "B3+") {
-                10.0
-            } else {
-                8.0
-            };
+            let score = 8.0;
             return if environment_state == "strong" {
                 score - 2.0
             } else {
@@ -1925,228 +1550,15 @@ fn score_risk_adjustment(weekly_stage: &ScoreStage, daily_stage: &ScoreStage) ->
     score
 }
 
-fn score_b2_method_bias(weekly_stage: &ScoreStage, daily_stage: &ScoreStage, signal: &str) -> f64 {
-    let _ = weekly_stage;
+fn score_b2_method_bias(daily_stage: &ScoreStage) -> f64 {
     if daily_stage.current_opportunity_phase == "pre_odd_imminent"
         && daily_stage.current_wave_index == 3
     {
-        if matches!(signal, "B3" | "B3+") {
-            4.0
-        } else {
-            2.0
-        }
+        2.0
     } else if daily_stage.wave_cycle_phase == "even_repairing" {
         1.0
     } else {
         0.0
-    }
-}
-
-fn derive_setup_tag(weekly_stage: &ScoreStage, daily_stage: &ScoreStage) -> String {
-    if ["cycle_ended"].contains(&weekly_stage.wave_cycle_phase.as_str())
-        || ["cycle_ended"].contains(&daily_stage.wave_cycle_phase.as_str())
-    {
-        return "cycle_ended".to_string();
-    }
-    if daily_stage.current_opportunity_phase == "pre_odd_imminent"
-        && daily_stage.current_wave_index == 3
-    {
-        return "pre_wave3_imminent".to_string();
-    }
-    if daily_stage.current_opportunity_phase == "pre_odd_imminent" {
-        return "pre_odd_imminent".to_string();
-    }
-    if daily_stage.wave_cycle_phase == "even_repairing" {
-        return "even_repairing".to_string();
-    }
-    if daily_stage.wave_cycle_phase == "odd_confirmed"
-        && daily_stage.odd_push_stage == "stage3_hist_lagging"
-    {
-        return "odd_stage3_late".to_string();
-    }
-    format!(
-        "{}__{}",
-        weekly_stage.wave_cycle_phase, daily_stage.wave_cycle_phase
-    )
-}
-
-fn score_risk_flags(weekly_stage: &ScoreStage, daily_stage: &ScoreStage) -> Vec<String> {
-    let mut flags = weekly_stage.risk_flags.clone();
-    flags.extend(daily_stage.risk_flags.clone());
-    if daily_stage.bottom_divergence_valid == Some(true) {
-        flags.push("bottom_divergence_valid".to_string());
-    }
-    if weekly_stage.wave_cycle_phase == "cycle_ended"
-        || daily_stage.wave_cycle_phase == "cycle_ended"
-    {
-        flags.push("cycle_ended".to_string());
-    }
-    if weekly_stage.top_divergence_level == "B" || daily_stage.top_divergence_level == "B" {
-        flags.push("top_divergence_B".to_string());
-    }
-    if weekly_stage.current_wave_index >= 7 || daily_stage.current_wave_index >= 7 {
-        flags.push("late_odd_wave".to_string());
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    flags
-        .into_iter()
-        .filter(|item| seen.insert(item.clone()))
-        .collect()
-}
-
-fn build_score_reason(
-    method: &str,
-    weekly_stage: &ScoreStage,
-    daily_stage: &ScoreStage,
-    signal: &str,
-    setup_tag: &str,
-    risk_flags: &[String],
-) -> String {
-    let mut parts = vec![
-        format!("method={method}"),
-        format!("signal={signal}"),
-        format!("setup={setup_tag}"),
-        format!(
-            "weekly={}:{}",
-            weekly_stage.wave_cycle_phase, weekly_stage.odd_push_stage
-        ),
-        format!(
-            "daily={}:{}:{}",
-            daily_stage.wave_cycle_phase,
-            daily_stage.current_opportunity_phase,
-            daily_stage.odd_push_stage
-        ),
-    ];
-    if risk_flags
-        .iter()
-        .any(|flag| flag == "bottom_divergence_valid")
-    {
-        parts.push("left_bottom_divergence".to_string());
-    }
-    if !risk_flags.is_empty() {
-        parts.push(format!("risk={}", risk_flags.join(",")));
-    }
-    parts.join("; ")
-}
-
-fn render_stage_context(prefix: &str, stage: &ScoreStage) -> String {
-    let mut parts = vec![prefix.to_string(), describe_wave_phase(stage)];
-    let odd_push = describe_odd_push_stage(&stage.odd_push_stage);
-    if !odd_push.is_empty() {
-        parts.push(odd_push.to_string());
-    }
-    if stage.bottom_divergence_valid == Some(true) {
-        parts.push("左侧底背离有效".to_string());
-    } else if stage.bottom_divergence_valid == Some(false) {
-        parts.push("左侧底背离未成立".to_string());
-    }
-    if !stage.reason.is_empty() {
-        parts.push(stage.reason.clone());
-    }
-    parts.join("，")
-}
-
-fn describe_wave_phase(stage: &ScoreStage) -> String {
-    if stage.current_opportunity_phase == "pre_odd_imminent" {
-        let wave_name = if stage.current_wave_index <= 1 {
-            "预备奇数浪".to_string()
-        } else {
-            format!("预备{}浪", wave_number_to_cn(stage.current_wave_index))
-        };
-        return format!("{wave_name}金叉临近");
-    }
-    if stage.wave_cycle_phase == "pre_odd_pushing" {
-        let wave_name = if stage.current_wave_index <= 1 {
-            "预备奇数浪".to_string()
-        } else {
-            format!("预备{}浪", wave_number_to_cn(stage.current_wave_index))
-        };
-        return format!("{wave_name}启动");
-    }
-    match stage.wave_cycle_phase.as_str() {
-        "waiting" => "水下等待".to_string(),
-        "pre_odd_adjusting" => "预备奇数浪调整".to_string(),
-        "odd_confirmed" if stage.current_wave_index > 0 => {
-            format!("{}浪确认", wave_number_to_cn(stage.current_wave_index))
-        }
-        "odd_confirmed" => "奇数浪确认".to_string(),
-        "even_adjusting" => "偶数浪调整".to_string(),
-        "even_repairing" => "偶数浪修复".to_string(),
-        "cycle_ended" => "本轮周期结束".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn describe_odd_push_stage(stage_name: &str) -> &'static str {
-    match stage_name {
-        "stage1_hist_dominant" => "柱体主导强化阶段",
-        "stage2_line_extending" => "线体延伸阶段",
-        "stage3_hist_lagging" => "推进后段",
-        _ => "",
-    }
-}
-
-fn describe_setup_tag(tag: &str) -> String {
-    match tag {
-        "pre_wave3_imminent" => "预备三浪金叉临近".to_string(),
-        "pre_odd_imminent" => "预备奇数浪金叉临近".to_string(),
-        "even_repairing" => "偶数浪修复观察窗口".to_string(),
-        "odd_stage3_late" => "奇数浪推进后段".to_string(),
-        "cycle_ended" => "周期结束低分段".to_string(),
-        _ => tag.replace("__", " / "),
-    }
-}
-
-fn render_combo_reason(reason: &str) -> String {
-    let replacements = [
-        ("setup=pre_wave3_imminent", "形态=预备三浪金叉临近"),
-        ("setup=pre_odd_imminent", "形态=预备奇数浪金叉临近"),
-        ("setup=even_repairing", "形态=偶数浪修复观察窗口"),
-        ("setup=odd_stage3_late", "形态=奇数浪推进后段"),
-        (
-            "weekly=odd_confirmed:stage1_hist_dominant",
-            "周线=奇数浪确认/柱体主导强化阶段",
-        ),
-        (
-            "weekly=odd_confirmed:stage2_line_extending",
-            "周线=奇数浪确认/线体延伸阶段",
-        ),
-        (
-            "weekly=odd_confirmed:stage3_hist_lagging",
-            "周线=奇数浪确认/推进后段",
-        ),
-        ("weekly=even_repairing:not_applicable", "周线=偶数浪修复"),
-        ("weekly=waiting:not_applicable", "周线=水下等待"),
-        (
-            "daily=even_repairing:pre_odd_imminent:not_applicable",
-            "日线=偶数浪修复/预备奇数浪金叉临近",
-        ),
-        (
-            "daily=odd_confirmed:not_applicable:stage3_hist_lagging",
-            "日线=奇数浪确认/推进后段",
-        ),
-        ("left_bottom_divergence", "左侧底背离支持"),
-        ("risk=bottom_divergence_valid", "风险标记=底背离有效"),
-    ];
-    let mut rendered = reason.to_string();
-    for (source, target) in replacements {
-        rendered = rendered.replace(source, target);
-    }
-    rendered
-}
-
-fn wave_number_to_cn(wave_index: i32) -> String {
-    match wave_index {
-        1 => "一".to_string(),
-        2 => "二".to_string(),
-        3 => "三".to_string(),
-        4 => "四".to_string(),
-        5 => "五".to_string(),
-        6 => "六".to_string(),
-        7 => "七".to_string(),
-        8 => "八".to_string(),
-        9 => "九".to_string(),
-        _ => wave_index.to_string(),
     }
 }
 
@@ -2179,19 +1591,6 @@ fn week_ending_friday(date: NaiveDate) -> NaiveDate {
         11 - weekday
     };
     date + Duration::days(days_to_friday)
-}
-
-fn daily_top_divergence_penalty_waived(close: &[f64]) -> bool {
-    let mut pivots = Vec::new();
-    for idx in 1..close.len().saturating_sub(1) {
-        if close[idx] <= close[idx - 1] && close[idx] <= close[idx + 1] {
-            pivots.push(close[idx]);
-        }
-    }
-    if pivots.len() < 2 {
-        return false;
-    }
-    pivots[pivots.len() - 1] >= pivots[pivots.len() - 2]
 }
 
 fn invalid_trend_state(reason: &str, periods: usize) -> MacdTrendState {
@@ -2371,7 +1770,6 @@ mod tests {
             v_shrink: true,
             safe_mode: true,
             lt_filter: true,
-            yellow_b1: false,
             db_factors: Default::default(),
         }
     }

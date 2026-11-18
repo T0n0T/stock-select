@@ -3,43 +3,47 @@ use std::path::{Path, PathBuf};
 use std::collections::BTreeSet;
 use stock_select::config::{
     default_runtime_root_from_home, resolve_config_value_from,
-    resolve_db_check_tables_from_sources, resolve_dsn_from_sources,
+    resolve_db_check_tables_from_sources, resolve_duckdb_path_from_sources,
     resolve_runtime_root_from_sources,
 };
 
 #[test]
 fn config_value_uses_cli_then_shell_then_dotenv() {
-    let dotenv = "POSTGRES_DSN=postgresql://dotenv\nTUSHARE_TOKEN='dotenv-token'\n";
+    let dotenv = "DUCKDB_PATH=/data/from-dotenv.duckdb\nTUSHARE_TOKEN='dotenv-token'\n";
 
     assert_eq!(
         resolve_config_value_from(
-            Some("cli-token"),
-            Some("shell-token"),
+            Some("/data/from-cli.duckdb"),
+            Some("/data/from-shell.duckdb"),
             dotenv,
-            "TUSHARE_TOKEN"
+            "DUCKDB_PATH"
         ),
-        Some("cli-token".to_string())
+        Some("/data/from-cli.duckdb".to_string())
     );
     assert_eq!(
-        resolve_config_value_from(None, Some("shell-token"), dotenv, "TUSHARE_TOKEN"),
-        Some("shell-token".to_string())
+        resolve_config_value_from(None, Some("/data/from-shell.duckdb"), dotenv, "DUCKDB_PATH"),
+        Some("/data/from-shell.duckdb".to_string())
     );
     assert_eq!(
-        resolve_config_value_from(None, None, dotenv, "TUSHARE_TOKEN"),
-        Some("dotenv-token".to_string())
+        resolve_config_value_from(None, None, dotenv, "DUCKDB_PATH"),
+        Some("/data/from-dotenv.duckdb".to_string())
     );
 }
 
 #[test]
-fn dsn_uses_postgres_dsn_sources() {
-    let dsn = resolve_dsn_from_sources(
+fn data_source_uses_duckdb_path_sources() {
+    let duckdb_path = resolve_duckdb_path_from_sources(
         None,
-        Some("postgresql://shell"),
-        "POSTGRES_DSN=postgresql://dotenv\n",
+        Some("/data/stock-cache.duckdb"),
+        "DUCKDB_PATH=/data/from-dotenv.duckdb\n",
     )
     .unwrap();
 
-    assert_eq!(dsn, "postgresql://shell");
+    assert_eq!(duckdb_path, "/data/stock-cache.duckdb");
+    assert_eq!(
+        resolve_duckdb_path_from_sources(None, None, "DUCKDB_PATH=cache.duckdb\n").unwrap(),
+        "cache.duckdb"
+    );
 }
 
 #[test]

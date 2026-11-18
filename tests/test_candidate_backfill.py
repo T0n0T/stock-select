@@ -19,9 +19,9 @@ from ml.subprocesses import format_returncode
 
 class CandidateBackfillTest(unittest.TestCase):
     def test_parse_args_accepts_future_methods_without_new_script(self):
-        args = parse_args(["--start-date", "2026-06-01", "--end-date", "2026-06-04", "--method", "b1"])
+        args = parse_args(["--start-date", "2026-06-01", "--end-date", "2026-06-04", "--method", "scm"])
 
-        self.assertEqual(args.method, "b1")
+        self.assertEqual(args.method, "scm")
 
     def test_select_missing_dates_skips_existing_eod_candidates_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -97,7 +97,7 @@ class CandidateBackfillTest(unittest.TestCase):
         self.assertIn("--runtime-root", command)
         self.assertIn("/tmp/runtime", command)
         self.assertIn("--recompute", command)
-        self.assertNotIn("--dsn", command)
+        self.assertNotIn("--duckdb-path", command)
         self.assertNotIn("--tushare-token", command_text)
 
     def test_build_screen_command_can_request_runtime_factor_export(self):
@@ -284,7 +284,7 @@ class CandidateBackfillTest(unittest.TestCase):
         config = BackfillConfig(
             binary=Path("stock-select-rs"),
             runtime_root=Path("/tmp/runtime"),
-            method="b3",
+            method="scm",
             workers=1,
             quiet=False,
         )

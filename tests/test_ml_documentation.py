@@ -65,11 +65,11 @@ class MlDocumentationTests(unittest.TestCase):
             with self.subTest(old_entrypoint=old_entrypoint):
                 self.assertNotIn(old_entrypoint, combined)
 
-    def test_docs_describe_price_basis_invalidation_without_binary_schema_bump(self):
+    def test_docs_describe_parquet_cache_schema_and_price_basis_invalidation(self):
         for name in ["workflow.md", "screening-methods.md"]:
             text = (PROJECT_ROOT / "docs" / name).read_text(encoding="utf-8")
             with self.subTest(document=name):
-                for fragment in ["schema 11", "price_basis", "asof_qfq_v1", "按需重建"]:
+                for fragment in ["Parquet", "schema 14", "price_basis", "asof_qfq_v1", "按需重建"]:
                     self.assertTrue(fragment in text, f"{name}: missing {fragment}")
 
     def test_screening_methods_document_current_filter_conditions(self):
@@ -79,56 +79,40 @@ class MlDocumentationTests(unittest.TestCase):
 
         expected_fragments = [
             "# 选股筛选方法过滤条件",
-            "实际接入 screen 的方法：`b2`、`b3`、`lsh`、`scm`、`pbm`、`qianlong`。",
+            "当前 `screen` 支持：`b2`、`scm`、`pbm`。",
+            "旧策略及历史产物兼容代码已删除",
+            "所有 Rust 与 Python 入口仅接受当前三种方法",
             "截至 `pick_date` 的约 252 个交易日预计算行情和指标",
+            "Parquet",
+            "schema 14",
             "`STOCK_SELECT_PREPARED_CACHE_LIMIT`",
             "盘中 prepared cache 不计入这个保留数量",
             "`turnover-top` 股票池",
             "取 `turnover_n` 最高的前 5000 只",
-            "`b2` / `b3`：要求当日 `MA25 > MA60`",
+            "`b2`：要求当日 `MA25 > MA60`",
             "`custom` 股票池",
-            "`b1`、`dribull` 当前没有 screen 策略实现",
+            "旧策略名、旧候选结构、未声明类别编码的模型及旧缓存均不再兼容",
             "`b2`",
             "当日涨幅 `pct >= 3.7%`",
             "当前成交量大于前一日成交量",
             "当前 `J` 值大于前一日 `J` 值",
             "同一轮 `J` 转强周期内只保留第一次 raw B2",
             "最新月线 MACD `DEA > 0`",
-            "`b3`",
-            "前一交易日已经触发 `B2`",
-            "当前振幅 `amp` 小于阈值",
-            "当前成交量不超过前一日的 `90%`",
-            "`B3+`：在 `B3` 基础上",
-            "`lsh`",
-            "昨日最低价低于昨日 `MA25`",
-            "当日收盘价高于 `MA25`",
-            "昨日成交量低于前一日成交量",
-            "周线和月线最新 DIF 与 DEA 都大于 0",
             "`scm`（Sustained Cross MA25）",
             "`pbm`（Pullback MA25）",
             "最近 20 日中至少 16 日收盘高于当日 `MA25`，且最近 10 日中至少 8 日收盘高于当日 `MA25`",
             "当前月 `macd_monthly_hist` 大于前一个月",
             "选股日当前价格必须严格高于该最大量红周 K 的开盘价",
             "`runtime/models/scm/` 和 `runtime/models/pbm/`",
-            "`qianlong`",
-            "候选信号写为 `QIANLONG`",
-            "已有 schema 11 prepared cache 可以直接复用",
-            "`macd_weekly_dif` / `macd_weekly_dea`",
-            "`macd_monthly_dif` / `macd_monthly_dea`",
-            "缺失时按日线聚合周线/月线收盘价",
-            "不依赖潜龙专用的上一周期字段",
-            "不改写原缓存文件",
-            "第二段峰值必须已经开始缩短",
-            "最新一根不要求仍处于绿柱段",
-            "实时周线/月线 DIF 和 DEA 从本周/本月开始前的已完成周期状态外推",
-            "`qianlong` 当前没有已发布模型",
             "`run` 阶段不再增加硬过滤",
         ]
         for fragment in expected_fragments:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, docs)
-        self.assertNotIn("macd_weekly_prev_hist", docs)
-        self.assertNotIn("macd_monthly_prev_hist", docs)
+        self.assertNotIn("实际接入 screen 的方法：`b2`、`scm`、`pbm`", docs)
+        self.assertNotIn("## `b3`", docs)
+        self.assertNotIn("## `lsh`", docs)
+        self.assertNotIn("## `qianlong`", docs)
 
     def test_model_docs_describe_random_forest_factor_diagnostics(self):
         docs = (PROJECT_ROOT / "docs" / "model.md").read_text(encoding="utf-8")
@@ -223,10 +207,10 @@ class MlDocumentationTests(unittest.TestCase):
             uv.chmod(0o755)
 
             runtime = root / "runtime"
-            model_dir = runtime / "models" / "b3"
+            model_dir = runtime / "models" / "scm"
             model_dir.mkdir(parents=True)
             (model_dir / "model_state.json").write_text(
-                json.dumps({"eod": {"status": "ready", "model_dir": "models/b3"}}),
+                json.dumps({"eod": {"status": "ready", "model_dir": "models/scm"}}),
                 encoding="utf-8",
             )
             (model_dir / "model.txt").write_text("tree\n", encoding="utf-8")
@@ -262,15 +246,15 @@ class MlDocumentationTests(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
             completed = subprocess.run(
-                [sys.executable, "-m", "ml", "model", "status", "--method", "b3", "--runtime-root", str(runtime)],
+                [sys.executable, "-m", "ml", "model", "status", "--method", "scm", "--runtime-root", str(runtime)],
                 check=True,
                 capture_output=True,
                 env=env,
                 text=True,
             )
 
-        self.assertIn("模型状态: b3", completed.stdout)
-        self.assertIn("生产路由总览: b3", completed.stdout)
+        self.assertIn("模型状态: scm", completed.stdout)
+        self.assertIn("生产路由总览: scm", completed.stdout)
         self.assertIn("日终模型 (eod)", completed.stdout)
         self.assertIn("状态: ready (可用)", completed.stdout)
         self.assertIn("发布版本: 20260608T010203Z", completed.stdout)
@@ -302,23 +286,23 @@ class MlDocumentationTests(unittest.TestCase):
             uv.chmod(0o755)
 
             runtime = root / "runtime"
-            lsh_dir = runtime / "models" / "lsh"
-            intraday_dir = runtime / "models" / "lsh_intraday"
-            lsh_dir.mkdir(parents=True)
+            pbm_dir = runtime / "models" / "pbm"
+            intraday_dir = runtime / "models" / "pbm_intraday"
+            pbm_dir.mkdir(parents=True)
             intraday_dir.mkdir(parents=True)
-            (lsh_dir / "model_state.json").write_text(
+            (pbm_dir / "model_state.json").write_text(
                 json.dumps(
                     {
-                        "eod": {"status": "ready", "model_dir": "models/lsh"},
+                        "eod": {"status": "ready", "model_dir": "models/pbm"},
                         "intraday": {
                             "status": "ready",
-                            "model_dir": "models/lsh_intraday",
+                            "model_dir": "models/pbm_intraday",
                         },
                     }
                 ),
                 encoding="utf-8",
             )
-            for model_dir in [lsh_dir, intraday_dir]:
+            for model_dir in [pbm_dir, intraday_dir]:
                 (model_dir / "model.txt").write_text("tree\n", encoding="utf-8")
                 (model_dir / "model_metadata.json").write_text(
                     json.dumps(
@@ -348,7 +332,7 @@ class MlDocumentationTests(unittest.TestCase):
             env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
             env["STOCK_SELECT_RUNTIME_ROOT"] = str(runtime)
             completed = subprocess.run(
-                [sys.executable, "-m", "ml", "model", "status", "--method", "lsh"],
+                [sys.executable, "-m", "ml", "model", "status", "--method", "pbm"],
                 check=True,
                 capture_output=True,
                 env=env,
@@ -368,7 +352,7 @@ class MlDocumentationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             runtime = root / "runtime"
-            intraday_dir = runtime / "models" / "lsh_intraday"
+            intraday_dir = runtime / "models" / "pbm_intraday"
             intraday_dir.mkdir(parents=True)
             (intraday_dir / "model.txt").write_text("tree\n", encoding="utf-8")
             (intraday_dir / "model_metadata.json").write_text(
@@ -400,7 +384,7 @@ class MlDocumentationTests(unittest.TestCase):
             env = os.environ.copy()
             env["STOCK_SELECT_RUNTIME_ROOT"] = str(runtime)
             completed = subprocess.run(
-                [sys.executable, "-m", "ml", "model", "status", "--method", "lsh"],
+                [sys.executable, "-m", "ml", "model", "status", "--method", "pbm"],
                 check=True,
                 capture_output=True,
                 env=env,
@@ -429,7 +413,7 @@ class MlDocumentationTests(unittest.TestCase):
             uv.chmod(0o755)
 
             runtime = root / "runtime"
-            model_dir = runtime / "models" / "b3"
+            model_dir = runtime / "models" / "scm"
             child_dir = model_dir / "models" / "neutral_rf"
             child_dir.mkdir(parents=True)
             (model_dir / "model_routing.json").write_text(
@@ -473,7 +457,7 @@ class MlDocumentationTests(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
             completed = subprocess.run(
-                [sys.executable, "-m", "ml", "model", "status", "--method", "b3", "--runtime-root", str(runtime)],
+                [sys.executable, "-m", "ml", "model", "status", "--method", "scm", "--runtime-root", str(runtime)],
                 check=True,
                 capture_output=True,
                 env=env,
@@ -502,7 +486,7 @@ class MlDocumentationTests(unittest.TestCase):
             )
             uv.chmod(0o755)
 
-            model_dir = root / "runtime" / "models" / "b3"
+            model_dir = root / "runtime" / "models" / "scm"
             model_dir.mkdir(parents=True)
             (model_dir / "model.txt").write_text("tree\n", encoding="utf-8")
             (model_dir / "model_metadata.json").write_text(
@@ -524,7 +508,7 @@ class MlDocumentationTests(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
             completed = subprocess.run(
-                [sys.executable, "-m", "ml", "model", "status", "--method", "b3", "--target-dir", str(relative_target_dir)],
+                [sys.executable, "-m", "ml", "model", "status", "--method", "scm", "--target-dir", str(relative_target_dir)],
                 check=True,
                 capture_output=True,
                 env=env,

@@ -7,6 +7,8 @@
 # ///
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import csv
 import json
@@ -28,7 +30,7 @@ from ml.training.train_lgbm_rank import read_dataset, rolling_walk_forward_split
 from ml.training.trial_params import lightgbm_ranking_params_with_defaults, trial_config_from_report
 
 
-DEFAULT_METHOD = "b3"
+DEFAULT_METHOD = "b2"
 DEFAULT_DATASET = PROJECT_ROOT / "diagnostics" / "ml" / DEFAULT_METHOD / "controlled-online-window" / "rank_dataset.csv"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "diagnostics" / "ml" / DEFAULT_METHOD / "controlled-online-window" / "rerank-diagnostics"
 DEFAULT_ALPHAS = [0.2, 0.4, 0.6]
@@ -460,7 +462,7 @@ def markdown_report(report: dict[str, Any]) -> str:
         "rank_ic_ret5",
     ]
     lines = [
-        "# B3 controlled rerank diagnostics",
+        "# Model controlled rerank diagnostics",
         "",
         f"dataset: `{report.get('dataset')}`",
         f"oof predictions: `{report.get('outputs', {}).get('oof_predictions_csv')}`",
@@ -574,13 +576,13 @@ def evaluate_controlled_rerank(
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate B3 controlled rolling OOF rerank/risk-filter diagnostics.")
+    parser = argparse.ArgumentParser(description="Evaluate Model controlled rolling OOF rerank/risk-filter diagnostics.")
     add_parser_arguments(parser)
     return parser.parse_args(argv)
 
 
 def add_parser_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--model", action="append", type=parse_model_spec, required=True)
     parser.add_argument("--primary-model", action="append", required=True)
@@ -594,7 +596,7 @@ def add_parser_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
-    parser = subparsers.add_parser("controlled-rerank", description="Evaluate B3 controlled rolling OOF rerank/risk-filter diagnostics.")
+    parser = subparsers.add_parser("controlled-rerank", description="Evaluate Model controlled rolling OOF rerank/risk-filter diagnostics.")
     add_parser_arguments(parser)
     parser.set_defaults(handler=main_from_args)
     return parser

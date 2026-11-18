@@ -15,10 +15,10 @@ use stock_select::db::{
     fetch_db_native_daily_dataset, fetch_db_native_daily_dataset_for_intraday,
     fetch_instrument_info, fetch_stock_period_macd_states, resolve_previous_trade_date,
 };
+use stock_select::engine::artifacts::artifact_key_for_run;
 use stock_select::engine::artifacts::{
     SelectionRunPaths, read_selection_json, write_selection_json,
 };
-use stock_select::engine::b2::artifact_key_for_run;
 use stock_select::engine::capability::ensure_model_run_supported;
 use stock_select::engine::inference::{
     LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector,
@@ -52,6 +52,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    #[command(hide = true)]
+    DbQuery,
     Screen(ScreenArgs),
     Chart(ArtifactCommandArgs),
     CleanIntraday(CleanIntradayArgs),
@@ -81,7 +83,7 @@ struct ScreenArgs {
     runtime_root: Option<PathBuf>,
 
     #[arg(long)]
-    dsn: Option<String>,
+    duckdb_path: Option<String>,
 
     #[arg(long)]
     tushare_token: Option<String>,
@@ -120,7 +122,7 @@ struct ReviewListArgs {
     runtime_root: Option<PathBuf>,
 
     #[arg(long)]
-    dsn: Option<String>,
+    duckdb_path: Option<String>,
 
     #[arg(long)]
     pick_date: Option<NaiveDate>,
@@ -260,7 +262,7 @@ struct RunArgs {
     runtime_root: Option<PathBuf>,
 
     #[arg(long)]
-    dsn: Option<String>,
+    duckdb_path: Option<String>,
 
     #[arg(long)]
     tushare_token: Option<String>,
@@ -336,6 +338,19 @@ struct ChartRow {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Commands::DbQuery => {
+            #[derive(serde::Deserialize)]
+            struct QueryRequest {
+                source: String,
+                sql: String,
+                params: Vec<serde_json::Value>,
+            }
+            let request: QueryRequest = serde_json::from_reader(std::io::stdin().lock())?;
+            let rows =
+                stock_select::db::query_json(&request.source, &request.sql, &request.params)?;
+            serde_json::to_writer(std::io::stdout().lock(), &rows)?;
+            Ok(())
+        }
         Commands::Screen(args) => run_screen_command(args),
         Commands::Chart(args) => run_chart_command(args),
         Commands::CleanIntraday(args) => run_clean_intraday_command(args),
@@ -389,7 +404,8 @@ fn run_model_predict_command(args: ModelPredictArgs) -> anyhow::Result<()> {
 fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
     let pick_date = resolve_pick_date(args.pick_date, args.method.intraday, "screen")?;
     let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
-    let dsn = resolve_config_value(args.dsn.as_deref(), "POSTGRES_DSN").unwrap_or_default();
+    let duckdb_path =
+        resolve_config_value(args.duckdb_path.as_deref(), "DUCKDB_PATH").unwrap_or_default();
     let environment_state = args
         .environment_state
         .as_deref()
@@ -399,7 +415,7 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
         method: args.method.method,
         pick_date,
         runtime_root: runtime_root.clone(),
-        dsn,
+        duckdb_path,
         recompute: args.recompute,
         pool_source: if args.pool_file.is_some() {
             PoolSource::Custom
@@ -416,7 +432,10 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
         let provider = TushareRestProvider::new(token)?;
         run_db_native_intraday_screen(request, &provider)?
     } else {
-        run_db_native_screen_with_dataset_loader(request, fetch_db_native_daily_dataset_if_dsn)?
+        run_db_native_screen_with_dataset_loader(
+            request,
+            fetch_db_native_daily_dataset_if_configured,
+        )?
     };
     let display_path = path.strip_prefix(&runtime_root).unwrap_or(&path);
     println!("screen complete: {}", display_path.display());
@@ -426,7 +445,8 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
 fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
     ensure_model_run_supported(args.method.method)?;
     let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
-    let dsn = resolve_config_value(args.dsn.as_deref(), "POSTGRES_DSN").unwrap_or_default();
+    let duckdb_path =
+        resolve_config_value(args.duckdb_path.as_deref(), "DUCKDB_PATH").unwrap_or_default();
     let _tushare_token = resolve_config_value(args.tushare_token.as_deref(), "TUSHARE_TOKEN");
     let pick_date = resolve_pick_date(args.pick_date, args.method.intraday, "run")?;
     eprintln!(
@@ -447,7 +467,7 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
                 method: args.method.method,
                 pick_date,
                 runtime_root: runtime_root.clone(),
-                dsn: dsn.clone(),
+                duckdb_path: duckdb_path.clone(),
                 recompute: args.recompute,
                 pool_source: if args.pool_file.is_some() {
                     PoolSource::Custom
@@ -468,7 +488,7 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
             } else {
                 run_db_native_screen_with_dataset_loader(
                     request,
-                    fetch_db_native_daily_dataset_if_dsn,
+                    fetch_db_native_daily_dataset_if_configured,
                 )?
             };
             let display_path = path.strip_prefix(&runtime_root).unwrap_or(&path);
@@ -484,7 +504,7 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         &runtime_root,
         pick_date,
         args.method.intraday,
-        dsn.as_str(),
+        duckdb_path.as_str(),
         args.environment_state.clone(),
         args.environment_reason.clone(),
     )?;
@@ -531,7 +551,7 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         pick_date,
         args.method.intraday,
         record_config.as_ref(),
-        &dsn,
+        &duckdb_path,
     )?;
     if artifact_args.limit.is_some() {
         eprintln!("[run] chart start");
@@ -616,7 +636,7 @@ fn maybe_update_run_record(
     pick_date: NaiveDate,
     intraday: bool,
     record_config: Option<&RunRecordConfig>,
-    dsn: &str,
+    duckdb_path: &str,
 ) -> anyhow::Result<()> {
     maybe_update_run_record_with_name_loader(
         runtime_root,
@@ -625,7 +645,7 @@ fn maybe_update_run_record(
         pick_date,
         intraday,
         record_config,
-        dsn,
+        duckdb_path,
         fetch_instrument_info,
     )
 }
@@ -637,7 +657,7 @@ fn maybe_update_run_record_with_name_loader<F>(
     pick_date: NaiveDate,
     intraday: bool,
     record_config: Option<&RunRecordConfig>,
-    dsn: &str,
+    duckdb_path: &str,
     name_loader: F,
 ) -> anyhow::Result<()>
 where
@@ -650,7 +670,7 @@ where
         return Ok(());
     };
     let mut rows = read_display_rows(paths)?;
-    fill_review_list_names(&mut rows, Some(dsn), name_loader)?;
+    fill_review_list_names(&mut rows, Some(duckdb_path), name_loader)?;
     let count = update_run_record(
         runtime_root,
         method,
@@ -734,15 +754,15 @@ fn resolve_command_environment(
     runtime_root: &Path,
     pick_date: NaiveDate,
     intraday: bool,
-    dsn: &str,
+    duckdb_path: &str,
     manual_state: Option<String>,
     manual_reason: Option<String>,
 ) -> anyhow::Result<ResolvedEnvironment> {
     if intraday {
-        let previous_trade_date = if dsn.trim().is_empty() {
+        let previous_trade_date = if duckdb_path.trim().is_empty() {
             Some(pick_date - chrono::Duration::days(1))
         } else {
-            resolve_previous_trade_date(dsn, pick_date).ok()
+            resolve_previous_trade_date(duckdb_path, pick_date).ok()
         };
         return resolve_intraday_market_environment(
             runtime_root,
@@ -1030,14 +1050,14 @@ fn run_review_command(args: ReviewArgs) -> anyhow::Result<()> {
     ensure_model_run_supported(args.method.method)?;
     let pick_date = resolve_pick_date(args.pick_date, args.method.intraday, "review")?;
     let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
-    let dsn = resolve_config_value(None, "POSTGRES_DSN").unwrap_or_default();
+    let duckdb_path = resolve_config_value(None, "DUCKDB_PATH").unwrap_or_default();
     let artifact_key = artifact_key_for_run(pick_date, args.method.intraday);
     let paths = SelectionRunPaths::new(&runtime_root, args.method.method, &artifact_key);
     let environment = resolve_command_environment(
         &runtime_root,
         pick_date,
         args.method.intraday,
-        dsn.as_str(),
+        duckdb_path.as_str(),
         args.environment_state.clone(),
         args.environment_reason.clone(),
     )?;
@@ -1516,7 +1536,9 @@ fn load_chart_histories(
 }
 
 fn run_review_list(args: ReviewListArgs) -> anyhow::Result<()> {
-    run_review_list_with_name_loader(args, |dsn, codes| fetch_instrument_info(dsn, codes))
+    run_review_list_with_name_loader(args, |duckdb_path, codes| {
+        fetch_instrument_info(duckdb_path, codes)
+    })
 }
 
 fn run_review_list_with_name_loader<F>(args: ReviewListArgs, name_loader: F) -> anyhow::Result<()>
@@ -1526,7 +1548,7 @@ where
     let method = args.method.method;
     let intraday = args.method.intraday;
     let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
-    let dsn = resolve_config_value(args.dsn.as_deref(), "POSTGRES_DSN");
+    let duckdb_path = resolve_config_value(args.duckdb_path.as_deref(), "DUCKDB_PATH");
 
     // Resolve pick date early so we can check cache
     let pick_date = resolve_pick_date(args.pick_date, intraday, "review-list")?;
@@ -1544,7 +1566,7 @@ where
                 .ok_or_else(|| anyhow::anyhow!("display artifact missing rows"))?,
         )?;
         let mut rows = limit_display_rows(rows, args.limit)?;
-        fill_review_list_names(&mut rows, dsn.as_deref(), name_loader)?;
+        fill_review_list_names(&mut rows, duckdb_path.as_deref(), name_loader)?;
         for line in format_display_lines(&rows) {
             println!("{line}");
         }
@@ -1552,13 +1574,13 @@ where
     }
 
     // Model-first review: run screen + selection, then display
-    let dsn_val = dsn.clone().unwrap_or_default();
+    let duckdb_path_val = duckdb_path.clone().unwrap_or_default();
     let candidates_path = {
         let request = ScreenRequest {
             method,
             pick_date,
             runtime_root: runtime_root.clone(),
-            dsn: dsn_val.clone(),
+            duckdb_path: duckdb_path_val.clone(),
             recompute: args.recompute,
             pool_source: if args.pool_file.is_some() {
                 PoolSource::Custom
@@ -1575,7 +1597,10 @@ where
             let provider = TushareRestProvider::new(token)?;
             run_db_native_intraday_screen(request, &provider)?
         } else {
-            run_db_native_screen_with_dataset_loader(request, fetch_db_native_daily_dataset_if_dsn)?
+            run_db_native_screen_with_dataset_loader(
+                request,
+                fetch_db_native_daily_dataset_if_configured,
+            )?
         }
     };
 
@@ -1583,7 +1608,7 @@ where
         &runtime_root,
         pick_date,
         intraday,
-        &dsn_val,
+        &duckdb_path_val,
         args.environment_state.clone(),
         args.environment_reason.clone(),
     )?;
@@ -1615,7 +1640,7 @@ where
         pick_date,
         intraday,
         record_config.as_ref(),
-        &dsn_val,
+        &duckdb_path_val,
     )?;
 
     // Read and display results from the now-existing artifact
@@ -1627,7 +1652,7 @@ where
             .ok_or_else(|| anyhow::anyhow!("display artifact missing rows"))?,
     )?;
     let mut rows = limit_display_rows(rows, args.limit)?;
-    fill_review_list_names(&mut rows, dsn.as_deref(), name_loader)?;
+    fill_review_list_names(&mut rows, duckdb_path.as_deref(), name_loader)?;
     for line in format_display_lines(&rows) {
         println!("{line}");
     }
@@ -1636,13 +1661,13 @@ where
 
 fn fill_review_list_names<F>(
     rows: &mut [DisplayRow],
-    dsn: Option<&str>,
+    duckdb_path: Option<&str>,
     name_loader: F,
 ) -> anyhow::Result<()>
 where
     F: FnOnce(&str, &[String]) -> anyhow::Result<BTreeMap<String, InstrumentInfo>>,
 {
-    let Some(dsn) = dsn.filter(|value| !value.trim().is_empty()) else {
+    let Some(duckdb_path) = duckdb_path.filter(|value| !value.trim().is_empty()) else {
         return Ok(());
     };
     let codes = rows
@@ -1653,7 +1678,7 @@ where
         })
         .map(|row| row.code.clone())
         .collect::<Vec<_>>();
-    let instruments = name_loader(dsn, &codes)?;
+    let instruments = name_loader(duckdb_path, &codes)?;
     fill_missing_display_instrument_info(rows, &instruments);
     Ok(())
 }
@@ -1665,26 +1690,26 @@ fn is_blank_display_value(value: Option<&str>) -> bool {
         .is_none()
 }
 
-fn fetch_db_native_daily_dataset_if_dsn(
-    dsn: &str,
+fn fetch_db_native_daily_dataset_if_configured(
+    duckdb_path: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<MarketDataset> {
-    if dsn.trim().is_empty() {
-        anyhow::bail!("A database DSN is required.");
+    if duckdb_path.trim().is_empty() {
+        anyhow::bail!("DUCKDB_PATH is required; set it in .env or pass --duckdb-path.");
     }
-    fetch_db_native_daily_dataset(dsn, start_date, end_date)
+    fetch_db_native_daily_dataset(duckdb_path, start_date, end_date)
 }
 
-fn fetch_db_native_intraday_dataset_if_dsn(
-    dsn: &str,
+fn fetch_db_native_intraday_dataset_if_configured(
+    duckdb_path: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> anyhow::Result<MarketDataset> {
-    if dsn.trim().is_empty() {
-        anyhow::bail!("A database DSN is required.");
+    if duckdb_path.trim().is_empty() {
+        anyhow::bail!("DUCKDB_PATH is required; set it in .env or pass --duckdb-path.");
     }
-    fetch_db_native_daily_dataset_for_intraday(dsn, start_date, end_date)
+    fetch_db_native_daily_dataset_for_intraday(duckdb_path, start_date, end_date)
 }
 
 fn run_db_native_intraday_screen(
@@ -1696,7 +1721,7 @@ fn run_db_native_intraday_screen(
         provider,
         "15:00:00",
         resolve_previous_trade_date,
-        fetch_db_native_intraday_dataset_if_dsn,
+        fetch_db_native_intraday_dataset_if_configured,
         fetch_stock_period_macd_states,
     )
 }
@@ -1740,8 +1765,8 @@ mod tests {
             },
         ];
 
-        fill_review_list_names(&mut rows, Some("postgres://example"), |dsn, codes| {
-            assert_eq!(dsn, "postgres://example");
+        fill_review_list_names(&mut rows, Some("fixture.duckdb"), |duckdb_path, codes| {
+            assert_eq!(duckdb_path, "fixture.duckdb");
             assert_eq!(codes, &["000001.SZ".to_string(), "000002.SZ".to_string()]);
             Ok(BTreeMap::from([
                 (
@@ -1771,7 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn review_list_name_fill_skips_blank_resolved_dsn() {
+    fn review_list_name_fill_skips_blank_resolved_duckdb_path() {
         let mut rows = vec![DisplayRow {
             code: "000001.SZ".to_string(),
             name: None,
@@ -1783,8 +1808,8 @@ mod tests {
             llm_comment: None,
         }];
 
-        fill_review_list_names(&mut rows, Some("   "), |_dsn, _codes| {
-            panic!("blank DSN must not trigger instrument name loading")
+        fill_review_list_names(&mut rows, Some("   "), |_duckdb_path, _codes| {
+            panic!("blank DuckDB path must not trigger instrument name loading")
         })
         .unwrap();
     }
@@ -1824,9 +1849,9 @@ mod tests {
                 window_trading_days: 10,
                 record_limit: 30,
             }),
-            "postgres://example",
-            |dsn, codes| {
-                assert_eq!(dsn, "postgres://example");
+            "fixture.duckdb",
+            |duckdb_path, codes| {
+                assert_eq!(duckdb_path, "fixture.duckdb");
                 assert_eq!(codes, &["002384.SZ".to_string()]);
                 Ok(BTreeMap::from([(
                     "002384.SZ".to_string(),

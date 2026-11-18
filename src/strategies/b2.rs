@@ -67,7 +67,6 @@ pub fn run_b2_strategy_from_refs(rows: &[&PreparedRow], pick_date: NaiveDate) ->
                 close: row.close,
                 turnover_n: row.turnover_n,
                 signal: Some("B2".to_string()),
-                yellow_b1: None,
             });
             *stats.entry("selected".to_string()).or_default() += 1;
             *stats.entry("selected_b2".to_string()).or_default() += 1;
@@ -245,7 +244,6 @@ mod tests {
             v_shrink: true,
             safe_mode: true,
             lt_filter: true,
-            yellow_b1: false,
             db_factors: Default::default(),
         }
     }

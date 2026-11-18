@@ -1,10 +1,11 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "psycopg[binary]",
 # ]
 # ///
 from __future__ import annotations
+
+from ml.methods import SUPPORTED_METHODS, validate_method
 
 import argparse
 import csv
@@ -17,12 +18,14 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence
 
+from ml.db import query_rows
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METHOD = "b2"
 RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
 EXPECTED_FACTOR_ARTIFACT_VERSION = 2
-EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v4"
+EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v5"
 
 
 IDENTITY_COLUMNS = ["date", "code", "name", "env", "method"]
@@ -50,7 +53,7 @@ TRAINING_CATEGORICAL_COLUMNS = [
     "weekly_daily_combo_type",
     *CZSC_TRAINING_CATEGORICAL_COLUMNS,
 ]
-LSH_TRAINING_CATEGORICAL_COLUMNS = [
+MA25_TRAINING_CATEGORICAL_COLUMNS = [
     "signal",
     *CZSC_TRAINING_CATEGORICAL_COLUMNS,
 ]
@@ -290,14 +293,9 @@ DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS = [
     "volume_event_redundant_position_pct",
     "bar_close_position_pct",
     "bar_upper_shadow_pct",
-    "bar_lower_shadow_pct",
-    "bar_amplitude_pct",
-    "bar_body_pct",
     "signal_bullish_engulf_prev_bearish_flag",
     "signal_bullish_engulf_volume_ratio",
     "signal_yang_engulf_ma25_flag",
-    "signal_prev_b2_flag",
-    "signal_b3_plus_flag",
     *CZSC_RAW_FACTOR_COLUMNS,
 ]
 THS_SECTOR_RAW_FACTOR_COLUMNS = [
@@ -369,41 +367,25 @@ B2_RAW_FACTOR_COLUMNS = (
     + THS_SECTOR_RAW_FACTOR_COLUMNS
     + B2_RDAGENT_RAW_FACTOR_COLUMNS
 )
-B3_SPECIFIC_RAW_FACTOR_COLUMNS = [
-    "b3_volume_shrink_ratio",
-    "b3_amplitude_pct",
-    "b3_body_pct",
-    "b3_upper_shadow_pct",
-    "b3_lower_shadow_pct",
-    "b3_j_delta",
-    "b3_prev_b2_flag",
-    "b3_plus_flag",
+MA25_SPECIFIC_RAW_FACTOR_COLUMNS = [
+    "ma25_daily_macd_wave_index",
+    "ma25_weekly_macd_wave_index",
+    "ma25_daily_macd_rising_initial_flag",
+    "ma25_weekly_macd_rising_initial_flag",
+    "ma25_daily_macd_top_divergence_flag",
+    "ma25_weekly_macd_top_divergence_flag",
+    "ma25_weekly_daily_constructive_combo_flag",
+    "ma25_bullish_engulf_prev_bearish_flag",
+    "ma25_volume_bullish_engulf_prev_bearish_flag",
+    "ma25_bullish_engulf_volume_ratio",
 ]
-B3_RAW_FACTOR_COLUMNS = (
-    RAW_FACTOR_COLUMNS
-    + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS
-    + THS_SECTOR_RAW_FACTOR_COLUMNS
-    + B3_SPECIFIC_RAW_FACTOR_COLUMNS
-)
-LSH_SPECIFIC_RAW_FACTOR_COLUMNS = [
-    "lsh_daily_macd_wave_index",
-    "lsh_weekly_macd_wave_index",
-    "lsh_daily_macd_rising_initial_flag",
-    "lsh_weekly_macd_rising_initial_flag",
-    "lsh_daily_macd_top_divergence_flag",
-    "lsh_weekly_macd_top_divergence_flag",
-    "lsh_weekly_daily_constructive_combo_flag",
-    "lsh_bullish_engulf_prev_bearish_flag",
-    "lsh_volume_bullish_engulf_prev_bearish_flag",
-    "lsh_bullish_engulf_volume_ratio",
-]
-LSH_EXCLUDED_RAW_FACTOR_COLUMNS = {
+MA25_EXCLUDED_RAW_FACTOR_COLUMNS = {
     "vr_qfq",
     "cyq_cost_85_to_close_pct",
 }
-LSH_RAW_FACTOR_COLUMNS = [
-    column for column in RAW_FACTOR_COLUMNS if column not in LSH_EXCLUDED_RAW_FACTOR_COLUMNS
-] + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS + THS_SECTOR_RAW_FACTOR_COLUMNS + LSH_SPECIFIC_RAW_FACTOR_COLUMNS
+MA25_RAW_FACTOR_COLUMNS = [
+    column for column in RAW_FACTOR_COLUMNS if column not in MA25_EXCLUDED_RAW_FACTOR_COLUMNS
+] + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS + THS_SECTOR_RAW_FACTOR_COLUMNS + MA25_SPECIFIC_RAW_FACTOR_COLUMNS
 LABEL_COLUMNS = [
     "ret3",
     "ret5",
@@ -417,33 +399,34 @@ LABEL_COLUMNS = [
 ]
 METHOD_RAW_FACTOR_COLUMNS = {
     "b2": B2_RAW_FACTOR_COLUMNS,
-    "b3": B3_RAW_FACTOR_COLUMNS,
-    "lsh": LSH_RAW_FACTOR_COLUMNS,
-    "scm": LSH_RAW_FACTOR_COLUMNS,
-    "pbm": LSH_RAW_FACTOR_COLUMNS,
+    "scm": MA25_RAW_FACTOR_COLUMNS,
+    "pbm": MA25_RAW_FACTOR_COLUMNS,
 }
 
 
 def training_categorical_columns_for_method(method: str) -> list[str]:
-    if method in {"lsh", "scm", "pbm"}:
-        return list(LSH_TRAINING_CATEGORICAL_COLUMNS)
+    validate_method(method)
+    if method in {"scm", "pbm"}:
+        return list(MA25_TRAINING_CATEGORICAL_COLUMNS)
     return list(TRAINING_CATEGORICAL_COLUMNS)
 
 
 def training_macd_numeric_columns_for_method(method: str) -> list[str]:
-    if method in {"lsh", "scm", "pbm"}:
+    validate_method(method)
+    if method in {"scm", "pbm"}:
         return []
     return list(TRAINING_MACD_NUMERIC_COLUMNS)
 
 
 def context_numeric_columns_for_method(method: str) -> list[str]:
-    if method in {"lsh", "scm", "pbm"}:
+    validate_method(method)
+    if method in {"scm", "pbm"}:
         return []
     return list(CONTEXT_NUMERIC_COLUMNS)
 
 
 def raw_factor_columns_for_method(method: str) -> list[str]:
-    return list(METHOD_RAW_FACTOR_COLUMNS.get(method, RAW_FACTOR_COLUMNS))
+    return list(METHOD_RAW_FACTOR_COLUMNS[validate_method(method)])
 
 
 def confirmed_training_columns_for_method(method: str) -> list[str]:
@@ -532,18 +515,12 @@ def format_csv_value(value: Any) -> str:
 
 def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str) -> dict[str, float | None]:
     history = sorted(price_rows, key=lambda row: str(row.get("trade_date")))
-    price_bases = {row.get("price_basis", "raw") for row in history}
-    if len(price_bases) > 1 or not price_bases.issubset({"raw", "qfq"}):
-        raise ValueError("Forward labels require one consistent raw or qfq price basis.")
+    if any(row.get("price_basis") != "qfq" for row in history):
+        raise ValueError("Forward labels require an explicit qfq price basis.")
     current = [row for row in history if str(row.get("trade_date")) <= pick_date]
     if not current:
         return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
-    entry_adj_factor = None if price_bases == {"qfq"} else valid_adj_factor(current[-1].get("adj_factor"))
-    entry_close = adjusted_price(
-        current[-1].get("close"),
-        current[-1].get("adj_factor"),
-        entry_adj_factor,
-    )
+    entry_close = as_float(current[-1].get("close"))
     if entry_close is None or entry_close == 0.0:
         return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
     future = [row for row in history if str(row.get("trade_date")) > pick_date]
@@ -552,17 +529,10 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
         index = position - 1
         if len(future) <= index:
             return None
-        close = adjusted_price(
-            future[index].get("close"),
-            future[index].get("adj_factor"),
-            entry_adj_factor,
-        )
+        close = as_float(future[index].get("close"))
         return round4(pct_change(close, entry_close))
 
-    lows = [
-        adjusted_price(row.get("low"), row.get("adj_factor"), entry_adj_factor)
-        for row in future[:5]
-    ]
+    lows = [as_float(row.get("low")) for row in future[:5]]
     valid_lows = [value for value in lows if value is not None]
     drawdown = round4(pct_change(min(valid_lows), entry_close)) if valid_lows else None
     return {
@@ -571,23 +541,6 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
         "ret10": ret_at(10),
         "max_drawdown_5d": drawdown,
     }
-
-
-def valid_adj_factor(value: Any) -> float | None:
-    parsed = as_float(value)
-    if parsed is None or parsed <= 0.0:
-        return None
-    return parsed
-
-
-def adjusted_price(value: Any, adj_factor: Any, base_adj_factor: float | None) -> float | None:
-    price = as_float(value)
-    if price is None:
-        return None
-    current_factor = valid_adj_factor(adj_factor)
-    if current_factor is None or base_adj_factor is None:
-        return price
-    return price * current_factor / base_adj_factor
 
 
 def median(values: Sequence[float]) -> float | None:
@@ -901,8 +854,8 @@ def extract_candidate_row(candidate: dict[str, Any], *, pick_date: str, method: 
     row = {column: "" for column in dataset_columns}
     row.update(
         {
-            "date": str(candidate.get("pick_date") or pick_date),
-            "code": str(candidate.get("code") or candidate.get("ts_code") or "").strip(),
+            "date": pick_date,
+            "code": str(candidate.get("code") or "").strip(),
             "name": candidate.get("name") or "",
             "env": normalize_env(candidate.get("env") or env),
             "method": method,
@@ -931,6 +884,7 @@ def load_candidate_rows(
     intraday: bool = False,
     db_data_gaps: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    validate_method(method)
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     suffix = f".intraday.{method}.json" if intraday else f".{method}.json"
@@ -939,14 +893,15 @@ def load_candidate_rows(
         if payload is None:
             warnings.append(f"invalid_candidate_json:{path}")
             continue
-        pick_date = str(payload.get("pick_date") or path.name.removesuffix(suffix))
+        pick_date = path.name.removesuffix(suffix)
+        if payload.get("method") != method or payload.get("pick_date") != pick_date:
+            warnings.append(f"invalid_candidate_contract:{path}")
+            continue
         env = "unknown"
         environment = payload.get("environment")
         if isinstance(environment, dict):
             env = normalize_env(environment.get("state"))
         candidate_rows = payload.get("candidates")
-        if not isinstance(candidate_rows, list):
-            candidate_rows = payload.get("rows")
         if not isinstance(candidate_rows, list):
             warnings.append(f"invalid_candidate_rows:{path}")
             continue
@@ -1054,11 +1009,11 @@ def load_dotenv_value(env_path: Path, key: str) -> str | None:
     return None
 
 
-def resolve_dsn(cli_dsn: str | None) -> str:
-    for value in (cli_dsn, os.getenv("POSTGRES_DSN"), load_dotenv_value(PROJECT_ROOT / ".env", "POSTGRES_DSN")):
+def resolve_duckdb_path(cli_duckdb_path: str | None) -> str:
+    for value in (cli_duckdb_path, os.getenv("DUCKDB_PATH"), load_dotenv_value(PROJECT_ROOT / ".env", "DUCKDB_PATH")):
         if value and value.strip():
             return value.strip()
-    raise ValueError("A database DSN is required.")
+    raise ValueError("DUCKDB_PATH is required; set it in .env or pass --duckdb-path.")
 
 
 def resolve_runtime_root(
@@ -1090,47 +1045,26 @@ def resolve_output_dir(output_dir: Path | None, *, method: str) -> Path:
     return output_dir or PROJECT_ROOT / "diagnostics" / "ml" / method
 
 
-def fetch_price_rows(dsn: str, symbols: Sequence[str], start_date: str, end_date: str) -> dict[str, list[dict[str, Any]]]:
-    import psycopg
-
+def fetch_price_rows(duckdb_path: str, symbols: Sequence[str], start_date: str, end_date: str) -> dict[str, list[dict[str, Any]]]:
     if not symbols:
         return {}
     query = """
         SELECT ts_code, trade_date,
-               open_qfq::double precision AS open,
-               close_qfq::double precision AS close,
-               high_qfq::double precision AS high,
-               low_qfq::double precision AS low,
-               vol::double precision,
-               turnover_rate::double precision,
-               pct_chg::double precision,
-               adj_factor::double precision
+               open_qfq AS open, close_qfq AS close, high_qfq AS high, low_qfq AS low,
+               vol, turnover_rate, pct_chg, adj_factor
         FROM stock_stk_factor_pro
-        WHERE ts_code = ANY(%s)
-          AND trade_date >= %s
-          AND trade_date <= %s
+        WHERE ts_code = ANY($1)
+          AND trade_date >= $2::DATE AND trade_date <= $3::DATE
           AND close_qfq IS NOT NULL
         ORDER BY ts_code ASC, trade_date ASC
     """
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    with psycopg.connect(dsn) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query, (list(symbols), start_date, end_date))
-            for ts_code, trade_date, open_price, close, high, low, vol, turnover_rate, pct_chg, adj_factor in cursor.fetchall():
-                grouped[str(ts_code)].append(
-                    {
-                        "trade_date": trade_date.isoformat() if hasattr(trade_date, "isoformat") else str(trade_date),
-                        "open": as_float(open_price),
-                        "close": as_float(close),
-                        "high": as_float(high),
-                        "low": as_float(low),
-                        "vol": as_float(vol),
-                        "turnover_rate": as_float(turnover_rate),
-                        "pct_chg": as_float(pct_chg),
-                        "adj_factor": as_float(adj_factor),
-                        "price_basis": "qfq",
-                    }
-                )
+    for row in query_rows(duckdb_path, query, [list(symbols), start_date, end_date]):
+        grouped[str(row["ts_code"])].append({
+            "trade_date": str(row["trade_date"]),
+            **{key: as_float(row.get(key)) for key in ("open", "close", "high", "low", "vol", "turnover_rate", "pct_chg", "adj_factor")},
+            "price_basis": "qfq",
+        })
     return dict(grouped)
 
 
@@ -1290,8 +1224,8 @@ def fatal_factor_warning_message(warnings: Sequence[str], *, method: str, limit:
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runtime-root", type=Path)
-    parser.add_argument("--dsn")
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--duckdb-path")
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--start-date", required=True, type=validate_date)
     parser.add_argument("--end-date", required=True, type=validate_date)
     parser.add_argument("--output-dir", type=Path)
@@ -1319,7 +1253,7 @@ def main_from_args(args: argparse.Namespace) -> int:
     runtime_root = resolve_runtime_root(args.runtime_root, env_runtime_root=os.getenv(RUNTIME_ROOT_ENV))
     if not runtime_root.exists():
         raise SystemExit(f"runtime root does not exist: {runtime_root}")
-    dsn = resolve_dsn(args.dsn)
+    duckdb_path = resolve_duckdb_path(args.duckdb_path)
     intraday = bool(getattr(args, "intraday", False))
     db_data_gaps: dict[str, Any] = {}
     if args.source == "select":
@@ -1346,7 +1280,7 @@ def main_from_args(args: argparse.Namespace) -> int:
     symbols = sorted({str(row.get("code")) for row in training_input_rows if row.get("code")})
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()
-    prices = fetch_price_rows(dsn, symbols, query_start, query_end)
+    prices = fetch_price_rows(duckdb_path, symbols, query_start, query_end)
     external_features, external_warnings = load_external_feature_rows(args.external_feature_csv, method=args.method)
     warnings.extend(external_warnings)
     rows = build_dataset_rows(

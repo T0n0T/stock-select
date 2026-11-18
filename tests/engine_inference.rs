@@ -10,11 +10,8 @@ use stock_select::model::Method;
 #[test]
 fn lightgbm_default_model_dirs_match_runtime_contract() {
     assert_eq!(default_model_dir(Method::B2).unwrap(), "models/b2");
-    assert_eq!(default_model_dir(Method::B3).unwrap(), "models/b3");
-    assert_eq!(default_model_dir(Method::Lsh).unwrap(), "models/lsh");
     assert_eq!(default_model_dir(Method::Scm).unwrap(), "models/scm");
     assert_eq!(default_model_dir(Method::Pbm).unwrap(), "models/pbm");
-    assert!(default_model_dir(Method::B1).is_none());
 }
 
 #[test]
@@ -147,10 +144,10 @@ fn b2_intraday_model_resolution_uses_intraday_dir_when_ready() {
 }
 
 #[test]
-fn lsh_intraday_model_resolution_uses_intraday_dir_when_ready() {
+fn pbm_intraday_model_resolution_uses_intraday_dir_when_ready() {
     let temp = tempfile::tempdir().unwrap();
-    let model_dir = temp.path().join(default_model_dir(Method::Lsh).unwrap());
-    let intraday_dir = temp.path().join("models/lsh_intraday");
+    let model_dir = temp.path().join(default_model_dir(Method::Pbm).unwrap());
+    let intraday_dir = temp.path().join("models/pbm_intraday");
     std::fs::create_dir_all(&model_dir).unwrap();
     std::fs::create_dir_all(&intraday_dir).unwrap();
     std::fs::write(intraday_dir.join("model.txt"), "tree\n").unwrap();
@@ -159,13 +156,13 @@ fn lsh_intraday_model_resolution_uses_intraday_dir_when_ready() {
         model_dir.join("model_state.json"),
         serde_json::json!({
             "eod": {"status": "blocked", "reason": "eod model is not published yet"},
-            "intraday": {"status": "ready", "model_dir": "models/lsh_intraday"}
+            "intraday": {"status": "ready", "model_dir": "models/pbm_intraday"}
         })
         .to_string(),
     )
     .unwrap();
 
-    let resolved = resolve_method_model_artifacts_for_mode(Method::Lsh, temp.path(), true).unwrap();
+    let resolved = resolve_method_model_artifacts_for_mode(Method::Pbm, temp.path(), true).unwrap();
 
     assert_eq!(resolved.model_path, Some(intraday_dir.join("model.txt")));
     assert_eq!(
@@ -226,21 +223,14 @@ fn b2_model_resolution_rejects_half_deployed_model() {
 }
 
 #[test]
-fn b1_model_resolution_is_unsupported() {
+fn scm_model_resolution_accepts_complete_default_artifacts() {
     let temp = tempfile::tempdir().unwrap();
-    let err = resolve_method_model_artifacts(Method::B1, temp.path()).unwrap_err();
-    assert!(err.to_string().contains("b1 model review is not available"));
-}
-
-#[test]
-fn b3_model_resolution_accepts_complete_default_artifacts() {
-    let temp = tempfile::tempdir().unwrap();
-    let model_dir = temp.path().join(default_model_dir(Method::B3).unwrap());
+    let model_dir = temp.path().join(default_model_dir(Method::Scm).unwrap());
     std::fs::create_dir_all(&model_dir).unwrap();
     std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
     std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
 
-    let resolved = resolve_method_model_artifacts(Method::B3, temp.path()).unwrap();
+    let resolved = resolve_method_model_artifacts(Method::Scm, temp.path()).unwrap();
     assert_eq!(resolved.model_path, Some(model_dir.join("model.txt")));
     assert_eq!(
         resolved.metadata_path,
@@ -249,9 +239,9 @@ fn b3_model_resolution_accepts_complete_default_artifacts() {
 }
 
 #[test]
-fn b3_model_resolution_uses_routed_artifact_for_env_condition() {
+fn scm_model_resolution_uses_routed_artifact_for_env_condition() {
     let temp = tempfile::tempdir().unwrap();
-    let model_dir = temp.path().join(default_model_dir(Method::B3).unwrap());
+    let model_dir = temp.path().join(default_model_dir(Method::Scm).unwrap());
     let strong_dir = model_dir.join("models/strong_sw4");
     let fallback_dir = model_dir.join("models/neutral_rf");
     std::fs::create_dir_all(&strong_dir).unwrap();
@@ -278,14 +268,14 @@ fn b3_model_resolution_uses_routed_artifact_for_env_condition() {
     std::fs::write(fallback_dir.join("model_metadata.json"), "{}\n").unwrap();
 
     let routed = resolve_method_model_artifacts_for_route(
-        Method::B3,
+        Method::Scm,
         temp.path(),
         false,
         [("env", Some("strong"))],
     )
     .unwrap();
     let fallback = resolve_method_model_artifacts_for_route(
-        Method::B3,
+        Method::Scm,
         temp.path(),
         false,
         [("env", Some("weak"))],
@@ -305,9 +295,9 @@ fn b3_model_resolution_uses_routed_artifact_for_env_condition() {
 }
 
 #[test]
-fn b3_model_resolution_accepts_routed_model_manifest_without_top_level_model() {
+fn scm_model_resolution_accepts_routed_model_manifest_without_top_level_model() {
     let temp = tempfile::tempdir().unwrap();
-    let model_dir = temp.path().join(default_model_dir(Method::B3).unwrap());
+    let model_dir = temp.path().join(default_model_dir(Method::Scm).unwrap());
     let strong_dir = model_dir.join("models/strong_sw4");
     std::fs::create_dir_all(&strong_dir).unwrap();
     std::fs::write(strong_dir.join("model.txt"), "tree\n").unwrap();
@@ -324,7 +314,7 @@ fn b3_model_resolution_accepts_routed_model_manifest_without_top_level_model() {
     )
     .unwrap();
 
-    let resolved = resolve_method_model_artifacts(Method::B3, temp.path()).unwrap();
+    let resolved = resolve_method_model_artifacts(Method::Scm, temp.path()).unwrap();
 
     assert_eq!(resolved.model_dir, Some(model_dir.clone()));
     assert_eq!(
@@ -336,14 +326,14 @@ fn b3_model_resolution_accepts_routed_model_manifest_without_top_level_model() {
 }
 
 #[test]
-fn lsh_model_resolution_accepts_complete_default_artifacts() {
+fn pbm_model_resolution_accepts_complete_default_artifacts() {
     let temp = tempfile::tempdir().unwrap();
-    let model_dir = temp.path().join(default_model_dir(Method::Lsh).unwrap());
+    let model_dir = temp.path().join(default_model_dir(Method::Pbm).unwrap());
     std::fs::create_dir_all(&model_dir).unwrap();
     std::fs::write(model_dir.join("model.txt"), "tree\n").unwrap();
     std::fs::write(model_dir.join("model_metadata.json"), "{}\n").unwrap();
 
-    let resolved = resolve_method_model_artifacts(Method::Lsh, temp.path()).unwrap();
+    let resolved = resolve_method_model_artifacts(Method::Pbm, temp.path()).unwrap();
     assert_eq!(resolved.model_path, Some(model_dir.join("model.txt")));
     assert_eq!(
         resolved.metadata_path,
@@ -434,20 +424,6 @@ fn feature_vector_native_categorical_uses_code_maps_and_missing_code() {
     assert_eq!(vector.feature_names, metadata.feature_names);
     assert_eq!(vector.values, vec![1.5, 1.0, -1.0]);
     assert!(vector.missing_numeric_features.is_empty());
-}
-
-#[test]
-fn model_feature_metadata_defaults_to_one_hot_for_legacy_models() {
-    let metadata: ModelFeatureMetadata = serde_json::from_value(serde_json::json!({
-        "numeric_columns": ["close_to_zxdkx_pct"],
-        "categorical_columns": ["env"],
-        "categorical_levels": {"env": ["weak", "strong"]},
-        "feature_names": ["close_to_zxdkx_pct", "env=weak", "env=strong"]
-    }))
-    .unwrap();
-
-    assert_eq!(metadata.categorical_encoding, "one_hot");
-    assert!(metadata.categorical_code_maps.is_empty());
 }
 
 #[test]

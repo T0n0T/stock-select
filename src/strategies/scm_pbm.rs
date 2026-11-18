@@ -162,7 +162,6 @@ fn run_strategy(rows: &[&PreparedRow], pick_date: NaiveDate, method: MethodKind)
             close: current_price,
             turnover_n: row.turnover_n,
             signal: Some(method.signal().to_string()),
-            yellow_b1: None,
         });
         *stats.entry("selected".to_string()).or_default() += 1;
         *stats.entry(format!("selected_{method_name}")).or_default() += 1;

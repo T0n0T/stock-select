@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import os
 import shlex
@@ -32,6 +34,7 @@ class RunConfig:
     dry_run: bool
     recompute: bool
     pool_source: str
+    duckdb_path: str | None = None
 
 
 @dataclass
@@ -55,17 +58,20 @@ class RunResult:
 def build_dates(
     start_date: date,
     end_date: date,
-    dsn: str | None,
+    duckdb_path: str | None,
     runtime_root: Path,
     method: str,
     skip_existing: bool,
+    *,
+    binary: Path | None = None,
 ) -> tuple[list[str], int]:
     start_s = start_date.isoformat()
     end_s = end_date.isoformat()
     trade_dates: list[str] | None = None
-    if dsn:
+    if duckdb_path:
         try:
-            trade_dates = fetch_trade_dates(dsn, start_s, end_s)
+            options = {"binary": binary} if binary is not None else {}
+            trade_dates = fetch_trade_dates(duckdb_path, start_s, end_s, **options)
             print(f"  交易日历: 从 DB 查询到 {len(trade_dates)} 个交易日")
         except Exception:
             trade_dates = None
@@ -92,6 +98,7 @@ def command_for_date(date_str: str, config: RunConfig) -> list[str]:
         method=config.method,
         recompute=config.recompute,
         pool_source=config.pool_source,
+        duckdb_path=config.duckdb_path,
     )
 
 
@@ -234,7 +241,7 @@ def print_failure_summary(failures: Sequence[RunFailure]) -> None:
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start-date", required=True, type=date.fromisoformat, help="起始日期 (含)")
     parser.add_argument("--end-date", required=True, type=date.fromisoformat, help="截止日期 (含)")
-    parser.add_argument("--method", default=None, help="筛选方法，默认 b2")
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=None, help="筛选方法，默认 b2")
     parser.add_argument("--binary", type=Path, default=None, help="二进制路径")
     parser.add_argument("--force", action="store_true", dest="no_skip_existing", help="兼容旧参数；等同 --no-skip-existing")
     parser.add_argument("--no-skip-existing", action="store_true", help="覆盖已存在的 run artifact")
@@ -242,8 +249,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workers", type=int, default=4, help="并发数，默认 4（设为 1 则串行）")
     parser.add_argument("--jobs", "-j", type=int, dest="workers", help="兼容旧参数；等同 --workers")
     parser.add_argument("--runtime-root", type=Path, default=None, help="runtime 根目录")
-    parser.add_argument("--dsn", default=None, help="PostgreSQL DSN（用于查交易日历）")
-    parser.add_argument("--postgres-dsn", dest="dsn", help="兼容旧参数；等同 --dsn")
+    parser.add_argument("--duckdb-path", default=None, help="DuckDB 文件路径或 Quack 地址（用于查交易日历）")
     parser.add_argument("--dates-file", type=Path)
     parser.add_argument("--pool-source", default=DEFAULT_POOL_SOURCE, help="传给 run 自动筛选的股票池来源")
     parser.add_argument("--recompute", action="store_true", help="传给 run 自动筛选，强制重算 prepared cache")
@@ -264,7 +270,7 @@ def _resolve_config(args: argparse.Namespace) -> tuple[RunConfig, str | None]:
         "STOCK_SELECT_RUNTIME_ROOT",
         dotenv,
     ) or "runtime"
-    dsn = resolve_config_value(args.dsn, "POSTGRES_DSN", dotenv)
+    duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv)
     config = RunConfig(
         binary=Path(binary_value),
         runtime_root=Path(runtime_value),
@@ -274,12 +280,13 @@ def _resolve_config(args: argparse.Namespace) -> tuple[RunConfig, str | None]:
         dry_run=args.dry_run,
         recompute=args.recompute,
         pool_source=args.pool_source,
+        duckdb_path=args.duckdb_path,
     )
-    return config, dsn
+    return config, duckdb_path
 
 
 def main_from_args(args: argparse.Namespace) -> int:
-    config, dsn = _resolve_config(args)
+    config, duckdb_path = _resolve_config(args)
     print("配置:")
     print(f"  二进制:        {config.binary}")
     print(f"  方法:          {config.method}")
@@ -288,7 +295,7 @@ def main_from_args(args: argparse.Namespace) -> int:
     print(f"  跳过已存在:    {config.skip_existing}")
     print(f"  并发数:        {config.workers}")
     print(f"  DRY-RUN:       {config.dry_run}")
-    print(f"  PostgreSQL:    {'已配置' if dsn else '未配置（跳过周末兜底）'}")
+    print(f"  DuckDB:        {'已配置' if duckdb_path else '未配置（跳过周末兜底）'}")
     print()
 
     if args.dates_file:
@@ -298,10 +305,11 @@ def main_from_args(args: argparse.Namespace) -> int:
         dates, skipped = build_dates(
             start_date=args.start_date,
             end_date=args.end_date,
-            dsn=dsn,
+            duckdb_path=duckdb_path,
             runtime_root=config.runtime_root,
             method=config.method,
             skip_existing=config.skip_existing,
+            binary=args.binary,
         )
     if not dates:
         print("没有需要补跑的日期。")

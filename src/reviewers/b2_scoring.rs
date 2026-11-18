@@ -390,54 +390,10 @@ pub fn infer_b2_verdict(input: B2VerdictInput<'_>) -> &'static str {
         && input.previous_abnormal_move >= 5.0
         && input.macd_phase < 4.5
         && input.total_score >= 3.45
-        && (input.price_position >= 4.0 || signal_in(input.signal, &["B3", "B3+"]))
+        && input.price_position >= 4.0
         && input.zxdq_5d_slope_pct.is_none_or(|value| value >= 0.0)
         && !overheat_extension
     {
-        return "PASS";
-    }
-
-    if profile_state == Some("neutral")
-        && signal_eq(input.signal, "B3")
-        && input.signal_type == "trend_start"
-        && input.trend_structure == 4.0
-        && input.price_position == 4.0
-        && input.volume_behavior == 3.0
-        && input.previous_abnormal_move >= 5.0
-        && input.total_score <= 4.28
-        && (4.2..=4.42).contains(&input.macd_phase)
-        && !overheat_extension
-    {
-        return "PASS";
-    }
-
-    if profile_state == Some("strong")
-        && signal_in(input.signal, &["B3", "B3+"])
-        && matches!(input.signal_type, "rebound" | "trend_start")
-        && input.trend_structure == 4.0
-        && input.price_position >= 4.0
-        && input.volume_behavior >= 4.0
-        && input.previous_abnormal_move >= 3.0
-        && (3.0..3.8).contains(&input.macd_phase)
-        && input.total_score >= 4.0
-        && !overheat_extension
-    {
-        return "PASS";
-    }
-
-    let b3_upgrade_setup = signal_in(input.signal, &["B3", "B3+"])
-        && matches!(input.signal_type, "rebound" | "trend_start")
-        && input.trend_structure >= 4.0
-        && input.price_position >= 5.0
-        && input.previous_abnormal_move >= 5.0
-        && input.total_score >= 4.15
-        && !is_weak_profile
-        && (input.macd_phase >= 4.2
-            || (input.signal_type == "trend_start" && input.macd_phase >= 3.8));
-    if b3_upgrade_setup {
-        if strong_negative_macd_guard_required && !input.strong_negative_macd_guard {
-            return "WATCH";
-        }
         return "PASS";
     }
 
@@ -494,9 +450,7 @@ pub fn score_b2_watch(input: B2WatchInput<'_>) -> Option<f64> {
         Some("low_volume_elastic_watch") => score += 5.0,
         _ => {}
     }
-    if signal_in(input.signal, &["B3", "B3+"]) {
-        score += 8.0;
-    } else if signal_eq(input.signal, "B5") {
+    if signal_eq(input.signal, "B5") {
         score -= 30.0;
     }
     if input.signal_type == "trend_start" {
@@ -559,10 +513,6 @@ fn profile_mode<'a>(profile: Option<&'a MethodEnvironmentProfile>, field: &str) 
 
 fn signal_eq(signal: Option<&str>, expected: &str) -> bool {
     signal.unwrap_or("").trim().eq_ignore_ascii_case(expected)
-}
-
-fn signal_in(signal: Option<&str>, expected: &[&str]) -> bool {
-    expected.iter().any(|item| signal_eq(signal, item))
 }
 
 fn max_tail(values: &[f64], len: usize) -> Option<f64> {

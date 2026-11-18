@@ -13,6 +13,7 @@ from typing import Callable, Sequence
 from ml.dates import fetch_trade_dates, read_dates_file, validate_date, weekday_fallback
 from ml.env import load_dotenv_values, resolve_config_value
 from ml.paths import PROJECT_ROOT
+from ml.methods import validate_method
 from ml.subprocesses import format_returncode
 
 
@@ -31,6 +32,7 @@ class RecordBackfillConfig:
     workers: int
     dry_run: bool
     record_window_trading_days: int | None
+    duckdb_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,7 +67,7 @@ def parse_methods(value: str | None) -> list[str]:
         method = item.strip().lower()
         if not method or method in seen:
             continue
-        methods.append(method)
+        methods.append(validate_method(method))
         seen.add(method)
     return methods
 
@@ -90,12 +92,13 @@ def build_dates(trade_dates: Sequence[str], days: int) -> list[str]:
     return list(trade_dates)[-days:]
 
 
-def recent_trade_dates(*, days: int, dsn: str | None, end_date: date) -> list[str]:
+def recent_trade_dates(*, days: int, duckdb_path: str | None, end_date: date, binary: Path | None = None) -> list[str]:
     start_date = end_date - timedelta(days=max(days * 3, 21))
     start_s = start_date.isoformat()
     end_s = end_date.isoformat()
-    if dsn:
-        dates = fetch_trade_dates(dsn, start_s, end_s)
+    if duckdb_path:
+        options = {"binary": binary} if binary is not None else {}
+        dates = fetch_trade_dates(duckdb_path, start_s, end_s, **options)
     else:
         dates = weekday_fallback(start_s, end_s)
     return build_dates(dates, days)
@@ -158,13 +161,16 @@ def build_tasks(methods: Sequence[str], dates: Sequence[str]) -> list[RecordTask
 
 
 def command_for_task(task: RecordTask, config: RecordBackfillConfig) -> list[str]:
-    return build_record_run_command(
+    command = build_record_run_command(
         binary=config.binary,
         runtime_root=config.runtime_root,
         method=task.method,
         pick_date=task.pick_date,
         record_window_trading_days=config.record_window_trading_days,
     )
+    if config.duckdb_path:
+        command.extend(["--duckdb-path", config.duckdb_path])
+    return command
 
 
 def _run_one(
@@ -272,8 +278,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dates-file", type=Path, help="交易日文件；优先于 --days/--end-date")
     parser.add_argument("--runtime-root", type=Path, default=None, help="runtime 根目录")
     parser.add_argument("--binary", type=Path, default=None, help="stock-select-rs 二进制路径")
-    parser.add_argument("--dsn", default=None, help="PostgreSQL DSN，用于读取交易日历")
-    parser.add_argument("--postgres-dsn", dest="dsn", help="兼容旧参数；等同 --dsn")
+    parser.add_argument("--duckdb-path", default=None, help="DuckDB 文件路径或 Quack 地址，用于读取交易日历")
     parser.add_argument("--workers", type=int, default=4, help="并发数，默认 4（设为 1 则串行）")
     parser.add_argument("--jobs", "-j", type=int, dest="workers", help="兼容旧参数；等同 --workers")
     parser.add_argument("--dry-run", action="store_true", help="只打印要执行的命令")
@@ -285,12 +290,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _resolve_dates(args: argparse.Namespace, dsn: str | None) -> list[str]:
+def _resolve_dates(args: argparse.Namespace, duckdb_path: str | None) -> list[str]:
     if args.dates_file:
         return read_dates_file(args.dates_file)
     if args.dates:
         return parse_inline_dates(args.dates)
-    return recent_trade_dates(days=args.days, dsn=dsn, end_date=args.end_date)
+    binary = getattr(args, "binary", None)
+    options = {"binary": binary} if binary is not None else {}
+    return recent_trade_dates(days=args.days, duckdb_path=duckdb_path, end_date=args.end_date, **options)
 
 
 def _resolve_record_window(dotenv_values: dict[str, str]) -> int | None:
@@ -326,9 +333,9 @@ def main_from_args(args: argparse.Namespace) -> int:
         )
         or str(DEFAULT_BINARY)
     )
-    dsn = resolve_config_value(args.dsn, "POSTGRES_DSN", dotenv_values)
+    duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv_values)
     record_window_trading_days = _resolve_record_window(dotenv_values)
-    dates = _resolve_dates(args, dsn)
+    dates = _resolve_dates(args, duckdb_path)
     tasks = build_tasks(methods, dates)
     config = RecordBackfillConfig(
         binary=binary,
@@ -337,6 +344,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         workers=args.workers,
         dry_run=args.dry_run,
         record_window_trading_days=record_window_trading_days,
+        duckdb_path=args.duckdb_path,
     )
 
     print("配置:")
@@ -350,7 +358,7 @@ def main_from_args(args: argparse.Namespace) -> int:
     )
     print(f"  并发数:        {config.workers}")
     print(f"  DRY-RUN:       {config.dry_run}")
-    print(f"  PostgreSQL:    {'已配置' if dsn else '未配置（跳过周末兜底）'}")
+    print(f"  DuckDB:        {'已配置' if duckdb_path else '未配置（跳过周末兜底）'}")
     print()
 
     if not tasks:

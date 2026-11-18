@@ -1,11 +1,31 @@
 use chrono::NaiveDate;
 use serde_json::json;
-use stock_select::engine::b2::{
-    B2FactorProvider, CandidatePayloadFactorProvider, artifact_key_for_run,
-    candidate_from_legacy_json,
+use stock_select::engine::artifacts::artifact_key_for_run;
+use stock_select::engine::candidates::{
+    CandidateFactorProvider, CandidatePayloadFactorProvider, candidate_from_json,
 };
 use stock_select::engine::types::{FactorValue, SelectionCandidate};
 use stock_select::model::Method;
+
+#[test]
+fn candidate_history_requires_current_volume_and_turnover_fields() {
+    for history in [
+        json!({"open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5, "vol": 100.0, "turnover_n": 1000.0}),
+        json!({"open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5, "volume": 100.0, "turnover_rate": 2.5}),
+    ] {
+        let candidate = candidate_from_json(
+            &json!({"code": "000001.SZ", "history": [history]}),
+            NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+            Method::B2,
+        )
+        .unwrap();
+        assert!(
+            CandidatePayloadFactorProvider
+                .factor_row(&candidate)
+                .is_err()
+        );
+    }
+}
 
 #[test]
 fn b2_candidate_adapter_preserves_screen_fields() {
@@ -16,8 +36,12 @@ fn b2_candidate_adapter_preserves_screen_fields() {
         "turnover_n": 1200.0,
         "signal": "B2"
     });
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
     assert_eq!(candidate.method, Method::B2);
     assert_eq!(candidate.code, "000001.SZ");
     assert_eq!(candidate.close, Some(10.5));
@@ -46,8 +70,12 @@ fn candidate_payload_factor_provider_extracts_screen_and_raw_factor_fields() {
             "event_flag": true
         }
     });
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
@@ -83,23 +111,23 @@ fn candidate_payload_factor_provider_uses_candidate_method_factor_profile() {
     let candidate = SelectionCandidate {
         code: "000001.SZ".to_string(),
         name: None,
-        method: Method::B3,
+        method: Method::Scm,
         pick_date: NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
         close: Some(10.5),
         turnover_n: Some(1200.0),
-        signal: Some("B3".to_string()),
-        raw_payload: json!({"code": "000001.SZ", "signal": "B3"}),
+        signal: Some("SCM".to_string()),
+        raw_payload: json!({"code": "000001.SZ", "signal": "SCM"}),
     };
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
         .unwrap();
 
-    assert_eq!(row.method, Method::B3);
-    assert_eq!(row.diagnostics["factor_profile"], "b3");
+    assert_eq!(row.method, Method::Scm);
+    assert_eq!(row.diagnostics["factor_profile"], "scm");
     assert_eq!(
         row.diagnostics["factor_bundles"],
-        serde_json::json!(["raw_common", "b3_semantic"])
+        serde_json::json!(["raw_common", "ma25_semantic"])
     );
 }
 
@@ -115,8 +143,12 @@ fn candidate_payload_factor_provider_computes_history_raw_factors() {
             {"open": 109.0, "high": 115.0, "low": 105.0, "close": 110.0, "volume": 150.0, "turnover_n": 15.0, "turnover_rate": 10.0, "ma25": 100.0, "zxdkx": 95.0, "macd_hist": 2.0, "dif": 3.0, "dea": 1.0}
         ]
     });
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
@@ -178,8 +210,12 @@ fn candidate_payload_factor_provider_reports_missing_czsc_snapshot_without_legac
         })
         .collect::<Vec<_>>();
     let value = json!({"code": "000001.SZ", "env": "strong", "signal": "B2", "history": history});
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
@@ -279,8 +315,12 @@ fn candidate_payload_factor_provider_computes_120d_range_factors() {
         })
         .collect::<Vec<_>>();
     let value = json!({"code": "000001.SZ", "history": history});
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
@@ -344,8 +384,12 @@ fn candidate_payload_factor_provider_computes_b2_rdagent_rank_factors() {
         })
         .collect::<Vec<_>>();
     let value = json!({"code": "000001.SZ", "signal": "B2", "history": history});
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
@@ -410,8 +454,12 @@ fn candidate_payload_factor_provider_derives_ma_and_zx_lines_from_history_close(
         })
         .collect::<Vec<_>>();
     let value = json!({"code": "000001.SZ", "history": history});
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
@@ -491,8 +539,12 @@ fn candidate_payload_factor_provider_computes_range_compression_factors() {
         })
         .collect::<Vec<_>>();
     let value = json!({"code": "000001.SZ", "history": history});
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)
@@ -525,8 +577,12 @@ fn candidate_payload_factor_provider_computes_abnormal_volume_event_factors() {
         })
         .collect::<Vec<_>>();
     let value = json!({"code": "000001.SZ", "history": history});
-    let candidate =
-        candidate_from_legacy_json(&value, NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()).unwrap();
+    let candidate = candidate_from_json(
+        &value,
+        NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+        Method::B2,
+    )
+    .unwrap();
 
     let row = CandidatePayloadFactorProvider
         .factor_row(&candidate)

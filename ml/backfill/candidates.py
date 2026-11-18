@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import shlex
 import subprocess
@@ -34,6 +36,7 @@ class BackfillConfig:
     dry_run: bool = False
     quiet: bool = True
     intraday: bool = False
+    duckdb_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,7 @@ def _run_one(
         pool_source=config.pool_source,
         export_factors=config.export_factors,
         intraday=config.intraday,
+        duckdb_path=config.duckdb_path,
     )
     completed = runner(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
     return pick_date, completed
@@ -123,6 +127,7 @@ def run_backfill(
                 pool_source=config.pool_source,
                 export_factors=config.export_factors,
                 intraday=config.intraday,
+                duckdb_path=config.duckdb_path,
             )
             try:
                 actual_date, completed = _run_one(pick_date, config=config, runner=runner)
@@ -169,6 +174,7 @@ def run_backfill(
                 pool_source=config.pool_source,
                 export_factors=config.export_factors,
                 intraday=config.intraday,
+                duckdb_path=config.duckdb_path,
             )
             completed_count += 1
             try:
@@ -211,10 +217,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start-date", type=validate_date, required=True)
     parser.add_argument("--end-date", type=validate_date, required=True)
     parser.add_argument("--runtime-root", type=Path)
-    parser.add_argument("--dsn")
-    parser.add_argument("--postgres-dsn", dest="dsn", help="Compatibility alias for --dsn.")
+    parser.add_argument("--duckdb-path")
     parser.add_argument("--binary", type=Path)
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--jobs", "-j", type=int, dest="workers", help="Compatibility alias for --workers.")
     parser.add_argument("--pool-source", default=DEFAULT_POOL_SOURCE)
@@ -237,10 +242,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _resolve_trade_dates(args: argparse.Namespace, dotenv_values: dict[str, str]) -> list[str]:
     if args.dates_file:
         return read_dates_file(args.dates_file)
-    dsn = resolve_config_value(args.dsn, "POSTGRES_DSN", dotenv_values)
-    if not dsn:
-        raise SystemExit("POSTGRES_DSN is required; set it in .env, export it, or pass --dsn.")
-    return fetch_trade_dates(dsn, args.start_date, args.end_date)
+    duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv_values)
+    if not duckdb_path:
+        raise SystemExit("DUCKDB_PATH is required; set it in .env, export it, or pass --duckdb-path.")
+    binary = getattr(args, "binary", None)
+    options = {"binary": binary} if binary is not None else {}
+    return fetch_trade_dates(duckdb_path, args.start_date, args.end_date, **options)
 
 
 def main_from_args(args: argparse.Namespace) -> int:
@@ -270,7 +277,7 @@ def main_from_args(args: argparse.Namespace) -> int:
     )
 
     config = BackfillConfig(
-        binary=resolve_binary(args.binary),
+        binary=resolve_binary(args.binary or (Path(value) if (value := resolve_config_value(None, "STOCK_SELECT_BIN", dotenv_values)) else None)),
         runtime_root=runtime_root,
         method=args.method,
         workers=args.workers,
@@ -280,6 +287,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         quiet=args.quiet,
         intraday=args.intraday,
+        duckdb_path=args.duckdb_path,
     )
     if args.dry_run:
         for pick_date in selected_dates:
@@ -292,6 +300,7 @@ def main_from_args(args: argparse.Namespace) -> int:
                 pool_source=config.pool_source,
                 export_factors=config.export_factors,
                 intraday=config.intraday,
+                duckdb_path=config.duckdb_path,
             )
             print(shlex.join(command))
     try:

@@ -29,12 +29,12 @@ class IntradayProxyDatasetTest(unittest.TestCase):
             self.assertEqual(classify_intraday_factor(column), "unavailable_intraday")
 
         classified = set().union(*map(set, INTRADAY_FACTOR_GROUPS.values()))
-        self.assertIn("lsh_bullish_engulf_volume_ratio", classified)
+        self.assertIn("ma25_bullish_engulf_volume_ratio", classified)
         for column in [
-            "lsh_weekly_macd_wave_index",
-            "lsh_weekly_macd_rising_initial_flag",
-            "lsh_weekly_macd_top_divergence_flag",
-            "lsh_weekly_daily_constructive_combo_flag",
+            "ma25_weekly_macd_wave_index",
+            "ma25_weekly_macd_rising_initial_flag",
+            "ma25_weekly_macd_top_divergence_flag",
+            "ma25_weekly_daily_constructive_combo_flag",
             "macd_weekly_hist",
             "macd_monthly_hist",
         ]:
@@ -56,11 +56,10 @@ class IntradayProxyDatasetTest(unittest.TestCase):
             "macd_weekly_dea_pctile",
             "macd_state_weekly_phase_type",
             "bar_upper_shadow_pct",
-            "signal_prev_b2_flag",
         ]:
             self.assertEqual(classify_intraday_factor(column), "unavailable_intraday")
 
-        # LSH screening emits this value for every selected row. It is available
+        # SCM screening emits this value for every selected row. It is available
         # intraday, but constant and therefore deliberately not a model feature.
         self.assertEqual(classify_intraday_factor("signal"), "constant_strategy_metadata")
 
@@ -71,9 +70,9 @@ class IntradayProxyDatasetTest(unittest.TestCase):
             source.write_text(
                 "date,code,env,close_to_ma25_pct,stock_mf_net_amount,turnover_rate_f,"
                 "czsc_close_to_last_bi_high_pct,czsc_last_bi_range_width_pct,czsc_status,"
-                "lsh_bullish_engulf_volume_ratio,lsh_weekly_macd_wave_index,structure_zxdkx,signal,ret3,rank_label_3d\n"
-                "2026-07-01,000001.SZ,strong,1.2,99,2.1,-2.5,8.0,ok,1.4,2,10.2,LSH,3.1,3\n"
-                "2026-07-02,000002.SZ,weak,0.8,88,1.8,-1.5,6.0,ok,0.9,3,11.4,LSH,-1.0,0\n",
+                "ma25_bullish_engulf_volume_ratio,ma25_weekly_macd_wave_index,structure_zxdkx,signal,ret3,rank_label_3d\n"
+                "2026-07-01,000001.SZ,strong,1.2,99,2.1,-2.5,8.0,ok,1.4,2,10.2,SCM,3.1,3\n"
+                "2026-07-02,000002.SZ,weak,0.8,88,1.8,-1.5,6.0,ok,0.9,3,11.4,SCM,-1.0,0\n",
                 encoding="utf-8",
             )
             output_dir = root / "output"
@@ -90,8 +89,8 @@ class IntradayProxyDatasetTest(unittest.TestCase):
         self.assertIn("close_to_ma25_pct", summary["feature_columns"])
         self.assertNotIn("czsc_last_bi_range_width_pct", summary["feature_columns"])
         self.assertNotIn("czsc_status", summary["feature_columns"])
-        self.assertIn("lsh_bullish_engulf_volume_ratio", summary["feature_columns"])
-        self.assertIn("lsh_weekly_macd_wave_index", summary["feature_columns"])
+        self.assertIn("ma25_bullish_engulf_volume_ratio", summary["feature_columns"])
+        self.assertIn("ma25_weekly_macd_wave_index", summary["feature_columns"])
         self.assertNotIn("structure_zxdkx", summary["feature_columns"])
         self.assertNotIn("signal", summary["feature_columns"])
         self.assertIn("signal", summary["constant_strategy_metadata_columns"])
@@ -100,6 +99,10 @@ class IntradayProxyDatasetTest(unittest.TestCase):
         self.assertNotIn("czsc_close_to_last_bi_high_pct", summary["feature_columns"])
         self.assertNotIn("intraday_czsc_close_to_last_bi_high_pct", summary["feature_columns"])
         self.assertEqual(rows[0]["rank_label_3d"], "3")
+        self.assertEqual(summary["capability_basis"]["previous_eod_tables"], [
+            "stock_stk_factor_pro", "calc_daily_czsc_structure",
+            "calc_daily_rolling_factors", "calc_indicator_state",
+        ])
         self.assertEqual(summary["proxy_aliases"], {})
         self.assertNotIn("intraday_factor_artifact", summary)
         self.assertEqual(summary["factor_groups"]["unavailable_intraday"]["reason"], "盘中无当天数据源")

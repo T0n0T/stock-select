@@ -10,10 +10,17 @@
     "num_boost_round": 1,
     "learning_rate": 1.0
   },
-  "numeric_columns": ["close_to_ma25_pct"],
+  "numeric_columns": [
+    "close_to_ma25_pct"
+  ],
   "categorical_columns": [],
   "categorical_levels": {},
-  "feature_names": ["close_to_ma25_pct"],
-  "lightgbm_feature_names": ["close_to_ma25_pct"],
-  "label_column": "rank_label_3d"
+  "feature_names": [
+    "close_to_ma25_pct"
+  ],
+  "lightgbm_feature_names": [
+    "close_to_ma25_pct"
+  ],
+  "label_column": "rank_label_3d",
+  "categorical_encoding": "one_hot"
 }

@@ -12,10 +12,14 @@ git status --short --branch
 配置优先级是 CLI 参数 > shell 环境变量 > 当前目录 `.env`。常用变量：
 
 - `STOCK_SELECT_RUNTIME_ROOT`
-- `POSTGRES_DSN`
+- `DUCKDB_PATH`
+- `QUACK_AUTH_TOKEN`（Quack 服务必需）
+- `QUACK_SSL_FINGERPRINT`（TLS 指纹，可选）
 - `TUSHARE_TOKEN`
 
 不要打印凭据值。缺少 runtime 时优先使用 `.env` 的 `STOCK_SELECT_RUNTIME_ROOT`；仍缺省时 CLI 默认 `~/.agents/skills/stock-select/runtime`。
+
+`DUCKDB_PATH` 可设为本地 DuckDB 文件路径或 `quack://host:port`。prepared 中间缓存使用 Parquet（schema 14）；旧二进制缓存不会加载。screen 方法为 `b2`、`scm`、`pbm`。
 
 ## 盘后筛选排序
 

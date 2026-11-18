@@ -1,5 +1,11 @@
 # 工作流程
 
+## 数据源和中间缓存
+
+`DUCKDB_PATH` 支持本地 DuckDB 文件，例如 `../stock-cache/runtime/stock-cache.duckdb`，也支持 Quack URI，例如 `quack://host:9494`。两种方式都由 `duckdb-neo` 只读访问；Quack 认证使用 `QUACK_AUTH_TOKEN`，TLS 指纹可通过 `QUACK_SSL_FINGERPRINT` 设置。
+
+prepared 中间缓存统一使用 Parquet（`.parquet`，schema 14），动态因子以数值列存储。旧二进制中间缓存不再兼容，升级后会按需重新生成。
+
 ## 场景一：每日常规 EOD 生产 run
 
 收盘后运行一次完整流程。
@@ -72,12 +78,6 @@ stock-select-rs review-list \
 
 盘中 artifact key 为 `<date>.intraday.b2`，与 EOD 隔离。
 
-`qianlong` 目前只支持筛选，不支持模型 run；盘中可使用：
-
-```bash
-stock-select-rs screen --method qianlong --intraday
-```
-
 清理盘中运行产物：
 
 ```bash
@@ -96,9 +96,9 @@ EOD prepared cache 默认只保留最近 30 个交易日 artifact，以减少 `r
 
 DB-native EOD 加载保留原始 OHLC，再将每只股票的历史行情统一复权到该次窗口末日；选股日收盘仍是当日实际收盘价。数据库当前前复权基准的 CZSC 价格锚点、均线、布林线、MTM 和个股日/周/月 MACD 价格值，使用 `close / close_qfq` 换算到同一窗口基准。参考值取自较早日期时，还需乘该日 `adj_factor / 窗口末日 adj_factor`。日期、周期数、百分位、成交量、成交额、无量纲指标和行业指数因子不参与价格缩放，原始成交额在行情复权前计算。缺少有效参考且无法回退时明确报错，不落盘混合基准的缓存。
 
-二进制格式仍为 schema 11，DB-native 元数据增加 `calc_versions.price_basis = asof_qfq_v1`。缺失或不匹配此标记的旧缓存，下一次请求该日期时按需重建，不会自动扫描或冲刷全年。SCM、PBM、B2 等共享同日修正后的 prepared cache；SCM 重建完成后，PBM 正常读取不需要再次刷新。`--force` 覆盖 candidate/factor 的语义不变，但它不会绕过价格基准校验；旧 candidate/factor 不会因修改此标记自动更新，重训前需要另行刷新并重新构建数据集。
+Parquet 格式使用 schema 14，DB-native 元数据增加 `calc_versions.price_basis = asof_qfq_v1`。缺失或不匹配此标记的缓存，下一次请求该日期时按需重建，不会自动扫描或冲刷全年。SCM、PBM、B2 等共享同日修正后的 prepared cache；SCM 重建完成后，PBM 正常读取不需要再次刷新。`--force` 覆盖 candidate/factor 的语义不变，但它不会绕过价格基准校验；旧 candidate/factor 不会因修改此标记自动更新，重训前需要另行刷新并重新构建数据集。
 
-SCM/PBM 的 DB-native 缓存还需带有 `calc_versions.monthly_macd_history = previous_completed_month_v1`，标识加载逻辑已包含上月最后交易日的数据库月柱；源数据缺失时按策略的月柱缺失规则处理。缺少或不匹配此标记时，仅 SCM/PBM 请求会触发按需重建；新缓存继续使用 schema 11 并在各方法间共享。此修复不需要运行 stock-cache refresh；数据库行情缺行仍需先补行情、重算指标，再重新生成 prepared 和 candidate/factor。
+三种方法的 DB-native 缓存均需带有 `calc_versions.monthly_macd_history = previous_completed_month_v1`，标识加载逻辑已包含上月最后交易日的 DuckDB 月柱；源数据缺失时按策略的月柱缺失规则处理。缺少或不匹配此标记时，任一方法请求都会触发按需重建；新 Parquet 缓存继续使用 schema 14 并在各方法间共享。此修复不需要运行 stock-cache refresh；数据库行情缺行仍需先补行情、重算指标，再重新生成 prepared 和 candidate/factor。
 
 ## 场景三：模型更新
 
@@ -162,7 +162,7 @@ uv run stock-select-ml model promote "diagnostics/ml/$METHOD/model" \
   --require-report
 ```
 
-`METHOD=b3` 可维护并发布到 `runtime/models/b3/`；生产 `run/review` 是否可直接使用 b3，仍取决于 Rust CLI 对 b3 的 capability。
+`METHOD` 仅可取 `b2`、`scm` 或 `pbm`，三种方法分别发布到各自的模型目录。
 
 ## 场景四：历史数据补跑
 
@@ -187,14 +187,11 @@ uv run stock-select-ml backfill runs \
 
 ## 场景五：仅筛选候选
 
-当前 `screen` 支持 `b2`、`b3`、`lsh`、`scm`、`pbm`、`qianlong`。`scm` 和 `pbm` 分别使用独立模型；各方法的公共股票池过滤、具体策略条件和 `run` 阶段排序口径见 [选股筛选方法过滤条件](screening-methods.md)。
+当前 `screen` 支持 `b2`、`scm`、`pbm`。旧策略及历史产物兼容代码已删除。`scm` 和 `pbm` 分别使用独立模型；各方法的公共股票池过滤、具体策略条件和 `run` 阶段排序口径见 [选股筛选方法过滤条件](screening-methods.md)。
 
 ```bash
 # 只生成候选（不跑模型）
 stock-select-rs screen --method b2 --pick-date 2026-06-05
-
-# 潜龙只筛选候选（不跑模型）
-stock-select-rs screen --method qianlong --pick-date 2026-06-05
 
 # 生成候选并导出因子
 stock-select-rs screen \
@@ -215,8 +212,6 @@ stock-select-rs chart \
   --pick-date 2026-06-05 \
   --chart-workers 4
 ```
-
-`qianlong` 可直接复用通过价格基准校验的 schema 11 prepared cache 中 B2/B3/LSH 已使用的周线/月线 DIF、DEA 字段；字段缺失时按日线聚合回算，不需要潜龙专用字段。正常缓存命中不改写原缓存；缺少 `price_basis` 标记的旧 DB-native 缓存仍须按需重建。
 
 ## 场景六：复盘
 
@@ -255,7 +250,7 @@ EOD run 自动评分：
 
 run record 相关环境变量：
 
-- `STOCK_SELECT_RECORD_METHODS`：开启自动写 `record.csv` 的方法列表，例如 `b2,lsh`。
+- `STOCK_SELECT_RECORD_METHODS`：开启自动写 `record.csv` 的方法列表，例如 `b2,scm,pbm`。
 - `STOCK_SELECT_RECORD_WINDOW_TRADING_DAYS`：`record.csv` 保留最近 N 个入选交易日，默认 10。
 - `STOCK_SELECT_RECORD_LIMIT`：每次 `update_run_record` 最多写入排名前 N 条，默认 30；`run --record` 和 `review-list --record` 自动补跑都会使用。
 
@@ -288,7 +283,7 @@ cp -r .agents/skills/* ~/.agents/skills/
 
 # 手动配置环境变量
 cp .env.example .env
-# 编辑 .env 填入 POSTGRES_DSN 和 TUSHARE_TOKEN
+# 编辑 .env 填入 DUCKDB_PATH 和 TUSHARE_TOKEN；使用 Quack 时再配置认证 token
 ```
 
 ## 高级：分段执行

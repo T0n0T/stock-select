@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import sys
 from pathlib import Path
@@ -9,7 +11,7 @@ from .promote import DEFAULT_METHOD, list_archived_models, print_archive_list, r
 
 def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     parser = subparsers.add_parser("archives", description="列出可切换的归档模型")
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--target-dir", type=Path)
     parser.set_defaults(handler=main_from_args)

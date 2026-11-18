@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ml.cli import main
 from ml.review.recurring_candidates import (
@@ -25,10 +26,10 @@ def write_json(path: Path, payload: dict) -> None:
 
 
 class ReviewRecurringCandidatesTest(unittest.TestCase):
-    def test_parse_methods_accepts_b2_b3_lsh_combinations(self):
+    def test_parse_methods_accepts_b2_scm_pbm_combinations(self):
         self.assertEqual(
-            parse_methods("b2,b3 lsh,SCM PBM"),
-            ["b2", "b3", "lsh", "scm", "pbm"],
+            parse_methods("b2,scm pbm,SCM PBM"),
+            ["b2", "scm", "pbm"],
         )
 
     def test_recent_trade_dates_keeps_only_previous_window_dates(self):
@@ -136,7 +137,7 @@ class ReviewRecurringCandidatesTest(unittest.TestCase):
                 {"candidates": [{"code": "000001.SZ"}]},
             )
             write_json(
-                runtime_root / "candidates" / "2026-06-03.b3.json",
+                runtime_root / "candidates" / "2026-06-03.scm.json",
                 {"candidates": [{"code": "000001.SZ"}]},
             )
 
@@ -153,7 +154,7 @@ class ReviewRecurringCandidatesTest(unittest.TestCase):
                         "--method",
                         "b2",
                         "--candidate-methods",
-                        "b2,b3",
+                        "b2,scm",
                         "--dates-file",
                         str(dates_file),
                         "--window",
@@ -163,7 +164,7 @@ class ReviewRecurringCandidatesTest(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         output = stdout.getvalue()
-        self.assertIn("1\t000001.SZ\tPing An\tBank\t0.700000\t\u2192\trepeat:b2@2026-06-02,b3@2026-06-03", output)
+        self.assertIn("1\t000001.SZ\tPing An\tBank\t0.700000\t\u2192\trepeat:b2@2026-06-02,scm@2026-06-03", output)
         self.assertIn("2\t000002.SZ\tVanke\tReal Estate\t0.500000\t\u2193\t-", output)
 
     def test_cli_defaults_candidate_methods_to_b2(self):
@@ -204,38 +205,27 @@ class ReviewRecurringCandidatesTest(unittest.TestCase):
 
         calls = []
 
-        def fake_fetch(dsn, pick_date, window):
-            calls.append((dsn, pick_date, window))
+        def fake_fetch(duckdb_path, pick_date, window):
+            calls.append((duckdb_path, pick_date, window))
             return ["2026-06-01", "2026-06-02", "2026-06-03"]
 
         original_fetch = recurring_candidates.fetch_recent_trade_dates
         recurring_candidates.fetch_recent_trade_dates = fake_fetch
         try:
             dates = resolve_trade_dates(
-                argparse.Namespace(dates_file=None, dsn=None, pick_date="2026-06-08", window=2),
-                {"POSTGRES_DSN": "postgresql://fixture"},
+                argparse.Namespace(dates_file=None, duckdb_path=None, pick_date="2026-06-08", window=2),
+                {"DUCKDB_PATH": "cache.duckdb"},
             )
         finally:
             recurring_candidates.fetch_recent_trade_dates = original_fetch
 
         self.assertEqual(dates, ["2026-06-01", "2026-06-02", "2026-06-03"])
-        self.assertEqual(calls, [("postgresql://fixture", "2026-06-08", 2)])
+        self.assertEqual(calls, [("cache.duckdb", "2026-06-08", 2)])
 
-    def test_fetch_recent_trade_dates_falls_back_to_weekdays_without_psycopg(self):
-        original_import = builtins.__import__
-
-        def fake_import(name, *args, **kwargs):
-            if name == "psycopg":
-                raise ModuleNotFoundError("No module named 'psycopg'")
-            return original_import(name, *args, **kwargs)
-
-        builtins.__import__ = fake_import
-        try:
-            dates = fetch_recent_trade_dates("postgresql://fixture", "2026-07-09", 3)
-        finally:
-            builtins.__import__ = original_import
-
-        self.assertEqual(dates, ["2026-07-06", "2026-07-07", "2026-07-08"])
+    def test_fetch_recent_trade_dates_propagates_database_errors(self):
+        with patch("ml.review.recurring_candidates.query_rows", side_effect=RuntimeError("unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                fetch_recent_trade_dates("cache.duckdb", "2026-07-09", 3)
 
 
 if __name__ == "__main__":

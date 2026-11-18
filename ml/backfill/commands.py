@@ -13,6 +13,7 @@ def build_screen_command(
     pool_source: str,
     export_factors: bool,
     intraday: bool = False,
+    duckdb_path: str | None = None,
 ) -> list[str]:
     command = [
         str(binary),
@@ -36,6 +37,8 @@ def build_screen_command(
         command.append("--recompute")
     if export_factors:
         command.append("--export-factors")
+    if duckdb_path:
+        command.extend(["--duckdb-path", duckdb_path])
     return command
 
 
@@ -47,6 +50,7 @@ def build_run_command(
     method: str,
     recompute: bool,
     pool_source: str,
+    duckdb_path: str | None = None,
 ) -> list[str]:
     command = [
         str(binary),
@@ -62,4 +66,6 @@ def build_run_command(
     ]
     if recompute:
         command.append("--recompute")
+    if duckdb_path:
+        command.extend(["--duckdb-path", duckdb_path])
     return command

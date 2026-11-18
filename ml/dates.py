@@ -4,6 +4,8 @@ import argparse
 from datetime import date, timedelta
 from pathlib import Path
 
+from ml.db import query_rows
+
 
 def validate_date(value: str) -> str:
     try:
@@ -34,18 +36,11 @@ def read_dates_file(path: Path) -> list[str]:
     return sorted(dict.fromkeys(dates))
 
 
-def fetch_trade_dates(dsn: str, start_date: str, end_date: str) -> list[str]:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                select distinct trade_date
-                from stock_stk_factor_pro
-                where trade_date between %s and %s
-                order by trade_date
-                """,
-                (validate_date(start_date), validate_date(end_date)),
-            )
-            return [row[0].isoformat() for row in cur.fetchall()]
+def fetch_trade_dates(duckdb_path: str, start_date: str, end_date: str, *, binary: Path | None = None) -> list[str]:
+    options = {"binary": binary} if binary is not None else {}
+    rows = query_rows(duckdb_path, """
+        SELECT DISTINCT trade_date FROM stock_stk_factor_pro
+        WHERE trade_date BETWEEN $1::DATE AND $2::DATE
+        ORDER BY trade_date
+        """, [validate_date(start_date), validate_date(end_date)], **options)
+    return [str(row["trade_date"]) for row in rows]

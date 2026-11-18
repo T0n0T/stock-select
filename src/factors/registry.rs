@@ -13,20 +13,16 @@ use crate::factors::abnormal_volume::push_abnormal_volume_event_factors;
 use crate::factors::czsc::push_czsc_factors;
 use crate::factors::ma::push_ma_support_factors;
 use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
-use crate::factors::price_position::{
-    push_latest_bar_shape_factors, push_price_position_factors, push_range_compression,
-};
-use crate::factors::semantic::{
-    push_b2_semantic_factors, push_b3_semantic_factors, push_lsh_semantic_factors,
-};
+use crate::factors::price_position::{push_price_position_factors, push_range_compression};
+use crate::factors::semantic::{push_b2_semantic_factors, push_ma25_semantic_factors};
 use crate::factors::series::{FactorList, mean_tail, push_number, rolling_mean_series};
 use crate::factors::types::{FactorInputRow, FactorRow, FactorValue};
-use crate::factors::volume::{push_latest_volume_shrink_factor, push_volume_turnover_factors};
+use crate::factors::volume::push_volume_turnover_factors;
 use crate::factors::zx::{push_zx_pullback_factors, zx_lines};
 use crate::model::{Candidate, DbDataGap, Method, PreparedRow};
 
 pub const FACTOR_ARTIFACT_VERSION: u32 = 2;
-pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v4";
+pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v5";
 pub(crate) const RAW_MARKET_AMOUNT_FACTOR: &str = "_raw_market_amount";
 
 const THS_MEMBERSHIP_SOURCE: &str = "current_index_ths_member";
@@ -34,9 +30,7 @@ const THS_MEMBERSHIP_SOURCE: &str = "current_index_ths_member";
 const HISTORY_DB_FACTOR_KEYS: &[&str] = &[RAW_MARKET_AMOUNT_FACTOR];
 
 const B2_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B2Semantic];
-const B3_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::B3Semantic];
-const LSH_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::LshSemantic];
-const RAW_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon];
+const MA25_FACTOR_BUNDLES: &[FactorBundle] = &[FactorBundle::RawCommon, FactorBundle::Ma25Semantic];
 
 const REVIEW_ONLY_FACTOR_KEYS: &[&str] = &[
     "trend_structure",
@@ -52,8 +46,7 @@ const REVIEW_ONLY_FACTOR_KEYS: &[&str] = &[
 pub enum FactorBundle {
     RawCommon,
     B2Semantic,
-    B3Semantic,
-    LshSemantic,
+    Ma25Semantic,
 }
 
 impl FactorBundle {
@@ -61,8 +54,7 @@ impl FactorBundle {
         match self {
             Self::RawCommon => "raw_common",
             Self::B2Semantic => "b2_semantic",
-            Self::B3Semantic => "b3_semantic",
-            Self::LshSemantic => "lsh_semantic",
+            Self::Ma25Semantic => "ma25_semantic",
         }
     }
 }
@@ -87,20 +79,10 @@ pub fn factor_profile_for_method(method: Method) -> FactorProfile {
             name: "b2",
             bundles: B2_FACTOR_BUNDLES,
         },
-        Method::B3 => FactorProfile {
-            method,
-            name: "b3",
-            bundles: B3_FACTOR_BUNDLES,
-        },
-        Method::Lsh | Method::Scm | Method::Pbm => FactorProfile {
+        Method::Scm | Method::Pbm => FactorProfile {
             method,
             name: method.as_str(),
-            bundles: LSH_FACTOR_BUNDLES,
-        },
-        _ => FactorProfile {
-            method,
-            name: method.as_str(),
-            bundles: RAW_FACTOR_BUNDLES,
+            bundles: MA25_FACTOR_BUNDLES,
         },
     }
 }
@@ -183,7 +165,6 @@ fn history_factor_fields_for_profile(
 
     let latest = history.last();
     let previous = history.iter().rev().nth(1);
-    let latest_open = latest.map(|row| row.open);
     let latest_close = latest.map(|row| row.close);
     let latest_low = latest.map(|row| row.low);
     let latest_high = latest.map(|row| row.high);
@@ -285,20 +266,8 @@ fn history_factor_fields_for_profile(
                     latest_ma60,
                 );
             }
-            FactorBundle::B3Semantic => {
-                push_latest_volume_shrink_factor(&mut factors, latest_volume, previous_volume);
-                push_latest_bar_shape_factors(
-                    &mut factors,
-                    latest_open,
-                    latest_high,
-                    latest_low,
-                    latest_close,
-                    previous.map(|row| row.close),
-                );
-                push_b3_semantic_factors(&mut factors, history, signal, environment_state);
-            }
-            FactorBundle::LshSemantic => {
-                push_lsh_semantic_factors(&mut factors, history);
+            FactorBundle::Ma25Semantic => {
+                push_ma25_semantic_factors(&mut factors, history);
             }
         }
     }
@@ -406,9 +375,6 @@ const DB_NATIVE_FACTOR_ALIASES: &[(&str, &str)] = &[
     ),
     ("bar_close_position_pct", "latest_bar_position_pct"),
     ("bar_upper_shadow_pct", "upper_shadow_pct"),
-    ("bar_lower_shadow_pct", "b3_lower_shadow_pct"),
-    ("bar_amplitude_pct", "b3_amplitude_pct"),
-    ("bar_body_pct", "b3_body_pct"),
     (
         "signal_bullish_engulf_prev_bearish_flag",
         "b2_bullish_engulf_prev_bearish_flag",
@@ -418,8 +384,6 @@ const DB_NATIVE_FACTOR_ALIASES: &[(&str, &str)] = &[
         "b2_bullish_engulf_volume_ratio",
     ),
     ("signal_yang_engulf_ma25_flag", "b2_yang_engulf_ma25"),
-    ("signal_prev_b2_flag", "b3_prev_b2_flag"),
-    ("signal_b3_plus_flag", "b3_plus_flag"),
 ];
 
 fn push_factor_alias(factors: &mut FactorList, target: &str, source: &str) {
@@ -1084,7 +1048,6 @@ mod tests {
             v_shrink: true,
             safe_mode: true,
             lt_filter: true,
-            yellow_b1: false,
             db_factors: BTreeMap::new(),
         }
     }
@@ -1156,10 +1119,9 @@ mod tests {
             close: latest.close,
             turnover_n: latest.turnover_n,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         };
 
-        for method in [Method::B2, Method::B3, Method::Lsh] {
+        for method in [Method::B2, Method::Scm, Method::Pbm] {
             let rows = build_candidate_factor_rows(
                 std::slice::from_ref(&candidate),
                 &prepared,
@@ -1300,7 +1262,6 @@ mod tests {
                 close: prepared.close,
                 turnover_n: prepared.turnover_n,
                 signal: Some("B2".to_string()),
-                yellow_b1: None,
             };
 
             let rows = build_candidate_factor_rows(&[candidate], &[prepared], Method::B2, None);
@@ -1350,7 +1311,6 @@ mod tests {
             close: latest.close,
             turnover_n: latest.turnover_n,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         };
 
         let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
@@ -1445,7 +1405,6 @@ mod tests {
             close: latest.close,
             turnover_n: latest.turnover_n,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         };
 
         let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
@@ -1518,7 +1477,6 @@ mod tests {
             close: latest.close,
             turnover_n: latest.turnover_n,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         };
 
         let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
@@ -1575,7 +1533,6 @@ mod tests {
             close: latest.close,
             turnover_n: latest.turnover_n,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         };
 
         let rows = build_candidate_factor_rows(&[candidate], &prepared, Method::B2, None);
@@ -1697,7 +1654,6 @@ mod tests {
                     v_shrink: true,
                     safe_mode: true,
                     lt_filter: true,
-                    yellow_b1: false,
                     db_factors,
                 }
             })
@@ -1739,7 +1695,6 @@ mod tests {
             close: prepared[2].close,
             turnover_n: prepared[2].turnover_n,
             signal: Some("B2".to_string()),
-            yellow_b1: None,
         };
         let rows =
             build_candidate_factor_rows_from_refs(&[candidate], &prepared_refs, Method::B2, None);

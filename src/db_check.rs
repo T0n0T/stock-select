@@ -1,31 +1,26 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
-use postgres::GenericClient;
 
 use crate::cache::MIN_DB_NATIVE_WINDOW_TRADING_DAYS;
+use crate::db::{DuckDbConnection, DuckDbParameter, DuckDbRow};
 use crate::model::{DbDataGap, DbDataGapReason, db_data_gap_warning_message};
 
 const RELATION_INSPECTION_QUERY: &str = "
-    WITH resolved AS (
-        SELECT pg_catalog.to_regclass($1::text)::oid AS relation_oid
-    )
     SELECT
-        resolved.relation_oid::bigint AS relation_oid,
-        namespace.nspname AS schema_name,
-        relation.relname AS relation_name,
-        relation.relkind::text AS relation_kind,
-        attribute.attname AS column_name
-    FROM resolved
-    LEFT JOIN pg_catalog.pg_class relation
-      ON relation.oid = resolved.relation_oid
-    LEFT JOIN pg_catalog.pg_namespace namespace
-      ON namespace.oid = relation.relnamespace
-    LEFT JOIN pg_catalog.pg_attribute attribute
-      ON attribute.attrelid = resolved.relation_oid
-     AND attribute.attnum > 0
-     AND NOT attribute.attisdropped
-    ORDER BY attribute.attnum
+        c.table_schema AS schema_name,
+        c.table_name AS relation_name,
+        t.table_type AS relation_kind,
+        c.column_name
+    FROM information_schema.columns c
+    JOIN information_schema.tables t
+      ON t.table_schema = c.table_schema
+     AND t.table_name = c.table_name
+    WHERE c.table_name = $1
+    ORDER BY
+        CASE WHEN c.table_schema = current_schema() THEN 0 ELSE 1 END,
+        c.table_schema,
+        c.ordinal_position
 ";
 
 type DbColumnSpec = (&'static str, &'static str);
@@ -91,28 +86,36 @@ const STOCK_STK_FACTOR_PRO_COLUMNS: &[DbColumnSpec] = &[
     ("pct_chg", "double precision"),
 ];
 
-const STOCK_DAILY_ASOF_INDICATORS_COLUMNS: &[DbColumnSpec] = &[
+const CALC_DAILY_INDICATORS_COLUMNS: &[DbColumnSpec] = &[
+    ("source_dataset", "text"),
     ("ts_code", "text"),
     ("trade_date", "date"),
     ("calc_version", "text"),
-    ("daily_dif_asof", "double precision"),
-    ("daily_dea_asof", "double precision"),
-    ("daily_hist_x2_asof", "double precision"),
-    ("daily_dea_pctile_asof", "double precision"),
-    ("daily_period_count", "double precision"),
-    ("weekly_dif_asof", "double precision"),
-    ("weekly_dea_asof", "double precision"),
-    ("weekly_hist_x2_asof", "double precision"),
-    ("weekly_dea_pctile_asof", "double precision"),
-    ("weekly_period_count", "double precision"),
-    ("monthly_dif_asof", "double precision"),
-    ("monthly_dea_asof", "double precision"),
-    ("monthly_hist_x2_asof", "double precision"),
-    ("monthly_dea_pctile_asof", "double precision"),
-    ("monthly_period_count", "double precision"),
+    ("daily_macd_dif_asof", "double precision"),
+    ("daily_macd_dea_asof", "double precision"),
+    ("daily_macd_hist_x2_asof", "double precision"),
+    ("daily_macd_dea_pctile_asof", "double precision"),
+    ("daily_macd_period_count", "bigint"),
+    ("weekly_macd_dif_asof", "double precision"),
+    ("weekly_macd_dea_asof", "double precision"),
+    ("weekly_macd_hist_x2_asof", "double precision"),
+    ("weekly_macd_dea_pctile_asof", "double precision"),
+    ("weekly_macd_period_count", "bigint"),
+    ("monthly_macd_dif_asof", "double precision"),
+    ("monthly_macd_dea_asof", "double precision"),
+    ("monthly_macd_hist_x2_asof", "double precision"),
+    ("monthly_macd_dea_pctile_asof", "double precision"),
+    ("monthly_macd_period_count", "bigint"),
+    ("weekly_kdj_k_asof", "double precision"),
+    ("weekly_kdj_d_asof", "double precision"),
+    ("weekly_kdj_j_asof", "double precision"),
+    ("monthly_kdj_k_asof", "double precision"),
+    ("monthly_kdj_d_asof", "double precision"),
+    ("monthly_kdj_j_asof", "double precision"),
 ];
 
-const STOCK_DAILY_ROLLING_FACTORS_COLUMNS: &[DbColumnSpec] = &[
+const CALC_DAILY_ROLLING_FACTORS_COLUMNS: &[DbColumnSpec] = &[
+    ("source_dataset", "text"),
     ("ts_code", "text"),
     ("trade_date", "date"),
     ("calc_version", "text"),
@@ -138,46 +141,48 @@ const STOCK_DAILY_ROLLING_FACTORS_COLUMNS: &[DbColumnSpec] = &[
     ("range_compression_40d", "double precision"),
 ];
 
-const STOCK_DAILY_CZSC_STRUCTURE_COLUMNS: &[DbColumnSpec] = &[
+const CALC_DAILY_CZSC_STRUCTURE_COLUMNS: &[DbColumnSpec] = &[
+    ("source_dataset", "text"),
     ("ts_code", "text"),
     ("trade_date", "date"),
     ("calc_version", "text"),
-    ("source_bar_valid", "boolean"),
-    ("status", "text"),
-    ("available_finished_bi_count", "double precision"),
-    ("recent_bi_count", "double precision"),
-    ("last_bi_direction", "text"),
-    ("last_bi_start_date", "date"),
-    ("last_bi_end_date", "date"),
-    ("last_bi_high", "double precision"),
-    ("last_bi_low", "double precision"),
-    ("last_bi_mid", "double precision"),
-    ("latest_zs_start_date", "date"),
-    ("latest_zs_end_date", "date"),
-    ("latest_zs_bi_count", "double precision"),
-    ("latest_zs_zg", "double precision"),
-    ("latest_zs_zd", "double precision"),
-    ("latest_zs_zz", "double precision"),
-    ("recent_peak_date", "date"),
-    ("recent_peak_high", "double precision"),
-    ("post_peak_first_bear_date", "date"),
-    ("post_peak_first_bear_open", "double precision"),
-    ("post_peak_first_bear_high", "double precision"),
-    ("post_peak_first_bear_low", "double precision"),
-    ("post_peak_first_bear_close", "double precision"),
-    ("post_peak_first_bear_missing", "boolean"),
+    ("daily_source_bar_valid", "boolean"),
+    ("daily_status", "text"),
+    ("daily_available_finished_bi_count", "integer"),
+    ("daily_recent_bi_count", "integer"),
+    ("daily_last_bi_direction", "text"),
+    ("daily_last_bi_start_date", "date"),
+    ("daily_last_bi_end_date", "date"),
+    ("daily_last_bi_high", "double precision"),
+    ("daily_last_bi_low", "double precision"),
+    ("daily_last_bi_mid", "double precision"),
+    ("daily_latest_zs_start_date", "date"),
+    ("daily_latest_zs_end_date", "date"),
+    ("daily_latest_zs_bi_count", "integer"),
+    ("daily_latest_zs_zg", "double precision"),
+    ("daily_latest_zs_zd", "double precision"),
+    ("daily_latest_zs_zz", "double precision"),
+    ("daily_recent_peak_date", "date"),
+    ("daily_recent_peak_high", "double precision"),
+    ("daily_post_peak_first_bear_date", "date"),
+    ("daily_post_peak_first_bear_open", "double precision"),
+    ("daily_post_peak_first_bear_high", "double precision"),
+    ("daily_post_peak_first_bear_low", "double precision"),
+    ("daily_post_peak_first_bear_close", "double precision"),
+    ("daily_post_peak_first_bear_missing", "boolean"),
 ];
 
-const STOCK_PERIOD_INDICATOR_STATE_COLUMNS: &[DbColumnSpec] = &[
+const CALC_INDICATOR_STATE_COLUMNS: &[DbColumnSpec] = &[
+    ("source_dataset", "text"),
     ("ts_code", "text"),
     ("period_type", "text"),
+    ("period_start_date", "date"),
     ("period_end_date", "date"),
     ("calc_version", "text"),
-    ("hist_x2", "double precision"),
-    ("ema12", "double precision"),
-    ("ema26", "double precision"),
-    ("dea", "double precision"),
-    ("period_count", "integer"),
+    ("macd_ema12", "double precision"),
+    ("macd_ema26", "double precision"),
+    ("macd_dea", "double precision"),
+    ("macd_period_count", "bigint"),
 ];
 
 const STOCK_MONEYFLOW_THS_COLUMNS: &[DbColumnSpec] = &[
@@ -191,21 +196,6 @@ const STOCK_MONEYFLOW_THS_COLUMNS: &[DbColumnSpec] = &[
     ("buy_md_amount_rate", "double precision"),
     ("buy_sm_amount", "double precision"),
     ("buy_sm_amount_rate", "double precision"),
-];
-
-const INDEX_DAILY_ASOF_INDICATORS_COLUMNS: &[DbColumnSpec] = &[
-    ("ts_code", "text"),
-    ("trade_date", "date"),
-    ("calc_version", "text"),
-    ("daily_dif_asof", "double precision"),
-    ("daily_dea_asof", "double precision"),
-    ("daily_hist_x2_asof", "double precision"),
-    ("weekly_dif_asof", "double precision"),
-    ("weekly_dea_asof", "double precision"),
-    ("weekly_hist_x2_asof", "double precision"),
-    ("monthly_dif_asof", "double precision"),
-    ("monthly_dea_asof", "double precision"),
-    ("monthly_hist_x2_asof", "double precision"),
 ];
 
 const INDEX_THS_MEMBER_COLUMNS: &[DbColumnSpec] = &[("ts_code", "text"), ("con_code", "text")];
@@ -252,28 +242,24 @@ const DB_TABLE_SPECS: &[DbTableSpec] = &[
         columns: STOCK_STK_FACTOR_PRO_COLUMNS,
     },
     DbTableSpec {
-        name: "stock_daily_asof_indicators",
-        columns: STOCK_DAILY_ASOF_INDICATORS_COLUMNS,
+        name: "calc_daily_indicators",
+        columns: CALC_DAILY_INDICATORS_COLUMNS,
     },
     DbTableSpec {
-        name: "stock_daily_rolling_factors",
-        columns: STOCK_DAILY_ROLLING_FACTORS_COLUMNS,
+        name: "calc_daily_rolling_factors",
+        columns: CALC_DAILY_ROLLING_FACTORS_COLUMNS,
     },
     DbTableSpec {
-        name: "stock_daily_czsc_structure",
-        columns: STOCK_DAILY_CZSC_STRUCTURE_COLUMNS,
+        name: "calc_daily_czsc_structure",
+        columns: CALC_DAILY_CZSC_STRUCTURE_COLUMNS,
     },
     DbTableSpec {
-        name: "stock_period_indicator_state",
-        columns: STOCK_PERIOD_INDICATOR_STATE_COLUMNS,
+        name: "calc_indicator_state",
+        columns: CALC_INDICATOR_STATE_COLUMNS,
     },
     DbTableSpec {
         name: "stock_moneyflow_ths",
         columns: STOCK_MONEYFLOW_THS_COLUMNS,
-    },
-    DbTableSpec {
-        name: "index_daily_asof_indicators",
-        columns: INDEX_DAILY_ASOF_INDICATORS_COLUMNS,
     },
     DbTableSpec {
         name: "index_ths_member",
@@ -436,8 +422,8 @@ impl DbLoadPlan {
     }
 }
 
-pub(crate) fn preflight_db_native_load<C: GenericClient>(
-    client: &mut C,
+pub(crate) fn preflight_db_native_load(
+    client: &DuckDbConnection,
     start_date: NaiveDate,
     pick_date: NaiveDate,
     configured_strict_tables: &BTreeSet<String>,
@@ -461,50 +447,58 @@ pub(crate) fn preflight_db_native_load<C: GenericClient>(
     Ok(plan)
 }
 
-fn inspect_relation<C: GenericClient>(
-    client: &mut C,
+fn inspect_relation(
+    client: &DuckDbConnection,
     spec: &DbTableSpec,
 ) -> anyhow::Result<DbRelationInspection> {
-    let rows = client.query(RELATION_INSPECTION_QUERY, &[&spec.name])?;
+    let rows = client.query_rows(
+        RELATION_INSPECTION_QUERY,
+        &[DuckDbParameter::Text(spec.name.to_string())],
+    )?;
     let Some(first) = rows.first() else {
         return Ok(DbRelationInspection::missing());
     };
-    let relation_oid: Option<i64> = first.try_get("relation_oid")?;
-    let relation_kind: Option<String> = first.try_get("relation_kind")?;
-    if relation_oid.is_none()
-        || !relation_kind
-            .as_deref()
-            .is_some_and(|kind| matches!(kind, "r" | "p" | "v" | "m" | "f"))
-    {
-        return Ok(DbRelationInspection::missing());
-    }
     let schema: String = first.try_get("schema_name")?;
     let name: String = first.try_get("relation_name")?;
+    let relation_kind: String = first.try_get("relation_kind")?;
+    if !matches!(relation_kind.as_str(), "BASE TABLE" | "VIEW") {
+        return Ok(DbRelationInspection::missing());
+    }
     let columns = rows
         .iter()
-        .filter_map(|row| row.try_get::<_, Option<String>>("column_name").transpose())
-        .collect::<Result<Vec<_>, _>>()?;
+        .filter_map(|row| {
+            let row_schema = row.try_get::<String>("schema_name").ok()?;
+            let row_name = row.try_get::<String>("relation_name").ok()?;
+            (row_schema == schema && row_name == name)
+                .then(|| row.try_get::<String>("column_name").ok())
+                .flatten()
+        })
+        .collect::<Vec<_>>();
     Ok(DbRelationInspection::available_with_columns(
-        schema, name, columns,
+        &schema, &name, columns,
     ))
 }
 
-fn probe_required_rows<C: GenericClient>(
-    client: &mut C,
+fn probe_required_rows(
+    client: &DuckDbConnection,
     plan: &mut DbLoadPlan,
     start_date: NaiveDate,
     pick_date: NaiveDate,
     strict_tables: &BTreeSet<String>,
 ) -> anyhow::Result<()> {
     if let Some(relation) = plan.relation_sql("stock_stk_factor_pro") {
-        let row = client.query_one(
+        let row = query_one(
+            client,
             &format!(
                 "SELECT count(DISTINCT trade_date)::bigint AS window_trade_dates, count(*) FILTER (WHERE trade_date = $2)::bigint AS pick_date_rows FROM {relation} WHERE trade_date BETWEEN $1 AND $2"
             ),
-            &[&start_date, &pick_date],
+            &[
+                DuckDbParameter::Date(start_date),
+                DuckDbParameter::Date(pick_date),
+            ],
         )?;
-        let pick_date_rows: i64 = row.try_get("pick_date_rows")?;
         let window_trade_dates: i64 = row.try_get("window_trade_dates")?;
+        let pick_date_rows: i64 = row.try_get("pick_date_rows")?;
         if pick_date_rows < 1 {
             record_missing_rows(plan, "stock_stk_factor_pro", 1, pick_date_rows);
         } else {
@@ -568,15 +562,15 @@ fn probe_required_rows<C: GenericClient>(
         && let Some(relation) = plan.relation_sql("index_ths_member")
     {
         let query = ths_membership_probe_query(&relation);
-        let row = client.query_one(&query, &[])?;
-        let actual_rows: i64 = row.try_get("actual_rows")?;
+        let row = query_one(client, &query, &[])?;
+        let actual_rows = row.try_get("actual_rows")?;
         record_missing_rows(plan, "index_ths_member", 1, actual_rows);
     }
     Ok(())
 }
 
-fn probe_pick_date_rows<C: GenericClient>(
-    client: &mut C,
+fn probe_pick_date_rows(
+    client: &DuckDbConnection,
     plan: &mut DbLoadPlan,
     table: &str,
     pick_date: NaiveDate,
@@ -588,10 +582,22 @@ fn probe_pick_date_rows<C: GenericClient>(
         return Ok(());
     };
     let query = pick_date_probe_query(&relation, count_expression, extra_predicate);
-    let row = client.query_one(&query, &[&pick_date])?;
-    let actual_rows: i64 = row.try_get("actual_rows")?;
+    let row = query_one(client, &query, &[DuckDbParameter::Date(pick_date)])?;
+    let actual_rows = row.try_get("actual_rows")?;
     record_missing_rows(plan, table, expected_rows, actual_rows);
     Ok(())
+}
+
+fn query_one(
+    client: &DuckDbConnection,
+    sql: &str,
+    parameters: &[DuckDbParameter],
+) -> anyhow::Result<DuckDbRow> {
+    client
+        .query_rows(sql, parameters)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("DuckDB query returned no rows"))
 }
 
 fn pick_date_probe_query(
@@ -870,7 +876,7 @@ mod tests {
                 DbRelationInspection::available_for_spec("stock_stk_factor_pro"),
             ),
             (
-                "stock_daily_czsc_structure".to_string(),
+                "calc_daily_czsc_structure".to_string(),
                 DbRelationInspection::missing(),
             ),
         ]);
@@ -883,14 +889,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            plan.db_data_gaps["stock_daily_czsc_structure"].reason,
+            plan.db_data_gaps["calc_daily_czsc_structure"].reason,
             DbDataGapReason::MissingTable
         );
         let query = plan.adapt_query(
-            "SELECT c.status FROM {{stock_stk_factor_pro}} s LEFT JOIN {{stock_daily_czsc_structure}} c ON c.ts_code = s.ts_code",
+            "SELECT c.daily_status, c.daily_source_bar_valid FROM {{stock_stk_factor_pro}} s LEFT JOIN {{calc_daily_czsc_structure}} c ON c.ts_code = s.ts_code",
         );
-        assert!(query.contains("db_src_stock_daily_czsc_structure AS"));
-        assert!(query.contains("NULL::text AS \"status\""));
+        assert!(query.contains("db_src_calc_daily_czsc_structure AS"));
+        assert!(query.contains("NULL::text AS \"daily_status\""));
+        assert!(query.contains("NULL::boolean AS \"daily_source_bar_valid\""));
         assert!(query.contains("WHERE FALSE"));
     }
 

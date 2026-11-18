@@ -70,18 +70,18 @@ class LgbmTrainingFeaturesTest(unittest.TestCase):
         )
 
     def test_select_feature_columns_uses_method_registered_raw_factors(self):
-        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"]
+        original = rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"]
         try:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = [*original, "b3_only_raw_factor"]
-            columns = ["close_to_zxdkx_pct", "b3_only_raw_factor"]
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = [*original, "scm_only_raw_factor"]
+            columns = ["close_to_zxdkx_pct", "scm_only_raw_factor"]
 
             b2_numeric, _b2_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="b2")
-            b3_numeric, _b3_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="b3")
+            scm_numeric, _scm_categorical = select_feature_columns(columns, feature_set="raw_numeric", method="scm")
 
             self.assertEqual(b2_numeric, ["close_to_zxdkx_pct"])
-            self.assertEqual(b3_numeric, ["close_to_zxdkx_pct", "b3_only_raw_factor"])
+            self.assertEqual(scm_numeric, ["close_to_zxdkx_pct", "scm_only_raw_factor"])
         finally:
-            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["b3"] = original
+            rank_dataset_schema.METHOD_RAW_FACTOR_COLUMNS["scm"] = original
 
     def test_select_feature_columns_keeps_intraday_czsc_for_intraday_training(self):
         columns = [
@@ -199,14 +199,14 @@ class LgbmTrainingFeaturesTest(unittest.TestCase):
 
     def test_validate_selected_feature_coverage_fails_zero_coverage_feature(self):
         rows = [
-            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "b3_volume_shrink_ratio": ""},
-            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "close_to_zxdkx_pct": "0.8", "b3_volume_shrink_ratio": ""},
+            {"date": "2026-01-01", "code": "a", "rank_label_3d": "3", "close_to_zxdkx_pct": "1.2", "test_no_coverage_factor": ""},
+            {"date": "2026-01-02", "code": "b", "rank_label_3d": "0", "close_to_zxdkx_pct": "0.8", "test_no_coverage_factor": ""},
         ]
 
-        with self.assertRaisesRegex(ValueError, "zero coverage.*b3_volume_shrink_ratio"):
+        with self.assertRaisesRegex(ValueError, "zero coverage.*test_no_coverage_factor"):
             validate_selected_feature_coverage(
                 rows,
-                numeric_columns=["close_to_zxdkx_pct", "b3_volume_shrink_ratio"],
+                numeric_columns=["close_to_zxdkx_pct", "test_no_coverage_factor"],
                 categorical_columns=[],
             )
 

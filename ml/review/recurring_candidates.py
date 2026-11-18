@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
+from ml.db import query_rows
+
 import argparse
 import json
 import re
@@ -14,7 +18,6 @@ from ml.dates import read_dates_file, validate_date
 from ml.env import load_dotenv_values, resolve_config_value
 from ml.paths import PROJECT_ROOT, candidate_path, select_dir
 
-SUPPORTED_METHODS = {"b2", "b3", "lsh", "scm", "pbm"}
 DEFAULT_METHOD = "b2"
 DEFAULT_WINDOW = 10
 DEFAULT_BINARY = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
@@ -31,7 +34,7 @@ def parse_methods(value: str) -> list[str]:
     invalid = [method for method in methods if method not in SUPPORTED_METHODS]
     if invalid:
         raise argparse.ArgumentTypeError(
-            f"candidate methods must be b2, b3, lsh, scm, or pbm; got {', '.join(invalid)}"
+            f"candidate methods must be b2, scm, or pbm; got {', '.join(invalid)}"
         )
     return list(dict.fromkeys(methods))
 
@@ -234,25 +237,13 @@ def limit_rows(rows: Sequence[dict], limit: int | None) -> list[dict]:
     return list(rows[:limit])
 
 
-def fetch_recent_trade_dates(dsn: str, pick_date: str, window: int) -> list[str]:
-    try:
-        import psycopg
-    except ModuleNotFoundError:
-        return recent_weekdays(pick_date, window)
-
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                select distinct trade_date
-                from stock_stk_factor_pro
-                where trade_date <= %s
-                order by trade_date desc
-                limit %s
-                """,
-                (validate_date(pick_date), window + 1),
-            )
-            return sorted(row[0].isoformat() for row in cur.fetchall())
+def fetch_recent_trade_dates(duckdb_path: str, pick_date: str, window: int, *, binary: Path | None = None) -> list[str]:
+    options = {"binary": binary} if binary is not None else {}
+    rows = query_rows(duckdb_path, """
+        SELECT DISTINCT trade_date FROM stock_stk_factor_pro
+        WHERE trade_date <= $1::DATE ORDER BY trade_date DESC LIMIT $2::BIGINT
+        """, [validate_date(pick_date), str(window + 1)], **options)
+    return sorted(str(row["trade_date"]) for row in rows)
 
 
 def recent_weekdays(pick_date: str, window: int) -> list[str]:
@@ -268,10 +259,12 @@ def recent_weekdays(pick_date: str, window: int) -> list[str]:
 def resolve_trade_dates(args: argparse.Namespace, dotenv_values: dict[str, str]) -> list[str]:
     if args.dates_file:
         return read_dates_file(args.dates_file)
-    dsn = resolve_config_value(args.dsn, "POSTGRES_DSN", dotenv_values)
-    if not dsn:
-        raise SystemExit("POSTGRES_DSN is required; set it in .env, export it, pass --dsn, or use --dates-file.")
-    return fetch_recent_trade_dates(dsn, args.pick_date, args.window)
+    duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv_values)
+    if not duckdb_path:
+        raise SystemExit("DUCKDB_PATH is required; set it in .env, export it, pass --duckdb-path, or use --dates-file.")
+    binary = getattr(args, "binary", None)
+    options = {"binary": binary} if binary is not None else {}
+    return fetch_recent_trade_dates(duckdb_path, args.pick_date, args.window, **options)
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -282,8 +275,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--dates-file", type=Path)
-    parser.add_argument("--dsn")
-    parser.add_argument("--postgres-dsn", dest="dsn", help="Compatibility alias for --dsn.")
+    parser.add_argument("--duckdb-path")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--intraday", action="store_true")
 
@@ -330,7 +322,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         args.limit,
     )
     review_list_lines = load_review_list_lines(
-        binary=resolve_binary(args.binary),
+        binary=resolve_binary(args.binary or (Path(value) if (value := resolve_config_value(None, "STOCK_SELECT_BIN", dotenv_values)) else None)),
         runtime_root=runtime_root,
         pick_date=args.pick_date,
         method=args.method,

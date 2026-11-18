@@ -49,7 +49,7 @@ uv run stock-select-ml model rollback <archive_version> --method "$METHOD"
 其中：
 
 - `status` 读取当前激活模型摘要
-- `archives` 列出 `<runtime>/models/archive/<method>/` 下可切换的历史模型；旧版共享 archive 只有在 `model_card.json` 的 target method 匹配时才兼容列出
+- `archives` 列出 `<runtime>/models/archive/<method>/` 下可切换的历史模型；不读取旧版共享 archive
 - `rollback` 从 `<runtime>/models/archive/<method>/` 切换到指定归档版本
 
 ## 历史 Candidate 补齐
@@ -64,7 +64,7 @@ uv run stock-select-ml backfill candidates \
   --workers 16
 ```
 
-脚本从 PostgreSQL `daily_market` 查询交易日，并发执行：
+脚本从 DuckDB `stock_stk_factor_pro` 查询交易日，并发执行：
 
 ```text
 stock-select-rs screen --method <method> --pick-date <date> --runtime-root <runtime>
@@ -76,7 +76,7 @@ stock-select-rs screen --method <method> --pick-date <date> --runtime-root <runt
 - `--dry-run` 只打印将执行的 screen 命令，不调用真实 CLI。
 - `--recompute` 会强制每个 screen 重新读取数据源，不复用已有 prepared cache。
 - `--workers` 控制并发 screen 数；执行模型训练、候选补齐、因子补齐前先查看机器可用核心数，并至少使用最大可用核心数的 1/2，除非用户明确指定更低并发或机器负载不允许。
-- 脚本从 `.env`、shell 环境或 CLI 参数读取 `POSTGRES_DSN`，但不会把 DSN/token 放到 screen 命令行。
+- 脚本从 `.env`、shell 环境或 CLI 参数读取 `DUCKDB_PATH`，但不会把数据库路径或 token 放到 screen 命令行。
 - CLI 默认 `--method b2`；后续其他 method 接入 `screen` 后复用同一个 `stock-select-ml backfill candidates --method <method>`，不新增 method 专属补数据脚本。
 
 ## Dataset 输入
@@ -103,7 +103,7 @@ stock-select-rs screen --method <method> --pick-date <date> --runtime-root <runt
 <runtime>/select/<date>.<method>/display.json
 ```
 
-`select` 模式用于 diagnostics，不是重训默认入口。`model_score/model_rank` 不会作为训练特征；`select/<key>/factors.json` 只保留为兼容副本，不是 dataset 的主因子来源。
+`select` 模式用于 diagnostics，不是重训默认入口。`model_score/model_rank` 不会作为训练特征；`select/<key>/factors.json` 是本次运行的因子快照；dataset 从 `factors/<key>.<method>/` 读取带版本校验的因子产物。
 
 大区间重训示例：
 
@@ -211,7 +211,7 @@ rf_feature_diagnostics.md
 
 分类特征编码：
 
-- 缺省 `categorical_encoding=one_hot`，保持旧模型兼容。
+- 训练默认使用 `one_hot`；模型元数据必须显式声明 `categorical_encoding`，不接受缺失该字段的模型。
 - LightGBM 原生分类试验传 `--categorical-encoding native`。
 - `native` 模式下，`feature_manifest.json`、`model_metadata.json` 和 report 都会写入 `categorical_encoding=native`；`model_metadata.json` 必须包含 `categorical_code_maps`。
 - Rust runtime 使用 `categorical_code_maps` 把分类值映射成 LightGBM 原生分类整数 code，未知或缺失分类值映射为 `-1`。
@@ -298,7 +298,7 @@ uv run stock-select-ml model rollback <archive-version> --method "$METHOD"
 
 ## 训练完成汇报
 
-训练、重训或调参结束后，必须给出模型效果摘要。不要只说命令成功；即使命令失败，也要说明停在哪一步和可恢复的下一步。汇报时不要打印 `.env`、DSN、token 的具体值。
+训练、重训或调参结束后，必须给出模型效果摘要。不要只说命令成功；即使命令失败，也要说明停在哪一步和可恢复的下一步。汇报时不要打印 `.env`、数据库路径、token 的具体值。
 
 至少包含：
 

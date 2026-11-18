@@ -7,6 +7,8 @@
 # ///
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import json
 from pathlib import Path
@@ -338,7 +340,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def add_parser_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--model", action="append", type=parse_model_spec, required=True)
     parser.add_argument("--aux-weight", action="append", type=float, required=True)

@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod b2;
+pub mod candidates;
 pub mod capability;
 pub mod inference;
 pub mod llm;

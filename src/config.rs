@@ -15,12 +15,11 @@ pub const DB_CHECK_DEFAULT_TABLES: &[&str] = &[
 
 pub const DB_CHECK_ALLOWED_TABLES: &[&str] = &[
     "stock_stk_factor_pro",
-    "stock_daily_asof_indicators",
-    "stock_daily_rolling_factors",
-    "stock_daily_czsc_structure",
-    "stock_period_indicator_state",
+    "calc_daily_indicators",
+    "calc_daily_rolling_factors",
+    "calc_daily_czsc_structure",
+    "calc_indicator_state",
     "stock_moneyflow_ths",
-    "index_daily_asof_indicators",
     "index_ths_member",
     "index_ths_daily",
     "index_idx_factor_pro",
@@ -30,13 +29,16 @@ pub const DB_CHECK_ALLOWED_TABLES: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
-    MissingDsn,
+    MissingDuckDbPath,
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingDsn => write!(f, "A database DSN is required."),
+            Self::MissingDuckDbPath => write!(
+                f,
+                "DUCKDB_PATH is required; set it in .env or pass --duckdb-path."
+            ),
         }
     }
 }
@@ -109,17 +111,22 @@ pub fn resolve_db_check_tables_from_sources(
     Ok(strict_tables)
 }
 
-pub fn resolve_dsn_from_env(cli_dsn: Option<&str>) -> Result<String, ConfigError> {
-    resolve_config_value(cli_dsn, "POSTGRES_DSN").ok_or(ConfigError::MissingDsn)
+pub fn resolve_duckdb_path_from_env(cli_duckdb_path: Option<&str>) -> Result<String, ConfigError> {
+    resolve_config_value(cli_duckdb_path, "DUCKDB_PATH").ok_or(ConfigError::MissingDuckDbPath)
 }
 
-pub fn resolve_dsn_from_sources(
-    cli_dsn: Option<&str>,
-    env_dsn: Option<&str>,
+pub fn resolve_duckdb_path_from_sources(
+    cli_duckdb_path: Option<&str>,
+    env_duckdb_path: Option<&str>,
     dotenv_content: &str,
 ) -> Result<String, ConfigError> {
-    resolve_config_value_from(cli_dsn, env_dsn, dotenv_content, "POSTGRES_DSN")
-        .ok_or(ConfigError::MissingDsn)
+    resolve_config_value_from(
+        cli_duckdb_path,
+        env_duckdb_path,
+        dotenv_content,
+        "DUCKDB_PATH",
+    )
+    .ok_or(ConfigError::MissingDuckDbPath)
 }
 
 pub fn default_runtime_root() -> PathBuf {

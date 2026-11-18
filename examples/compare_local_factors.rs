@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Read};
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
 use serde_json::{Value, json};
-use stock_select::cache::{PreparedCacheMetadata, decode_prepared_cache_rows};
+use stock_select::cache::decode_prepared_cache_rows;
 use stock_select::model::PreparedRow;
 
 #[derive(Debug, Clone, Copy)]
@@ -21,7 +20,7 @@ struct DiffStats {
 fn main() -> anyhow::Result<()> {
     let pick_date = arg_value("--pick-date").unwrap_or_else(|| "2026-06-05".to_string());
     let cache_path = PathBuf::from(
-        arg_value("--cache").unwrap_or_else(|| format!("runtime/prepared/{pick_date}.bin")),
+        arg_value("--cache").unwrap_or_else(|| format!("runtime/prepared/{pick_date}.parquet")),
     );
     let factors_path = PathBuf::from(
         arg_value("--factors")
@@ -240,120 +239,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn load_prepared_rows(path: &PathBuf) -> anyhow::Result<Vec<PreparedRow>> {
-    let bytes = std::fs::read(path)?;
-    let schema_version = prepared_cache_schema_version(path)?;
-    if schema_version >= 4 {
-        return decode_prepared_cache_rows(&bytes);
-    }
-    decode_legacy_prepared_cache_rows(&bytes)
-}
-
-fn prepared_cache_schema_version(path: &PathBuf) -> anyhow::Result<u32> {
-    let mut meta_path = path.clone();
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid cache path"))?;
-    let meta_name = file_name
-        .strip_suffix(".bin")
-        .map(|stem| format!("{stem}.meta.json"))
-        .ok_or_else(|| anyhow::anyhow!("cache path must end with .bin"))?;
-    meta_path.set_file_name(meta_name);
-    let metadata: PreparedCacheMetadata = serde_json::from_slice(&std::fs::read(meta_path)?)?;
-    Ok(metadata.schema_version)
-}
-
-fn read_string(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<String> {
-    let len = read_u16(cursor)? as usize;
-    let mut bytes = vec![0_u8; len];
-    cursor.read_exact(&mut bytes)?;
-    Ok(String::from_utf8(bytes)?)
-}
-
-fn read_bool(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<bool> {
-    let mut bytes = [0_u8; 1];
-    cursor.read_exact(&mut bytes)?;
-    Ok(bytes[0] != 0)
-}
-
-fn read_option_f64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<Option<f64>> {
-    if read_bool(cursor)? {
-        Ok(Some(read_f64(cursor)?))
-    } else {
-        Ok(None)
-    }
-}
-
-fn read_u16(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<u16> {
-    let mut bytes = [0_u8; 2];
-    cursor.read_exact(&mut bytes)?;
-    Ok(u16::from_le_bytes(bytes))
-}
-
-fn read_u64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<u64> {
-    let mut bytes = [0_u8; 8];
-    cursor.read_exact(&mut bytes)?;
-    Ok(u64::from_le_bytes(bytes))
-}
-
-fn read_i32(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<i32> {
-    let mut bytes = [0_u8; 4];
-    cursor.read_exact(&mut bytes)?;
-    Ok(i32::from_le_bytes(bytes))
-}
-
-fn read_f64(cursor: &mut Cursor<&[u8]>) -> anyhow::Result<f64> {
-    let mut bytes = [0_u8; 8];
-    cursor.read_exact(&mut bytes)?;
-    Ok(f64::from_le_bytes(bytes))
-}
-
-fn decode_legacy_prepared_cache_rows(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRow>> {
-    let mut cursor = Cursor::new(bytes);
-    let mut magic = [0_u8; 8];
-    cursor.read_exact(&mut magic)?;
-    if &magic != b"SSPRBIN1" {
-        anyhow::bail!("invalid prepared cache magic");
-    }
-
-    let count = read_u64(&mut cursor)? as usize;
-    let mut rows = Vec::with_capacity(count);
-    for _ in 0..count {
-        let ts_code = read_string(&mut cursor)?;
-        let trade_date = NaiveDate::from_num_days_from_ce_opt(read_i32(&mut cursor)?)
-            .ok_or_else(|| anyhow::anyhow!("invalid cached trade_date"))?;
-        rows.push(PreparedRow {
-            ts_code,
-            trade_date,
-            open: read_f64(&mut cursor)?,
-            high: read_f64(&mut cursor)?,
-            low: read_f64(&mut cursor)?,
-            close: read_f64(&mut cursor)?,
-            volume: read_f64(&mut cursor)?,
-            turnover_n: read_f64(&mut cursor)?,
-            turnover_rate: read_option_f64(&mut cursor)?,
-            k: read_f64(&mut cursor)?,
-            d: read_f64(&mut cursor)?,
-            j: read_f64(&mut cursor)?,
-            zxdq: read_option_f64(&mut cursor)?,
-            zxdkx: read_option_f64(&mut cursor)?,
-            dif: read_f64(&mut cursor)?,
-            dea: read_f64(&mut cursor)?,
-            macd_hist: read_f64(&mut cursor)?,
-            ma25: read_option_f64(&mut cursor)?,
-            ma60: read_option_f64(&mut cursor)?,
-            ma144: read_option_f64(&mut cursor)?,
-            chg_d: read_option_f64(&mut cursor)?,
-            weekly_ma_bull: read_bool(&mut cursor)?,
-            max_vol_not_bearish: read_bool(&mut cursor)?,
-            v_shrink: read_bool(&mut cursor)?,
-            safe_mode: read_bool(&mut cursor)?,
-            lt_filter: read_bool(&mut cursor)?,
-            yellow_b1: read_bool(&mut cursor)?,
-            db_factors: BTreeMap::new(),
-        });
-    }
-    Ok(rows)
+    decode_prepared_cache_rows(&std::fs::read(path)?)
 }
 
 fn arg_value(name: &str) -> Option<String> {

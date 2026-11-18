@@ -16,20 +16,8 @@ const B2_BASELINE_SCORE_WEIGHTS: [(&str, f64); 5] = [
     ("macd_phase", 0.35),
 ];
 
-const B1_BASELINE_SCORE_WEIGHTS: [(&str, f64); 5] = [
-    ("trend_structure", 0.23),
-    ("price_position", 0.20),
-    ("volume_behavior", 0.22),
-    ("previous_abnormal_move", 0.20),
-    ("macd_phase", 0.15),
-];
-
 pub fn compute_weighted_total(scores: &[(&str, f64)]) -> f64 {
     round2(weighted_sum(scores, &BASELINE_SCORE_WEIGHTS))
-}
-
-pub fn compute_b1_weighted_total(scores: &[(&str, f64)]) -> f64 {
-    round2(weighted_sum(scores, &B1_BASELINE_SCORE_WEIGHTS))
 }
 
 pub fn compute_b2_weighted_total(scores: &[(&str, f64)], signal: Option<&str>) -> f64 {
@@ -52,7 +40,6 @@ pub fn compute_weighted_total_for_profile(
 
 pub fn b2_signal_score(signal: Option<&str>) -> f64 {
     match signal.unwrap_or("").trim().to_ascii_uppercase().as_str() {
-        "B3" | "B3+" => 5.0,
         "B2" => 4.0,
         _ => 3.0,
     }

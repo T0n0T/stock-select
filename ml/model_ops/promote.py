@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import hashlib
 import json
@@ -17,6 +19,7 @@ REQUIRED_METADATA_KEYS = {
     "numeric_columns",
     "categorical_columns",
     "categorical_levels",
+    "categorical_encoding",
     "label_column",
     "train_start",
     "train_end",
@@ -57,7 +60,7 @@ def validate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     numeric_columns = metadata.get("numeric_columns")
     categorical_columns = metadata.get("categorical_columns")
     categorical_levels = metadata.get("categorical_levels")
-    categorical_encoding = str(metadata.get("categorical_encoding") or "one_hot")
+    categorical_encoding = metadata.get("categorical_encoding")
     categorical_code_maps = metadata.get("categorical_code_maps") or {}
     model_params = metadata.get("model_params")
     label_column = metadata.get("label_column")
@@ -443,41 +446,18 @@ def method_archive_root(target_dir: Path) -> Path:
     return target_dir.parent / "archive" / target_dir.name
 
 
-def archive_matches_target(path: Path, target_dir: Path) -> bool:
-    card_path = path / "model_card.json"
-    if not card_path.exists():
-        return False
-    try:
-        card = read_json(card_path)
-    except ValueError:
-        return False
-    target = card.get("target")
-    return bool(target) and Path(str(target)).name == target_dir.name
+
 
 
 def archive_source_for_version(target_dir: Path, version: str) -> Path:
-    scoped = method_archive_root(target_dir) / version
-    if scoped.exists():
-        return scoped
-    legacy = target_dir.parent / "archive" / version
-    if legacy.exists() and archive_matches_target(legacy, target_dir):
-        return legacy
-    return scoped
+    return method_archive_root(target_dir) / version
 
 
 def archive_dirs_for_target(target_dir: Path) -> list[Path]:
-    archive_parent = target_dir.parent / "archive"
-    scoped_root = method_archive_root(target_dir)
-    dirs: list[Path] = []
-    if scoped_root.exists():
-        dirs.extend(item for item in scoped_root.iterdir() if item.is_dir())
-    if archive_parent.exists():
-        for item in archive_parent.iterdir():
-            if item == scoped_root or not item.is_dir():
-                continue
-            if archive_matches_target(item, target_dir):
-                dirs.append(item)
-    return sorted(dirs, key=lambda item: item.name, reverse=True)
+    root = method_archive_root(target_dir)
+    if not root.exists():
+        return []
+    return sorted((item for item in root.iterdir() if item.is_dir()), key=lambda item: item.name, reverse=True)
 
 
 def list_archived_models(target_dir: Path | None = None, *, expected_method: str | None = None) -> list[dict[str, Any]]:
@@ -660,7 +640,7 @@ def print_archive_list(rows: Sequence[dict[str, Any]]) -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Promote or rollback LightGBM model artifacts for the Rust default runtime.")
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--candidate-dir", type=Path, help="候选模型目录，包含 model.txt 和 model_metadata.json")
     parser.add_argument("--runtime-root", type=Path, help="runtime root；未传时按 shell 环境变量再当前目录 .env 解析")
     parser.add_argument("--target-dir", type=Path, help="runtime 当前模型目录；未传时使用 <runtime-root>/models/<method>")
@@ -690,7 +670,7 @@ def add_promote_parser(subparsers: argparse._SubParsersAction) -> argparse.Argum
 def add_rollback_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     parser = subparsers.add_parser("rollback", description="回滚到归档版本")
     parser.add_argument("archive_version")
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--target-dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
@@ -700,7 +680,7 @@ def add_rollback_parser(subparsers: argparse._SubParsersAction) -> argparse.Argu
 
 def add_promote_parser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("candidate_dir", type=Path)
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--target-dir", type=Path)
     parser.add_argument("--report", type=Path)

@@ -140,7 +140,6 @@ fn prepared_row(code: &str, day: u32, close: f64) -> PreparedRow {
         v_shrink: true,
         safe_mode: false,
         lt_filter: true,
-        yellow_b1: false,
         db_factors: Default::default(),
     }
 }

@@ -8,27 +8,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Method {
-    B1,
     B2,
-    B3,
-    Lsh,
     Scm,
     Pbm,
-    Qianlong,
-    Dribull,
 }
 
 impl Method {
     pub fn as_str(self) -> &'static str {
         match self {
-            Method::B1 => "b1",
             Method::B2 => "b2",
-            Method::B3 => "b3",
-            Method::Lsh => "lsh",
             Method::Scm => "scm",
             Method::Pbm => "pbm",
-            Method::Qianlong => "qianlong",
-            Method::Dribull => "dribull",
         }
     }
 }
@@ -44,14 +34,9 @@ impl FromStr for Method {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "b1" => Ok(Method::B1),
             "b2" => Ok(Method::B2),
-            "b3" => Ok(Method::B3),
-            "lsh" => Ok(Method::Lsh),
             "scm" => Ok(Method::Scm),
             "pbm" => Ok(Method::Pbm),
-            "qianlong" => Ok(Method::Qianlong),
-            "dribull" => Ok(Method::Dribull),
             _ => anyhow::bail!("unsupported method: {value}"),
         }
     }
@@ -85,7 +70,6 @@ pub struct PreparedRow {
     pub v_shrink: bool,
     pub safe_mode: bool,
     pub lt_filter: bool,
-    pub yellow_b1: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub db_factors: BTreeMap<String, f64>,
 }
@@ -258,8 +242,6 @@ pub struct Candidate {
     pub turnover_n: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub yellow_b1: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -37,15 +37,3 @@ pub fn push_volume_turnover_factors(
             .map(|(latest, previous)| latest > previous),
     );
 }
-
-pub fn push_latest_volume_shrink_factor(
-    factors: &mut FactorList,
-    latest_volume: Option<f64>,
-    previous_volume: Option<f64>,
-) {
-    push_number(
-        factors,
-        "b3_volume_shrink_ratio",
-        ratio(latest_volume, previous_volume),
-    );
-}

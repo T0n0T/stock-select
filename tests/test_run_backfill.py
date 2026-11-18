@@ -18,7 +18,7 @@ class RunBackfillTest(unittest.TestCase):
         config = RunConfig(
             binary=Path("target/debug/stock-select-rs"),
             runtime_root=Path("/tmp/runtime"),
-            method="b3",
+            method="scm",
             workers=1,
             skip_existing=True,
             dry_run=False,
@@ -61,11 +61,11 @@ class RunBackfillTest(unittest.TestCase):
                         "--end-date",
                         "2026-06-04",
                         "--method",
-                        "b3",
+                        "scm",
                         "--workers",
                         "8",
-                        "--dsn",
-                        "postgres://example",
+                        "--duckdb-path",
+                        "cache.duckdb",
                         "--no-skip-existing",
                     ]
                 )
@@ -73,10 +73,10 @@ class RunBackfillTest(unittest.TestCase):
                 self.fail(f"parse_args should accept candidate-style parameters, exited with {exc.code}")
 
         self.assertEqual(args.workers, 8)
-        self.assertEqual(args.dsn, "postgres://example")
+        self.assertEqual(args.duckdb_path, "cache.duckdb")
         self.assertTrue(args.no_skip_existing)
 
-    def test_parse_args_keeps_legacy_aliases_for_existing_run_commands(self):
+    def test_parse_args_accepts_jobs_alias_and_duckdb_source(self):
         args = parse_args(
             [
                 "--start-date",
@@ -85,17 +85,17 @@ class RunBackfillTest(unittest.TestCase):
                 "2026-06-04",
                 "--jobs",
                 "3",
-                "--postgres-dsn",
-                "postgres://example",
+                "--duckdb-path",
+                "cache.duckdb",
                 "--force",
             ]
         )
 
         self.assertEqual(args.workers, 3)
-        self.assertEqual(args.dsn, "postgres://example")
+        self.assertEqual(args.duckdb_path, "cache.duckdb")
         self.assertTrue(args.no_skip_existing)
 
-    def test_candidate_backfill_accepts_run_backfill_legacy_aliases(self):
+    def test_candidate_backfill_accepts_jobs_alias_and_duckdb_source(self):
         with contextlib.redirect_stderr(io.StringIO()):
             try:
                 args = parse_candidate_args(
@@ -106,8 +106,8 @@ class RunBackfillTest(unittest.TestCase):
                         "2026-06-04",
                         "--jobs",
                         "3",
-                        "--postgres-dsn",
-                        "postgres://example",
+                        "--duckdb-path",
+                        "cache.duckdb",
                         "--force",
                     ]
                 )
@@ -115,14 +115,14 @@ class RunBackfillTest(unittest.TestCase):
                 self.fail(f"candidate backfill should accept run-style aliases, exited with {exc.code}")
 
         self.assertEqual(args.workers, 3)
-        self.assertEqual(args.dsn, "postgres://example")
+        self.assertEqual(args.duckdb_path, "cache.duckdb")
         self.assertTrue(args.no_skip_existing)
 
     def test_run_single_quiet_reports_negative_returncode_as_signal(self):
         config = RunConfig(
             binary=Path("stock-select-rs"),
             runtime_root=Path("/tmp/runtime"),
-            method="b3",
+            method="scm",
             workers=1,
             skip_existing=True,
             dry_run=False,
@@ -157,7 +157,7 @@ class RunBackfillTest(unittest.TestCase):
             "--runtime-root",
             "/tmp/runtime",
             "--method",
-            "b3",
+            "scm",
             "--workers",
             "1",
             "--dry-run",
@@ -171,7 +171,7 @@ class RunBackfillTest(unittest.TestCase):
 
         output = stream.getvalue()
         self.assertEqual(rc, 0)
-        self.assertIn("run --method b3 --pick-date 2026-06-01", output)
+        self.assertIn("run --method scm --pick-date 2026-06-01", output)
         self.assertIn("--runtime-root /tmp/runtime", output)
         self.assertIn("--pool-source turnover-top", output)
 
@@ -204,7 +204,7 @@ class RunBackfillTest(unittest.TestCase):
                                 "--binary",
                                 "stock-select-rs",
                                 "--method",
-                                "b3",
+                                "scm",
                                 "--dates-file",
                                 str(dates_file),
                                 "--workers",
@@ -251,7 +251,7 @@ class RunBackfillTest(unittest.TestCase):
                                 "--binary",
                                 "stock-select-rs",
                                 "--method",
-                                "b3",
+                                "scm",
                                 "--dates-file",
                                 str(dates_file),
                                 "--workers",

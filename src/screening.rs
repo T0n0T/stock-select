@@ -28,9 +28,6 @@ use crate::model::{
 };
 use crate::strategies::StrategyOutput;
 use crate::strategies::b2::run_b2_strategy_from_refs;
-use crate::strategies::b3::run_b3_strategy_from_refs;
-use crate::strategies::lsh::run_lsh_strategy_from_refs;
-use crate::strategies::qianlong::run_qianlong_strategy_from_refs;
 use crate::strategies::scm_pbm::{run_pbm_strategy_from_refs, run_scm_strategy_from_refs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +62,7 @@ pub struct ScreenRequest {
     pub method: Method,
     pub pick_date: NaiveDate,
     pub runtime_root: PathBuf,
-    pub dsn: String,
+    pub duckdb_path: String,
     pub recompute: bool,
     pub pool_source: PoolSource,
     pub pool_file: Option<PathBuf>,
@@ -153,7 +150,6 @@ where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
     D: IntoMarketDataset,
 {
-    ensure_screen_supported(request.method)?;
     let (start_date, end_date) = screen_window(request.pick_date);
     let prepared = if request.recompute {
         load_and_prepare(&request, start_date, end_date, loader, db_native_source)?
@@ -245,7 +241,7 @@ where
         request,
         provider,
         fallback_trade_time,
-        |_dsn, pick_date| Ok(pick_date - Duration::days(1)),
+        |_duckdb_path, pick_date| Ok(pick_date - Duration::days(1)),
         history_loader,
     )
 }
@@ -262,11 +258,10 @@ where
     Prev: FnOnce(&str, NaiveDate) -> anyhow::Result<NaiveDate>,
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<Vec<MarketRow>>,
 {
-    ensure_screen_supported(request.method)?;
-    let previous_trade_date = previous_trade_date_loader(&request.dsn, request.pick_date)?;
+    let previous_trade_date = previous_trade_date_loader(&request.duckdb_path, request.pick_date)?;
     let start_date = prepared_cache_start_date(previous_trade_date);
     let snapshot = fetch_rt_k_snapshot(provider, request.pick_date, fallback_trade_time)?;
-    let history = history_loader(&request.dsn, start_date, previous_trade_date)?;
+    let history = history_loader(&request.duckdb_path, start_date, previous_trade_date)?;
     if history.is_empty() {
         anyhow::bail!("No market rows found between {start_date} and {previous_trade_date}.");
     }
@@ -290,19 +285,16 @@ where
     D: IntoMarketDataset,
     S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
-    ensure_screen_supported(request.method)?;
-    let previous_trade_date = previous_trade_date_loader(&request.dsn, request.pick_date)?;
+    let previous_trade_date = previous_trade_date_loader(&request.duckdb_path, request.pick_date)?;
     let start_date = prepared_cache_start_date(previous_trade_date);
     let snapshot = fetch_rt_k_snapshot(provider, request.pick_date, fallback_trade_time)?;
-    let history_dataset =
-        history_loader(&request.dsn, start_date, previous_trade_date)?.into_market_dataset();
+    let history_dataset = history_loader(&request.duckdb_path, start_date, previous_trade_date)?
+        .into_market_dataset();
     if history_dataset.rows.is_empty() {
         anyhow::bail!("No market rows found between {start_date} and {previous_trade_date}.");
     }
-    let period_state_unavailable = db_table_unavailable(
-        &history_dataset.db_data_gaps,
-        "stock_period_indicator_state",
-    );
+    let period_state_unavailable =
+        db_table_unavailable(&history_dataset.db_data_gaps, "calc_indicator_state");
     let history = history_dataset.rows;
     let universe = db_native_intraday_history_universe(&history, previous_trade_date);
     let supported_snapshot = snapshot
@@ -323,7 +315,7 @@ where
             symbols.iter().map(String::as_str).collect::<BTreeSet<_>>(),
         )
     } else {
-        let states = macd_state_loader(&request.dsn, &symbols, request.pick_date)?;
+        let states = macd_state_loader(&request.duckdb_path, &symbols, request.pick_date)?;
         let covered = intraday_macd_covered_symbols(&symbols, &states);
         (states, covered)
     };
@@ -585,15 +577,6 @@ fn screen_artifact_key(pick_date: NaiveDate, intraday: bool) -> String {
     }
 }
 
-fn ensure_screen_supported(method: Method) -> anyhow::Result<()> {
-    match method {
-        Method::B2 | Method::B3 | Method::Lsh | Method::Scm | Method::Pbm | Method::Qianlong => {
-            Ok(())
-        }
-        _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
-    }
-}
-
 fn run_screen_strategy(
     method: Method,
     rows: &[&PreparedRow],
@@ -601,12 +584,57 @@ fn run_screen_strategy(
 ) -> anyhow::Result<StrategyOutput> {
     match method {
         Method::B2 => Ok(run_b2_strategy_from_refs(rows, pick_date)),
-        Method::B3 => Ok(run_b3_strategy_from_refs(rows, pick_date)),
-        Method::Lsh => Ok(run_lsh_strategy_from_refs(rows, pick_date)),
         Method::Scm => Ok(run_scm_strategy_from_refs(rows, pick_date)),
         Method::Pbm => Ok(run_pbm_strategy_from_refs(rows, pick_date)),
-        Method::Qianlong => Ok(run_qianlong_strategy_from_refs(rows, pick_date)),
-        _ => anyhow::bail!("{} screen is not implemented", method.as_str()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::front_adjust_rows;
+    use crate::model::MarketRow;
+    use chrono::NaiveDate;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn qfq_source_bars_are_not_adjusted_twice() {
+        let day1 = NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
+        let day2 = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let mut rows = vec![
+            MarketRow {
+                ts_code: "000001.SZ".to_string(),
+                trade_date: day1,
+                open: 9.0,
+                high: 11.0,
+                low: 8.0,
+                close: 10.0,
+                vol: 100.0,
+                turnover_rate: None,
+                adj_factor: Some(1.0),
+                db_factors: BTreeMap::from([
+                    ("_source_price_basis_qfq".to_string(), 1.0),
+                    ("rolling_ma25_qfq".to_string(), 8.0),
+                ]),
+            },
+            MarketRow {
+                ts_code: "000001.SZ".to_string(),
+                trade_date: day2,
+                open: 19.0,
+                high: 21.0,
+                low: 18.0,
+                close: 20.0,
+                vol: 100.0,
+                turnover_rate: None,
+                adj_factor: Some(2.0),
+                db_factors: BTreeMap::from([("_source_price_basis_qfq".to_string(), 1.0)]),
+            },
+        ];
+
+        front_adjust_rows(&mut rows).unwrap();
+
+        assert_eq!(rows[0].close, 10.0);
+        assert_eq!(rows[0].db_factors["rolling_ma25_qfq"], 8.0);
+        assert!(!rows[0].db_factors.contains_key("_source_price_basis_qfq"));
     }
 }
 
@@ -621,7 +649,7 @@ where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
     D: IntoMarketDataset,
 {
-    let market_dataset = loader(&request.dsn, start_date, end_date)?.into_market_dataset();
+    let market_dataset = loader(&request.duckdb_path, start_date, end_date)?.into_market_dataset();
     if market_dataset.rows.is_empty() {
         anyhow::bail!("No market rows found between {start_date} and {end_date}.");
     }
@@ -767,7 +795,6 @@ fn prepare_rows(mut rows: Vec<MarketRow>) -> anyhow::Result<Vec<PreparedRow>> {
                 v_shrink: false,
                 safe_mode: true,
                 lt_filter: true,
-                yellow_b1: false,
                 db_factors: {
                     let mut db_factors = row.db_factors;
                     if turnover_daily[idx].is_finite() {
@@ -803,6 +830,15 @@ fn db_factor_option_or(
 }
 
 fn front_adjust_rows(rows: &mut [MarketRow]) -> anyhow::Result<()> {
+    if rows
+        .iter()
+        .any(|row| row.db_factors.contains_key("_source_price_basis_qfq"))
+    {
+        for row in rows {
+            row.db_factors.remove("_source_price_basis_qfq");
+        }
+        return Ok(());
+    }
     let has_qfq_reference = rows
         .iter()
         .any(|row| row.db_factors.contains_key("_source_close_qfq"));
@@ -947,12 +983,11 @@ fn filter_turnover_top_pool_codes(
 
 fn turnover_top_pool_row_allowed(row: &PreparedRow, method: Method) -> bool {
     match method {
-        Method::B2 | Method::B3 => row
+        Method::B2 => row
             .ma25
             .zip(row.ma60)
             .is_some_and(|(ma25, ma60)| ma25 > ma60),
-        Method::Lsh | Method::Scm | Method::Pbm | Method::Qianlong => true,
-        _ => true,
+        Method::Scm | Method::Pbm => true,
     }
 }
 

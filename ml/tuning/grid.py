@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ml.methods import SUPPORTED_METHODS
+
 import argparse
 import json
 from pathlib import Path
@@ -85,7 +87,7 @@ def run_grid_search(args: argparse.Namespace) -> int:
 
 def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     parser = subparsers.add_parser("lgbm-rank", description="Tune LightGBM ranker.")
-    parser.add_argument("--method", default="b2")
+    parser.add_argument("--method", choices=SUPPORTED_METHODS, default="b2")
     parser.add_argument("--strategy", choices=["grid", "optuna"], default="grid")
     parser.add_argument("--max-trials", type=int, default=12)
     parser.add_argument("--dataset", type=Path)
