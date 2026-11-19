@@ -19,6 +19,7 @@ fn review_list_rejects_zero_limit() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review-list",
         "--runtime-root",
@@ -52,6 +53,7 @@ fn review_list_accepts_positive_limit_with_artifact() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review-list",
         "--runtime-root",
@@ -86,6 +88,7 @@ fn review_list_prefers_selection_display_artifact() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review-list",
         "--runtime-root",

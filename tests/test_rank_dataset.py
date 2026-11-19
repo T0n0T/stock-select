@@ -229,6 +229,52 @@ class RankDatasetTest(unittest.TestCase):
             self.assertEqual(dataset_columns_for_method(method), ma25_columns)
             self.assertEqual(raw_factor_columns_for_method(method), ma25_raw_columns)
 
+    def test_scm_schema_wires_kdj_and_weekly_monthly_macd_factors(self):
+        expected = [
+            "kdj_k_qfq",
+            "kdj_d_qfq",
+            "kdj_j_qfq",
+            "macd_weekly_dif",
+            "macd_weekly_dea",
+            "macd_weekly_hist",
+            "macd_weekly_dea_pctile",
+            "macd_weekly_period_count",
+            "macd_monthly_dif",
+            "macd_monthly_dea",
+            "macd_monthly_hist",
+            "macd_monthly_dea_pctile",
+            "macd_monthly_period_count",
+        ]
+        raw_columns = raw_factor_columns_for_method("scm")
+        dataset_columns = dataset_columns_for_method("scm")
+
+        for column in expected:
+            self.assertIn(column, raw_columns)
+            self.assertIn(column, dataset_columns)
+
+    def test_scm_schema_wires_valuation_market_cap_and_rsi_factors(self):
+        expected = [
+            "pe",
+            "pe_ttm",
+            "pb",
+            "ps",
+            "ps_ttm",
+            "dv_ratio",
+            "total_mv",
+            "circ_mv",
+            "total_share",
+            "free_share",
+            "rsi_qfq_6",
+            "rsi_qfq_12",
+            "rsi_qfq_24",
+        ]
+        raw_columns = raw_factor_columns_for_method("scm")
+        dataset_columns = dataset_columns_for_method("scm")
+
+        for column in expected:
+            self.assertIn(column, raw_columns)
+            self.assertIn(column, dataset_columns)
+
     def test_b2_dataset_schema_includes_db_and_market_state_factors(self):
         expected = [
             "boll_width_pct",

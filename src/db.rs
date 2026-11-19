@@ -1148,7 +1148,7 @@ const INSTRUMENT_INFO_QUERY: &str = "
             JOIN index_ths i ON i.ts_code = m.ts_code
             WHERE m.con_code = ANY($1)
               AND i.type = 'I'
-              AND NULLIF(btrim(i.name), '') IS NOT NULL
+              AND NULLIF(trim(i.name), '') IS NOT NULL
             ORDER BY
                 m.con_code,
                 CASE WHEN i.name LIKE '%(A股)' THEN 1 ELSE 0 END,
@@ -1157,8 +1157,8 @@ const INSTRUMENT_INFO_QUERY: &str = "
         )
         SELECT
             r.ts_code,
-            COALESCE(NULLIF(btrim(s.name), ''), ths_name.name) AS name,
-            COALESCE(NULLIF(btrim(s.industry), ''), ths_industry.industry) AS industry
+            COALESCE(NULLIF(trim(s.name), ''), ths_name.name) AS name,
+            COALESCE(NULLIF(trim(s.industry), ''), ths_industry.industry) AS industry
         FROM requested r
         LEFT JOIN stock_basic s ON s.ts_code = r.ts_code
         LEFT JOIN ths_name ON ths_name.ts_code = r.ts_code
@@ -2140,11 +2140,11 @@ mod tests {
             "WITH requested AS",
             "SELECT unnest($1::text[]) AS ts_code",
             "LEFT JOIN stock_basic s ON s.ts_code = r.ts_code",
-            "COALESCE(NULLIF(btrim(s.name), ''), ths_name.name) AS name",
+            "COALESCE(NULLIF(trim(s.name), ''), ths_name.name) AS name",
             "FROM index_ths_member m",
             "JOIN index_ths i",
             "i.type = 'I'",
-            "COALESCE(NULLIF(btrim(s.industry), ''), ths_industry.industry) AS industry",
+            "COALESCE(NULLIF(trim(s.industry), ''), ths_industry.industry) AS industry",
         ] {
             assert!(
                 INSTRUMENT_INFO_QUERY.contains(fragment),
@@ -2152,6 +2152,8 @@ mod tests {
             );
         }
         assert!(!INSTRUMENT_INFO_QUERY.contains("NULL::text AS industry"));
+        assert!(!INSTRUMENT_INFO_QUERY.contains("btrim("));
+        assert!(INSTRUMENT_INFO_QUERY.contains("NULLIF(trim(i.name), '')"));
     }
 
     #[test]
@@ -2454,6 +2456,7 @@ mod tests {
             runtime_root: root.path().to_path_buf(),
             duckdb_path,
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -2587,6 +2590,7 @@ mod tests {
             runtime_root: root.path().to_path_buf(),
             duckdb_path: duckdb_path.clone(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: true,

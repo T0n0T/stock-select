@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use crate::cache::{
     history_payload_for_code, load_prepared_dataset_for_mode, prepared_cache_start_date,
 };
+use crate::screening::load_db_native_prepared_window;
 use crate::engine::artifacts::artifact_key_for_run;
 use crate::engine::artifacts::{SelectionRunPaths, write_selection_json};
 use crate::engine::b2::adjust_b2_cyq_post_rerank_score;
@@ -36,6 +37,7 @@ pub struct SelectionRunRequest {
     pub method: Method,
     pub pick_date: NaiveDate,
     pub runtime_root: PathBuf,
+    pub duckdb_path: String,
     pub intraday: bool,
     pub candidates_path: PathBuf,
     pub model_path: Option<PathBuf>,
@@ -81,6 +83,7 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
     );
     let prepared_dataset = load_prepared_dataset_for_selection(
         &request.runtime_root,
+        &request.duckdb_path,
         request.method,
         request.pick_date,
         request.intraday,
@@ -273,19 +276,29 @@ fn read_model_metadata(path: Option<&Path>) -> anyhow::Result<Option<ModelFeatur
 
 fn load_prepared_dataset_for_selection(
     runtime_root: &Path,
+    duckdb_path: &str,
     method: Method,
     pick_date: NaiveDate,
     intraday: bool,
 ) -> anyhow::Result<Option<PreparedDataset>> {
     let start_date = prepared_cache_start_date(pick_date);
-    load_prepared_dataset_for_mode(
+    if let Some(dataset) = load_prepared_dataset_for_mode(
         runtime_root,
         method,
         pick_date,
         start_date,
         pick_date,
         intraday,
-    )
+    )? {
+        return Ok(Some(dataset));
+    }
+    // Without a cache, selection needs the same history factors; rebuild the EOD window in memory
+    // instead of silently degrading to payload-only factors. Intraday has no in-memory rebuild path.
+    if intraday || duckdb_path.trim().is_empty() {
+        return Ok(None);
+    }
+    eprintln!("[selection] prepared cache missing; rebuilding EOD window in memory");
+    load_db_native_prepared_window(duckdb_path, pick_date)
 }
 
 fn inject_prepared_history_if_available(

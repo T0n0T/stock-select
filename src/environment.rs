@@ -172,6 +172,37 @@ pub fn resolve_market_environment(
         })
 }
 
+/// Derives the EOD market environment from an in-memory DB window when no prepared cache exists.
+/// The window is built and dropped here; nothing is written except the environment record.
+pub fn resolve_window_environment_with_loader<F, D>(
+    runtime_root: &Path,
+    pick_date: NaiveDate,
+    duckdb_path: &str,
+    loader: F,
+) -> anyhow::Result<ResolvedEnvironment>
+where
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
+    D: crate::model::IntoMarketDataset,
+{
+    let window = crate::screening::load_db_native_prepared_window_with_loader(
+        duckdb_path,
+        pick_date,
+        loader,
+    )?;
+    let state = window
+        .as_ref()
+        .and_then(|dataset| prepared_market_state(&dataset.rows, pick_date))
+        .ok_or_else(|| {
+            anyhow::anyhow!("No prepared window market state is available for {pick_date}.")
+        })?;
+    persist_prepared_market_environment(
+        runtime_root,
+        pick_date,
+        state,
+        "derived from in-memory prepared window".to_string(),
+    )
+}
+
 pub fn persist_prepared_market_environment(
     runtime_root: &Path,
     pick_date: NaiveDate,

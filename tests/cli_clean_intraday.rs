@@ -43,6 +43,7 @@ fn clean_intraday_removes_runtime_intraday_artifacts_without_touching_models_or_
     }
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "clean-intraday",
         "--runtime-root",
@@ -72,6 +73,7 @@ fn clean_intraday_dry_run_reports_intraday_artifacts_without_deleting() {
     write_file(&eod_path);
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "clean-intraday",
         "--runtime-root",

@@ -56,6 +56,11 @@ TRAINING_CATEGORICAL_COLUMNS = [
 MA25_TRAINING_CATEGORICAL_COLUMNS = [
     "signal",
     *CZSC_TRAINING_CATEGORICAL_COLUMNS,
+    "macd_state_daily_phase_type",
+    "macd_state_daily_wave_stage",
+    "macd_state_weekly_phase_type",
+    "macd_state_weekly_wave_stage",
+    "macd_state_weekly_daily_combo_type",
 ]
 
 TRAINING_MACD_NUMERIC_COLUMNS = [
@@ -383,9 +388,40 @@ MA25_EXCLUDED_RAW_FACTOR_COLUMNS = {
     "vr_qfq",
     "cyq_cost_85_to_close_pct",
 }
-MA25_RAW_FACTOR_COLUMNS = [
-    column for column in RAW_FACTOR_COLUMNS if column not in MA25_EXCLUDED_RAW_FACTOR_COLUMNS
-] + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS + THS_SECTOR_RAW_FACTOR_COLUMNS + MA25_SPECIFIC_RAW_FACTOR_COLUMNS
+MA25_KDJ_WEEKLY_MONTHLY_MACD_RAW_FACTOR_COLUMNS = [
+    "kdj_k_qfq",
+    "kdj_d_qfq",
+    "kdj_j_qfq",
+    "macd_weekly_dif",
+    "macd_weekly_dea",
+    "macd_weekly_period_count",
+    "macd_monthly_dif",
+    "macd_monthly_dea",
+    "macd_monthly_period_count",
+]
+MA25_VALUATION_MARKET_CAP_RSI_RAW_FACTOR_COLUMNS = [
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps",
+    "ps_ttm",
+    "dv_ratio",
+    "total_mv",
+    "circ_mv",
+    "total_share",
+    "free_share",
+    "rsi_qfq_6",
+    "rsi_qfq_12",
+    "rsi_qfq_24",
+]
+MA25_RAW_FACTOR_COLUMNS = (
+    [column for column in RAW_FACTOR_COLUMNS if column not in MA25_EXCLUDED_RAW_FACTOR_COLUMNS]
+    + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS
+    + THS_SECTOR_RAW_FACTOR_COLUMNS
+    + MA25_SPECIFIC_RAW_FACTOR_COLUMNS
+    + MA25_KDJ_WEEKLY_MONTHLY_MACD_RAW_FACTOR_COLUMNS
+    + MA25_VALUATION_MARKET_CAP_RSI_RAW_FACTOR_COLUMNS
+)
 LABEL_COLUMNS = [
     "ret3",
     "ret5",

@@ -32,6 +32,7 @@ use stock_select::engine::types::{DisplayRow, LlmAnnotation};
 use stock_select::environment::{
     ResolvedEnvironment, ensure_market_environment, normalize_environment_state,
     persist_prepared_market_environment, prepared_market_state,
+    resolve_window_environment_with_loader,
     resolve_intraday_market_environment, resolve_market_environment,
 };
 use stock_select::intraday::TushareRestProvider;
@@ -93,6 +94,10 @@ struct ScreenArgs {
 
     #[arg(long)]
     recompute: bool,
+
+    /// Persist the EOD prepared cache. Off by default; `run` rebuilds the window in memory when absent.
+    #[arg(long)]
+    write_prepared_cache: bool,
 
     #[arg(long)]
     pool_file: Option<PathBuf>,
@@ -417,6 +422,7 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
         runtime_root: runtime_root.clone(),
         duckdb_path,
         recompute: args.recompute,
+        write_prepared_cache: args.write_prepared_cache,
         pool_source: if args.pool_file.is_some() {
             PoolSource::Custom
         } else {
@@ -469,6 +475,7 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
                 runtime_root: runtime_root.clone(),
                 duckdb_path: duckdb_path.clone(),
                 recompute: args.recompute,
+                write_prepared_cache: true,
                 pool_source: if args.pool_file.is_some() {
                     PoolSource::Custom
                 } else {
@@ -521,6 +528,7 @@ fn run_selection_command(args: RunArgs) -> anyhow::Result<()> {
         method: args.method.method,
         pick_date,
         runtime_root: runtime_root.clone(),
+        duckdb_path: duckdb_path.clone(),
         intraday: args.method.intraday,
         candidates_path,
         model_path: args.model_path.clone(),
@@ -778,8 +786,23 @@ fn resolve_command_environment(
             unreachable!("manual environment state should not evaluate")
         })?
     } else {
-        resolve_prepared_market_environment(runtime_root, pick_date)
-            .or_else(|_| resolve_market_environment(runtime_root, pick_date))?
+        match resolve_prepared_market_environment(runtime_root, pick_date)
+            .or_else(|_| resolve_market_environment(runtime_root, pick_date))
+        {
+            Ok(environment) => environment,
+            // No cache and no persisted record: derive from an in-memory DB window, the same
+            // source the cache would have held. Keep the original error when no DB is configured.
+            Err(error) if duckdb_path.trim().is_empty() => return Err(error),
+            Err(error) => resolve_window_environment_with_loader(
+                runtime_root,
+                pick_date,
+                duckdb_path,
+                fetch_db_native_daily_dataset_if_configured,
+            )
+            .map_err(|window_error| {
+                error.context(format!("in-memory window fallback failed: {window_error}"))
+            })?,
+        }
     };
     eprintln!(
         "[environment] state={} source={} interval={}..{}",
@@ -1582,6 +1605,7 @@ where
             runtime_root: runtime_root.clone(),
             duckdb_path: duckdb_path_val.clone(),
             recompute: args.recompute,
+            write_prepared_cache: true,
             pool_source: if args.pool_file.is_some() {
                 PoolSource::Custom
             } else {
@@ -1622,6 +1646,7 @@ where
         method,
         pick_date,
         runtime_root: runtime_root.clone(),
+        duckdb_path: duckdb_path_val.clone(),
         intraday,
         candidates_path,
         model_path: args.model_path.clone(),

@@ -291,7 +291,7 @@ cp .env.example .env
 如果想手动分段执行 run 中的各步骤：
 
 ```bash
-# 步骤 1: screen（仅生成候选）
+# 步骤 1: screen（仅生成候选；默认不写 prepared cache，加 --write-prepared-cache 才写）
 stock-select-rs screen --method b2 --pick-date 2026-06-05
 
 # 步骤 2: screen --export-factors（导出因子）

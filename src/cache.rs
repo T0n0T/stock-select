@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -489,7 +489,7 @@ fn write_prepared_cache_rows_file(path: &Path, rows: &[PreparedRow]) -> anyhow::
     let schema = prepared_cache_schema(&factor_keys);
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))?;
     for chunk in rows.chunks(PREPARED_CACHE_BATCH_SIZE) {
-        writer.write(&prepared_rows_record_batch(
+        writer.write(&prepared_rows_record_batch_optimized(
             chunk,
             &factor_keys,
             schema.clone(),
@@ -500,11 +500,18 @@ fn write_prepared_cache_rows_file(path: &Path, rows: &[PreparedRow]) -> anyhow::
 }
 
 fn prepared_cache_factor_keys(rows: &[PreparedRow]) -> Vec<String> {
-    rows.iter()
-        .flat_map(|row| row.db_factors.keys().cloned())
-        .collect::<BTreeSet<_>>()
+    prepared_cache_factor_keys_optimized(rows)
+}
+
+fn prepared_cache_factor_keys_optimized(rows: &[PreparedRow]) -> Vec<String> {
+    let mut keys = rows
+        .iter()
+        .flat_map(|row| row.db_factors.keys().map(String::as_str))
+        .collect::<HashSet<_>>()
         .into_iter()
-        .collect()
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.into_iter().map(str::to_owned).collect()
 }
 
 fn prepared_cache_schema(factor_keys: &[String]) -> SchemaRef {
@@ -545,7 +552,7 @@ fn prepared_cache_schema(factor_keys: &[String]) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-fn prepared_rows_record_batch(
+fn prepared_rows_record_batch_optimized(
     rows: &[PreparedRow],
     factor_keys: &[String],
     schema: SchemaRef,
@@ -587,14 +594,26 @@ fn prepared_rows_record_batch(
         boolean_array(rows, |row| row.safe_mode),
         boolean_array(rows, |row| row.lt_filter),
     ];
-    arrays.extend(factor_keys.iter().map(|key| {
-        optional_f64_array(rows, |row| {
-            row.db_factors
-                .get(key)
-                .copied()
-                .filter(|value| value.is_finite())
-        })
-    }));
+    let factor_indexes = factor_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| (key.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut factor_columns = (0..factor_keys.len())
+        .map(|_| vec![None; rows.len()])
+        .collect::<Vec<_>>();
+    for (row_index, row) in rows.iter().enumerate() {
+        for (key, value) in &row.db_factors {
+            if let Some(&column_index) = factor_indexes.get(key.as_str()) {
+                factor_columns[column_index][row_index] = value.is_finite().then_some(*value);
+            }
+        }
+    }
+    arrays.extend(
+        factor_columns
+            .into_iter()
+            .map(|values| Arc::new(Float64Array::from(values)) as ArrayRef),
+    );
     Ok(RecordBatch::try_new(schema, arrays)?)
 }
 
@@ -1022,6 +1041,198 @@ mod tests {
         write_prepared_cache_rows_file(&path, &rows).unwrap();
 
         assert_eq!(decode_prepared_cache_parquet_file(&path).unwrap(), rows);
+    }
+
+    #[test]
+    fn optimized_factor_key_collection_matches_old_implementation() {
+        let rows = test_rows_with_sparse_factors();
+
+        let expected = rows
+            .iter()
+            .flat_map(|row| row.db_factors.keys().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(prepared_cache_factor_keys_optimized(&rows), expected);
+    }
+
+    #[test]
+    fn optimized_record_batch_matches_old_implementation() {
+        let rows = test_rows_with_sparse_factors();
+        let factor_keys = rows
+            .iter()
+            .flat_map(|row| row.db_factors.keys().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let schema = prepared_cache_schema(&factor_keys);
+
+        let expected = prepared_rows_record_batch_old(&rows, &factor_keys, schema.clone()).unwrap();
+        let actual = prepared_rows_record_batch_optimized(&rows, &factor_keys, schema).unwrap();
+
+        assert_record_batches_equal(&actual, &expected);
+    }
+
+    fn prepared_rows_record_batch_old(
+        rows: &[PreparedRow],
+        factor_keys: &[String],
+        schema: SchemaRef,
+    ) -> anyhow::Result<RecordBatch> {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("Unix epoch is valid");
+        let dates = rows
+            .iter()
+            .map(|row| i32::try_from(row.trade_date.signed_duration_since(epoch).num_days()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(
+                rows.iter()
+                    .map(|row| row.ts_code.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(Date32Array::from(dates)),
+            required_f64_array(rows, |row| row.open),
+            required_f64_array(rows, |row| row.high),
+            required_f64_array(rows, |row| row.low),
+            required_f64_array(rows, |row| row.close),
+            required_f64_array(rows, |row| row.volume),
+            required_f64_array(rows, |row| row.turnover_n),
+            optional_f64_array(rows, |row| row.turnover_rate),
+            required_f64_array(rows, |row| row.k),
+            required_f64_array(rows, |row| row.d),
+            required_f64_array(rows, |row| row.j),
+            optional_f64_array(rows, |row| row.zxdq),
+            optional_f64_array(rows, |row| row.zxdkx),
+            required_f64_array(rows, |row| row.dif),
+            required_f64_array(rows, |row| row.dea),
+            required_f64_array(rows, |row| row.macd_hist),
+            optional_f64_array(rows, |row| row.ma25),
+            optional_f64_array(rows, |row| row.ma60),
+            optional_f64_array(rows, |row| row.ma144),
+            optional_f64_array(rows, |row| row.chg_d),
+            boolean_array(rows, |row| row.weekly_ma_bull),
+            boolean_array(rows, |row| row.max_vol_not_bearish),
+            boolean_array(rows, |row| row.v_shrink),
+            boolean_array(rows, |row| row.safe_mode),
+            boolean_array(rows, |row| row.lt_filter),
+        ];
+        arrays.extend(factor_keys.iter().map(|key| {
+            optional_f64_array(rows, |row| {
+                row.db_factors
+                    .get(key)
+                    .copied()
+                    .filter(|value| value.is_finite())
+            })
+        }));
+        Ok(RecordBatch::try_new(schema, arrays)?)
+    }
+
+    fn assert_record_batches_equal(actual: &RecordBatch, expected: &RecordBatch) {
+        assert_eq!(actual.schema(), expected.schema());
+        assert_eq!(actual.num_rows(), expected.num_rows());
+        assert_eq!(actual.num_columns(), expected.num_columns());
+
+        for index in 0..actual.num_columns() {
+            let actual_column = actual.column(index);
+            let expected_column = expected.column(index);
+            assert_eq!(actual_column.data_type(), expected_column.data_type());
+            assert_eq!(actual_column.null_count(), expected_column.null_count());
+            match actual_column.data_type() {
+                DataType::Utf8 => {
+                    let actual = actual_column
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap();
+                    let expected = expected_column
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap();
+                    assert_eq!(
+                        actual.iter().collect::<Vec<_>>(),
+                        expected.iter().collect::<Vec<_>>()
+                    );
+                }
+                DataType::Date32 => {
+                    let actual = actual_column
+                        .as_any()
+                        .downcast_ref::<Date32Array>()
+                        .unwrap();
+                    let expected = expected_column
+                        .as_any()
+                        .downcast_ref::<Date32Array>()
+                        .unwrap();
+                    assert_eq!(
+                        actual.iter().collect::<Vec<_>>(),
+                        expected.iter().collect::<Vec<_>>()
+                    );
+                }
+                DataType::Float64 => {
+                    let actual = actual_column
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .unwrap();
+                    let expected = expected_column
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .unwrap();
+                    let actual = actual
+                        .iter()
+                        .map(|value| value.map(f64::to_bits))
+                        .collect::<Vec<_>>();
+                    let expected = expected
+                        .iter()
+                        .map(|value| value.map(f64::to_bits))
+                        .collect::<Vec<_>>();
+                    assert_eq!(actual, expected);
+                }
+                DataType::Boolean => {
+                    let actual = actual_column
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .unwrap();
+                    let expected = expected_column
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .unwrap();
+                    assert_eq!(
+                        actual.iter().collect::<Vec<_>>(),
+                        expected.iter().collect::<Vec<_>>()
+                    );
+                }
+                data_type => panic!("unexpected prepared cache test data type: {data_type:?}"),
+            }
+        }
+    }
+
+    fn test_rows_with_sparse_factors() -> Vec<PreparedRow> {
+        let mut first = prepared_row_with_factors(
+            "000001.SZ",
+            NaiveDate::from_ymd_opt(2026, 5, 25).unwrap(),
+            10.0,
+            &[("z_factor", 1.0), ("a_factor", 2.0)],
+        );
+        first.turnover_rate = None;
+        first.db_factors.insert("nan_factor".to_string(), f64::NAN);
+
+        let mut second = prepared_row_with_factors(
+            "000002.SZ",
+            NaiveDate::from_ymd_opt(2026, 5, 26).unwrap(),
+            11.0,
+            &[("m_factor", 3.0), ("z_factor", 4.0)],
+        );
+        second.ma144 = None;
+
+        let mut third = prepared_row_with_factors(
+            "000003.SZ",
+            NaiveDate::from_ymd_opt(2026, 5, 27).unwrap(),
+            12.0,
+            &[("a_factor", 5.0), ("m_factor", 6.0)],
+        );
+        third
+            .db_factors
+            .insert("inf_factor".to_string(), f64::INFINITY);
+
+        vec![first, second, third]
     }
 
     fn prepared_row_with_factors(

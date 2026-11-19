@@ -182,7 +182,7 @@ flowchart TD
     POOLF --> WINDOW
     WINDOW --> LOCAL["enrich_local_market_factors()<br/>boll_width / bias / roc / mtm / psy / wr"]
     LOCAL --> IND["映射 DB 指标并补必要本地序列<br/>KDJ / MACD / rolling / CZSC / ZX"]
-    IND --> PREP["write_prepared_cache()<br/>Parquet schema 14<br/>→ runtime/prepared/*.parquet"]
+    IND --> PREP["write_prepared_cache()<br/>仅 screen --write-prepared-cache 或 run 自动筛选时写入<br/>Parquet schema 14 → runtime/prepared/*.parquet"]
     PREP --> STRAT{"策略筛选"}
     STRAT -->|b2| B2STRAT["run_b2_strategy_from_refs()<br/>src/strategies/b2.rs"]
     STRAT -->|scm| SCMSTRAT["run_scm_strategy_from_refs()<br/>src/strategies/scm_pbm.rs"]

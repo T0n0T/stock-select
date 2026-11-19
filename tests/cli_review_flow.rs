@@ -152,6 +152,7 @@ fn chart_generates_png_artifacts_and_cleans_payloads_from_display_rows() {
     let renderer = write_fake_chart_renderer(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.env("STOCK_SELECT_CHART_RENDERER", &renderer)
         .args([
             "chart",
@@ -203,6 +204,7 @@ fn intraday_chart_reads_intraday_prepared_cache() {
     let renderer = write_fake_chart_renderer(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.env("STOCK_SELECT_CHART_RENDERER", &renderer)
         .args([
             "chart",
@@ -234,6 +236,7 @@ fn review_writes_llm_tasks_without_changing_display_rank() {
     let run_dir = write_display(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review",
         "--runtime-root",
@@ -288,6 +291,7 @@ fn review_accepts_old_control_flags_as_task_metadata() {
     std::fs::write(&metadata_path, "{}\n").unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review",
         "--runtime-root",
@@ -341,6 +345,7 @@ fn review_merge_applies_annotations_to_display_without_changing_rank() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review-merge",
         "--runtime-root",
@@ -413,6 +418,7 @@ fn review_merge_writes_html_report_with_chart_comment_and_raw_response() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review-merge",
         "--runtime-root",
@@ -476,6 +482,7 @@ fn review_merge_does_not_inline_oversized_raw_response() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review-merge",
         "--runtime-root",
@@ -518,6 +525,7 @@ fn review_merge_does_not_read_raw_response_outside_llm_raw_dir() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "review-merge",
         "--runtime-root",
@@ -537,7 +545,9 @@ fn review_merge_does_not_read_raw_response_outside_llm_raw_dir() {
 
 #[test]
 fn completions_generates_requested_shell_script() {
+    let temp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args(["completions", "--shell", "bash"])
         .assert()
         .success()

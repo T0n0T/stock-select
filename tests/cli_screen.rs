@@ -57,6 +57,7 @@ fn b2_screen_accepts_pool_file_for_custom_pool() {
     std::fs::write(&pool_file, "000002").unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "screen",
         "--runtime-root",
@@ -118,6 +119,7 @@ fn b2_screen_pool_source_custom_uses_stock_select_pool_file() {
     std::fs::write(&pool_file, "000002").unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.env("STOCK_SELECT_POOL_FILE", &pool_file)
         .args([
             "screen",

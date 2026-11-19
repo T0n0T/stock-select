@@ -7,6 +7,7 @@ use stock_select::cache::{
 use stock_select::intraday::{MacdPeriodState, RawRtKRow, StaticRtKProvider};
 use stock_select::model::{DbDataGap, MarketDataset, MarketRow, Method, PreparedRow};
 use stock_select::screening::{
+    load_db_native_prepared_window_with_loader,
     PoolSource, ScreenRequest, prepared_cache_start_date,
     run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_dataset_loader,
     run_db_native_screen_with_loader, run_intraday_screen_with_loaders,
@@ -28,6 +29,36 @@ fn screen_window_uses_one_year_prepared_history() {
 }
 
 #[test]
+fn screen_skips_prepared_cache_write_when_disabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
+    let request = ScreenRequest {
+        method: Method::B2,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        duckdb_path: "fixture.duckdb".to_string(),
+        recompute: false,
+        write_prepared_cache: false,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+
+    let output_path = run_screen_with_loader(request, |_duckdb_path, _start, _end| {
+        Ok(vec![
+            market_row(1, 10.0, 100.0),
+            market_row(2, 10.1, 90.0),
+            market_row(3, 10.6, 120.0),
+        ])
+    })
+    .unwrap();
+
+    assert!(output_path.exists());
+    assert!(!prepared_cache_data_path(temp.path(), pick_date).exists());
+}
+
+#[test]
 fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
     let temp = tempfile::tempdir().unwrap();
     let pick_date = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
@@ -37,6 +68,7 @@ fn screen_loads_market_rows_writes_prepared_cache_and_candidate_file() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: false,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -91,6 +123,7 @@ fn db_native_screen_writes_db_native_prepared_cache_metadata() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -142,6 +175,7 @@ fn db_native_screen_propagates_table_gaps_to_cache_and_factor_manifest_only() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: true,
@@ -209,6 +243,7 @@ fn db_native_screen_rejects_joined_window_missing_requested_start_date() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -241,6 +276,7 @@ fn db_native_screen_allows_window_start_on_next_trading_date() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -278,6 +314,7 @@ fn db_native_screen_allows_window_start_after_long_holiday_when_trading_days_are
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -315,6 +352,7 @@ fn db_native_screen_rejects_window_with_too_few_trading_days() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -345,6 +383,7 @@ fn screen_prepare_matches_old_indicator_basics() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: false,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -386,6 +425,7 @@ fn screen_prepare_front_adjusts_ohlc_indicators_and_preserves_raw_turnover_basis
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -432,6 +472,7 @@ fn screen_prepare_front_adjusts_local_qfq_factor_fallbacks() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -478,6 +519,7 @@ fn screen_prepare_uses_shared_nan_aware_rolling_indicators() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -543,6 +585,7 @@ fn screen_prepare_aligns_db_qfq_prices_to_the_window_basis() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: true,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -670,6 +713,7 @@ fn screen_prepare_prefers_db_native_kdj_macd_and_rolling_values() {
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -738,6 +782,7 @@ fn screen_prepare_fills_local_intraday_compatible_db_factors_without_overwriting
         runtime_root: temp.path().to_path_buf(),
         duckdb_path: "fixture.duckdb".to_string(),
         recompute: true,
+        write_prepared_cache: true,
         pool_source: PoolSource::TurnoverTop,
         pool_file: None,
         export_factors: false,
@@ -819,6 +864,7 @@ fn screen_custom_pool_intersects_prepared_universe_before_strategy() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::Custom,
             pool_file: Some(pool_file.clone()),
             export_factors: false,
@@ -867,6 +913,7 @@ fn screen_missing_pick_date_rows_reports_latest_cached_date() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -931,6 +978,7 @@ fn screen_scm_and_pbm_partition_candidates_by_recent_ma25_path() {
                 runtime_root: temp.path().to_path_buf(),
                 duckdb_path: "fixture.duckdb".to_string(),
                 recompute: false,
+                write_prepared_cache: true,
                 pool_source: PoolSource::TurnoverTop,
                 pool_file: None,
                 export_factors: false,
@@ -1186,6 +1234,7 @@ fn run_screen_with_prepared_rows(
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -1227,6 +1276,7 @@ fn screen_b2_does_not_repeat_signal_in_same_j_turn_up_cycle() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -1296,6 +1346,7 @@ fn screen_b2_requires_close_above_long_term_reference_after_new_stock_window() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -1365,6 +1416,7 @@ fn screen_b2_golden_fixture_selects_mature_trend_start() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -1441,6 +1493,7 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: true,
@@ -1508,6 +1561,7 @@ fn screen_export_factors_derives_environment_from_prepared_cross_section() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: true,
@@ -1561,6 +1615,7 @@ fn intraday_screen_writes_intraday_prepared_cache_without_overwriting_eod_cache(
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -1652,6 +1707,7 @@ fn intraday_screen_export_factors_runs_through_local_factor_fill() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::Custom,
             pool_file: Some(pool_file),
             export_factors: true,
@@ -1723,6 +1779,7 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: true,
@@ -1891,6 +1948,7 @@ fn db_native_intraday_screen_skips_period_state_loader_when_table_is_unavailable
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: true,
@@ -2027,6 +2085,7 @@ fn db_native_intraday_screen_filters_snapshot_universe_and_skips_incomplete_peri
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -2183,6 +2242,7 @@ fn db_native_intraday_screen_skips_snapshot_rows_without_live_qfq_price() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -2334,6 +2394,7 @@ fn intraday_screen_uses_previous_trade_date_loader_for_history_window() {
             runtime_root: temp.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: false,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -2396,6 +2457,7 @@ fn prepare_test_market_rows(rows: Vec<MarketRow>) -> anyhow::Result<Vec<Prepared
             runtime_root: root.path().to_path_buf(),
             duckdb_path: "fixture.duckdb".to_string(),
             recompute: true,
+            write_prepared_cache: true,
             pool_source: PoolSource::TurnoverTop,
             pool_file: None,
             export_factors: false,
@@ -2594,4 +2656,49 @@ fn ma25_prepared_rows(
             }
         })
         .collect()
+}
+
+#[test]
+fn selection_fallback_prepares_window_in_memory_when_cache_is_absent() {
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let window_start = prepared_cache_start_date(pick_date);
+
+    let prepared = load_db_native_prepared_window_with_loader(
+        "fixture.duckdb",
+        pick_date,
+        |_duckdb_path, start_date, end_date| {
+            assert_eq!(start_date, window_start);
+            assert_eq!(end_date, pick_date);
+            Ok((0..365)
+                .map(|offset| {
+                    market_row_at_date(
+                        window_start + Duration::days(offset),
+                        10.0 + offset as f64 * 0.01,
+                        100.0,
+                    )
+                })
+                .chain(std::iter::once(market_row_at_date(pick_date, 12.52, 100.0)))
+                .collect::<Vec<MarketRow>>())
+        },
+    )
+    .unwrap();
+
+    let prepared = prepared.expect("a complete window should be prepared in memory");
+    assert!(prepared.rows.iter().any(|row| row.trade_date == pick_date));
+}
+
+#[test]
+fn selection_fallback_returns_none_when_window_is_too_short() {
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+
+    let prepared = load_db_native_prepared_window_with_loader(
+        "fixture.duckdb",
+        pick_date,
+        |_duckdb_path, _start_date, _end_date| {
+            Ok(vec![market_row_at_date(pick_date, 12.52, 100.0)])
+        },
+    )
+    .unwrap();
+
+    assert!(prepared.is_none());
 }

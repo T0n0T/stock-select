@@ -330,6 +330,7 @@ fn b2_run_writes_model_first_selection_artifacts() {
     write_lightgbm_model_artifacts(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -412,6 +413,7 @@ fn scm_run_uses_method_model_dir_and_factor_profile() {
     .unwrap();
     copy_fixture_model_artifacts(temp.path(), "scm");
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -454,6 +456,7 @@ fn b2_run_auto_screens_candidates_when_candidates_path_is_omitted() {
     let renderer = write_fake_chart_renderer(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.env("STOCK_SELECT_CHART_RENDERER", &renderer)
         .args([
             "run",
@@ -526,6 +529,7 @@ fn b2_run_accepts_old_review_control_flags_as_model_first_metadata() {
     let metadata_path = override_dir.join("models/b2/model_metadata.json");
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -775,6 +779,7 @@ fn b2_run_persists_environment_and_injects_env_factor() {
     write_lightgbm_model_artifacts(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -911,6 +916,7 @@ fn b2_run_llm_review_limit_charts_only_top_ranked_rows() {
     let renderer = write_fake_chart_renderer(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.env("STOCK_SELECT_CHART_RENDERER", &renderer)
         .args([
             "run",
@@ -965,6 +971,7 @@ fn b2_run_passes_pool_file_to_auto_screen() {
     std::fs::write(&pool_file, "000002").unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1018,6 +1025,7 @@ fn b2_run_uses_default_lightgbm_model_instead_of_input_model_score() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1092,6 +1100,7 @@ fn b2_run_uses_lightgbm_score_instead_of_candidate_model_score() {
     write_lightgbm_model_artifacts(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1128,6 +1137,7 @@ fn b2_intraday_run_writes_intraday_scoped_artifacts() {
     write_lightgbm_model_artifacts(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1203,6 +1213,7 @@ fn b2_intraday_run_warns_and_stops_when_model_state_is_blocked() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1242,6 +1253,7 @@ fn b2_intraday_run_infers_pick_date_when_omitted() {
     let artifact_key = format!("{}.intraday.b2", today.format("%Y-%m-%d"));
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1270,6 +1282,7 @@ fn b2_intraday_run_without_manual_or_previous_environment_fails_clearly() {
     write_lightgbm_model_artifacts(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1296,6 +1309,7 @@ fn b2_intraday_run_manual_environment_does_not_persist_daily_environment() {
     write_lightgbm_model_artifacts(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1437,6 +1451,7 @@ fn b2_run_rejects_missing_default_model_artifacts() {
     let candidates_path = write_candidates(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1512,6 +1527,7 @@ fn b2_run_injects_history_from_prepared_cache_when_candidate_has_no_history() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1558,6 +1574,7 @@ fn b2_run_propagates_prepared_cache_gaps_to_factor_manifest() {
     let candidates_path = write_candidates(temp.path());
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1617,6 +1634,7 @@ fn b2_run_uses_prepared_cache_factor_path_for_market_state_factors() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1673,6 +1691,7 @@ fn b2_run_replaces_incomplete_candidate_history_from_prepared_cache() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1722,6 +1741,7 @@ fn b2_intraday_run_injects_history_from_intraday_prepared_cache() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",
@@ -1776,6 +1796,7 @@ fn b2_run_skips_prepared_cache_when_metadata_is_missing() {
     .unwrap();
 
     let mut cmd = Command::cargo_bin("stock-select-rs").unwrap();
+    cmd.current_dir(temp.path()).env_remove("DUCKDB_PATH");
     cmd.args([
         "run",
         "--runtime-root",

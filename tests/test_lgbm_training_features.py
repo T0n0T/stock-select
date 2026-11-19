@@ -13,6 +13,38 @@ from ml.training.features import (
 
 
 class LgbmTrainingFeaturesTest(unittest.TestCase):
+    def test_scm_weekly_macd_state_text_fields_are_categorical_and_wave_index_numeric(self):
+        columns = [
+            "macd_state_weekly_phase_type",
+            "macd_state_weekly_wave_index",
+            "macd_state_weekly_wave_stage",
+            "macd_state_weekly_daily_combo_type",
+        ]
+
+        numeric, categorical = select_feature_columns(columns, feature_set="all", method="scm")
+
+        self.assertEqual(numeric, ["macd_state_weekly_wave_index"])
+        self.assertEqual(
+            categorical,
+            [
+                "macd_state_weekly_phase_type",
+                "macd_state_weekly_wave_stage",
+                "macd_state_weekly_daily_combo_type",
+            ],
+        )
+
+    def test_scm_daily_macd_state_text_fields_are_categorical_and_wave_index_numeric(self):
+        columns = [
+            "macd_state_daily_phase_type",
+            "macd_state_daily_wave_index",
+            "macd_state_daily_wave_stage",
+        ]
+
+        numeric, categorical = select_feature_columns(columns, feature_set="all", method="scm")
+
+        self.assertEqual(numeric, ["macd_state_daily_wave_index"])
+        self.assertEqual(categorical, ["macd_state_daily_phase_type", "macd_state_daily_wave_stage"])
+
     def test_select_feature_columns_excludes_artifact_scores_and_labels(self):
         columns = [
             "date",

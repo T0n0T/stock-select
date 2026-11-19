@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use stock_select::environment::{
     EnvironmentEvaluation, ensure_market_environment_for_test, evaluate_market_environment,
     resolve_intraday_market_environment_for_test, resolve_market_environment_for_test,
@@ -180,4 +180,66 @@ fn index_history(
             }
         })
         .collect()
+}
+
+fn window_market_row(trade_date: NaiveDate, close: f64, vol: f64) -> MarketRow {
+    MarketRow {
+        ts_code: "000001.SZ".to_string(),
+        trade_date,
+        open: close - 0.8,
+        high: close,
+        low: close - 1.0,
+        close,
+        vol,
+        turnover_rate: Some(vol / 100.0),
+        adj_factor: None,
+        db_factors: Default::default(),
+    }
+}
+
+#[test]
+fn environment_without_cache_is_derived_from_in_memory_window() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let window_start = stock_select::screening::prepared_cache_start_date(pick_date);
+
+    let resolved = stock_select::environment::resolve_window_environment_with_loader(
+        temp.path(),
+        pick_date,
+        "fixture.duckdb",
+        |_duckdb_path, start_date, end_date| {
+            assert_eq!(start_date, window_start);
+            assert_eq!(end_date, pick_date);
+            Ok((0..365)
+                .map(|offset| {
+                    window_market_row(
+                        window_start + Duration::days(offset),
+                        10.0 + offset as f64 * 0.01,
+                        100.0,
+                    )
+                })
+                .chain(std::iter::once(window_market_row(pick_date, 12.52, 100.0)))
+                .collect::<Vec<MarketRow>>())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(resolved.source, "prepared_market_state");
+    assert!(temp.path().join("environment/history.jsonl").exists());
+}
+
+#[test]
+fn environment_window_fallback_fails_when_window_is_too_short() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+
+    let result = stock_select::environment::resolve_window_environment_with_loader(
+        temp.path(),
+        pick_date,
+        "fixture.duckdb",
+        |_duckdb_path, _start, _end| Ok(vec![window_market_row(pick_date, 12.52, 100.0)]),
+    );
+
+    assert!(result.is_err());
+    assert!(!temp.path().join("environment/history.jsonl").exists());
 }

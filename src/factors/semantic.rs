@@ -77,6 +77,47 @@ pub fn push_ma25_semantic_factors(factors: &mut FactorList, history: &[FactorInp
         "ma25_weekly_daily_constructive_combo_flag",
         is_constructive_macd_trend_combo(&weekly_trend, &daily_trend),
     );
+    push_category(
+        factors,
+        "macd_state_daily_phase_type",
+        daily_trend.phase.clone(),
+    );
+    push_number(
+        factors,
+        "macd_state_daily_wave_index",
+        Some(daily_trend.metrics.state_machine_wave_index as f64),
+    );
+    push_category(
+        factors,
+        "macd_state_daily_wave_stage",
+        daily_trend.wave_stage.clone(),
+    );
+    push_category(
+        factors,
+        "macd_state_weekly_phase_type",
+        weekly_trend.phase.clone(),
+    );
+    push_number(
+        factors,
+        "macd_state_weekly_wave_index",
+        Some(weekly_trend.metrics.state_machine_wave_index as f64),
+    );
+    push_category(
+        factors,
+        "macd_state_weekly_wave_stage",
+        weekly_trend.wave_stage.clone(),
+    );
+    push_category(
+        factors,
+        "macd_state_weekly_daily_combo_type",
+        format!(
+            "{}:{}|{}:{}",
+            weekly_trend.phase,
+            weekly_trend.metrics.state_machine_wave_index,
+            daily_trend.phase,
+            daily_trend.metrics.state_machine_wave_index
+        ),
+    );
     push_ma25_bullish_engulfing_factors(factors, history);
 }
 
@@ -821,4 +862,101 @@ fn b2_macd_hist_segments(history: &[PreparedRow]) -> Vec<B2MacdSegment> {
         segments.push(segment);
     }
     segments
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use chrono::{Duration, NaiveDate};
+
+    use super::*;
+
+    fn wave_history(days: usize) -> Vec<FactorInputRow> {
+        let start = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        (0..days)
+            .map(|index| {
+                let close = 20.0 + (index as f64 / 9.0).sin() * 3.0 + index as f64 * 0.02;
+                FactorInputRow {
+                    trade_date: Some(start + Duration::days(index as i64)),
+                    open: close - 0.2,
+                    high: close + 0.5,
+                    low: close - 0.5,
+                    close,
+                    volume: 1000.0 + index as f64,
+                    turnover_n: 12.0,
+                    turnover_rate: Some(0.2),
+                    d: None,
+                    j: None,
+                    ma25: None,
+                    ma60: None,
+                    zxdkx: None,
+                    zxdq: None,
+                    dif: None,
+                    dea: None,
+                    macd_hist: None,
+                    db_factors: BTreeMap::new(),
+                }
+            })
+            .collect()
+    }
+
+    fn find_value<'a>(factors: &'a FactorList, key: &str) -> Option<&'a FactorValue> {
+        factors
+            .iter()
+            .rev()
+            .find_map(|(existing, value)| (existing == key).then_some(value))
+    }
+
+    #[test]
+    fn ma25_bundle_exports_weekly_macd_state_matching_weekly_classifier() {
+        let history = wave_history(400);
+        let mut factors = FactorList::new();
+
+        push_ma25_semantic_factors(&mut factors, &history);
+
+        let expected = classify_weekly_macd_trend(&prepared_rows(&history));
+        assert_eq!(
+            find_value(&factors, "macd_state_weekly_phase_type"),
+            Some(&FactorValue::Category(expected.phase.clone()))
+        );
+        assert_eq!(
+            find_value(&factors, "macd_state_weekly_wave_index"),
+            Some(&FactorValue::Number(
+                expected.metrics.state_machine_wave_index as f64
+            ))
+        );
+        assert_eq!(
+            find_value(&factors, "macd_state_weekly_wave_stage"),
+            Some(&FactorValue::Category(expected.wave_stage.clone()))
+        );
+        assert!(matches!(
+            find_value(&factors, "macd_state_weekly_daily_combo_type"),
+            Some(FactorValue::Category(combo)) if !combo.is_empty()
+        ));
+    }
+
+    #[test]
+    fn ma25_bundle_exports_daily_macd_state_matching_daily_classifier() {
+        let history = wave_history(400);
+        let mut factors = FactorList::new();
+
+        push_ma25_semantic_factors(&mut factors, &history);
+
+        let expected = classify_daily_macd_trend(&prepared_rows(&history));
+        assert_eq!(
+            find_value(&factors, "macd_state_daily_phase_type"),
+            Some(&FactorValue::Category(expected.phase.clone()))
+        );
+        assert_eq!(
+            find_value(&factors, "macd_state_daily_wave_index"),
+            Some(&FactorValue::Number(
+                expected.metrics.state_machine_wave_index as f64
+            ))
+        );
+        assert_eq!(
+            find_value(&factors, "macd_state_daily_wave_stage"),
+            Some(&FactorValue::Category(expected.wave_stage.clone()))
+        );
+    }
 }

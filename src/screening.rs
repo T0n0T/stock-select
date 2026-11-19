@@ -64,6 +64,7 @@ pub struct ScreenRequest {
     pub runtime_root: PathBuf,
     pub duckdb_path: String,
     pub recompute: bool,
+    pub write_prepared_cache: bool,
     pub pool_source: PoolSource,
     pub pool_file: Option<PathBuf>,
     pub export_factors: bool,
@@ -141,6 +142,20 @@ where
     run_screen_with_loaders(request, loader, true)
 }
 
+fn format_stage_line(stage: &str, elapsed: std::time::Duration) -> String {
+    format!(
+        "[screen] stage={stage} elapsed={:.3}s",
+        elapsed.as_secs_f64()
+    )
+}
+
+fn timed_stage<T>(stage: &str, run: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    let started = Instant::now();
+    let output = run();
+    eprintln!("{}", format_stage_line(stage, started.elapsed()));
+    output
+}
+
 fn run_screen_with_loaders<F, D>(
     request: ScreenRequest,
     loader: F,
@@ -154,13 +169,15 @@ where
     let prepared = if request.recompute {
         load_and_prepare(&request, start_date, end_date, loader, db_native_source)?
     } else {
-        match load_prepared_dataset(
-            &request.runtime_root,
-            request.method,
-            request.pick_date,
-            start_date,
-            end_date,
-        )? {
+        match timed_stage("load_cache", || {
+            load_prepared_dataset(
+                &request.runtime_root,
+                request.method,
+                request.pick_date,
+                start_date,
+                end_date,
+            )
+        })? {
             Some(dataset) => dataset,
             None => load_and_prepare(&request, start_date, end_date, loader, db_native_source)?,
         }
@@ -178,21 +195,30 @@ where
         ));
     }
 
-    let (pool_codes, resolved_pool_file) = match request.pool_source {
-        PoolSource::TurnoverTop => (
-            filter_turnover_top_pool_codes(&prepared.rows, request.method, request.pick_date, 5000),
-            None,
-        ),
-        PoolSource::Custom => {
-            let resolved = resolve_custom_pool(&request)?;
-            (
-                filter_custom_pool_codes(&prepared.rows, request.pick_date, &resolved.codes)?,
-                Some(resolved.path),
-            )
-        }
-    };
+    let (pool_codes, resolved_pool_file) = timed_stage("pool", || {
+        Ok(match request.pool_source {
+            PoolSource::TurnoverTop => (
+                filter_turnover_top_pool_codes(
+                    &prepared.rows,
+                    request.method,
+                    request.pick_date,
+                    5000,
+                ),
+                None,
+            ),
+            PoolSource::Custom => {
+                let resolved = resolve_custom_pool(&request)?;
+                (
+                    filter_custom_pool_codes(&prepared.rows, request.pick_date, &resolved.codes)?,
+                    Some(resolved.path),
+                )
+            }
+        })
+    })?;
     let pool = pool_refs(&prepared.rows, &pool_codes);
-    let strategy_output = run_screen_strategy(request.method, &pool, request.pick_date)?;
+    let strategy_output = timed_stage("strategy", || {
+        run_screen_strategy(request.method, &pool, request.pick_date)
+    })?;
     let count = strategy_output.stats.get("selected").copied().unwrap_or(0);
     let result = ScreenResult {
         mode: None,
@@ -212,17 +238,21 @@ where
         count: Some(count),
         stats: strategy_output.stats,
     };
-    let output_path = write_screen_result(&request.runtime_root, &result)?;
+    let output_path = timed_stage("write_candidates", || {
+        write_screen_result(&request.runtime_root, &result)
+    })?;
     if request.export_factors {
-        let prepared_refs = prepared.rows.iter().collect::<Vec<_>>();
-        write_screen_factor_artifact(
-            &request,
-            &result.candidates,
-            &prepared_refs,
-            &output_path,
-            false,
-            &prepared.db_data_gaps,
-        )?;
+        timed_stage("export_factors", || {
+            let prepared_refs = prepared.rows.iter().collect::<Vec<_>>();
+            write_screen_factor_artifact(
+                &request,
+                &result.candidates,
+                &prepared_refs,
+                &output_path,
+                false,
+                &prepared.db_data_gaps,
+            )
+        })?;
     }
     Ok(output_path)
 }
@@ -591,7 +621,7 @@ fn run_screen_strategy(
 
 #[cfg(test)]
 mod tests {
-    use super::front_adjust_rows;
+    use super::{format_stage_line, front_adjust_rows};
     use crate::model::MarketRow;
     use chrono::NaiveDate;
     use std::collections::BTreeMap;
@@ -636,6 +666,52 @@ mod tests {
         assert_eq!(rows[0].db_factors["rolling_ma25_qfq"], 8.0);
         assert!(!rows[0].db_factors.contains_key("_source_price_basis_qfq"));
     }
+
+    #[test]
+    fn stage_timing_line_reports_seconds_with_three_decimals() {
+        assert_eq!(
+            format_stage_line("prepare", std::time::Duration::from_millis(1500)),
+            "[screen] stage=prepare elapsed=1.500s"
+        );
+    }
+}
+
+/// Builds the EOD prepared window for `pick_date` in memory, without writing any cache.
+/// Returns `None` when the window is empty or does not satisfy the DB-native window contract,
+/// mirroring what a missing or unusable prepared cache would report.
+pub fn load_db_native_prepared_window_with_loader<F, D>(
+    duckdb_path: &str,
+    pick_date: NaiveDate,
+    loader: F,
+) -> anyhow::Result<Option<PreparedDataset>>
+where
+    F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
+    D: IntoMarketDataset,
+{
+    let (start_date, end_date) = screen_window(pick_date);
+    let market_dataset = loader(duckdb_path, start_date, end_date)?.into_market_dataset();
+    if market_dataset.rows.is_empty() {
+        return Ok(None);
+    }
+    let prepared = PreparedDataset {
+        rows: prepare_rows(market_dataset.rows)?,
+        db_data_gaps: market_dataset.db_data_gaps,
+    };
+    if ensure_db_native_prepared_window(&prepared.rows, start_date, end_date).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(prepared))
+}
+
+pub fn load_db_native_prepared_window(
+    duckdb_path: &str,
+    pick_date: NaiveDate,
+) -> anyhow::Result<Option<PreparedDataset>> {
+    load_db_native_prepared_window_with_loader(
+        duckdb_path,
+        pick_date,
+        crate::db::fetch_db_native_daily_dataset,
+    )
 }
 
 fn load_and_prepare<F, D>(
@@ -649,18 +725,27 @@ where
     F: FnOnce(&str, NaiveDate, NaiveDate) -> anyhow::Result<D>,
     D: IntoMarketDataset,
 {
-    let market_dataset = loader(&request.duckdb_path, start_date, end_date)?.into_market_dataset();
+    let market_dataset = timed_stage("load_db", || {
+        Ok(loader(&request.duckdb_path, start_date, end_date)?.into_market_dataset())
+    })?;
     if market_dataset.rows.is_empty() {
         anyhow::bail!("No market rows found between {start_date} and {end_date}.");
     }
     let prepared = PreparedDataset {
-        rows: prepare_rows(market_dataset.rows)?,
+        rows: timed_stage("prepare_rows", || prepare_rows(market_dataset.rows))?,
         db_data_gaps: market_dataset.db_data_gaps,
     };
     if db_native_source {
         ensure_db_native_prepared_window(&prepared.rows, start_date, end_date)?;
     }
     if !prepared.rows.iter().any(|row| row.trade_date == end_date) {
+        return Ok(prepared);
+    }
+    if !request.write_prepared_cache {
+        eprintln!(
+            "[screen] prepared cache write skipped rows={}",
+            prepared.rows.len()
+        );
         return Ok(prepared);
     }
     let write_cache_started = Instant::now();

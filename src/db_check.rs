@@ -613,7 +613,7 @@ fn pick_date_probe_query(
 
 fn ths_membership_probe_query(relation: &str) -> String {
     format!(
-        "SELECT count(*)::bigint AS actual_rows FROM {relation} WHERE ts_code IS NOT NULL AND con_code IS NOT NULL AND btrim(ts_code) <> '' AND btrim(con_code) <> ''"
+        "SELECT count(*)::bigint AS actual_rows FROM {relation} WHERE ts_code IS NOT NULL AND con_code IS NOT NULL AND trim(ts_code) <> '' AND trim(con_code) <> ''"
     )
 }
 
@@ -916,8 +916,9 @@ mod tests {
     fn ths_membership_probe_rejects_blank_codes() {
         let query = ths_membership_probe_query("\"public\".\"index_ths_member\"");
 
-        assert!(query.contains("btrim(ts_code) <> ''"));
-        assert!(query.contains("btrim(con_code) <> ''"));
+        assert!(query.contains("trim(ts_code) <> ''"));
+        assert!(query.contains("trim(con_code) <> ''"));
+        assert!(!query.contains("btrim("));
     }
 
     fn test_pick_date() -> chrono::NaiveDate {
