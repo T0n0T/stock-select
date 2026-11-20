@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
@@ -7,9 +7,13 @@ use chrono::{Duration, NaiveDate};
 use serde_json::json;
 
 use crate::cache::{
-    MIN_DB_NATIVE_WINDOW_TRADING_DAYS, candidate_output_path, load_prepared_dataset,
-    prepared_cache_start_date as cache_prepared_cache_start_date, write_db_native_prepared_dataset,
-    write_prepared_cache, write_prepared_dataset_for_mode,
+    DbNativePreparedCacheStreamWriter, MIN_DB_NATIVE_WINDOW_TRADING_DAYS, candidate_output_path,
+    load_prepared_dataset, prepared_cache_start_date as cache_prepared_cache_start_date,
+    write_db_native_prepared_dataset, write_prepared_cache, write_prepared_dataset_for_mode,
+};
+use crate::db::{
+    DB_NATIVE_FACTOR_COLUMNS, DB_NATIVE_PICK_DATE_FACTOR_COLUMNS,
+    DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS,
 };
 use crate::environment::{normalize_environment_state, prepared_market_state};
 use crate::factors::registry::{
@@ -26,14 +30,20 @@ use crate::model::{
     DbDataGap, DbDataGapReason, IntoMarketDataset, MarketRow, Method, PreparedDataset, PreparedRow,
     ScreenResult,
 };
-use crate::strategies::StrategyOutput;
 use crate::strategies::b2::run_b2_strategy_from_refs;
 use crate::strategies::scm_pbm::{run_pbm_strategy_from_refs, run_scm_strategy_from_refs};
+use crate::strategies::{StrategyOutput, sort_candidates};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolSource {
     TurnoverTop,
     Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamOrder {
+    SymbolAndDate,
+    Unordered,
 }
 
 impl PoolSource {
@@ -140,6 +150,322 @@ where
     S: FnOnce(&str, &[String], NaiveDate) -> anyhow::Result<Vec<MacdPeriodState>>,
 {
     run_screen_with_loaders(request, loader, true)
+}
+
+pub fn run_db_native_scm_screen_with_stream_loader<F>(
+    request: ScreenRequest,
+    mut loader: F,
+) -> anyhow::Result<PathBuf>
+where
+    F: for<'a> FnMut(
+        &str,
+        NaiveDate,
+        NaiveDate,
+        StreamOrder,
+        &'a mut dyn FnMut(MarketRow) -> anyhow::Result<()>,
+    ) -> anyhow::Result<BTreeMap<String, DbDataGap>>,
+{
+    if request.method != Method::Scm || !request.recompute {
+        anyhow::bail!("streaming screen requires SCM recompute.");
+    }
+    let (start_date, end_date) = screen_window(request.pick_date);
+    let mut cache_writer = if request.write_prepared_cache {
+        Some(DbNativePreparedCacheStreamWriter::new(
+            &request.runtime_root,
+            request.method,
+            request.pick_date,
+            start_date,
+            end_date,
+            0,
+            scm_prepared_cache_factor_keys(),
+            BTreeMap::new(),
+        )?)
+    } else {
+        None
+    };
+    let cache_write_started = Instant::now();
+    let mut strategy_by_code = Vec::new();
+    let mut pick_date_turnovers = Vec::new();
+    let mut factor_history_rows = Vec::new();
+    let mut factor_pick_date_rows = Vec::new();
+    let summary = timed_stage("stream_prepare_strategy", || {
+        stream_market_symbol_groups(
+            &mut loader,
+            &request.duckdb_path,
+            start_date,
+            end_date,
+            |rows| {
+                let prepared = prepare_symbol_rows(rows)?;
+                let code = prepared[0].ts_code.clone();
+                pick_date_turnovers.extend(
+                    prepared
+                        .iter()
+                        .filter(|row| row.trade_date == request.pick_date)
+                        .map(|row| (row.turnover_n, row.ts_code.clone())),
+                );
+                let references = prepared.iter().collect::<Vec<_>>();
+                let strategy = run_screen_strategy(Method::Scm, &references, request.pick_date)?;
+                if request.export_factors {
+                    if !strategy.candidates.is_empty() {
+                        factor_history_rows.extend(
+                            prepared
+                                .iter()
+                                .filter(|row| row.trade_date < request.pick_date)
+                                .cloned(),
+                        );
+                    }
+                    factor_pick_date_rows.extend(
+                        prepared
+                            .iter()
+                            .filter(|row| row.trade_date == request.pick_date)
+                            .cloned(),
+                    );
+                }
+                strategy_by_code.push((code, strategy));
+                if let Some(writer) = cache_writer.as_mut() {
+                    writer.write_rows(&prepared)?;
+                }
+                Ok(())
+            },
+        )
+    })?;
+    ensure_streamed_db_native_window(&summary, start_date, end_date)?;
+    if let Some(writer) = cache_writer.as_mut() {
+        writer.set_db_data_gaps(summary.db_data_gaps.clone());
+    }
+    if !summary.trade_dates.contains(&request.pick_date) {
+        return Err(missing_pick_date_rows_error(
+            request.pick_date,
+            summary.trade_dates.first().copied(),
+            summary.trade_dates.last().copied(),
+            &request.runtime_root,
+            request.method,
+        ));
+    }
+    if let Some(writer) = cache_writer.take() {
+        writer.finish(
+            summary.row_count,
+            summary.symbol_count,
+            &summary.trade_dates,
+        )?;
+        eprintln!(
+            "[screen] prepared cache wrote rows={} elapsed={:.3}s",
+            summary.row_count,
+            cache_write_started.elapsed().as_secs_f64()
+        );
+    }
+
+    let (pool_codes, resolved_pool_file) = match request.pool_source {
+        PoolSource::TurnoverTop => (scm_turnover_top_pool_codes(pick_date_turnovers, 5000), None),
+        PoolSource::Custom => {
+            let resolved = resolve_custom_pool(&request)?;
+            let available = pick_date_turnovers
+                .iter()
+                .map(|(_, code)| code.as_str())
+                .collect::<BTreeSet<_>>();
+            let effective = resolved
+                .codes
+                .iter()
+                .filter(|code| available.contains(code.as_str()))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if effective.is_empty() {
+                anyhow::bail!("Effective custom pool is empty after prepared-data intersection.");
+            }
+            (effective, Some(resolved.path))
+        }
+    };
+    let mut candidates = Vec::new();
+    let mut stats = BTreeMap::new();
+    for (code, output) in strategy_by_code {
+        if !pool_codes.contains(code.as_str()) {
+            continue;
+        }
+        for (key, value) in output.stats {
+            *stats.entry(key).or_default() += value;
+        }
+        candidates.extend(output.candidates);
+    }
+    sort_candidates(&mut candidates);
+    let count = stats.get("selected").copied().unwrap_or(0);
+    let result = ScreenResult {
+        mode: None,
+        method: request.method,
+        pick_date: request.pick_date,
+        trade_date: None,
+        fetched_at: None,
+        run_id: None,
+        source: None,
+        pool_source: request.pool_source.as_str().to_string(),
+        pool_file: resolved_pool_file
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+        screen_version: None,
+        candidates,
+        generated_at: Some("0".to_string()),
+        count: Some(count),
+        stats,
+    };
+    let output_path = timed_stage("write_candidates", || {
+        write_screen_result(&request.runtime_root, &result)
+    })?;
+    if request.export_factors {
+        timed_stage("export_factors", || {
+            factor_history_rows
+                .retain(|row| pool_codes.contains(row.ts_code.as_str()));
+            factor_history_rows.extend(factor_pick_date_rows);
+            let prepared_refs = factor_history_rows.iter().collect::<Vec<_>>();
+            write_screen_factor_artifact(
+                &request,
+                &result.candidates,
+                &prepared_refs,
+                &output_path,
+                false,
+                &summary.db_data_gaps,
+            )
+        })?;
+    }
+    Ok(output_path)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct StreamedMarketSummary {
+    row_count: usize,
+    symbol_count: usize,
+    trade_dates: BTreeSet<NaiveDate>,
+    db_data_gaps: BTreeMap<String, DbDataGap>,
+}
+
+const LOCAL_PREPARED_FACTOR_KEYS: [&str; 8] = [
+    "boll_width_pct",
+    "bias1_qfq",
+    "roc_qfq",
+    "mtm_qfq",
+    "psy_qfq",
+    "wr_qfq",
+    "dist_to_up_limit_pct",
+    "dist_to_down_limit_pct",
+];
+
+fn scm_prepared_cache_factor_keys() -> Vec<String> {
+    let mut factor_keys = HashSet::new();
+    factor_keys.extend(DB_NATIVE_FACTOR_COLUMNS.iter().copied());
+    factor_keys.extend(DB_NATIVE_PICK_DATE_FACTOR_COLUMNS.iter().copied());
+    factor_keys.extend(DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS.iter().copied());
+    factor_keys.extend(LOCAL_PREPARED_FACTOR_KEYS);
+    factor_keys.insert(RAW_MARKET_AMOUNT_FACTOR);
+    factor_keys.remove("_source_close_qfq");
+    let mut factor_keys = factor_keys
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    factor_keys.sort_unstable();
+    factor_keys
+}
+
+fn stream_market_symbol_groups<F, V>(
+    loader: &mut F,
+    duckdb_path: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    visit: V,
+) -> anyhow::Result<StreamedMarketSummary>
+where
+    F: for<'a> FnMut(
+        &str,
+        NaiveDate,
+        NaiveDate,
+        StreamOrder,
+        &'a mut dyn FnMut(MarketRow) -> anyhow::Result<()>,
+    ) -> anyhow::Result<BTreeMap<String, DbDataGap>>,
+    V: FnMut(Vec<MarketRow>) -> anyhow::Result<()>,
+{
+    let mut current_code: Option<String> = None;
+    let mut previous_date = None;
+    let mut rows_for_symbol = Vec::new();
+    let mut row_count = 0;
+    let mut symbol_count = 0;
+    let mut trade_dates = BTreeSet::new();
+    let mut visit = visit;
+    let db_data_gaps = loader(
+        duckdb_path,
+        start_date,
+        end_date,
+        StreamOrder::SymbolAndDate,
+        &mut |row| {
+            if let Some(code) = current_code.as_deref() {
+                match row.ts_code.as_str().cmp(code) {
+                    std::cmp::Ordering::Less => {
+                        anyhow::bail!("streamed market rows are not ordered by ts_code");
+                    }
+                    std::cmp::Ordering::Greater => {
+                        visit(std::mem::take(&mut rows_for_symbol))?;
+                        symbol_count += 1;
+                        current_code = Some(row.ts_code.clone());
+                        previous_date = None;
+                    }
+                    std::cmp::Ordering::Equal => {}
+                }
+            } else {
+                current_code = Some(row.ts_code.clone());
+            }
+            if previous_date.is_some_and(|date| row.trade_date < date) {
+                anyhow::bail!("streamed market rows are not ordered by trade_date");
+            }
+            previous_date = Some(row.trade_date);
+            trade_dates.insert(row.trade_date);
+            row_count += 1;
+            rows_for_symbol.push(row);
+            Ok(())
+        },
+    )?;
+    if !rows_for_symbol.is_empty() {
+        visit(rows_for_symbol)?;
+        symbol_count += 1;
+    }
+    Ok(StreamedMarketSummary {
+        row_count,
+        symbol_count,
+        trade_dates,
+        db_data_gaps,
+    })
+}
+
+fn ensure_streamed_db_native_window(
+    summary: &StreamedMarketSummary,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> anyhow::Result<()> {
+    if summary.row_count == 0 {
+        anyhow::bail!("No market rows found between {start_date} and {end_date}.");
+    }
+    let actual_start = summary.trade_dates.first().copied();
+    let actual_end = summary.trade_dates.last().copied();
+    if actual_start.is_some_and(|actual_start| actual_start >= start_date)
+        && actual_end == Some(end_date)
+        && u32::try_from(summary.trade_dates.len())
+            .is_ok_and(|len| len >= MIN_DB_NATIVE_WINDOW_TRADING_DAYS)
+    {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "DB-native joined prepared window has {} trading dates over {:?}..{:?}; expected requested prepared window {}..{}.",
+            summary.trade_dates.len(),
+            actual_start,
+            actual_end,
+            start_date,
+            end_date
+        );
+    }
+}
+
+fn scm_turnover_top_pool_codes(mut ranked: Vec<(f64, String)>, top_m: usize) -> BTreeSet<String> {
+    ranked.sort_by(|left, right| right.0.total_cmp(&left.0).then(left.1.cmp(&right.1)));
+    ranked
+        .into_iter()
+        .take(top_m)
+        .map(|(_, code)| code)
+        .collect()
 }
 
 fn format_stage_line(stage: &str, elapsed: std::time::Duration) -> String {
@@ -570,6 +896,31 @@ fn missing_pick_date_rows_message(
     message
 }
 
+fn missing_pick_date_rows_error(
+    pick_date: NaiveDate,
+    earliest: Option<NaiveDate>,
+    latest: Option<NaiveDate>,
+    runtime_root: &Path,
+    method: Method,
+) -> anyhow::Error {
+    let intraday_candidates = intraday_candidate_output_path(runtime_root, pick_date, method);
+    let intraday_cache = crate::cache::prepared_cache_paths(runtime_root, pick_date, true);
+    let mut message = format!("No prepared rows found for pick_date {pick_date}.");
+    if let Some(latest) = latest {
+        message.push_str(&format!(" latest cached trade_date is {latest}"));
+        if let Some(earliest) = earliest {
+            message.push_str(&format!("; cached window is {earliest}..{latest}"));
+        }
+        message.push('.');
+    }
+    if intraday_candidates.exists() || intraday_cache.data_path.exists() {
+        message.push_str(" Intraday artifacts exist for this date; use --intraday for intraday selection, or refresh the DB-native stock-cache daily prepared cache after stock-cache coverage is available.");
+    } else {
+        message.push_str(" Refresh the DB-native stock-cache daily prepared cache after stock-cache coverage is available.");
+    }
+    anyhow::anyhow!(message)
+}
+
 fn write_screen_factor_artifact(
     request: &ScreenRequest,
     candidates: &[crate::model::Candidate],
@@ -832,66 +1183,75 @@ fn prepare_rows(mut rows: Vec<MarketRow>) -> anyhow::Result<Vec<PreparedRow>> {
         {
             rows.push(remaining.next().expect("peeked market row"));
         }
-
-        let turnover_daily = rows
-            .iter()
-            .map(|row| ((row.open + row.close) / 2.0) * row.vol)
-            .collect::<Vec<_>>();
-        front_adjust_rows(&mut rows)?;
-        enrich_local_market_factors(&mut rows);
-        let high = rows.iter().map(|row| row.high).collect::<Vec<_>>();
-        let low = rows.iter().map(|row| row.low).collect::<Vec<_>>();
-        let close = rows.iter().map(|row| row.close).collect::<Vec<_>>();
-        let turnover_n = rolling_sum(&turnover_daily, 43, 1)
-            .into_iter()
-            .map(|value| value.unwrap_or(0.0))
-            .collect::<Vec<_>>();
-        let (k, d, j) = kdj(&high, &low, &close, 9);
-        let (dif, dea, macd_hist) = macd(&close, 12, 26, 9);
-        let ma25 = rolling_mean(&close, 25, 25);
-        let ma60 = rolling_mean(&close, 60, 60);
-        let ma144 = rolling_mean(&close, 144, 144);
-        let (zxdq, zxdkx) = zx_lines(&close);
-        for (idx, row) in rows.into_iter().enumerate() {
-            prepared.push(PreparedRow {
-                ts_code: row.ts_code,
-                trade_date: row.trade_date,
-                open: row.open,
-                high: row.high,
-                low: row.low,
-                close: row.close,
-                volume: row.vol,
-                turnover_n: turnover_n[idx],
-                turnover_rate: row.turnover_rate,
-                k: db_factor_or(&row.db_factors, "kdj_k_qfq", k[idx]),
-                d: db_factor_or(&row.db_factors, "kdj_d_qfq", d[idx]),
-                j: db_factor_or(&row.db_factors, "kdj_j_qfq", j[idx]),
-                zxdq: Some(zxdq[idx]),
-                zxdkx: zxdkx[idx],
-                dif: db_factor_or(&row.db_factors, "macd_daily_dif", dif[idx]),
-                dea: db_factor_or(&row.db_factors, "macd_daily_dea", dea[idx]),
-                macd_hist: db_factor_or(&row.db_factors, "macd_daily_hist", macd_hist[idx]),
-                ma25: db_factor_option_or(&row.db_factors, "rolling_ma25_qfq", ma25[idx]),
-                ma60: ma60[idx],
-                ma144: db_factor_option_or(&row.db_factors, "rolling_ma144_qfq", ma144[idx]),
-                chg_d: (idx > 0).then(|| (row.close - close[idx - 1]) / close[idx - 1] * 100.0),
-                weekly_ma_bull: false,
-                max_vol_not_bearish: true,
-                v_shrink: false,
-                safe_mode: true,
-                lt_filter: true,
-                db_factors: {
-                    let mut db_factors = row.db_factors;
-                    if turnover_daily[idx].is_finite() {
-                        db_factors
-                            .insert(RAW_MARKET_AMOUNT_FACTOR.to_string(), turnover_daily[idx]);
-                    }
-                    db_factors
-                },
-            });
-        }
+        prepared.extend(prepare_symbol_rows(rows)?);
     }
     Ok(prepared)
+}
+
+fn prepare_market_rows_for_symbol(rows: &mut [MarketRow]) -> anyhow::Result<Vec<f64>> {
+    let turnover_daily = rows
+        .iter()
+        .map(|row| ((row.open + row.close) / 2.0) * row.vol)
+        .collect::<Vec<_>>();
+    front_adjust_rows(rows)?;
+    enrich_local_market_factors(rows);
+    for (row, amount) in rows.iter_mut().zip(&turnover_daily) {
+        if amount.is_finite() {
+            row.db_factors
+                .insert(RAW_MARKET_AMOUNT_FACTOR.to_string(), *amount);
+        }
+    }
+    Ok(turnover_daily)
+}
+
+fn prepare_symbol_rows(mut rows: Vec<MarketRow>) -> anyhow::Result<Vec<PreparedRow>> {
+    let turnover_daily = prepare_market_rows_for_symbol(&mut rows)?;
+    let high = rows.iter().map(|row| row.high).collect::<Vec<_>>();
+    let low = rows.iter().map(|row| row.low).collect::<Vec<_>>();
+    let close = rows.iter().map(|row| row.close).collect::<Vec<_>>();
+    let turnover_n = rolling_sum(&turnover_daily, 43, 1)
+        .into_iter()
+        .map(|value| value.unwrap_or(0.0))
+        .collect::<Vec<_>>();
+    let (k, d, j) = kdj(&high, &low, &close, 9);
+    let (dif, dea, macd_hist) = macd(&close, 12, 26, 9);
+    let ma25 = rolling_mean(&close, 25, 25);
+    let ma60 = rolling_mean(&close, 60, 60);
+    let ma144 = rolling_mean(&close, 144, 144);
+    let (zxdq, zxdkx) = zx_lines(&close);
+    Ok(rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, row)| PreparedRow {
+            ts_code: row.ts_code,
+            trade_date: row.trade_date,
+            open: row.open,
+            high: row.high,
+            low: row.low,
+            close: row.close,
+            volume: row.vol,
+            turnover_n: turnover_n[idx],
+            turnover_rate: row.turnover_rate,
+            k: db_factor_or(&row.db_factors, "kdj_k_qfq", k[idx]),
+            d: db_factor_or(&row.db_factors, "kdj_d_qfq", d[idx]),
+            j: db_factor_or(&row.db_factors, "kdj_j_qfq", j[idx]),
+            zxdq: Some(zxdq[idx]),
+            zxdkx: zxdkx[idx],
+            dif: db_factor_or(&row.db_factors, "macd_daily_dif", dif[idx]),
+            dea: db_factor_or(&row.db_factors, "macd_daily_dea", dea[idx]),
+            macd_hist: db_factor_or(&row.db_factors, "macd_daily_hist", macd_hist[idx]),
+            ma25: db_factor_option_or(&row.db_factors, "rolling_ma25_qfq", ma25[idx]),
+            ma60: ma60[idx],
+            ma144: db_factor_option_or(&row.db_factors, "rolling_ma144_qfq", ma144[idx]),
+            chg_d: (idx > 0).then(|| (row.close - close[idx - 1]) / close[idx - 1] * 100.0),
+            weekly_ma_bull: false,
+            max_vol_not_bearish: true,
+            v_shrink: false,
+            safe_mode: true,
+            lt_filter: true,
+            db_factors: row.db_factors,
+        })
+        .collect())
 }
 
 fn db_factor_or(factors: &BTreeMap<String, f64>, key: &str, fallback: f64) -> f64 {

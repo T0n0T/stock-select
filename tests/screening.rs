@@ -7,9 +7,9 @@ use stock_select::cache::{
 use stock_select::intraday::{MacdPeriodState, RawRtKRow, StaticRtKProvider};
 use stock_select::model::{DbDataGap, MarketDataset, MarketRow, Method, PreparedRow};
 use stock_select::screening::{
-    load_db_native_prepared_window_with_loader,
-    PoolSource, ScreenRequest, prepared_cache_start_date,
-    run_db_native_intraday_screen_with_loaders, run_db_native_screen_with_dataset_loader,
+    PoolSource, ScreenRequest, StreamOrder, load_db_native_prepared_window_with_loader,
+    prepared_cache_start_date, run_db_native_intraday_screen_with_loaders,
+    run_db_native_scm_screen_with_stream_loader, run_db_native_screen_with_dataset_loader,
     run_db_native_screen_with_loader, run_intraday_screen_with_loaders,
     run_intraday_screen_with_provider, run_screen_with_loader, screen_window,
 };
@@ -1129,6 +1129,185 @@ fn scm_and_pbm_compare_database_month_end_with_current_month_asof() {
         let payload = run_screen_with_prepared_rows(method, pick_date, rows);
         assert_eq!(payload["count"], 1, "method={method}, payload={payload}");
     }
+}
+
+#[test]
+fn scm_streaming_screen_matches_dataset_screen_and_cache_rows() {
+    let first_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+    let pick_date = first_date + Duration::days(429);
+    let mut market_rows = scm_pbm_macd_fixture("scm", first_date)
+        .into_iter()
+        .skip(64)
+        .map(|row| MarketRow {
+            ts_code: row.ts_code,
+            trade_date: row.trade_date,
+            open: row.open,
+            high: row.high,
+            low: row.low,
+            close: row.close,
+            vol: row.volume,
+            turnover_rate: row.turnover_rate,
+            adj_factor: None,
+            db_factors: row.db_factors,
+        })
+        .collect::<Vec<_>>();
+    let second_symbol = market_rows
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            row.ts_code = "000002.SZ".to_string();
+            row
+        })
+        .collect::<Vec<_>>();
+    market_rows.extend(second_symbol);
+    let expected_root = tempfile::tempdir().unwrap();
+    let streamed_root = tempfile::tempdir().unwrap();
+    let request = |runtime_root: &std::path::Path| ScreenRequest {
+        method: Method::Scm,
+        pick_date,
+        runtime_root: runtime_root.to_path_buf(),
+        duckdb_path: "fixture.duckdb".to_string(),
+        recompute: true,
+        write_prepared_cache: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: true,
+        environment_state: None,
+    };
+
+    let expected_path =
+        run_db_native_screen_with_dataset_loader(request(expected_root.path()), |_, _, _| {
+            Ok(MarketDataset::complete(market_rows.clone()))
+        })
+        .unwrap();
+
+    let mut source_passes = 0;
+    let mut source_orders = Vec::new();
+    let streamed_path = run_db_native_scm_screen_with_stream_loader(
+        request(streamed_root.path()),
+        |_, _, _, order, consume| {
+            source_passes += 1;
+            source_orders.push(order);
+            let mut rows = market_rows.clone();
+            match order {
+                StreamOrder::SymbolAndDate => {
+                    rows.sort_unstable_by(|left, right| {
+                        left.ts_code
+                            .cmp(&right.ts_code)
+                            .then(left.trade_date.cmp(&right.trade_date))
+                    });
+                }
+                StreamOrder::Unordered => rows.reverse(),
+            }
+            for row in rows {
+                consume(row)?;
+            }
+            Ok(std::collections::BTreeMap::new())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(source_passes, 1);
+    assert_eq!(source_orders, vec![StreamOrder::SymbolAndDate]);
+    assert_eq!(
+        std::fs::read(expected_path).unwrap(),
+        std::fs::read(streamed_path).unwrap()
+    );
+    let factors_path = |root: &std::path::Path| {
+        root.join("factors")
+            .join(format!("{pick_date}.scm"))
+            .join("factors.json")
+    };
+    let expected_factors: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(factors_path(expected_root.path())).unwrap(),
+    )
+    .unwrap();
+    let streamed_factors: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(factors_path(streamed_root.path())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(streamed_factors, expected_factors);
+    let expected_metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(expected_root.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+    let streamed_metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared_cache_meta_path(streamed_root.path(), pick_date)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(streamed_metadata, expected_metadata);
+    assert_eq!(streamed_metadata["schema_version"], 14);
+    assert_eq!(
+        streamed_metadata["calc_versions"]["price_basis"],
+        "asof_qfq_v1"
+    );
+    let start_date = prepared_cache_start_date(pick_date);
+    let expected_rows = load_prepared_cache(
+        expected_root.path(),
+        Method::Scm,
+        pick_date,
+        start_date,
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    let streamed_rows = load_prepared_cache(
+        streamed_root.path(),
+        Method::Scm,
+        pick_date,
+        start_date,
+        pick_date,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(streamed_rows, expected_rows);
+}
+
+#[test]
+fn scm_streaming_screen_discards_partial_cache_for_unknown_factor_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let request = ScreenRequest {
+        method: Method::Scm,
+        pick_date,
+        runtime_root: temp.path().to_path_buf(),
+        duckdb_path: "fixture.duckdb".to_string(),
+        recompute: true,
+        write_prepared_cache: true,
+        pool_source: PoolSource::TurnoverTop,
+        pool_file: None,
+        export_factors: false,
+        environment_state: None,
+    };
+    let mut calls = 0;
+
+    let result = run_db_native_scm_screen_with_stream_loader(request, |_, _, _, _, consume| {
+        calls += 1;
+        for offset in 0..236 {
+            let mut row = market_row_at_date(
+                NaiveDate::from_ymd_opt(2025, 5, 11).unwrap() + Duration::days(offset),
+                10.0 + offset as f64 * 0.01,
+                1000.0,
+            );
+            row.db_factors.insert("unknown_factor_key".to_string(), 1.0);
+            consume(row)?;
+        }
+        Ok(std::collections::BTreeMap::new())
+    });
+
+    assert!(result.is_err());
+    assert_eq!(calls, 1);
+    assert!(!prepared_cache_data_path(temp.path(), pick_date).exists());
+    assert!(!prepared_cache_meta_path(temp.path(), pick_date).exists());
+    assert!(
+        std::fs::read_dir(temp.path().join("prepared"))
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp"))
+    );
 }
 
 fn scm_pbm_macd_fixture(method: &str, first_date: NaiveDate) -> Vec<PreparedRow> {

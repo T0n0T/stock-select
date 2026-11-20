@@ -13,6 +13,7 @@ use stock_select::cache::{load_prepared_cache_for_mode, prepared_cache_start_dat
 use stock_select::config::{resolve_config_value, resolve_runtime_root};
 use stock_select::db::{
     fetch_db_native_daily_dataset, fetch_db_native_daily_dataset_for_intraday,
+    fetch_db_native_daily_rows_stream, fetch_db_native_daily_rows_unordered_stream,
     fetch_instrument_info, fetch_stock_period_macd_states, resolve_previous_trade_date,
 };
 use stock_select::engine::artifacts::artifact_key_for_run;
@@ -32,15 +33,15 @@ use stock_select::engine::types::{DisplayRow, LlmAnnotation};
 use stock_select::environment::{
     ResolvedEnvironment, ensure_market_environment, normalize_environment_state,
     persist_prepared_market_environment, prepared_market_state,
-    resolve_window_environment_with_loader,
     resolve_intraday_market_environment, resolve_market_environment,
+    resolve_window_environment_with_loader,
 };
 use stock_select::intraday::TushareRestProvider;
 use stock_select::model::{InstrumentInfo, MarketDataset, Method, PreparedRow};
 use stock_select::record::{RunRecordConfig, update_run_record};
 use stock_select::screening::{
-    PoolSource, ScreenRequest, run_db_native_intraday_screen_with_loaders,
-    run_db_native_screen_with_dataset_loader,
+    PoolSource, ScreenRequest, StreamOrder, run_db_native_intraday_screen_with_loaders,
+    run_db_native_scm_screen_with_stream_loader, run_db_native_screen_with_dataset_loader,
 };
 
 #[derive(Debug, Parser)]
@@ -406,6 +407,10 @@ fn run_model_predict_command(args: ModelPredictArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn should_use_streaming_scm_screen(request: &ScreenRequest) -> bool {
+    request.method == Method::Scm && request.recompute
+}
+
 fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
     let pick_date = resolve_pick_date(args.pick_date, args.method.intraday, "screen")?;
     let runtime_root = resolve_runtime_root(args.runtime_root.as_deref());
@@ -438,10 +443,17 @@ fn run_screen_command(args: ScreenArgs) -> anyhow::Result<()> {
         let provider = TushareRestProvider::new(token)?;
         run_db_native_intraday_screen(request, &provider)?
     } else {
-        run_db_native_screen_with_dataset_loader(
-            request,
-            fetch_db_native_daily_dataset_if_configured,
-        )?
+        if should_use_streaming_scm_screen(&request) {
+            run_db_native_scm_screen_with_stream_loader(
+                request,
+                fetch_db_native_daily_rows_stream_if_configured,
+            )?
+        } else {
+            run_db_native_screen_with_dataset_loader(
+                request,
+                fetch_db_native_daily_dataset_if_configured,
+            )?
+        }
     };
     let display_path = path.strip_prefix(&runtime_root).unwrap_or(&path);
     println!("screen complete: {}", display_path.display());
@@ -1726,6 +1738,26 @@ fn fetch_db_native_daily_dataset_if_configured(
     fetch_db_native_daily_dataset(duckdb_path, start_date, end_date)
 }
 
+fn fetch_db_native_daily_rows_stream_if_configured(
+    duckdb_path: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    order: StreamOrder,
+    consume: &mut dyn FnMut(stock_select::model::MarketRow) -> anyhow::Result<()>,
+) -> anyhow::Result<BTreeMap<String, stock_select::model::DbDataGap>> {
+    if duckdb_path.trim().is_empty() {
+        anyhow::bail!("DUCKDB_PATH is required; set it in .env or pass --duckdb-path.");
+    }
+    match order {
+        StreamOrder::SymbolAndDate => {
+            fetch_db_native_daily_rows_stream(duckdb_path, start_date, end_date, consume)
+        }
+        StreamOrder::Unordered => {
+            fetch_db_native_daily_rows_unordered_stream(duckdb_path, start_date, end_date, consume)
+        }
+    }
+}
+
 fn fetch_db_native_intraday_dataset_if_configured(
     duckdb_path: &str,
     start_date: NaiveDate,
@@ -1754,6 +1786,24 @@ fn run_db_native_intraday_screen(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scm_recompute_with_factor_export_uses_streaming_screen() {
+        let request = ScreenRequest {
+            method: Method::Scm,
+            pick_date: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            runtime_root: PathBuf::new(),
+            duckdb_path: String::new(),
+            recompute: true,
+            write_prepared_cache: false,
+            pool_source: PoolSource::TurnoverTop,
+            pool_file: None,
+            export_factors: true,
+            environment_state: None,
+        };
+
+        assert!(should_use_streaming_scm_screen(&request));
+    }
 
     #[test]
     fn review_list_loads_instrument_info_for_missing_display_fields_only() {

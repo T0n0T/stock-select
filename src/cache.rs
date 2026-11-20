@@ -213,6 +213,136 @@ fn write_db_native_prepared_cache_parts(
     Ok(())
 }
 
+pub(crate) struct DbNativePreparedCacheStreamWriter {
+    writer: Option<ArrowWriter<std::fs::File>>,
+    schema: SchemaRef,
+    factor_keys: Vec<String>,
+    runtime_root: PathBuf,
+    data_path: PathBuf,
+    temp_data_path: PathBuf,
+    meta_path: PathBuf,
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    requested_window_trading_days: u32,
+    db_data_gaps: BTreeMap<String, DbDataGap>,
+}
+
+impl DbNativePreparedCacheStreamWriter {
+    pub(crate) fn new(
+        runtime_root: &Path,
+        method: Method,
+        pick_date: NaiveDate,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+        requested_window_trading_days: u32,
+        mut factor_keys: Vec<String>,
+        db_data_gaps: BTreeMap<String, DbDataGap>,
+    ) -> anyhow::Result<Self> {
+        let paths = prepared_cache_paths(runtime_root, pick_date, false);
+        if let Some(parent) = paths.data_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temp_data_path = paths.data_path.with_file_name(format!(
+            ".{}.{}.tmp",
+            paths
+                .data_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("prepared.parquet"),
+            std::process::id()
+        ));
+        let file = std::fs::File::create(&temp_data_path)?;
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(Default::default()))
+            .build();
+        factor_keys.sort_unstable();
+        let schema = prepared_cache_schema(&factor_keys);
+        let writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))?;
+        Ok(Self {
+            writer: Some(writer),
+            schema,
+            factor_keys,
+            runtime_root: runtime_root.to_path_buf(),
+            data_path: paths.data_path,
+            temp_data_path,
+            meta_path: paths.meta_path,
+            method,
+            pick_date,
+            start_date,
+            end_date,
+            requested_window_trading_days,
+            db_data_gaps,
+        })
+    }
+
+    pub(crate) fn write_rows(&mut self, rows: &[PreparedRow]) -> anyhow::Result<()> {
+        for key in rows.iter().flat_map(|row| row.db_factors.keys()) {
+            if self.factor_keys.binary_search(key).is_err() {
+                anyhow::bail!("prepared cache stream found a factor absent from its schema: {key}");
+            }
+        }
+        let writer = self
+            .writer
+            .as_mut()
+            .expect("prepared cache stream writer is open");
+        for chunk in rows.chunks(PREPARED_CACHE_BATCH_SIZE) {
+            writer.write(&prepared_rows_record_batch_optimized(
+                chunk,
+                &self.factor_keys,
+                self.schema.clone(),
+            )?)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_db_data_gaps(&mut self, db_data_gaps: BTreeMap<String, DbDataGap>) {
+        self.db_data_gaps = db_data_gaps;
+    }
+
+    pub(crate) fn finish(
+        mut self,
+        row_count: usize,
+        symbol_count: usize,
+        trade_dates: &BTreeSet<NaiveDate>,
+    ) -> anyhow::Result<()> {
+        self.writer
+            .take()
+            .expect("prepared cache stream writer is open")
+            .close()?;
+        std::fs::rename(&self.temp_data_path, &self.data_path)?;
+        let prepared_window = Some((
+            *trade_dates.first().unwrap_or(&self.start_date),
+            *trade_dates.last().unwrap_or(&self.end_date),
+            u32::try_from(trade_dates.len()).unwrap_or(self.requested_window_trading_days),
+        ));
+        write_json(
+            &self.meta_path,
+            &build_db_native_metadata_from_counts(
+                self.method,
+                self.pick_date,
+                self.start_date,
+                self.end_date,
+                row_count,
+                symbol_count,
+                prepared_window,
+                self.requested_window_trading_days,
+                &self.db_data_gaps,
+            ),
+        )?;
+        prune_eod_prepared_cache_to_limit(&self.runtime_root, prepared_cache_retention_limit()?)?;
+        Ok(())
+    }
+}
+
+impl Drop for DbNativePreparedCacheStreamWriter {
+    fn drop(&mut self) {
+        self.writer.take();
+        let _ = std::fs::remove_file(&self.temp_data_path);
+    }
+}
+
 pub fn write_prepared_cache_for_mode(
     runtime_root: &Path,
     method: Method,
@@ -392,6 +522,28 @@ fn build_metadata(
         .map(|row| row.ts_code.as_str())
         .collect::<BTreeSet<_>>()
         .len();
+    build_metadata_from_counts(
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        intraday,
+        rows.len(),
+        symbol_count,
+        db_data_gaps,
+    )
+}
+
+fn build_metadata_from_counts(
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    intraday: bool,
+    row_count: usize,
+    symbol_count: usize,
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
+) -> PreparedCacheMetadata {
     PreparedCacheMetadata {
         artifact_version: PREPARED_CACHE_ARTIFACT_VERSION,
         method: method.as_str().to_string(),
@@ -400,7 +552,7 @@ fn build_metadata(
         start_date,
         end_date,
         schema_version: PREPARED_CACHE_SCHEMA_VERSION,
-        row_count: rows.len(),
+        row_count,
         symbol_count,
         source_table: LOCAL_DERIVED_PREPARED_CACHE_SOURCE.to_string(),
         mode: intraday.then(|| "intraday_snapshot".to_string()),
@@ -427,19 +579,49 @@ fn build_db_native_metadata(
     rows: &[PreparedRow],
     db_data_gaps: &BTreeMap<String, DbDataGap>,
 ) -> PreparedCacheMetadata {
-    let mut metadata = build_metadata(
+    let symbol_count = rows
+        .iter()
+        .map(|row| row.ts_code.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    build_db_native_metadata_from_counts(
+        method,
+        pick_date,
+        start_date,
+        end_date,
+        rows.len(),
+        symbol_count,
+        prepared_row_window(rows),
+        requested_window_trading_days,
+        db_data_gaps,
+    )
+}
+
+fn build_db_native_metadata_from_counts(
+    method: Method,
+    pick_date: NaiveDate,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    row_count: usize,
+    symbol_count: usize,
+    prepared_window: Option<(NaiveDate, NaiveDate, u32)>,
+    requested_window_trading_days: u32,
+    db_data_gaps: &BTreeMap<String, DbDataGap>,
+) -> PreparedCacheMetadata {
+    let mut metadata = build_metadata_from_counts(
         method,
         pick_date,
         start_date,
         end_date,
         false,
-        rows,
+        row_count,
+        symbol_count,
         db_data_gaps,
     );
     metadata.source_table = DB_NATIVE_PREPARED_CACHE_SOURCE.to_string();
     metadata.source = Some(DB_NATIVE_PREPARED_CACHE_SOURCE.to_string());
     let (window_start_date, window_end_date, window_trading_days) =
-        prepared_row_window(rows).unwrap_or((start_date, end_date, requested_window_trading_days));
+        prepared_window.unwrap_or((start_date, end_date, requested_window_trading_days));
     metadata.start_date = window_start_date;
     metadata.end_date = window_end_date;
     metadata.window_trading_days = Some(window_trading_days);

@@ -15,7 +15,7 @@ use duckdb_neo::{
 use crate::config::resolve_db_check_tables;
 use crate::db_check::preflight_db_native_load;
 use crate::intraday::MacdPeriodState;
-use crate::model::{InstrumentInfo, MarketDataset, MarketRow};
+use crate::model::{DbDataGap, InstrumentInfo, MarketDataset, MarketRow};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DuckDbLocation {
@@ -312,8 +312,23 @@ impl DuckDbConnection {
         &self,
         sql: &str,
         parameters: &[DuckDbParameter],
-        mut map: impl FnMut(DuckDbRow) -> anyhow::Result<T>,
+        map: impl FnMut(DuckDbRow) -> anyhow::Result<T>,
     ) -> anyhow::Result<Vec<T>> {
+        let mut rows: Vec<T> = Vec::new();
+        self.query_for_each(sql, parameters, map, |row| {
+            rows.push(row);
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    pub(crate) fn query_for_each<T>(
+        &self,
+        sql: &str,
+        parameters: &[DuckDbParameter],
+        mut map: impl FnMut(DuckDbRow) -> anyhow::Result<T>,
+        mut consume: impl FnMut(T) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         let connection = &self.connection;
         let quack_sql = if self.is_quack && !parameters.is_empty() {
             Some(inline_quack_parameters(sql, parameters)?)
@@ -353,24 +368,22 @@ impl DuckDbConnection {
                 .map(|(index, name)| (name, index))
                 .collect(),
         );
-        let mut rows = Vec::new();
         while let Some(chunk) = result.next_chunk()? {
+            let vectors = (0..column_count)
+                .map(|column_index| chunk.get_vector_at::<Unknown>(column_index))
+                .collect::<duckdb_neo::Result<Vec<_>>>()?;
             for row_index in 0..chunk.row_count()? {
-                let values = (0..column_count)
-                    .map(|column_index| {
-                        chunk
-                            .get_vector_at::<Unknown>(column_index)?
-                            .get_value_slow(row_index)
-                            .map(DuckDbCell::Native)
-                    })
+                let values = vectors
+                    .iter()
+                    .map(|vector| vector.get_value_slow(row_index).map(DuckDbCell::Native))
                     .collect::<duckdb_neo::Result<Vec<_>>>()?;
-                rows.push(map(DuckDbRow {
+                consume(map(DuckDbRow {
                     values,
                     columns: columns.clone(),
-                })?);
+                })?)?;
             }
         }
-        Ok(rows)
+        Ok(())
     }
 }
 
@@ -1180,7 +1193,7 @@ struct DbNativeDailyRow {
     db_factors: BTreeMap<String, Option<f64>>,
 }
 
-const DB_NATIVE_FACTOR_COLUMNS: &[&str] = &[
+pub(crate) const DB_NATIVE_FACTOR_COLUMNS: &[&str] = &[
     "_source_close_qfq",
     "amount",
     "_czsc_snapshot_available",
@@ -1210,7 +1223,7 @@ const DB_NATIVE_FACTOR_COLUMNS: &[&str] = &[
     "_czsc_post_peak_first_bear_missing",
 ];
 
-const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
+pub(crate) const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
     "amount",
     "turnover_rate_f",
     "volume_ratio",
@@ -1311,7 +1324,7 @@ const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
     "market_broad_volatility20_pct",
 ];
 
-const DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS: &[&str] = &[
+pub(crate) const DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS: &[&str] = &[
     "ths_membership_current_flag",
     "ths_main_sector_rank",
     "ths_main_pct_change",
@@ -1384,6 +1397,145 @@ pub fn fetch_db_native_daily_dataset(
     end_date: NaiveDate,
 ) -> anyhow::Result<MarketDataset> {
     fetch_db_native_daily_dataset_with_preflight(duckdb_path, start_date, end_date)
+}
+
+pub fn fetch_db_native_daily_rows_stream(
+    duckdb_path: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    consume: &mut dyn FnMut(MarketRow) -> anyhow::Result<()>,
+) -> anyhow::Result<BTreeMap<String, DbDataGap>> {
+    fetch_db_native_daily_rows_stream_with_order(duckdb_path, start_date, end_date, true, consume)
+}
+
+pub fn fetch_db_native_daily_rows_unordered_stream(
+    duckdb_path: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    consume: &mut dyn FnMut(MarketRow) -> anyhow::Result<()>,
+) -> anyhow::Result<BTreeMap<String, DbDataGap>> {
+    fetch_db_native_daily_rows_stream_with_order(duckdb_path, start_date, end_date, false, consume)
+}
+
+fn fetch_db_native_daily_rows_stream_with_order(
+    duckdb_path: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    order_by_symbol: bool,
+    consume: &mut dyn FnMut(MarketRow) -> anyhow::Result<()>,
+) -> anyhow::Result<BTreeMap<String, DbDataGap>> {
+    let strict_tables = resolve_db_check_tables()?;
+    let client = open_duckdb(duckdb_path)?;
+    configure_daily_window_session(&client)?;
+    let plan = preflight_db_native_load(&client, start_date, end_date, &strict_tables)?;
+    let mut pick_date_extras = BTreeMap::new();
+    let pick_date_extras_query = plan.adapt_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY);
+    client.query_for_each(
+        &pick_date_extras_query,
+        &[DuckDbParameter::Date(end_date)],
+        |row| {
+            let ts_code = row.try_get("ts_code")?;
+            let trade_date = row.try_get("trade_date")?;
+            let mut factors = BTreeMap::new();
+            for column in DB_NATIVE_PICK_DATE_FACTOR_COLUMNS {
+                if let Some(value) = optional_option_f64(&row, column)?
+                    && value.is_finite()
+                {
+                    factors.insert((*column).to_string(), value);
+                }
+            }
+            Ok((ts_code, trade_date, factors))
+        },
+        |(ts_code, trade_date, factors)| {
+            if !factors.is_empty() {
+                pick_date_extras.insert((ts_code, trade_date), factors);
+            }
+            Ok(())
+        },
+    )?;
+
+    let mut previous_month_macd = BTreeMap::new();
+    let previous_month_macd_query = plan.adapt_query(DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY);
+    client.query_for_each(
+        &previous_month_macd_query,
+        &[DuckDbParameter::Date(end_date)],
+        |row| {
+            Ok((
+                row.try_get::<String>("ts_code")?,
+                row.try_get::<NaiveDate>("trade_date")?,
+                optional_option_f64(&row, "macd_monthly_hist")?.filter(|value| value.is_finite()),
+            ))
+        },
+        |(ts_code, trade_date, histogram)| {
+            if let Some(histogram) = histogram {
+                previous_month_macd.insert(ts_code, (trade_date, histogram));
+            }
+            Ok(())
+        },
+    )?;
+
+    let mut ths_sector_extras = BTreeMap::new();
+    let ths_sector_extras_query = plan.adapt_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY);
+    client.query_for_each(
+        &ths_sector_extras_query,
+        &[DuckDbParameter::Date(end_date)],
+        |row| {
+            let ts_code = row.try_get("ts_code")?;
+            let trade_date = row.try_get("trade_date")?;
+            let mut factors = BTreeMap::new();
+            for column in DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS {
+                if let Some(value) = optional_option_f64(&row, column)?
+                    && value.is_finite()
+                {
+                    factors.insert((*column).to_string(), value);
+                }
+            }
+            Ok((ts_code, trade_date, factors))
+        },
+        |(ts_code, trade_date, factors)| {
+            if !factors.is_empty() {
+                ths_sector_extras.insert((ts_code, trade_date), factors);
+            }
+            Ok(())
+        },
+    )?;
+
+    let base_query = plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY);
+    let query = base_query.trim_end().trim_end_matches(';');
+    let ordered_query;
+    let query = if order_by_symbol {
+        ordered_query = format!("{query} ORDER BY s.ts_code ASC, s.trade_date ASC");
+        ordered_query.as_str()
+    } else {
+        query
+    };
+    client.query_for_each(
+        &query,
+        &[
+            DuckDbParameter::Date(start_date),
+            DuckDbParameter::Date(end_date),
+        ],
+        db_native_market_row_from_db_row,
+        |mut row| {
+            if row.trade_date == end_date
+                && let Some(extras) =
+                    pick_date_extras.remove(&(row.ts_code.clone(), row.trade_date))
+            {
+                row.db_factors.extend(extras);
+            }
+            if let Some(&(trade_date, histogram)) = previous_month_macd.get(row.ts_code.as_str())
+                && row.trade_date == trade_date
+            {
+                row.db_factors
+                    .insert("macd_monthly_hist".to_string(), histogram);
+            }
+            if let Some(extras) = ths_sector_extras.remove(&(row.ts_code.clone(), row.trade_date)) {
+                row.db_factors.extend(extras);
+            }
+            consume(row)
+        },
+    )?;
+    Ok(plan.db_data_gaps)
 }
 
 pub fn fetch_db_native_daily_window_for_intraday(
@@ -2786,5 +2938,35 @@ mod duckdb_neo_tests {
 
         assert_eq!(row.try_get::<NaiveDate>("trade_date").unwrap(), trade_date);
         assert_eq!(row.try_get::<i32>("period_count").unwrap(), 3);
+    }
+
+    #[test]
+    fn duckdb_query_for_each_visits_multiple_chunks_in_order() {
+        let connection = open_duckdb(":memory:").unwrap();
+        let mut visited = Vec::new();
+
+        connection
+            .query_for_each(
+                "SELECT i::BIGINT AS row_id, CASE WHEN i % 2 = 0 THEN i::DOUBLE ELSE NULL END AS maybe_id, 'row-' || i::VARCHAR AS label FROM range(5000) AS rows(i) ORDER BY i",
+                &[],
+                |row| {
+                    Ok((
+                        row.try_get::<i64>("row_id")?,
+                        row.try_get::<Option<f64>>("maybe_id")?,
+                        row.try_get::<String>("label")?,
+                    ))
+                },
+                |row| {
+                    visited.push(row);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(visited.len(), 5000);
+        assert_eq!(visited[0], (0, Some(0.0), "row-0".to_string()));
+        assert_eq!(visited[1], (1, None, "row-1".to_string()));
+        assert_eq!(visited[4999], (4999, None, "row-4999".to_string()));
+        assert!(visited.windows(2).all(|pair| pair[0].0 + 1 == pair[1].0));
     }
 }
