@@ -15,11 +15,10 @@ from typing import Sequence
 from ml.backfill.commands import build_run_command
 from ml.dates import fetch_trade_dates, read_dates_file, weekday_fallback
 from ml.env import load_dotenv_values, resolve_config_value
-from ml.paths import PROJECT_ROOT, select_dir
+from ml.paths import PROJECT_ROOT, resolve_stock_select_binary, select_dir
 from ml.subprocesses import format_returncode
 
 
-DEFAULT_BINARY = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
 DEFAULT_METHOD = "b2"
 DEFAULT_POOL_SOURCE = "turnover-top"
 
@@ -264,7 +263,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _resolve_config(args: argparse.Namespace) -> tuple[RunConfig, str | None]:
     dotenv = load_dotenv_values()
     method = args.method or resolve_config_value(None, "STOCK_SELECT_METHOD", dotenv) or DEFAULT_METHOD
-    binary_value = args.binary or Path(resolve_config_value(None, "STOCK_SELECT_BIN", dotenv) or str(DEFAULT_BINARY))
+    binary = resolve_stock_select_binary(args.binary, resolve_config_value(None, "STOCK_SELECT_BIN", dotenv))
     runtime_value = resolve_config_value(
         str(args.runtime_root) if args.runtime_root else None,
         "STOCK_SELECT_RUNTIME_ROOT",
@@ -272,7 +271,7 @@ def _resolve_config(args: argparse.Namespace) -> tuple[RunConfig, str | None]:
     ) or "runtime"
     duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv)
     config = RunConfig(
-        binary=Path(binary_value),
+        binary=binary,
         runtime_root=Path(runtime_value),
         method=method,
         workers=args.workers,
@@ -309,7 +308,7 @@ def main_from_args(args: argparse.Namespace) -> int:
             runtime_root=config.runtime_root,
             method=config.method,
             skip_existing=config.skip_existing,
-            binary=args.binary,
+            binary=config.binary,
         )
     if not dates:
         print("没有需要补跑的日期。")

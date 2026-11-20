@@ -16,11 +16,10 @@ from typing import Iterable, Sequence
 
 from ml.dates import read_dates_file, validate_date
 from ml.env import load_dotenv_values, resolve_config_value
-from ml.paths import PROJECT_ROOT, candidate_path, select_dir
+from ml.paths import PROJECT_ROOT, candidate_path, resolve_stock_select_binary, select_dir
 
 DEFAULT_METHOD = "b2"
 DEFAULT_WINDOW = 10
-DEFAULT_BINARY = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
 
 
 @dataclass(frozen=True)
@@ -150,14 +149,6 @@ def format_recurring_lines_from_review_list(
     return lines
 
 
-def resolve_binary(cli_binary: Path | None) -> Path:
-    if cli_binary is not None:
-        return cli_binary
-    if DEFAULT_BINARY.exists():
-        return DEFAULT_BINARY
-    return Path("stock-select-rs")
-
-
 def build_review_list_command(
     *,
     binary: Path,
@@ -256,13 +247,15 @@ def recent_weekdays(pick_date: str, window: int) -> list[str]:
     return sorted(dates)
 
 
-def resolve_trade_dates(args: argparse.Namespace, dotenv_values: dict[str, str]) -> list[str]:
+def resolve_trade_dates(
+    args: argparse.Namespace, dotenv_values: dict[str, str], *, binary: Path | None = None
+) -> list[str]:
     if args.dates_file:
         return read_dates_file(args.dates_file)
     duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv_values)
     if not duckdb_path:
         raise SystemExit("DUCKDB_PATH is required; set it in .env, export it, pass --duckdb-path, or use --dates-file.")
-    binary = getattr(args, "binary", None)
+    binary = binary or getattr(args, "binary", None)
     options = {"binary": binary} if binary is not None else {}
     return fetch_recent_trade_dates(duckdb_path, args.pick_date, args.window, **options)
 
@@ -304,7 +297,8 @@ def main_from_args(args: argparse.Namespace) -> int:
         raise SystemExit("STOCK_SELECT_RUNTIME_ROOT is required; set it in .env or pass --runtime-root.")
     runtime_root = Path(runtime_root_value).expanduser()
 
-    trade_dates = resolve_trade_dates(args, dotenv_values)
+    binary = resolve_stock_select_binary(args.binary, resolve_config_value(None, "STOCK_SELECT_BIN", dotenv_values))
+    trade_dates = resolve_trade_dates(args, dotenv_values, binary=binary)
     dates = recent_trade_dates(args.pick_date, trade_dates, window=args.window)
     occurrences = collect_candidate_occurrences(
         runtime_root=runtime_root,
@@ -322,7 +316,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         args.limit,
     )
     review_list_lines = load_review_list_lines(
-        binary=resolve_binary(args.binary or (Path(value) if (value := resolve_config_value(None, "STOCK_SELECT_BIN", dotenv_values)) else None)),
+        binary=binary,
         runtime_root=runtime_root,
         pick_date=args.pick_date,
         method=args.method,

@@ -3,8 +3,11 @@ import io
 import signal
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from ml.backfill import candidates as backfill_candidates
 from ml.backfill.candidates import (
@@ -149,24 +152,13 @@ class CandidateBackfillTest(unittest.TestCase):
         self.assertEqual(result.success_count, 0)
         self.assertEqual(result.failures, [])
 
-    def test_scm_and_pbm_backfills_run_one_worker_to_bound_memory(self):
-        import threading
-        import time
-
+    def test_scm_and_pbm_backfills_respect_requested_worker_count(self):
         for method in ("scm", "pbm"):
             with self.subTest(method=method):
-                active_workers = 0
-                max_active_workers = 0
-                active_workers_lock = threading.Lock()
+                workers_started = threading.Barrier(4, timeout=2)
 
                 def fake_runner(command, **_kwargs):
-                    nonlocal active_workers, max_active_workers
-                    with active_workers_lock:
-                        active_workers += 1
-                        max_active_workers = max(max_active_workers, active_workers)
-                    time.sleep(0.03)
-                    with active_workers_lock:
-                        active_workers -= 1
+                    workers_started.wait()
                     return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
                 config = BackfillConfig(
@@ -183,7 +175,31 @@ class CandidateBackfillTest(unittest.TestCase):
                 )
 
                 self.assertEqual(result.success_count, 4)
-                self.assertEqual(max_active_workers, 1)
+
+    def test_parallel_backfill_does_not_start_remaining_dates_after_interrupt(self):
+        dates = ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"]
+        started = []
+        first_workers = threading.Barrier(2, timeout=2)
+
+        def interrupting_runner(command, **_kwargs):
+            pick_date = command[command.index("--pick-date") + 1]
+            started.append(pick_date)
+            if pick_date in dates[:2]:
+                first_workers.wait()
+                raise KeyboardInterrupt
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        config = BackfillConfig(
+            binary=Path("stock-select-rs"),
+            runtime_root=Path("/tmp/runtime"),
+            method="scm",
+            workers=2,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            run_backfill(dates, config=config, runner=interrupting_runner)
+
+        self.assertCountEqual(started, dates[:2])
 
     def test_single_worker_backfill_does_not_start_queued_dates_after_interrupt(self):
         calls = []
@@ -232,6 +248,49 @@ class CandidateBackfillTest(unittest.TestCase):
         self.assertEqual(len(result.failures), 1)
         self.assertEqual(result.failures[0].pick_date, "2026-06-02")
         self.assertIn("screen failed", result.failures[0].stderr)
+
+    def test_run_backfill_reports_each_subprocess_elapsed_time(self):
+        dates = ["2026-06-01", "2026-06-02", "2026-06-03"]
+        clock = threading.local()
+
+        def monotonic():
+            return getattr(clock, "now", 100.0)
+
+        def fake_runner(command, **_kwargs):
+            pick_date = command[command.index("--pick-date") + 1]
+            clock.now = monotonic() + (dates.index(pick_date) + 1) * 0.125
+            if pick_date == dates[1]:
+                return subprocess.CompletedProcess(command, -signal.SIGKILL, stdout="", stderr="")
+            if pick_date == dates[2]:
+                raise FileNotFoundError("screen executable missing")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        for workers in (1, 2):
+            with self.subTest(workers=workers):
+                config = BackfillConfig(
+                    binary=Path("stock-select-rs"),
+                    runtime_root=Path("/tmp/runtime"),
+                    method="scm",
+                    workers=workers,
+                    quiet=False,
+                )
+                stream = io.StringIO()
+                with patch.object(backfill_candidates, "time", SimpleNamespace(monotonic=monotonic)):
+                    with contextlib.redirect_stdout(stream):
+                        result = run_backfill(dates, config=config, runner=fake_runner)
+
+                self.assertEqual(result.success_count, 1)
+                self.assertCountEqual([failure.pick_date for failure in result.failures], dates[1:])
+                lines = stream.getvalue().splitlines()
+                self.assertEqual([line.split(" ", 1)[0] for line in lines], ["[1/3]", "[2/3]", "[3/3]"])
+                self.assertCountEqual(
+                    [line.split(" ", 1)[1] for line in lines],
+                    [
+                        "2026-06-01 ok elapsed=0.125s",
+                        "2026-06-02 failed signal=SIGKILL elapsed=0.250s",
+                        "2026-06-03 failed: screen executable missing elapsed=0.375s",
+                    ],
+                )
 
     def test_run_backfill_releases_completed_outputs_between_jobs(self):
         import gc

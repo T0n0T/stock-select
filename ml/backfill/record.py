@@ -12,12 +12,11 @@ from typing import Callable, Sequence
 
 from ml.dates import fetch_trade_dates, read_dates_file, validate_date, weekday_fallback
 from ml.env import load_dotenv_values, resolve_config_value
-from ml.paths import PROJECT_ROOT
+from ml.paths import PROJECT_ROOT, resolve_stock_select_binary
 from ml.methods import validate_method
 from ml.subprocesses import format_returncode
 
 
-DEFAULT_BINARY = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
 DEFAULT_RUNTIME_ROOT = Path("runtime")
 DEFAULT_DAYS = 10
 
@@ -290,14 +289,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _resolve_dates(args: argparse.Namespace, duckdb_path: str | None) -> list[str]:
+def _resolve_dates(
+    args: argparse.Namespace, duckdb_path: str | None, *, binary: Path | None = None
+) -> list[str]:
     if args.dates_file:
         return read_dates_file(args.dates_file)
     if args.dates:
         return parse_inline_dates(args.dates)
-    binary = getattr(args, "binary", None)
-    options = {"binary": binary} if binary is not None else {}
-    return recent_trade_dates(days=args.days, duckdb_path=duckdb_path, end_date=args.end_date, **options)
+    return recent_trade_dates(days=args.days, duckdb_path=duckdb_path, end_date=args.end_date, binary=binary)
 
 
 def _resolve_record_window(dotenv_values: dict[str, str]) -> int | None:
@@ -325,17 +324,10 @@ def main_from_args(args: argparse.Namespace) -> int:
         )
         or str(DEFAULT_RUNTIME_ROOT)
     )
-    binary = Path(
-        resolve_config_value(
-            str(args.binary) if args.binary else None,
-            "STOCK_SELECT_BIN",
-            dotenv_values,
-        )
-        or str(DEFAULT_BINARY)
-    )
+    binary = resolve_stock_select_binary(args.binary, resolve_config_value(None, "STOCK_SELECT_BIN", dotenv_values))
     duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv_values)
     record_window_trading_days = _resolve_record_window(dotenv_values)
-    dates = _resolve_dates(args, duckdb_path)
+    dates = _resolve_dates(args, duckdb_path, binary=binary)
     tasks = build_tasks(methods, dates)
     config = RecordBackfillConfig(
         binary=binary,

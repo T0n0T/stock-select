@@ -5,7 +5,8 @@ from ml.methods import SUPPORTED_METHODS
 import argparse
 import shlex
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -13,15 +14,21 @@ from typing import Callable, Sequence
 from ml.backfill.commands import build_screen_command
 from ml.dates import fetch_trade_dates, read_dates_file, validate_date
 from ml.env import load_dotenv_values, resolve_config_value
-from ml.paths import PROJECT_ROOT, candidate_path, factor_artifact_path
+from ml.paths import PROJECT_ROOT, candidate_path, factor_artifact_path, resolve_stock_select_binary
 from ml.subprocesses import format_returncode
 
 
-DEFAULT_BINARY = PROJECT_ROOT / "target" / "debug" / "stock-select-rs"
 DEFAULT_METHOD = "b2"
 DEFAULT_POOL_SOURCE = "turnover-top"
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+class _TimedRunError(Exception):
+    def __init__(self, cause: Exception, elapsed_seconds: float) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.elapsed_seconds = elapsed_seconds
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,16 @@ def _run_one(
     config: BackfillConfig,
     runner: Runner,
 ) -> tuple[str, subprocess.CompletedProcess[str]]:
+    actual_date, completed, _ = _run_one_timed(pick_date, config=config, runner=runner)
+    return actual_date, completed
+
+
+def _run_one_timed(
+    pick_date: str,
+    *,
+    config: BackfillConfig,
+    runner: Runner,
+) -> tuple[str, subprocess.CompletedProcess[str], float]:
     command = build_screen_command(
         binary=config.binary,
         pick_date=pick_date,
@@ -96,8 +113,12 @@ def _run_one(
         intraday=config.intraday,
         duckdb_path=config.duckdb_path,
     )
-    completed = runner(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
-    return pick_date, completed
+    started = time.monotonic()
+    try:
+        completed = runner(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    except Exception as exc:
+        raise _TimedRunError(exc, time.monotonic() - started) from exc
+    return pick_date, completed, time.monotonic() - started
 
 
 def run_backfill(
@@ -114,8 +135,7 @@ def run_backfill(
     if not dates:
         return result
 
-    requested_workers = 1 if config.method in {"scm", "pbm"} else config.workers
-    worker_count = max(1, min(requested_workers, len(dates)))
+    worker_count = max(1, min(config.workers, len(dates)))
     if worker_count == 1:
         for completed_count, pick_date in enumerate(dates, start=1):
             command = build_screen_command(
@@ -130,18 +150,22 @@ def run_backfill(
                 duckdb_path=config.duckdb_path,
             )
             try:
-                actual_date, completed = _run_one(pick_date, config=config, runner=runner)
+                actual_date, completed, elapsed_seconds = _run_one_timed(
+                    pick_date, config=config, runner=runner
+                )
             except Exception as exc:  # pragma: no cover - defensive for subprocess launch errors
+                elapsed_seconds = exc.elapsed_seconds if isinstance(exc, _TimedRunError) else 0.0
+                cause = exc.cause if isinstance(exc, _TimedRunError) else exc
                 result.failures.append(
-                    BackfillFailure(pick_date=pick_date, command=command, returncode=1, stderr=str(exc))
+                    BackfillFailure(pick_date=pick_date, command=command, returncode=1, stderr=str(cause))
                 )
                 if not config.quiet:
-                    print(f"[{completed_count}/{len(dates)}] {pick_date} failed: {exc}")
+                    print(f"[{completed_count}/{len(dates)}] {pick_date} failed: {cause} elapsed={elapsed_seconds:.3f}s")
                 continue
             if completed.returncode == 0:
                 result.success_count += 1
                 if not config.quiet:
-                    print(f"[{completed_count}/{len(dates)}] {actual_date} ok")
+                    print(f"[{completed_count}/{len(dates)}] {actual_date} ok elapsed={elapsed_seconds:.3f}s")
             else:
                 result.failures.append(
                     BackfillFailure(
@@ -153,64 +177,70 @@ def run_backfill(
                     )
                 )
                 if not config.quiet:
-                    print(f"[{completed_count}/{len(dates)}] {actual_date} failed {format_returncode(completed.returncode)}")
+                    print(
+                        f"[{completed_count}/{len(dates)}] {actual_date} failed "
+                        f"{format_returncode(completed.returncode)} elapsed={elapsed_seconds:.3f}s"
+                    )
         return result
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = {
-            executor.submit(_run_one, pick_date, config=config, runner=runner): pick_date
-            for pick_date in dates
-        }
+        remaining = iter(dates)
+        futures = {}
         completed_count = 0
-        for future in as_completed(futures):
-            # Drop finished futures immediately so captured subprocess output can be freed per date.
-            pick_date = futures.pop(future)
-            command = build_screen_command(
-                binary=config.binary,
-                pick_date=pick_date,
-                runtime_root=config.runtime_root,
-                method=config.method,
-                recompute=config.recompute,
-                pool_source=config.pool_source,
-                export_factors=config.export_factors,
-                intraday=config.intraday,
-                duckdb_path=config.duckdb_path,
-            )
-            completed_count += 1
-            try:
-                actual_date, completed = future.result()
-            except Exception as exc:  # pragma: no cover - defensive for subprocess launch errors
-                result.failures.append(
-                    BackfillFailure(pick_date=pick_date, command=command, returncode=1, stderr=str(exc))
+        while completed_count < len(dates):
+            # Leave remaining dates unscheduled so interrupting does not drain a backlog.
+            for _ in range(worker_count - len(futures)):
+                pick_date = next(remaining, None)
+                if pick_date is None:
+                    break
+                futures[executor.submit(_run_one_timed, pick_date, config=config, runner=runner)] = pick_date
+            done, _ = wait(futures, return_when=FIRST_COMPLETED)
+            while done:
+                future = done.pop()
+                pick_date = futures.pop(future)
+                command = build_screen_command(
+                    binary=config.binary,
+                    pick_date=pick_date,
+                    runtime_root=config.runtime_root,
+                    method=config.method,
+                    recompute=config.recompute,
+                    pool_source=config.pool_source,
+                    export_factors=config.export_factors,
+                    intraday=config.intraday,
+                    duckdb_path=config.duckdb_path,
                 )
-                if not config.quiet:
-                    print(f"[{completed_count}/{len(dates)}] {pick_date} failed: {exc}")
-                continue
-            if completed.returncode == 0:
-                result.success_count += 1
-                if not config.quiet:
-                    print(f"[{completed_count}/{len(dates)}] {actual_date} ok")
-            else:
-                result.failures.append(
-                    BackfillFailure(
-                        pick_date=actual_date,
-                        command=command,
-                        returncode=completed.returncode,
-                        stdout=completed.stdout or "",
-                        stderr=completed.stderr or "",
+                completed_count += 1
+                try:
+                    actual_date, completed, elapsed_seconds = future.result()
+                except Exception as exc:  # pragma: no cover - defensive for subprocess launch errors
+                    elapsed_seconds = exc.elapsed_seconds if isinstance(exc, _TimedRunError) else 0.0
+                    cause = exc.cause if isinstance(exc, _TimedRunError) else exc
+                    result.failures.append(
+                        BackfillFailure(pick_date=pick_date, command=command, returncode=1, stderr=str(cause))
                     )
-                )
-                if not config.quiet:
-                    print(f"[{completed_count}/{len(dates)}] {actual_date} failed {format_returncode(completed.returncode)}")
+                    if not config.quiet:
+                        print(f"[{completed_count}/{len(dates)}] {pick_date} failed: {cause} elapsed={elapsed_seconds:.3f}s")
+                    continue
+                if completed.returncode == 0:
+                    result.success_count += 1
+                    if not config.quiet:
+                        print(f"[{completed_count}/{len(dates)}] {actual_date} ok elapsed={elapsed_seconds:.3f}s")
+                else:
+                    result.failures.append(
+                        BackfillFailure(
+                            pick_date=actual_date,
+                            command=command,
+                            returncode=completed.returncode,
+                            stdout=completed.stdout or "",
+                            stderr=completed.stderr or "",
+                        )
+                    )
+                    if not config.quiet:
+                        print(
+                            f"[{completed_count}/{len(dates)}] {actual_date} failed "
+                            f"{format_returncode(completed.returncode)} elapsed={elapsed_seconds:.3f}s"
+                        )
     return result
-
-
-def resolve_binary(cli_binary: Path | None) -> Path:
-    if cli_binary is not None:
-        return cli_binary
-    if DEFAULT_BINARY.exists():
-        return DEFAULT_BINARY
-    return Path("stock-select-rs")
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -239,15 +269,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _resolve_trade_dates(args: argparse.Namespace, dotenv_values: dict[str, str]) -> list[str]:
+def _resolve_trade_dates(
+    args: argparse.Namespace, dotenv_values: dict[str, str], *, binary: Path | None = None
+) -> list[str]:
     if args.dates_file:
         return read_dates_file(args.dates_file)
     duckdb_path = resolve_config_value(args.duckdb_path, "DUCKDB_PATH", dotenv_values)
     if not duckdb_path:
         raise SystemExit("DUCKDB_PATH is required; set it in .env, export it, or pass --duckdb-path.")
-    binary = getattr(args, "binary", None)
-    options = {"binary": binary} if binary is not None else {}
-    return fetch_trade_dates(duckdb_path, args.start_date, args.end_date, **options)
+    return fetch_trade_dates(duckdb_path, args.start_date, args.end_date, binary=binary or getattr(args, "binary", None))
 
 
 def main_from_args(args: argparse.Namespace) -> int:
@@ -261,7 +291,8 @@ def main_from_args(args: argparse.Namespace) -> int:
         raise SystemExit("STOCK_SELECT_RUNTIME_ROOT is required; set it in .env or pass --runtime-root.")
     runtime_root = Path(runtime_root_value).expanduser()
 
-    trade_dates = _resolve_trade_dates(args, dotenv_values)
+    binary = resolve_stock_select_binary(args.binary, resolve_config_value(None, "STOCK_SELECT_BIN", dotenv_values))
+    trade_dates = _resolve_trade_dates(args, dotenv_values, binary=binary)
     selected_dates = select_missing_dates(
         trade_dates,
         runtime_root=runtime_root,
@@ -277,7 +308,7 @@ def main_from_args(args: argparse.Namespace) -> int:
     )
 
     config = BackfillConfig(
-        binary=resolve_binary(args.binary or (Path(value) if (value := resolve_config_value(None, "STOCK_SELECT_BIN", dotenv_values)) else None)),
+        binary=binary,
         runtime_root=runtime_root,
         method=args.method,
         workers=args.workers,
