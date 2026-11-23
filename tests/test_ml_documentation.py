@@ -69,7 +69,7 @@ class MlDocumentationTests(unittest.TestCase):
         for name in ["workflow.md", "screening-methods.md"]:
             text = (PROJECT_ROOT / "docs" / name).read_text(encoding="utf-8")
             with self.subTest(document=name):
-                for fragment in ["Parquet", "schema 14", "price_basis", "asof_qfq_v1", "按需重建"]:
+                for fragment in ["Parquet", "schema 21", "price_basis", "asof_qfq_v1", "按需重建"]:
                     self.assertTrue(fragment in text, f"{name}: missing {fragment}")
 
     def test_screening_methods_document_current_filter_conditions(self):
@@ -84,7 +84,7 @@ class MlDocumentationTests(unittest.TestCase):
             "所有 Rust 与 Python 入口仅接受当前三种方法",
             "截至 `pick_date` 的约 252 个交易日预计算行情和指标",
             "Parquet",
-            "schema 14",
+            "schema 21",
             "`STOCK_SELECT_PREPARED_CACHE_LIMIT`",
             "盘中 prepared cache 不计入这个保留数量",
             "`turnover-top` 股票池",

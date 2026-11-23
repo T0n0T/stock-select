@@ -189,6 +189,10 @@ def add_summary_warning(summary: dict[str, Any], message: str) -> None:
 
 
 def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
+    if args.objective == "akquant":
+        from .backtest import run_akquant_study
+
+        return run_akquant_study(args, optuna)
     objective_fn = resolve_objective(args.objective)
     output_root = args.output_root or Path("diagnostics") / "ml" / args.method / "tuning"
     dataset = train_lgbm_rank.resolve_dataset_path(args.dataset, method=args.method)
@@ -211,6 +215,7 @@ def run_optuna_study(args: argparse.Namespace, optuna: Any) -> dict[str, Any]:
             rolling_folds=args.rolling_folds,
             rolling_train_dates=args.rolling_train_dates,
             rolling_test_dates=args.rolling_test_dates,
+            purge_gap=getattr(args, "purge_gap", None),
             method=args.method,
             feature_manifest=getattr(args, "feature_manifest", None),
             rf_diagnostics=not args.skip_rf_diagnostics,

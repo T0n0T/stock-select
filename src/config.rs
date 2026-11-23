@@ -7,10 +7,11 @@ pub const STOCK_SELECT_DB_CHECK_ENV: &str = "STOCK_SELECT_DB_CHECK";
 pub const DB_CHECK_CORE_TABLES: &[&str] = &["stock_stk_factor_pro"];
 
 pub const DB_CHECK_DEFAULT_TABLES: &[&str] = &[
-    "index_ths_daily",
     "index_idx_factor_pro",
-    "index_moneyflow_cnt_ths",
-    "index_limit_cpt_list",
+    "index_weight",
+    "stock_moneyflow",
+    "index_sw_member",
+    "calc_daily_industry_moneyflow",
 ];
 
 pub const DB_CHECK_ALLOWED_TABLES: &[&str] = &[
@@ -19,11 +20,11 @@ pub const DB_CHECK_ALLOWED_TABLES: &[&str] = &[
     "calc_daily_rolling_factors",
     "calc_daily_czsc_structure",
     "calc_indicator_state",
-    "stock_moneyflow_ths",
-    "index_ths_member",
-    "index_ths_daily",
+    "stock_moneyflow",
+    "index_weight",
+    "index_sw_member",
     "index_idx_factor_pro",
-    "index_moneyflow_cnt_ths",
+    "calc_daily_industry_moneyflow",
     "index_limit_cpt_list",
 ];
 

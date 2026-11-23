@@ -143,7 +143,7 @@ fn write_prepared_cache_metadata_with_db_data_gaps(root: &std::path::Path, pick_
     ));
     let mut metadata: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     metadata["db_data_gaps"] = json!({
-        "index_moneyflow_cnt_ths": {
+        "calc_daily_industry_moneyflow": {
             "reason": "missing_rows",
             "expected_rows": 1,
             "actual_rows": 0
@@ -445,6 +445,89 @@ fn scm_run_uses_method_model_dir_and_factor_profile() {
         serde_json::from_slice(&std::fs::read(run_dir.join("factors.json")).unwrap()).unwrap();
     assert_eq!(factors["method"], "scm");
     assert_eq!(factors["rows"][0]["diagnostics"]["factor_profile"], "scm");
+}
+
+#[test]
+fn scm_run_binds_entry_gate_to_raw_model_output_and_keeps_it_in_display_artifacts() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    copy_fixture_model_artifacts(temp.path(), "scm");
+    let model_dir = temp.path().join("models/scm");
+    let metadata_path = model_dir.join("model_metadata.json");
+    let mut metadata: Value =
+        serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
+    let hash = format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(model_dir.join("model.txt")).unwrap())
+    );
+    metadata["score_entry_policy"] = json!({
+        "schema_version":1,"method":"scm","model_sha256":hash,
+        "calibration_end_date":"2026-05-22","status":"research",
+        "gate":{"open_min_score":-999.0,"discard_below_score":-1000.0,"top_n":3}
+    });
+    std::fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let candidates = temp.path().join("candidates.json");
+    std::fs::write(
+        &candidates,
+        serde_json::to_vec(&json!({
+            "method":"scm","pick_date":"2026-05-25","candidates":[
+                {"code":"000001.SZ","name":"测试一","close":10.0,"turnover_n":1000.0,"signal":"SCM",
+                 "factors":{"close_to_zxdkx_pct":1.0}}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let run = || {
+        Command::cargo_bin("stock-select-rs")
+            .unwrap()
+            .current_dir(temp.path())
+            .env_remove("DUCKDB_PATH")
+            .args([
+                "run",
+                "--runtime-root",
+                temp.path().to_str().unwrap(),
+                "--pick-date",
+                "2026-05-25",
+                "--method",
+                "scm",
+                "--environment-state",
+                "strong",
+                "--candidates-path",
+                candidates.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+    };
+    run();
+    let dir = temp.path().join("select/2026-05-25.scm");
+    let display: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("display.json")).unwrap()).unwrap();
+    let ranked: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("ranked.json")).unwrap()).unwrap();
+    assert_eq!(ranked["rows"][0]["model_score"], 1.0);
+    assert!(ranked["rows"][0]["raw_model_score"].as_f64().is_some());
+    assert_ne!(
+        ranked["rows"][0]["raw_model_score"],
+        ranked["rows"][0]["model_score"]
+    );
+    assert_eq!(display["rows"][0]["entry_assessment"]["action"], "open");
+    assert_eq!(display["rows"][0]["entry_assessment"]["research"], true);
+    assert_eq!(
+        display["rows"][0]["raw_model_score"],
+        ranked["rows"][0]["raw_model_score"]
+    );
+
+    metadata["score_entry_policy"]["model_sha256"] = json!("0".repeat(64));
+    std::fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    run();
+    let display: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("display.json")).unwrap()).unwrap();
+    assert_eq!(display["rows"][0]["entry_assessment"]["action"], "observe");
+    assert_eq!(
+        display["rows"][0]["entry_assessment"]["reason"],
+        "模型与门槛不匹配"
+    );
 }
 
 #[test]
@@ -770,6 +853,235 @@ fn b2_eod_run_empty_record_methods_env_overrides_dotenv_record_methods() {
         .success();
 
     assert!(!temp.path().join("record.csv").exists());
+}
+
+#[test]
+fn scm_run_fetches_only_the_cyq_source_declared_by_model_metadata() {
+    for feature in [
+        "close_to_ma25_pct",
+        "cyq_winner_rate",
+        "cyq_chips_support_10pct",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let candidates_path = write_candidates(temp.path());
+        let mut candidates: Value =
+            serde_json::from_slice(&std::fs::read(&candidates_path).unwrap()).unwrap();
+        candidates["method"] = json!("scm");
+        candidates["candidates"].as_array_mut().unwrap().truncate(1);
+        std::fs::write(&candidates_path, candidates.to_string()).unwrap();
+        copy_fixture_model_artifacts(temp.path(), "scm");
+        for file in ["model.txt", "model_metadata.json"] {
+            let path = temp.path().join("models/scm").join(file);
+            let content = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("close_to_ma25_pct", feature);
+            std::fs::write(path, content).unwrap();
+        }
+        std::fs::create_dir_all(temp.path().join("cyq_perf")).unwrap();
+        std::fs::write(
+            temp.path().join("cyq_perf/2026-05-25.json"),
+            json!({
+                "trade_date": "2026-05-25", "fetched_complete": true, "rows": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let chips_dir = temp.path().join("cyq_chips/2026-05-25");
+        std::fs::create_dir_all(&chips_dir).unwrap();
+        std::fs::write(chips_dir.join("000001.SZ.json"), json!({
+            "version": 1, "trade_date": "2026-05-25", "ts_code": "000001.SZ",
+            "rows": [{"price": 9.0, "percent": 30.0}, {"price": 10.0, "percent": 50.0}, {"price": 11.0, "percent": 20.0}]
+        }).to_string()).unwrap();
+        Command::cargo_bin("stock-select-rs")
+            .unwrap()
+            .current_dir(temp.path())
+            .env_remove("DUCKDB_PATH")
+            .env_remove("TUSHARE_TOKEN")
+            .args([
+                "run",
+                "--runtime-root",
+                temp.path().to_str().unwrap(),
+                "--pick-date",
+                "2026-05-25",
+                "--method",
+                "scm",
+                "--candidates-path",
+                candidates_path.to_str().unwrap(),
+                "--environment-state",
+                "neutral",
+            ])
+            .assert()
+            .success();
+        let factors: Value = serde_json::from_slice(
+            &std::fs::read(temp.path().join("select/2026-05-25.scm/factors.json")).unwrap(),
+        )
+        .unwrap();
+        let diagnostic = &factors["rows"][0]["diagnostics"];
+        assert_eq!(
+            diagnostic.get("cyq_perf").is_some(),
+            feature == "cyq_winner_rate",
+            "{feature}"
+        );
+        assert_eq!(
+            diagnostic.get("cyq_chips").is_some(),
+            feature == "cyq_chips_support_10pct",
+            "{feature}"
+        );
+        if feature == "cyq_chips_support_10pct" {
+            assert_eq!(factors["rows"][0]["factors"][feature], 30.0);
+        }
+    }
+}
+
+#[test]
+fn intraday_run_skips_chips_even_when_metadata_requests_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+    for file in ["model.txt", "model_metadata.json"] {
+        let path = temp.path().join("models/b2_intraday").join(file);
+        let content = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("close_to_ma25_pct", "cyq_chips_support_10pct");
+        std::fs::write(path, content).unwrap();
+    }
+    Command::cargo_bin("stock-select-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("DUCKDB_PATH")
+        .env_remove("TUSHARE_TOKEN")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--intraday",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "neutral",
+        ])
+        .assert()
+        .success();
+    let factors: Value = serde_json::from_slice(
+        &std::fs::read(
+            temp.path()
+                .join("select/2026-05-25.intraday.b2/factors.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for row in factors["rows"].as_array().unwrap() {
+        assert!(row["diagnostics"].get("cyq_chips").is_none());
+        assert!(row["factors"].get("cyq_chips_support_10pct").is_none());
+    }
+    assert!(!temp.path().join("cyq_chips").exists());
+}
+
+#[test]
+fn b2_run_enriches_factor_artifact_from_cached_cyq_data() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+    std::fs::create_dir_all(temp.path().join("cyq_perf")).unwrap();
+    std::fs::write(
+        temp.path().join("cyq_perf/2026-05-25.json"),
+        serde_json::json!({
+            "trade_date": "2026-05-25",
+            "fetched_complete": true,
+            "rows": {
+                "000001.SZ": {
+                    "ts_code": "000001.SZ",
+                    "cost_5pct": 8.0,
+                    "cost_15pct": 9.0,
+                    "cost_50pct": 9.5,
+                    "cost_85pct": 11.0,
+                    "cost_95pct": 12.0,
+                    "weight_avg": 10.2,
+                    "winner_rate": 53.2
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    Command::cargo_bin("stock-select-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("DUCKDB_PATH")
+        .env_remove("TUSHARE_TOKEN")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "neutral",
+        ])
+        .assert()
+        .success();
+
+    let factors: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("select/2026-05-25.b2/factors.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(factors["rows"][0]["code"], "000001.SZ");
+    assert_eq!(factors["rows"][0]["factors"]["cyq_winner_rate"], 53.2);
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["cyq_perf"]["status"],
+        "available"
+    );
+}
+
+#[test]
+fn b2_run_warns_but_continues_when_cyq_token_is_missing() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidates_path = write_candidates(temp.path());
+    write_lightgbm_model_artifacts(temp.path());
+
+    Command::cargo_bin("stock-select-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .env_remove("DUCKDB_PATH")
+        .env_remove("TUSHARE_TOKEN")
+        .args([
+            "run",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-25",
+            "--method",
+            "b2",
+            "--candidates-path",
+            candidates_path.to_str().unwrap(),
+            "--environment-state",
+            "neutral",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("TUSHARE_TOKEN is not configured"));
+
+    let factors: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("select/2026-05-25.b2/factors.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["cyq_perf"]["status"],
+        "missing_row"
+    );
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["cyq_perf"]["reason"],
+        "TUSHARE_TOKEN is not configured"
+    );
 }
 
 #[test]
@@ -1386,6 +1698,8 @@ fn review_list_reads_display_after_intraday_run() {
 
     let mut review_list = Command::cargo_bin("stock-select-rs").unwrap();
     review_list
+        .current_dir(temp.path())
+        .env_remove("DUCKDB_PATH")
         .args([
             "review-list",
             "--runtime-root",
@@ -1591,7 +1905,7 @@ fn b2_run_propagates_prepared_cache_gaps_to_factor_manifest() {
     assert_eq!(
         stderr
             .matches(
-                "warning: db data gap pick_date=2026-05-25 table=index_moneyflow_cnt_ths reason=missing_rows expected_rows=1 actual_rows=0 source=prepared_cache",
+                "warning: db data gap pick_date=2026-05-25 table=calc_daily_industry_moneyflow reason=missing_rows expected_rows=1 actual_rows=0 source=prepared_cache",
             )
             .count(),
         1,
@@ -1603,7 +1917,7 @@ fn b2_run_propagates_prepared_cache_gaps_to_factor_manifest() {
     )
     .unwrap();
     assert_eq!(
-        manifest["db_data_gaps"]["index_moneyflow_cnt_ths"],
+        manifest["db_data_gaps"]["calc_daily_industry_moneyflow"],
         json!({
             "reason": "missing_rows",
             "expected_rows": 1,

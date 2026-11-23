@@ -302,6 +302,9 @@ def validate_model_artifacts(
     metadata_summary = validate_metadata(metadata)
     model_sha256 = file_hash(model_path)
     metadata_sha256 = file_hash(metadata_path)
+    if "score_entry_policy" in metadata:
+        from ml.backtest.score_gate import validate_bound_score_policy
+        validate_bound_score_policy(metadata["score_entry_policy"], model_sha256, expected_method)
     native_parity = None
     if metadata_summary.get("categorical_encoding") == "native":
         native_parity = validate_native_parity_report(

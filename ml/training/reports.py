@@ -47,6 +47,7 @@ def markdown_report(report: dict[str, Any]) -> str:
         f"dataset: `{report['dataset']}`",
         f"train dates: `{report['train_date_count']}`",
         f"test dates: `{report['test_date_count']}`",
+        f"标签隔离日期数: `{report.get('purge_gap', 0)}`",
         f"features: `{report['feature_count']}`",
         "",
         "| split | top3 positive | top3 >=5 | top3 <=0 | top3 >=5 capture | rank ic ret3 | top3 ret5 >=5 | rank ic ret5 |",
@@ -66,6 +67,73 @@ def markdown_report(report: dict[str, Any]) -> str:
                 ic_ret5=metrics.get("rank_ic_ret5"),
             )
         )
+    selection_success = report.get("selection_success") or {}
+    if selection_success:
+        lines.extend(
+            [
+                "",
+                "## 日级入选成功率",
+                "",
+                "收益口径：t+1 开盘入场、t+3 收盘退出；收益大于 0 计为成功。基准为沪深 300。",
+                "该指标仅用于离线评估；未来收益标签不进入训练特征，相关性仅表示共变关系。",
+                "",
+                "| split | top-k | 有效日期 | 有效入选数 | 成功率 | 日均成功率 | 跑赢沪深 300 | 平均超额收益 % |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for split in ("train", "test"):
+            for top_key, result in sorted((selection_success.get(split) or {}).items()):
+                lines.append(
+                    "| {split} | {top_key} | {dates} | {selected} | {win_rate} | {daily_rate} | {benchmark_rate} | {excess} |".format(
+                        split=split,
+                        top_key=top_key,
+                        dates=result.get("date_count"),
+                        selected=result.get("selected_count"),
+                        win_rate=result.get("pooled_win_rate"),
+                        daily_rate=result.get("mean_daily_win_rate"),
+                        benchmark_rate=result.get("benchmark_win_rate"),
+                        excess=result.get("mean_excess_return_pct"),
+                    )
+                )
+        test_success = selection_success.get("test") or {}
+        for scope_key, scope_title in (("all_candidates", "全部入选股"), ("top3", "模型 Top 3")):
+            scope_analysis = test_success.get(scope_key) or {}
+            if scope_analysis.get("by_env"):
+                lines.extend(
+                    [
+                        "",
+                        f"### {scope_title}按市场环境",
+                        "",
+                        "| env | 有效日期 | 有效入选数 | 成功率 | 日均成功率 | 跑赢沪深 300 | 平均超额收益 % |",
+                        "|---|---:|---:|---:|---:|---:|---:|",
+                    ]
+                )
+                for env, result in sorted(scope_analysis["by_env"].items()):
+                    lines.append(
+                        "| {env} | {dates} | {selected} | {win_rate} | {daily_rate} | {benchmark_rate} | {excess} |".format(
+                            env=env,
+                            dates=result.get("date_count"),
+                            selected=result.get("selected_count"),
+                            win_rate=result.get("pooled_win_rate"),
+                            daily_rate=result.get("mean_daily_win_rate"),
+                            benchmark_rate=result.get("benchmark_win_rate"),
+                            excess=result.get("mean_excess_return_pct"),
+                        )
+                    )
+            if scope_analysis.get("environment_correlations"):
+                lines.extend(
+                    [
+                        "",
+                        f"### {scope_title}成功率与市场环境因子的相关性",
+                        "",
+                        "| 环境因子 | 配对日期 | Pearson r |",
+                        "|---|---:|---:|",
+                    ]
+                )
+                for factor, result in sorted(scope_analysis["environment_correlations"].items()):
+                    lines.append(
+                        f"| {factor} | {result.get('date_count')} | {result.get('pearson_r')} |"
+                    )
     lines.extend(["", "## top features", ""])
     lines.extend(f"- {item['feature']}: {item['importance']}" for item in report.get("top_features", [])[:20])
     lines.extend(markdown_db_data_gaps(report.get("db_data_gaps")))
@@ -133,6 +201,27 @@ def markdown_report(report: dict[str, Any]) -> str:
                     ic_ret5=metrics.get("rank_ic_ret5"),
                 )
             )
+        if any(fold.get("selection_success") for fold in report["rolling_folds"]):
+            lines.extend(
+                [
+                    "",
+                    "### rolling fold 日级成功率",
+                    "",
+                    "| fold | 有效日期 | Top 3 成功率 | 跑赢沪深 300 | 平均超额收益 % |",
+                    "|---:|---:|---:|---:|---:|",
+                ]
+            )
+            for fold in report["rolling_folds"]:
+                result = (fold.get("selection_success") or {}).get("top3") or {}
+                lines.append(
+                    "| {fold} | {dates} | {win_rate} | {benchmark_rate} | {excess} |".format(
+                        fold=fold["fold"],
+                        dates=result.get("date_count"),
+                        win_rate=result.get("pooled_win_rate"),
+                        benchmark_rate=result.get("benchmark_win_rate"),
+                        excess=result.get("mean_excess_return_pct"),
+                    )
+                )
         if any(fold.get("by_env") for fold in report["rolling_folds"]):
             lines.extend(["", "### rolling fold by-env", "", "| fold | env | rows | top3 >=5 | rank ic ret3 | top3 ret5 >=5 | rank ic ret5 |", "|---|---:|---:|---:|---:|---:|---:|"])
             for fold in report["rolling_folds"]:

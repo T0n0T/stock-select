@@ -84,7 +84,76 @@ const STOCK_STK_FACTOR_PRO_COLUMNS: &[DbColumnSpec] = &[
     ("total_share", "double precision"),
     ("free_share", "double precision"),
     ("pct_chg", "double precision"),
+    ("asi_qfq", "double precision"),
+    ("asit_qfq", "double precision"),
+    ("bias2_qfq", "double precision"),
+    ("bias3_qfq", "double precision"),
+    ("brar_ar_qfq", "double precision"),
+    ("brar_br_qfq", "double precision"),
+    ("cci_qfq", "double precision"),
+    ("cr_qfq", "double precision"),
+    ("emv_qfq", "double precision"),
+    ("maemv_qfq", "double precision"),
+    ("mass_qfq", "double precision"),
+    ("ma_mass_qfq", "double precision"),
+    ("mfi_qfq", "double precision"),
+    ("psyma_qfq", "double precision"),
+    ("maroc_qfq", "double precision"),
+    ("trma_qfq", "double precision"),
+    ("wr1_qfq", "double precision"),
+    ("updays", "double precision"),
+    ("downdays", "double precision"),
+    ("lowdays", "double precision"),
+    ("topdays", "double precision"),
+    ("dv_ttm", "double precision"),
+    ("float_share", "double precision"),
+    ("bbi_qfq", "double precision"),
+    ("ma_qfq_5", "double precision"),
+    ("ma_qfq_10", "double precision"),
+    ("ma_qfq_20", "double precision"),
+    ("ma_qfq_30", "double precision"),
+    ("ma_qfq_60", "double precision"),
+    ("ma_qfq_90", "double precision"),
+    ("ma_qfq_250", "double precision"),
+    ("ema_qfq_5", "double precision"),
+    ("ema_qfq_10", "double precision"),
+    ("ema_qfq_20", "double precision"),
+    ("ema_qfq_30", "double precision"),
+    ("ema_qfq_60", "double precision"),
+    ("ema_qfq_90", "double precision"),
+    ("ema_qfq_250", "double precision"),
+    ("expma_12_qfq", "double precision"),
+    ("expma_50_qfq", "double precision"),
+    ("ktn_upper_qfq", "double precision"),
+    ("ktn_mid_qfq", "double precision"),
+    ("ktn_down_qfq", "double precision"),
+    ("taq_up_qfq", "double precision"),
+    ("taq_mid_qfq", "double precision"),
+    ("taq_down_qfq", "double precision"),
+    ("xsii_td1_qfq", "double precision"),
+    ("xsii_td2_qfq", "double precision"),
+    ("xsii_td3_qfq", "double precision"),
+    ("xsii_td4_qfq", "double precision"),
+    ("atr_qfq", "double precision"),
+    ("dfma_dif_qfq", "double precision"),
+    ("dfma_difma_qfq", "double precision"),
+    ("dpo_qfq", "double precision"),
+    ("madpo_qfq", "double precision"),
+    ("mtmma_qfq", "double precision"),
 ];
+
+#[cfg(test)]
+#[test]
+fn stk_factor_pro_preflight_preserves_extended_snapshot_columns() {
+    for column in crate::factors::stk_factor_pro::SOURCE_COLUMNS {
+        assert!(
+            STOCK_STK_FACTOR_PRO_COLUMNS
+                .iter()
+                .any(|(name, _)| name == column),
+            "{column}"
+        );
+    }
+}
 
 const CALC_DAILY_INDICATORS_COLUMNS: &[DbColumnSpec] = &[
     ("source_dataset", "text"),
@@ -146,6 +215,9 @@ const CALC_DAILY_CZSC_STRUCTURE_COLUMNS: &[DbColumnSpec] = &[
     ("ts_code", "text"),
     ("trade_date", "date"),
     ("calc_version", "text"),
+    ("daily_period_complete", "boolean"),
+    ("weekly_period_complete", "boolean"),
+    ("monthly_period_complete", "boolean"),
     ("daily_source_bar_valid", "boolean"),
     ("daily_status", "text"),
     ("daily_available_finished_bi_count", "integer"),
@@ -170,6 +242,54 @@ const CALC_DAILY_CZSC_STRUCTURE_COLUMNS: &[DbColumnSpec] = &[
     ("daily_post_peak_first_bear_low", "double precision"),
     ("daily_post_peak_first_bear_close", "double precision"),
     ("daily_post_peak_first_bear_missing", "boolean"),
+    ("weekly_source_bar_valid", "boolean"),
+    ("weekly_status", "text"),
+    ("weekly_available_finished_bi_count", "integer"),
+    ("weekly_recent_bi_count", "integer"),
+    ("weekly_last_bi_direction", "text"),
+    ("weekly_last_bi_start_date", "date"),
+    ("weekly_last_bi_end_date", "date"),
+    ("weekly_last_bi_high", "double precision"),
+    ("weekly_last_bi_low", "double precision"),
+    ("weekly_last_bi_mid", "double precision"),
+    ("weekly_latest_zs_start_date", "date"),
+    ("weekly_latest_zs_end_date", "date"),
+    ("weekly_latest_zs_bi_count", "integer"),
+    ("weekly_latest_zs_zg", "double precision"),
+    ("weekly_latest_zs_zd", "double precision"),
+    ("weekly_latest_zs_zz", "double precision"),
+    ("weekly_recent_peak_date", "date"),
+    ("weekly_recent_peak_high", "double precision"),
+    ("weekly_post_peak_first_bear_date", "date"),
+    ("weekly_post_peak_first_bear_open", "double precision"),
+    ("weekly_post_peak_first_bear_high", "double precision"),
+    ("weekly_post_peak_first_bear_low", "double precision"),
+    ("weekly_post_peak_first_bear_close", "double precision"),
+    ("weekly_post_peak_first_bear_missing", "boolean"),
+    ("monthly_source_bar_valid", "boolean"),
+    ("monthly_status", "text"),
+    ("monthly_available_finished_bi_count", "integer"),
+    ("monthly_recent_bi_count", "integer"),
+    ("monthly_last_bi_direction", "text"),
+    ("monthly_last_bi_start_date", "date"),
+    ("monthly_last_bi_end_date", "date"),
+    ("monthly_last_bi_high", "double precision"),
+    ("monthly_last_bi_low", "double precision"),
+    ("monthly_last_bi_mid", "double precision"),
+    ("monthly_latest_zs_start_date", "date"),
+    ("monthly_latest_zs_end_date", "date"),
+    ("monthly_latest_zs_bi_count", "integer"),
+    ("monthly_latest_zs_zg", "double precision"),
+    ("monthly_latest_zs_zd", "double precision"),
+    ("monthly_latest_zs_zz", "double precision"),
+    ("monthly_recent_peak_date", "date"),
+    ("monthly_recent_peak_high", "double precision"),
+    ("monthly_post_peak_first_bear_date", "date"),
+    ("monthly_post_peak_first_bear_open", "double precision"),
+    ("monthly_post_peak_first_bear_high", "double precision"),
+    ("monthly_post_peak_first_bear_low", "double precision"),
+    ("monthly_post_peak_first_bear_close", "double precision"),
+    ("monthly_post_peak_first_bear_missing", "boolean"),
 ];
 
 const CALC_INDICATOR_STATE_COLUMNS: &[DbColumnSpec] = &[
@@ -183,48 +303,169 @@ const CALC_INDICATOR_STATE_COLUMNS: &[DbColumnSpec] = &[
     ("macd_ema26", "double precision"),
     ("macd_dea", "double precision"),
     ("macd_period_count", "bigint"),
+    ("kdj_k", "double precision"),
+    ("kdj_d", "double precision"),
+    ("kdj_period_count", "bigint"),
 ];
 
-const STOCK_MONEYFLOW_THS_COLUMNS: &[DbColumnSpec] = &[
+const STOCK_MONEYFLOW_COLUMNS: &[DbColumnSpec] = &[
     ("ts_code", "text"),
     ("trade_date", "date"),
-    ("net_amount", "double precision"),
-    ("net_d5_amount", "double precision"),
-    ("buy_lg_amount", "double precision"),
-    ("buy_lg_amount_rate", "double precision"),
-    ("buy_md_amount", "double precision"),
-    ("buy_md_amount_rate", "double precision"),
+    ("buy_sm_vol", "double precision"),
     ("buy_sm_amount", "double precision"),
-    ("buy_sm_amount_rate", "double precision"),
+    ("sell_sm_vol", "double precision"),
+    ("sell_sm_amount", "double precision"),
+    ("buy_md_vol", "double precision"),
+    ("buy_md_amount", "double precision"),
+    ("sell_md_vol", "double precision"),
+    ("sell_md_amount", "double precision"),
+    ("buy_lg_vol", "double precision"),
+    ("buy_lg_amount", "double precision"),
+    ("sell_lg_vol", "double precision"),
+    ("sell_lg_amount", "double precision"),
+    ("buy_elg_vol", "double precision"),
+    ("buy_elg_amount", "double precision"),
+    ("sell_elg_vol", "double precision"),
+    ("sell_elg_amount", "double precision"),
+    ("net_mf_vol", "double precision"),
+    ("net_mf_amount", "double precision"),
 ];
 
-const INDEX_THS_MEMBER_COLUMNS: &[DbColumnSpec] = &[("ts_code", "text"), ("con_code", "text")];
-
-const INDEX_THS_DAILY_COLUMNS: &[DbColumnSpec] = &[
+const INDEX_SW_MEMBER_COLUMNS: &[DbColumnSpec] = &[
+    ("l1_code", "text"),
+    ("l1_name", "text"),
+    ("l2_code", "text"),
+    ("l2_name", "text"),
+    ("l3_code", "text"),
+    ("l3_name", "text"),
     ("ts_code", "text"),
+    ("name", "text"),
+    ("in_date", "date"),
+    ("out_date", "date"),
+    ("is_new", "boolean"),
+];
+
+const INDEX_WEIGHT_COLUMNS: &[DbColumnSpec] = &[
+    ("index_code", "text"),
+    ("con_code", "text"),
     ("trade_date", "date"),
-    ("close", "double precision"),
-    ("pct_change", "double precision"),
-    ("vol", "double precision"),
-    ("turnover_rate", "double precision"),
-    ("total_mv", "double precision"),
-    ("float_mv", "double precision"),
+    ("weight", "double precision"),
+];
+
+const CALC_DAILY_INDUSTRY_MONEYFLOW_COLUMNS: &[DbColumnSpec] = &[
+    ("source_dataset", "text"),
+    ("industry_code", "text"),
+    ("industry_name", "text"),
+    ("trade_date", "date"),
+    ("stock_count", "bigint"),
+    ("buy_sm_amount", "double precision"),
+    ("sell_sm_amount", "double precision"),
+    ("net_sm_amount", "double precision"),
+    ("buy_md_amount", "double precision"),
+    ("sell_md_amount", "double precision"),
+    ("net_md_amount", "double precision"),
+    ("buy_lg_amount", "double precision"),
+    ("sell_lg_amount", "double precision"),
+    ("net_lg_amount", "double precision"),
+    ("buy_elg_amount", "double precision"),
+    ("sell_elg_amount", "double precision"),
+    ("net_elg_amount", "double precision"),
+    ("main_net_amount", "double precision"),
+    ("net_mf_vol", "double precision"),
+    ("net_mf_amount", "double precision"),
+    ("calc_version", "text"),
 ];
 
 const INDEX_IDX_FACTOR_PRO_COLUMNS: &[DbColumnSpec] = &[
     ("ts_code", "text"),
     ("trade_date", "date"),
+    ("open", "double precision"),
+    ("high", "double precision"),
+    ("low", "double precision"),
     ("close", "double precision"),
+    ("pre_close", "double precision"),
+    ("change", "double precision"),
     ("pct_change", "double precision"),
-];
-
-const INDEX_MONEYFLOW_CNT_THS_COLUMNS: &[DbColumnSpec] = &[
-    ("ts_code", "text"),
-    ("trade_date", "date"),
-    ("net_amount", "double precision"),
-    ("net_buy_amount", "double precision"),
-    ("net_sell_amount", "double precision"),
-    ("pct_change_stock", "double precision"),
+    ("vol", "double precision"),
+    ("amount", "double precision"),
+    ("asi_bfq", "double precision"),
+    ("asit_bfq", "double precision"),
+    ("atr_bfq", "double precision"),
+    ("bbi_bfq", "double precision"),
+    ("bias1_bfq", "double precision"),
+    ("bias2_bfq", "double precision"),
+    ("bias3_bfq", "double precision"),
+    ("boll_lower_bfq", "double precision"),
+    ("boll_mid_bfq", "double precision"),
+    ("boll_upper_bfq", "double precision"),
+    ("brar_ar_bfq", "double precision"),
+    ("brar_br_bfq", "double precision"),
+    ("cci_bfq", "double precision"),
+    ("cr_bfq", "double precision"),
+    ("dfma_dif_bfq", "double precision"),
+    ("dfma_difma_bfq", "double precision"),
+    ("dmi_adx_bfq", "double precision"),
+    ("dmi_adxr_bfq", "double precision"),
+    ("dmi_mdi_bfq", "double precision"),
+    ("dmi_pdi_bfq", "double precision"),
+    ("downdays", "double precision"),
+    ("updays", "double precision"),
+    ("dpo_bfq", "double precision"),
+    ("madpo_bfq", "double precision"),
+    ("ema_bfq_10", "double precision"),
+    ("ema_bfq_20", "double precision"),
+    ("ema_bfq_250", "double precision"),
+    ("ema_bfq_30", "double precision"),
+    ("ema_bfq_5", "double precision"),
+    ("ema_bfq_60", "double precision"),
+    ("ema_bfq_90", "double precision"),
+    ("emv_bfq", "double precision"),
+    ("maemv_bfq", "double precision"),
+    ("expma_12_bfq", "double precision"),
+    ("expma_50_bfq", "double precision"),
+    ("kdj_bfq", "double precision"),
+    ("kdj_d_bfq", "double precision"),
+    ("kdj_k_bfq", "double precision"),
+    ("ktn_down_bfq", "double precision"),
+    ("ktn_mid_bfq", "double precision"),
+    ("ktn_upper_bfq", "double precision"),
+    ("lowdays", "double precision"),
+    ("topdays", "double precision"),
+    ("ma_bfq_10", "double precision"),
+    ("ma_bfq_20", "double precision"),
+    ("ma_bfq_250", "double precision"),
+    ("ma_bfq_30", "double precision"),
+    ("ma_bfq_5", "double precision"),
+    ("ma_bfq_60", "double precision"),
+    ("ma_bfq_90", "double precision"),
+    ("macd_bfq", "double precision"),
+    ("macd_dea_bfq", "double precision"),
+    ("macd_dif_bfq", "double precision"),
+    ("mass_bfq", "double precision"),
+    ("ma_mass_bfq", "double precision"),
+    ("mfi_bfq", "double precision"),
+    ("mtm_bfq", "double precision"),
+    ("mtmma_bfq", "double precision"),
+    ("obv_bfq", "double precision"),
+    ("psy_bfq", "double precision"),
+    ("psyma_bfq", "double precision"),
+    ("roc_bfq", "double precision"),
+    ("maroc_bfq", "double precision"),
+    ("rsi_bfq_12", "double precision"),
+    ("rsi_bfq_24", "double precision"),
+    ("rsi_bfq_6", "double precision"),
+    ("taq_down_bfq", "double precision"),
+    ("taq_mid_bfq", "double precision"),
+    ("taq_up_bfq", "double precision"),
+    ("trix_bfq", "double precision"),
+    ("trma_bfq", "double precision"),
+    ("vr_bfq", "double precision"),
+    ("wr_bfq", "double precision"),
+    ("wr1_bfq", "double precision"),
+    ("xsii_td1_bfq", "double precision"),
+    ("xsii_td2_bfq", "double precision"),
+    ("xsii_td3_bfq", "double precision"),
+    ("xsii_td4_bfq", "double precision"),
 ];
 
 const INDEX_LIMIT_CPT_LIST_COLUMNS: &[DbColumnSpec] = &[
@@ -258,30 +499,63 @@ const DB_TABLE_SPECS: &[DbTableSpec] = &[
         columns: CALC_INDICATOR_STATE_COLUMNS,
     },
     DbTableSpec {
-        name: "stock_moneyflow_ths",
-        columns: STOCK_MONEYFLOW_THS_COLUMNS,
-    },
-    DbTableSpec {
-        name: "index_ths_member",
-        columns: INDEX_THS_MEMBER_COLUMNS,
-    },
-    DbTableSpec {
-        name: "index_ths_daily",
-        columns: INDEX_THS_DAILY_COLUMNS,
+        name: "stock_moneyflow",
+        columns: STOCK_MONEYFLOW_COLUMNS,
     },
     DbTableSpec {
         name: "index_idx_factor_pro",
         columns: INDEX_IDX_FACTOR_PRO_COLUMNS,
     },
     DbTableSpec {
-        name: "index_moneyflow_cnt_ths",
-        columns: INDEX_MONEYFLOW_CNT_THS_COLUMNS,
+        name: "index_weight",
+        columns: INDEX_WEIGHT_COLUMNS,
+    },
+    DbTableSpec {
+        name: "index_sw_member",
+        columns: INDEX_SW_MEMBER_COLUMNS,
+    },
+    DbTableSpec {
+        name: "calc_daily_industry_moneyflow",
+        columns: CALC_DAILY_INDUSTRY_MONEYFLOW_COLUMNS,
     },
     DbTableSpec {
         name: "index_limit_cpt_list",
         columns: INDEX_LIMIT_CPT_LIST_COLUMNS,
     },
 ];
+
+pub(crate) fn db_native_factor_source_columns(table: &str) -> Vec<&'static str> {
+    DB_TABLE_SPECS
+        .iter()
+        .find(|spec| spec.name == table)
+        .map(|spec| spec.columns.iter().map(|(column, _)| *column).collect())
+        .unwrap_or_default()
+}
+
+pub(crate) fn db_native_numeric_factor_columns(table: &str) -> Vec<&'static str> {
+    DB_TABLE_SPECS
+        .iter()
+        .find(|spec| spec.name == table)
+        .map(|spec| {
+            spec.columns
+                .iter()
+                .filter_map(|(name, sql_type)| {
+                    let numeric = sql_type.contains("int")
+                        || sql_type.contains("double")
+                        || sql_type.contains("real")
+                        || sql_type.contains("decimal")
+                        || *sql_type == "boolean";
+                    (numeric
+                        && !matches!(
+                            *name,
+                            "ts_code" | "trade_date" | "source_dataset" | "calc_version"
+                        ))
+                    .then_some(*name)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedRelation {
@@ -479,6 +753,10 @@ fn inspect_relation(
     ))
 }
 
+fn index_factor_probe_spec() -> (&'static str, i64, &'static str) {
+    ("count(DISTINCT ts_code)", 1, "AND ts_code = '000016.SH'")
+}
+
 fn probe_required_rows(
     client: &DuckDbConnection,
     plan: &mut DbLoadPlan,
@@ -514,29 +792,30 @@ fn probe_required_rows(
     probe_pick_date_rows(
         client,
         plan,
-        "index_ths_daily",
+        "stock_moneyflow",
         pick_date,
         "count(*)",
         1,
         None,
     )?;
+    let (count_expression, expected_rows, predicate) = index_factor_probe_spec();
     probe_pick_date_rows(
         client,
         plan,
         "index_idx_factor_pro",
         pick_date,
-        "count(DISTINCT ts_code)",
-        2,
-        Some("AND ts_code IN ('000001.SH', '399303.SZ')"),
+        count_expression,
+        expected_rows,
+        Some(predicate),
     )?;
     probe_pick_date_rows(
         client,
         plan,
-        "index_moneyflow_cnt_ths",
+        "calc_daily_industry_moneyflow",
         pick_date,
         "count(*)",
         1,
-        None,
+        Some("AND source_dataset = 'stock_moneyflow' AND calc_version = 'sw2021-l2-v1'"),
     )?;
     probe_pick_date_rows(
         client,
@@ -547,24 +826,13 @@ fn probe_required_rows(
         1,
         None,
     )?;
-    if strict_tables.contains("stock_moneyflow_ths") {
-        probe_pick_date_rows(
-            client,
-            plan,
-            "stock_moneyflow_ths",
-            pick_date,
-            "count(*)",
-            1,
-            None,
-        )?;
-    }
-    if strict_tables.contains("index_ths_member")
-        && let Some(relation) = plan.relation_sql("index_ths_member")
+    if strict_tables.contains("index_sw_member")
+        && let Some(relation) = plan.relation_sql("index_sw_member")
     {
-        let query = ths_membership_probe_query(&relation);
-        let row = query_one(client, &query, &[])?;
+        let query = sw_membership_probe_query(&relation);
+        let row = query_one(client, &query, &[DuckDbParameter::Date(pick_date)])?;
         let actual_rows = row.try_get("actual_rows")?;
-        record_missing_rows(plan, "index_ths_member", 1, actual_rows);
+        record_missing_rows(plan, "index_sw_member", 1, actual_rows);
     }
     Ok(())
 }
@@ -611,9 +879,9 @@ fn pick_date_probe_query(
     )
 }
 
-fn ths_membership_probe_query(relation: &str) -> String {
+fn sw_membership_probe_query(relation: &str) -> String {
     format!(
-        "SELECT count(*)::bigint AS actual_rows FROM {relation} WHERE ts_code IS NOT NULL AND con_code IS NOT NULL AND trim(ts_code) <> '' AND trim(con_code) <> ''"
+        "SELECT count(*)::bigint AS actual_rows FROM {relation} WHERE ts_code IS NOT NULL AND l2_code IS NOT NULL AND in_date IS NOT NULL AND trim(ts_code) <> '' AND trim(l2_code) <> '' AND in_date <= $1::date AND (out_date IS NULL OR $1::date < out_date)"
     )
 }
 
@@ -774,32 +1042,32 @@ mod tests {
                 "stock_stk_factor_pro",
                 Some("market_data.stock_stk_factor_pro"),
             ),
-            ("index_moneyflow_cnt_ths", None),
+            ("calc_daily_industry_moneyflow", None),
         ]);
         let query = plan.adapt_query(
-            "WITH selected AS (SELECT * FROM {{index_moneyflow_cnt_ths}}) SELECT s.ts_code FROM {{stock_stk_factor_pro}} s LEFT JOIN selected ON true",
+            "WITH selected AS (SELECT * FROM {{calc_daily_industry_moneyflow}}) SELECT s.ts_code FROM {{stock_stk_factor_pro}} s LEFT JOIN selected ON true",
         );
 
         assert!(query.contains("db_src_stock_stk_factor_pro AS NOT MATERIALIZED"));
         assert!(query.contains("FROM \"market_data\".\"stock_stk_factor_pro\""));
-        assert!(query.contains("db_src_index_moneyflow_cnt_ths AS"));
-        assert!(query.contains("NULL::text AS \"ts_code\""));
+        assert!(query.contains("db_src_calc_daily_industry_moneyflow AS"));
+        assert!(query.contains("NULL::text AS \"industry_code\""));
         assert!(query.contains("NULL::date AS \"trade_date\""));
-        assert!(query.contains("NULL::double precision AS \"net_amount\""));
-        assert!(!query.contains("FROM index_moneyflow_cnt_ths"));
+        assert!(query.contains("NULL::double precision AS \"net_mf_amount\""));
+        assert!(!query.contains("FROM calc_daily_industry_moneyflow"));
         assert!(!query.contains("{{"));
     }
 
     #[test]
     fn adapted_query_only_replaces_relation_references() {
-        let plan = DbLoadPlan::for_test([("stock_moneyflow_ths", None)]);
+        let plan = DbLoadPlan::for_test([("stock_moneyflow", None)]);
         let query = plan.adapt_query(
-            "SELECT 'stock_moneyflow_ths' AS source_name, stock_moneyflow_ths_status FROM {{stock_moneyflow_ths}}",
+            "SELECT 'stock_moneyflow' AS source_name, stock_moneyflow_status FROM {{stock_moneyflow}}",
         );
 
-        assert!(query.contains("'stock_moneyflow_ths' AS source_name"));
-        assert!(query.contains("stock_moneyflow_ths_status"));
-        assert!(query.contains("FROM db_src_stock_moneyflow_ths"));
+        assert!(query.contains("'stock_moneyflow' AS source_name"));
+        assert!(query.contains("stock_moneyflow_status"));
+        assert!(query.contains("FROM db_src_stock_moneyflow"));
     }
 
     #[test]
@@ -810,17 +1078,17 @@ mod tests {
                 DbRelationInspection::missing(),
             ),
             (
-                "index_ths_daily".to_string(),
+                "index_idx_factor_pro".to_string(),
                 DbRelationInspection::available_with_columns(
                     "public",
-                    "index_ths_daily",
+                    "index_idx_factor_pro",
                     ["ts_code", "trade_date"],
                 ),
             ),
         ]);
         let strict_tables = BTreeSet::from([
             "stock_stk_factor_pro".to_string(),
-            "index_ths_daily".to_string(),
+            "index_idx_factor_pro".to_string(),
         ]);
 
         let mut plan = plan_from_inspections(&inspections);
@@ -831,7 +1099,7 @@ mod tests {
 
         assert!(error.contains("stock_stk_factor_pro"));
         assert!(error.contains("missing_table"));
-        assert!(error.contains("index_ths_daily"));
+        assert!(error.contains("index_idx_factor_pro"));
         assert!(error.contains("schema_mismatch"));
         assert!(error.contains("close"));
         assert!(!error.contains("expected_rows=235 actual_rows=0"));
@@ -845,12 +1113,12 @@ mod tests {
                 DbRelationInspection::available_for_spec("stock_stk_factor_pro"),
             ),
             (
-                "index_moneyflow_cnt_ths".to_string(),
-                DbRelationInspection::available_for_spec("index_moneyflow_cnt_ths"),
+                "calc_daily_industry_moneyflow".to_string(),
+                DbRelationInspection::available_for_spec("calc_daily_industry_moneyflow"),
             ),
         ]);
         let mut plan = plan_from_inspections(&inspections);
-        record_missing_rows(&mut plan, "index_moneyflow_cnt_ths", 1, 0);
+        record_missing_rows(&mut plan, "calc_daily_industry_moneyflow", 1, 0);
 
         let plan = finish_preflight(
             plan,
@@ -860,12 +1128,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            plan.db_data_gaps["index_moneyflow_cnt_ths"].reason,
+            plan.db_data_gaps["calc_daily_industry_moneyflow"].reason,
             DbDataGapReason::MissingRows
         );
-        let query = plan
-            .adapt_query("WITH x AS (SELECT * FROM {{index_moneyflow_cnt_ths}}) SELECT * FROM x");
-        assert!(query.contains("FROM \"public\".\"index_moneyflow_cnt_ths\""));
+        let query = plan.adapt_query(
+            "WITH x AS (SELECT * FROM {{calc_daily_industry_moneyflow}}) SELECT * FROM x",
+        );
+        assert!(query.contains("FROM \"public\".\"calc_daily_industry_moneyflow\""));
     }
 
     #[test]
@@ -902,22 +1171,29 @@ mod tests {
     }
 
     #[test]
-    fn index_market_probe_counts_distinct_required_codes() {
+    fn index_market_probe_requires_current_core_benchmark() {
+        let (count_expression, expected_rows, predicate) = index_factor_probe_spec();
+        assert_eq!(expected_rows, 1);
+
         let query = pick_date_probe_query(
             "\"public\".\"index_idx_factor_pro\"",
-            "count(DISTINCT ts_code)",
-            Some("AND ts_code IN ('000001.SH', '399303.SZ')"),
+            count_expression,
+            Some(predicate),
         );
 
         assert!(query.contains("count(DISTINCT ts_code)::bigint AS actual_rows"));
+        assert!(query.contains("ts_code = '000016.SH'"));
+        assert!(!query.contains("000001.SH"));
     }
 
     #[test]
-    fn ths_membership_probe_rejects_blank_codes() {
-        let query = ths_membership_probe_query("\"public\".\"index_ths_member\"");
+    fn sw_membership_probe_rejects_blank_codes() {
+        let query = sw_membership_probe_query("\"public\".\"index_sw_member\"");
 
         assert!(query.contains("trim(ts_code) <> ''"));
-        assert!(query.contains("trim(con_code) <> ''"));
+        assert!(query.contains("trim(l2_code) <> ''"));
+        assert!(query.contains("in_date <= $1::date"));
+        assert!(query.contains("out_date IS NULL OR $1::date < out_date"));
         assert!(!query.contains("btrim("));
     }
 

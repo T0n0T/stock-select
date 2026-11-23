@@ -15,6 +15,7 @@ from ml.env import load_dotenv_values, resolve_config_value
 from ml.paths import PROJECT_ROOT, resolve_stock_select_binary
 from ml.methods import validate_method
 from ml.subprocesses import format_returncode
+from ml.parallelism import parse_worker_count, validate_worker_count
 
 
 DEFAULT_RUNTIME_ROOT = Path("runtime")
@@ -32,6 +33,9 @@ class RecordBackfillConfig:
     dry_run: bool
     record_window_trading_days: int | None
     duckdb_path: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_worker_count(self.workers)
 
 
 @dataclass(frozen=True)
@@ -278,8 +282,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runtime-root", type=Path, default=None, help="runtime 根目录")
     parser.add_argument("--binary", type=Path, default=None, help="stock-select-rs 二进制路径")
     parser.add_argument("--duckdb-path", default=None, help="DuckDB 文件路径或 Quack 地址，用于读取交易日历")
-    parser.add_argument("--workers", type=int, default=4, help="并发数，默认 4（设为 1 则串行）")
-    parser.add_argument("--jobs", "-j", type=int, dest="workers", help="兼容旧参数；等同 --workers")
+    parser.add_argument("--workers", type=parse_worker_count, default=4, help="并发数，1～8，默认 4")
+    parser.add_argument("--jobs", "-j", type=parse_worker_count, dest="workers", help="兼容旧参数；等同 --workers")
     parser.add_argument("--dry-run", action="store_true", help="只打印要执行的命令")
 
 

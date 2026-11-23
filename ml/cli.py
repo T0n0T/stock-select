@@ -8,6 +8,7 @@ from . import __version__
 from .backfill import candidates as backfill_candidates
 from .backfill import record as backfill_record
 from .backfill import runs as backfill_runs
+from .backtest import cli as backtest_cli
 from .dataset import rank_dataset
 from .diagnostics import controlled_rerank
 from .model_ops import archive as model_archive
@@ -30,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     backfill_candidates.add_parser(backfill_subparsers)
     backfill_record.add_parser(backfill_subparsers)
     backfill_runs.add_parser(backfill_subparsers)
+
+    backtest = subparsers.add_parser("backtest")
+    backtest_subparsers = backtest.add_subparsers(dest="command")
+    backtest_cli.add_parser(backtest_subparsers)
 
     dataset = subparsers.add_parser("dataset")
     dataset_subparsers = dataset.add_subparsers(dest="command")

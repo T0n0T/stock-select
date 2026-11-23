@@ -11,7 +11,10 @@ from typing import Any, Mapping, Sequence
 from ml.db import query_rows
 from ml.env import load_dotenv_values, resolve_config_value
 
-from .rank_dataset import IDENTITY_COLUMNS, LABEL_COLUMNS, REVIEW_METADATA_COLUMNS
+from .rank_dataset import (
+    IDENTITY_COLUMNS, LABEL_COLUMNS, REVIEW_METADATA_COLUMNS,
+    STK_FACTOR_PRO_RAW_FACTOR_COLUMNS,
+)
 
 
 INTRADAY_CZSC_PROXY_ALIASES = {
@@ -138,6 +141,8 @@ PREVIOUS_EOD_SNAPSHOT = [
 LIVE_PRICE_AGAINST_PREVIOUS_STRUCTURE = list(INTRADAY_CZSC_PROXY_ALIASES)
 
 UNAVAILABLE_INTRADAY = [
+    *STK_FACTOR_PRO_RAW_FACTOR_COLUMNS,
+    "vr_qfq",
     "turnover_to_ma5_ratio",
     "turnover_rate_f",
     "dmi_adxr_qfq",
@@ -212,7 +217,7 @@ _INTRADAY_FACTOR_CLASS = {
 
 
 def classify_intraday_factor(column: str) -> str | None:
-    if column.startswith("ths_") or column.startswith("stock_vs_ths_"):
+    if column.startswith("sw_l2_") or column.startswith("stock_vs_sw_l2_"):
         return "previous_eod_snapshot"
     if column.startswith("stock_env_"):
         return "previous_eod_snapshot"

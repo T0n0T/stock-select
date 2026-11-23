@@ -493,7 +493,7 @@ fn build_intraday_market_rows_uses_existing_period_macd_fields_without_previous_
 }
 
 #[test]
-fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows() {
+fn build_intraday_market_rows_carries_previous_day_sw_l2_factors_for_snapshot_rows() {
     let previous_date = NaiveDate::from_ymd_opt(2026, 4, 8).unwrap();
     let trade_date = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
     let mut db_factors = std::collections::BTreeMap::new();
@@ -501,12 +501,12 @@ fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows
     db_factors.insert("_czsc_snapshot_available".to_string(), 1.0);
     db_factors.insert("_czsc_latest_zs_zg".to_string(), 10.8);
     db_factors.insert("left_peak_valid".to_string(), 1.0);
-    db_factors.insert("ths_sector_count".to_string(), 3.0);
-    db_factors.insert("ths_main_pct_change".to_string(), 2.4);
-    db_factors.insert("stock_vs_ths_main_pct_change".to_string(), 0.8);
+    db_factors.insert("sw_l2_sector_count".to_string(), 3.0);
+    db_factors.insert("sw_l2_main_pct_change".to_string(), 2.4);
+    db_factors.insert("stock_vs_sw_l2_main_pct_change".to_string(), 0.8);
     db_factors.insert("stock_env_sector_score".to_string(), 3.4);
     db_factors.insert("unrelated_previous_eod_factor".to_string(), 99.0);
-    db_factors.insert("ths_main_net_amount".to_string(), f64::NAN);
+    db_factors.insert("sw_l2_main_net_amount_per_stock".to_string(), f64::NAN);
     let history = vec![MarketRow {
         ts_code: "000001.SZ".to_string(),
         trade_date: previous_date,
@@ -544,9 +544,12 @@ fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows
     assert_eq!(snapshot_row.db_factors["rolling_ma25_qfq"], 10.2);
     assert_eq!(snapshot_row.db_factors["_czsc_snapshot_available"], 1.0);
     assert_eq!(snapshot_row.db_factors["_czsc_latest_zs_zg"], 10.8);
-    assert_eq!(snapshot_row.db_factors["ths_sector_count"], 3.0);
-    assert_eq!(snapshot_row.db_factors["ths_main_pct_change"], 2.4);
-    assert_eq!(snapshot_row.db_factors["stock_vs_ths_main_pct_change"], 0.8);
+    assert_eq!(snapshot_row.db_factors["sw_l2_sector_count"], 3.0);
+    assert_eq!(snapshot_row.db_factors["sw_l2_main_pct_change"], 2.4);
+    assert_eq!(
+        snapshot_row.db_factors["stock_vs_sw_l2_main_pct_change"],
+        0.8
+    );
     assert_eq!(snapshot_row.db_factors["stock_env_sector_score"], 3.4);
     assert_eq!(
         snapshot_row.db_factors["intraday_structure_source_previous_eod"],
@@ -557,7 +560,11 @@ fn build_intraday_market_rows_carries_previous_day_ths_factors_for_snapshot_rows
             .db_factors
             .contains_key("unrelated_previous_eod_factor")
     );
-    assert!(!snapshot_row.db_factors.contains_key("ths_main_net_amount"));
+    assert!(
+        !snapshot_row
+            .db_factors
+            .contains_key("sw_l2_main_net_amount_per_stock")
+    );
     assert!(!snapshot_row.db_factors.contains_key("left_peak_valid"));
 }
 

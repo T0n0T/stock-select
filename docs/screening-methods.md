@@ -8,7 +8,7 @@
 
 ## 公共流程
 
-`screen` 通过 `duckdb-neo` 从本地 DuckDB 文件或 Quack 服务读取 stock-cache 日线窗口，取截至 `pick_date` 的约 252 个交易日预计算行情和指标，并在进入具体策略前完成预处理和股票池裁剪。prepared 中间缓存统一使用 Parquet（`.parquet`，schema 14），不再读取旧二进制缓存。EOD cache 写入后会按日期保留最近 30 个 artifact；可用 `STOCK_SELECT_PREPARED_CACHE_LIMIT` 调整保留数量。盘中 prepared cache 不计入这个保留数量，也不会被该策略清理。
+`screen` 通过 `duckdb-neo` 从本地 DuckDB 文件或 Quack 服务读取 stock-cache 日线窗口，取截至 `pick_date` 的约 252 个交易日预计算行情和指标，并在进入具体策略前完成预处理和股票池裁剪。prepared 中间缓存统一使用 Parquet（`.parquet`，schema 21），不再读取旧二进制缓存。EOD cache 写入后会按日期保留最近 30 个 artifact；可用 `STOCK_SELECT_PREPARED_CACHE_LIMIT` 调整保留数量。盘中 prepared cache 不计入这个保留数量，也不会被该策略清理。
 
 ### 预处理字段
 

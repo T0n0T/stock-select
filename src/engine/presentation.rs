@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use unicode_width::UnicodeWidthStr;
 
 use crate::engine::types::DisplayRow;
 use crate::model::InstrumentInfo;
@@ -18,21 +19,79 @@ pub fn limit_display_rows(
 
 pub fn format_display_lines(rows: &[DisplayRow]) -> Vec<String> {
     rows.iter()
-        .map(|row| {
-            let rank = row
-                .model_rank
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            let name = row.name.as_deref().unwrap_or("-");
-            let industry = row.industry.as_deref().unwrap_or("-");
-            let score = row
-                .model_score
-                .map(|value| format!("{value:.6}"))
-                .unwrap_or_else(|| "-".to_string());
-            let bias = review_signal_symbol(row.llm_action.as_deref());
-            format!("{rank}\t{}\t{name}\t{industry}\t{score}\t{bias}", row.code)
-        })
+        .map(|row| display_columns(row).join("\t"))
         .collect()
+}
+
+pub fn format_display_table(rows: &[DisplayRow]) -> Vec<String> {
+    if rows.is_empty() {
+        return vec!["暂无入选股票".into()];
+    }
+    let score_heading = if rows.iter().any(|row| row.entry_assessment.is_some()) {
+        "开仓 / 原分"
+    } else {
+        "评分"
+    };
+    let headings = ["排名", "代码", "名称", "行业", score_heading, "LLM"].map(str::to_string);
+    let cells: Vec<_> = rows
+        .iter()
+        .map(|row| display_columns(row).map(|value| value.replace(['\t', '\r', '\n'], " ")))
+        .collect();
+    let widths: [usize; 6] = std::array::from_fn(|column| {
+        cells
+            .iter()
+            .map(|row| row[column].width())
+            .chain(std::iter::once(headings[column].width()))
+            .max()
+            .unwrap_or_default()
+    });
+    let render = |row: &[String; 6]| {
+        row.iter()
+            .enumerate()
+            .map(|(column, value)| {
+                let padding = widths[column] - value.width();
+                match column {
+                    0 => format!("{}{value}", " ".repeat(padding)),
+                    5 => format!("{}{value}", " ".repeat(padding / 2)),
+                    _ => format!("{value}{}", " ".repeat(padding)),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    let mut lines = vec![
+        render(&headings),
+        widths.map(|width| "─".repeat(width)).join("  "),
+    ];
+    lines.extend(cells.iter().map(render));
+    lines
+}
+
+fn display_columns(row: &DisplayRow) -> [String; 6] {
+    let rank = row
+        .model_rank
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let score = if let Some(entry) = &row.entry_assessment {
+        let raw = row
+            .raw_model_score
+            .filter(|value| value.is_finite())
+            .map(|value| format!("{value:+.6}"))
+            .unwrap_or_else(|| "缺失".into());
+        format!("{} | {raw}", entry.action.label())
+    } else {
+        row.model_score
+            .map(|value| format!("{value:.6}"))
+            .unwrap_or_else(|| "-".into())
+    };
+    [
+        rank,
+        row.code.clone(),
+        row.name.as_deref().unwrap_or("-").into(),
+        row.industry.as_deref().unwrap_or("-").into(),
+        score,
+        review_signal_symbol(row.llm_action.as_deref()).into(),
+    ]
 }
 
 pub fn review_signal_symbol(action: Option<&str>) -> &'static str {
@@ -55,6 +114,8 @@ mod tests {
             industry: None,
             model_rank: Some(rank),
             model_score: Some(0.5),
+            raw_model_score: None,
+            entry_assessment: None,
             llm_action: None,
             llm_risk_flags: Vec::new(),
             llm_comment: None,

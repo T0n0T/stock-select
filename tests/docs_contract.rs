@@ -33,7 +33,7 @@ fn docs_describe_db_native_screening_path_instead_of_legacy_daily_market_loader(
     assert!(architecture.contains("QUACK_AUTH_TOKEN"));
     assert!(workflow.contains("DB-native stock-cache"));
     assert!(workflow.contains("Parquet"));
-    assert!(workflow.contains("schema 14"));
+    assert!(workflow.contains("schema 21"));
     assert!(screening_methods.contains("约 252 个交易日"));
     assert!(screening_methods.contains("当前 `screen` 支持：`b2`、`scm`、`pbm`。"));
     assert!(screening_methods.contains("旧策略及历史产物兼容代码已删除"));

@@ -8,6 +8,83 @@ use stock_select::screening::{
 };
 
 #[test]
+fn stock_weekly_monthly_czsc_snapshots_reach_candidate_factors() {
+    let date = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+    let mut row = prepared_row("000001.SZ", date, 11.0, 1000.0);
+    for period in ["weekly", "monthly"] {
+        for (field, value) in [
+            ("snapshot_available", 1.0),
+            ("period_complete", 0.0),
+            ("source_bar_valid", 1.0),
+            ("status_code", 4.0),
+            ("last_bi_direction_code", -1.0),
+            ("last_bi_high", 12.0),
+            ("last_bi_low", 8.0),
+            ("last_bi_mid", 10.0),
+            ("latest_zs_zg", 10.0),
+            ("latest_zs_zd", 8.0),
+            ("latest_zs_zz", 9.0),
+        ] {
+            row.db_factors
+                .insert(format!("_czsc_{period}_{field}"), value);
+        }
+    }
+    row.db_factors.insert("rolling_ma144_qfq".to_string(), 10.0);
+    row.db_factors.insert("rolling_ma220_qfq".to_string(), 8.0);
+    let candidate = Candidate {
+        code: row.ts_code.clone(),
+        pick_date: date,
+        close: row.close,
+        turnover_n: row.turnover_n,
+        signal: None,
+    };
+    for method in [Method::B2, Method::Scm, Method::Pbm] {
+        let rows = build_candidate_factor_rows(
+            std::slice::from_ref(&candidate),
+            std::slice::from_ref(&row),
+            method,
+            None,
+        );
+        let factors = &rows[0].factors;
+        for period in ["weekly", "monthly"] {
+            assert_eq!(
+                factors
+                    .keys()
+                    .filter(|key| key.starts_with(&format!("czsc_{period}_")))
+                    .count(),
+                42
+            );
+
+            assert_eq!(
+                factors.get(&format!("czsc_{period}_close_to_last_bi_mid_pct")),
+                Some(&FactorValue::Number(10.0))
+            );
+            assert_eq!(
+                factors.get(&format!("czsc_{period}_last_bi_move_pct")),
+                Some(&FactorValue::Number(-50.0))
+            );
+            assert_eq!(
+                factors.get(&format!("czsc_{period}_status")),
+                Some(&FactorValue::Category("ok".to_string()))
+            );
+            assert_eq!(
+                factors.get(&format!("czsc_{period}_period_complete")),
+                Some(&FactorValue::Bool(false))
+            );
+        }
+        assert_eq!(
+            factors.get("close_to_rolling_ma144_pct"),
+            Some(&FactorValue::Number(10.0))
+        );
+        assert_eq!(
+            factors.get("close_to_rolling_ma220_pct"),
+            Some(&FactorValue::Number(37.5))
+        );
+        assert!(!factors.keys().any(|key| key.starts_with("_czsc_")));
+    }
+}
+
+#[test]
 fn screen_prepared_cache_feeds_real_ma_and_zx_values_into_factor_export() {
     let temp = tempfile::tempdir().unwrap();
     let first_date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();

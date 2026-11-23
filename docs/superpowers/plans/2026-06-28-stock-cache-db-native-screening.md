@@ -6,6 +6,8 @@
 
 **技术栈：** Rust、PostgreSQL、Serde prepared cache、Python ML schema、TDD。
 
+> **历史方案口径说明（2026-11-22）：** 本计划记录的原始 THS 资金流和 `index_ths_daily` 计算源已被数据库侧新口径废止。当前实现使用 `stock_moneyflow`、`calc_daily_industry_moneyflow`、`index_sw_member` 和 `index_idx_factor_pro`；下文保留旧表名仅作为历史方案记录，不应据此新增查询或恢复旧数据依赖。
+
 ---
 
 ## 已确认决策

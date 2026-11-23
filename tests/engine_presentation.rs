@@ -1,4 +1,6 @@
-use stock_select::engine::presentation::{format_display_lines, limit_display_rows};
+use stock_select::engine::presentation::{
+    format_display_lines, format_display_table, limit_display_rows,
+};
 use stock_select::engine::types::DisplayRow;
 
 fn row(code: &str, rank: usize, score: f64) -> DisplayRow {
@@ -8,6 +10,8 @@ fn row(code: &str, rank: usize, score: f64) -> DisplayRow {
         industry: None,
         model_rank: Some(rank),
         model_score: Some(score),
+        raw_model_score: None,
+        entry_assessment: None,
         llm_action: None,
         llm_risk_flags: vec![],
         llm_comment: None,
@@ -59,4 +63,56 @@ fn format_display_lines_maps_llm_actions_to_short_bias_symbols() {
     assert!(!lines[0].contains("KEEP"));
     assert!(!lines[1].contains("CAUTION"));
     assert!(!lines[2].contains("REJECT"));
+}
+
+#[test]
+fn fifth_column_shows_compact_entry_action_and_raw_score_with_independent_llm_bias() {
+    let item: DisplayRow = serde_json::from_value(serde_json::json!({
+        "code": "000001.SZ", "name": "平安银行", "industry": "银行",
+        "model_rank": 1, "model_score": 1.0, "raw_model_score": -0.1,
+        "llm_action": "KEEP", "llm_risk_flags": [],
+        "entry_assessment": {"action": "observe", "reason": "未达开仓门槛", "research": true,
+            "gate": {"open_min_score": 0.0, "discard_below_score": -0.2, "top_n": 2}}
+    }))
+    .unwrap();
+    let line = format_display_lines(&[item]).pop().unwrap();
+    let cols = line.split('\t').collect::<Vec<_>>();
+    assert_eq!(cols.len(), 6);
+    assert_eq!(cols[4], "观察 | -0.100000");
+    assert_eq!(cols[5], "↑");
+}
+
+#[test]
+fn display_table_aligns_chinese_names_industries_and_multi_digit_ranks() {
+    let items = [
+        serde_json::from_value(serde_json::json!({
+            "code":"688775.SH", "name":"影石创新", "industry":"消费电子", "model_rank":1,
+            "raw_model_score":0.228483, "entry_assessment":{"action":"observe", "reason":"日期早于校准完成"},
+            "llm_action":"KEEP", "llm_risk_flags":[]
+        })).unwrap(),
+        serde_json::from_value(serde_json::json!({
+            "code":"002983.SZ", "name":"芯瑞达", "industry":"光学光电子", "model_rank":10,
+            "raw_model_score":null, "entry_assessment":{"action":"observe", "reason":"原分缺失"},
+            "llm_action":"REJECT", "llm_risk_flags":[]
+        })).unwrap(),
+    ];
+    let lines = format_display_table(&items);
+    assert_eq!(
+        lines,
+        [
+            "排名  代码       名称      行业        开仓 / 原分       LLM",
+            "────  ─────────  ────────  ──────────  ────────────────  ───",
+            "   1  688775.SH  影石创新  消费电子    观察 | +0.228483   ↑",
+            "  10  002983.SZ  芯瑞达    光学光电子  观察 | 缺失        ↓",
+        ]
+    );
+}
+
+#[test]
+fn display_table_handles_empty_results_and_missing_instrument_info() {
+    assert_eq!(format_display_table(&[]), ["暂无入选股票"]);
+    let lines = format_display_table(&[row("000001.SZ", 1, 0.7)]);
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].contains("评分"));
+    assert!(lines[2].contains("000001.SZ  -     -     0.700000"));
 }

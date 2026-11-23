@@ -19,213 +19,283 @@ pub fn push_czsc_factors(factors: &mut FactorList, history: &[FactorInputRow]) {
     } else {
         history
     };
-    let official_latest = official_history.last();
-    let snapshot_available = latest
-        .and_then(|row| raw(row, "_czsc_snapshot_available"))
-        .is_some_and(|value| value == 1.0);
-    push_bool(factors, "czsc_snapshot_available", Some(snapshot_available));
+    for (raw_prefix, factor_prefix) in [
+        ("_czsc_", "czsc_"),
+        ("_czsc_weekly_", "czsc_weekly_"),
+        ("_czsc_monthly_", "czsc_monthly_"),
+    ] {
+        push_snapshot_factors(factors, official_history, latest, raw_prefix, factor_prefix);
+    }
+    let value = |field: &str| latest.and_then(|row| raw(row, &format!("_czsc_{field}")));
+    push_intraday_distance_factors(
+        factors,
+        intraday.then(|| latest.map(|row| row.close)).flatten(),
+        value("last_bi_high"),
+        value("last_bi_low"),
+        value("last_bi_mid"),
+        value("latest_zs_zg"),
+        value("latest_zs_zd"),
+        value("latest_zs_zz"),
+        value("recent_peak_high"),
+        value("post_peak_first_bear_open"),
+        value("post_peak_first_bear_high"),
+        value("post_peak_first_bear_low"),
+        value("post_peak_first_bear_close"),
+    );
+    push_pricing_lifecycle_factors(factors, official_history);
+    push_zs_lifecycle_factors(factors, official_history);
+}
+
+fn push_snapshot_factors(
+    factors: &mut FactorList,
+    official_history: &[FactorInputRow],
+    latest: Option<&FactorInputRow>,
+    raw_prefix: &str,
+    factor_prefix: &str,
+) {
+    let value = |field: &str| latest.and_then(|row| raw(row, &format!("{raw_prefix}{field}")));
+    let day = |field: &str| latest.and_then(|row| raw_day(row, &format!("{raw_prefix}{field}")));
+    let snapshot_available = value("snapshot_available").is_some_and(|value| value == 1.0);
+    push_bool(
+        factors,
+        &format!("{factor_prefix}snapshot_available"),
+        Some(snapshot_available),
+    );
+    push_bool(
+        factors,
+        &format!("{factor_prefix}period_complete"),
+        value("period_complete").map(|v| v == 1.0),
+    );
     push_category(
         factors,
-        "czsc_status",
-        latest
-            .and_then(|row| raw(row, "_czsc_status_code"))
+        &format!("{factor_prefix}status"),
+        value("status_code")
             .and_then(status_name)
             .unwrap_or("missing_snapshot"),
     );
     push_bool(
         factors,
-        "czsc_source_bar_valid",
-        latest
-            .and_then(|row| raw(row, "_czsc_source_bar_valid"))
-            .map(|value| value == 1.0),
+        &format!("{factor_prefix}source_bar_valid"),
+        value("source_bar_valid").map(|value| value == 1.0),
     );
     push_number(
         factors,
-        "czsc_available_finished_bi_count",
-        latest.and_then(|row| raw(row, "_czsc_available_finished_bi_count")),
+        &format!("{factor_prefix}available_finished_bi_count"),
+        value("available_finished_bi_count"),
     );
     push_number(
         factors,
-        "czsc_recent_bi_count",
-        latest.and_then(|row| raw(row, "_czsc_recent_bi_count")),
+        &format!("{factor_prefix}recent_bi_count"),
+        value("recent_bi_count"),
     );
 
-    let close = official_latest.map(|row| row.close);
-    let intraday_close = intraday.then(|| latest.map(|row| row.close)).flatten();
-    let bi_high = latest.and_then(|row| raw(row, "_czsc_last_bi_high"));
-    let bi_low = latest.and_then(|row| raw(row, "_czsc_last_bi_low"));
-    let bi_mid = latest.and_then(|row| raw(row, "_czsc_last_bi_mid"));
+    let close = official_history.last().map(|row| row.close);
+    let bi_high = value("last_bi_high");
+    let bi_low = value("last_bi_low");
+    let bi_mid = value("last_bi_mid");
     let bi_available = bi_high.zip(bi_low).zip(bi_mid).is_some();
-    push_bool(factors, "czsc_bi_available", Some(bi_available));
+    push_bool(
+        factors,
+        &format!("{factor_prefix}bi_available"),
+        Some(bi_available),
+    );
     push_category(
         factors,
-        "czsc_last_bi_direction",
-        latest
-            .and_then(|row| raw(row, "_czsc_last_bi_direction_code"))
+        &format!("{factor_prefix}last_bi_direction"),
+        value("last_bi_direction_code")
             .and_then(direction_name)
             .unwrap_or("missing"),
     );
     push_number(
         factors,
-        "czsc_close_to_last_bi_high_pct",
+        &format!("{factor_prefix}close_to_last_bi_high_pct"),
         pct_change(close, bi_high),
     );
     push_number(
         factors,
-        "czsc_close_to_last_bi_low_pct",
+        &format!("{factor_prefix}close_to_last_bi_low_pct"),
         pct_change(close, bi_low),
     );
     push_number(
         factors,
-        "czsc_close_to_last_bi_mid_pct",
+        &format!("{factor_prefix}close_to_last_bi_mid_pct"),
         pct_change(close, bi_mid),
     );
     push_number(
         factors,
-        "czsc_last_bi_range_width_pct",
+        &format!("{factor_prefix}last_bi_range_width_pct"),
         pct_change(bi_high, bi_low),
     );
     push_number(
         factors,
-        "czsc_last_bi_move_pct",
-        latest
-            .and_then(|row| raw(row, "_czsc_last_bi_direction_code"))
-            .and_then(|direction| {
-                let magnitude = pct_change(bi_high, bi_low)?;
-                Some(if direction < 0.0 {
-                    -magnitude
-                } else {
-                    magnitude
-                })
-            }),
+        &format!("{factor_prefix}last_bi_move_pct"),
+        value("last_bi_direction_code").and_then(|direction| {
+            let magnitude = pct_change(bi_high, bi_low)?;
+            Some(if direction < 0.0 {
+                -magnitude
+            } else {
+                magnitude
+            })
+        }),
     );
     push_number(
         factors,
-        "czsc_last_bi_duration_trade_days",
+        &format!("{factor_prefix}last_bi_duration_trade_days"),
         trading_day_span(
             official_history,
-            latest.and_then(|row| raw_day(row, "_czsc_last_bi_start_day")),
-            latest.and_then(|row| raw_day(row, "_czsc_last_bi_end_day")),
+            day("last_bi_start_day"),
+            day("last_bi_end_day"),
         ),
     );
 
-    let zs_zg = latest.and_then(|row| raw(row, "_czsc_latest_zs_zg"));
-    let zs_zd = latest.and_then(|row| raw(row, "_czsc_latest_zs_zd"));
-    let zs_zz = latest.and_then(|row| raw(row, "_czsc_latest_zs_zz"));
+    let zs_zg = value("latest_zs_zg");
+    let zs_zd = value("latest_zs_zd");
+    let zs_zz = value("latest_zs_zz");
     let zs_available = zs_zg.zip(zs_zd).zip(zs_zz).is_some();
-    push_bool(factors, "czsc_zs_available", Some(zs_available));
-    push_number(factors, "czsc_close_to_zs_zg_pct", pct_change(close, zs_zg));
-    push_number(factors, "czsc_close_to_zs_zd_pct", pct_change(close, zs_zd));
-    push_number(factors, "czsc_close_to_zs_zz_pct", pct_change(close, zs_zz));
-    push_number(factors, "czsc_zs_width_pct", pct_change(zs_zg, zs_zd));
-    push_number(
+    push_bool(
         factors,
-        "czsc_zs_bi_count",
-        latest.and_then(|row| raw(row, "_czsc_latest_zs_bi_count")),
+        &format!("{factor_prefix}zs_available"),
+        Some(zs_available),
     );
     push_number(
         factors,
-        "czsc_zs_duration_trade_days",
+        &format!("{factor_prefix}close_to_zs_zg_pct"),
+        pct_change(close, zs_zg),
+    );
+    push_number(
+        factors,
+        &format!("{factor_prefix}close_to_zs_zd_pct"),
+        pct_change(close, zs_zd),
+    );
+    push_number(
+        factors,
+        &format!("{factor_prefix}close_to_zs_zz_pct"),
+        pct_change(close, zs_zz),
+    );
+    push_number(
+        factors,
+        &format!("{factor_prefix}zs_width_pct"),
+        pct_change(zs_zg, zs_zd),
+    );
+    push_number(
+        factors,
+        &format!("{factor_prefix}zs_bi_count"),
+        value("latest_zs_bi_count"),
+    );
+    push_number(
+        factors,
+        &format!("{factor_prefix}zs_duration_trade_days"),
         trading_day_span(
             official_history,
-            latest.and_then(|row| raw_day(row, "_czsc_latest_zs_start_day")),
-            latest.and_then(|row| raw_day(row, "_czsc_latest_zs_end_day")),
+            day("latest_zs_start_day"),
+            day("latest_zs_end_day"),
         ),
     );
     push_category(
         factors,
-        "czsc_zs_region",
+        &format!("{factor_prefix}zs_region"),
         zs_region(close, zs_zg, zs_zd, zs_zz),
     );
 
-    let peak = latest.and_then(|row| raw(row, "_czsc_recent_peak_high"));
-    let peak_day = latest.and_then(|row| raw_day(row, "_czsc_recent_peak_day"));
+    let peak = value("recent_peak_high");
+    let peak_day = day("recent_peak_day");
     push_bool(
         factors,
-        "czsc_recent_peak_available",
+        &format!("{factor_prefix}recent_peak_available"),
         Some(peak.zip(peak_day).is_some()),
     );
     push_number(
         factors,
-        "czsc_close_to_recent_peak_pct",
+        &format!("{factor_prefix}close_to_recent_peak_pct"),
         pct_change(close, peak),
     );
     push_number(
         factors,
-        "czsc_recent_peak_age_trade_days",
+        &format!("{factor_prefix}recent_peak_age_trade_days"),
         trading_days_since(official_history, peak_day),
     );
 
-    let pricing_open = latest.and_then(|row| raw(row, "_czsc_post_peak_first_bear_open"));
-    let pricing_day = latest.and_then(|row| raw_day(row, "_czsc_post_peak_first_bear_day"));
+    let pricing_open = value("post_peak_first_bear_open");
+    let pricing_day = day("post_peak_first_bear_day");
     let pricing_available = pricing_open.zip(pricing_day).is_some();
     push_bool(
         factors,
-        "czsc_pricing_line_available",
+        &format!("{factor_prefix}pricing_line_available"),
         Some(pricing_available),
     );
     push_bool(
         factors,
-        "czsc_pricing_line_missing_after_peak",
-        latest
-            .and_then(|row| raw(row, "_czsc_post_peak_first_bear_missing"))
-            .map(|value| value == 1.0),
+        &format!("{factor_prefix}pricing_line_missing_after_peak"),
+        value("post_peak_first_bear_missing").map(|value| value == 1.0),
     );
     push_number(
         factors,
-        "czsc_close_to_pricing_line_pct",
+        &format!("{factor_prefix}close_to_pricing_line_pct"),
         pct_change(close, pricing_open),
     );
     push_number(
         factors,
-        "czsc_pricing_line_age_trade_days",
+        &format!("{factor_prefix}pricing_line_age_trade_days"),
         trading_days_since(official_history, pricing_day),
     );
-    let bear_high = latest.and_then(|row| raw(row, "_czsc_post_peak_first_bear_high"));
-    let bear_low = latest.and_then(|row| raw(row, "_czsc_post_peak_first_bear_low"));
-    let bear_close = latest.and_then(|row| raw(row, "_czsc_post_peak_first_bear_close"));
+    let bear_high = value("post_peak_first_bear_high");
+    let bear_low = value("post_peak_first_bear_low");
+    let bear_close = value("post_peak_first_bear_close");
     push_number(
         factors,
-        "czsc_pricing_bear_body_pct",
+        &format!("{factor_prefix}pricing_bear_body_pct"),
         pct_change(bear_close, pricing_open),
     );
     push_number(
         factors,
-        "czsc_pricing_bear_amplitude_pct",
+        &format!("{factor_prefix}pricing_bear_amplitude_pct"),
         pct_change(bear_high, bear_low),
     );
     push_number(
         factors,
-        "czsc_close_to_pricing_bear_high_pct",
+        &format!("{factor_prefix}close_to_pricing_bear_high_pct"),
         pct_change(close, bear_high),
     );
     push_number(
         factors,
-        "czsc_close_to_pricing_bear_low_pct",
+        &format!("{factor_prefix}close_to_pricing_bear_low_pct"),
         pct_change(close, bear_low),
     );
     push_number(
         factors,
-        "czsc_close_to_pricing_bear_close_pct",
+        &format!("{factor_prefix}close_to_pricing_bear_close_pct"),
         pct_change(close, bear_close),
     );
-    push_intraday_distance_factors(
-        factors,
-        intraday_close,
-        bi_high,
-        bi_low,
-        bi_mid,
-        zs_zg,
-        zs_zd,
-        zs_zz,
-        peak,
-        pricing_open,
-        bear_high,
-        bear_low,
-        bear_close,
-    );
-    push_pricing_lifecycle_factors(factors, official_history);
-    push_zs_lifecycle_factors(factors, official_history);
+    let asof = official_history.last().and_then(|row| row.trade_date);
+    for (output, input) in [
+        ("last_bi_start", "last_bi_start_day"),
+        ("last_bi_end", "last_bi_end_day"),
+        ("zs_start", "latest_zs_start_day"),
+        ("zs_end", "latest_zs_end_day"),
+        ("recent_peak", "recent_peak_day"),
+        ("pricing_line", "post_peak_first_bear_day"),
+    ] {
+        push_number(
+            factors,
+            &format!("{factor_prefix}{output}_age_calendar_days"),
+            asof.zip(day(input))
+                .filter(|(asof, event)| event <= asof)
+                .map(|(asof, event)| (asof - event).num_days() as f64),
+        );
+    }
+    for (output, start, end) in [
+        ("last_bi", "last_bi_start_day", "last_bi_end_day"),
+        ("zs", "latest_zs_start_day", "latest_zs_end_day"),
+    ] {
+        push_number(
+            factors,
+            &format!("{factor_prefix}{output}_duration_calendar_days"),
+            day(start)
+                .zip(day(end))
+                .filter(|(start, end)| start <= end && Some(*end) <= asof)
+                .map(|(start, end)| (end - start).num_days() as f64),
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -637,6 +707,11 @@ fn trading_day_span(
     let (Some(start), Some(end)) = (start, end) else {
         return None;
     };
+    let first = history.first()?.trade_date?;
+    let latest = history.last()?.trade_date?;
+    if start < first || end > latest || start > end {
+        return None;
+    }
     Some(
         history
             .iter()
@@ -648,7 +723,11 @@ fn trading_day_span(
 
 fn trading_days_since(history: &[FactorInputRow], event: Option<NaiveDate>) -> Option<f64> {
     let event = event?;
+    let first = history.first()?.trade_date?;
     let latest = history.last()?.trade_date?;
+    if event < first || event > latest {
+        return None;
+    }
     Some(
         history
             .iter()
@@ -724,6 +803,28 @@ mod tests {
             .rev()
             .find_map(|(candidate, value)| (candidate == key).then_some(value))
             .unwrap_or_else(|| panic!("missing factor {key}"))
+    }
+
+    #[test]
+    fn structural_trade_day_counts_do_not_silently_clip_to_the_loaded_window() {
+        let date = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let history = [pricing_row(date, 0, 10.0, 9.0, 1000.0)];
+        assert_eq!(
+            trading_day_span(&history, Some(date - Duration::days(400)), Some(date)),
+            None
+        );
+        assert_eq!(
+            trading_days_since(&history, Some(date - Duration::days(400))),
+            None
+        );
+        assert_eq!(
+            trading_days_since(&history, Some(date + Duration::days(1))),
+            None
+        );
+        assert_eq!(
+            trading_day_span(&history, Some(date), Some(date)),
+            Some(1.0)
+        );
     }
 
     #[test]

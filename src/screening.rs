@@ -12,10 +12,12 @@ use crate::cache::{
     write_db_native_prepared_dataset, write_prepared_cache, write_prepared_dataset_for_mode,
 };
 use crate::db::{
-    DB_NATIVE_FACTOR_COLUMNS, DB_NATIVE_PICK_DATE_FACTOR_COLUMNS,
-    DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS,
+    DB_NATIVE_FACTOR_COLUMNS, DB_NATIVE_SW_L2_FACTOR_COLUMNS,
+    db_native_index_context_factor_columns, db_native_pick_date_factor_columns,
 };
 use crate::environment::{normalize_environment_state, prepared_market_state};
+use crate::factors::cyq::{enrich_factor_rows_from_tushare, log_cyq_enrichment};
+use crate::factors::cyq_chips::enrich_chip_factor_rows_from_tushare;
 use crate::factors::registry::{
     RAW_MARKET_AMOUNT_FACTOR, build_candidate_factor_rows_from_refs,
     write_factor_artifact_with_db_data_gaps,
@@ -311,8 +313,7 @@ where
     })?;
     if request.export_factors {
         timed_stage("export_factors", || {
-            factor_history_rows
-                .retain(|row| pool_codes.contains(row.ts_code.as_str()));
+            factor_history_rows.retain(|row| pool_codes.contains(row.ts_code.as_str()));
             factor_history_rows.extend(factor_pick_date_rows);
             let prepared_refs = factor_history_rows.iter().collect::<Vec<_>>();
             write_screen_factor_artifact(
@@ -348,18 +349,19 @@ const LOCAL_PREPARED_FACTOR_KEYS: [&str; 8] = [
 ];
 
 fn scm_prepared_cache_factor_keys() -> Vec<String> {
-    let mut factor_keys = HashSet::new();
-    factor_keys.extend(DB_NATIVE_FACTOR_COLUMNS.iter().copied());
-    factor_keys.extend(DB_NATIVE_PICK_DATE_FACTOR_COLUMNS.iter().copied());
-    factor_keys.extend(DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS.iter().copied());
-    factor_keys.extend(LOCAL_PREPARED_FACTOR_KEYS);
-    factor_keys.insert(RAW_MARKET_AMOUNT_FACTOR);
+    let mut factor_keys = DB_NATIVE_FACTOR_COLUMNS
+        .iter()
+        .chain(DB_NATIVE_SW_L2_FACTOR_COLUMNS.iter())
+        .map(|key| (*key).to_string())
+        .collect::<HashSet<_>>();
+    factor_keys.extend(db_native_index_context_factor_columns());
+    factor_keys.extend(LOCAL_PREPARED_FACTOR_KEYS.iter().map(|key| key.to_string()));
+    factor_keys.insert(RAW_MARKET_AMOUNT_FACTOR.to_string());
     factor_keys.remove("_source_close_qfq");
-    let mut factor_keys = factor_keys
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let mut factor_keys = factor_keys.into_iter().collect::<Vec<_>>();
+    factor_keys.extend(db_native_pick_date_factor_columns());
     factor_keys.sort_unstable();
+    factor_keys.dedup();
     factor_keys
 }
 
@@ -934,12 +936,23 @@ fn write_screen_factor_artifact(
         Some(state) => Some(normalize_environment_state(state)?),
         None => prepared_market_state(prepared_rows.iter().copied(), request.pick_date),
     };
-    let rows = build_candidate_factor_rows_from_refs(
+    let mut rows = build_candidate_factor_rows_from_refs(
         candidates,
         prepared_rows,
         request.method,
         environment_state.as_deref(),
     );
+    if !intraday {
+        let report =
+            enrich_factor_rows_from_tushare(&request.runtime_root, request.pick_date, &mut rows);
+        log_cyq_enrichment("screen factor export", request.pick_date, &report);
+        let report = enrich_chip_factor_rows_from_tushare(
+            &request.runtime_root,
+            request.pick_date,
+            &mut rows,
+        );
+        log_cyq_enrichment("cyq_chips screen factor export", request.pick_date, &report);
+    }
     write_factor_artifact_with_db_data_gaps(
         &request.runtime_root,
         request.method,
@@ -1354,6 +1367,12 @@ fn front_adjust_rows(rows: &mut [MarketRow]) -> anyhow::Result<()> {
 }
 
 fn is_db_qfq_price_factor(key: &str) -> bool {
+    if let Some(field) = key
+        .strip_prefix("_czsc_weekly_")
+        .or_else(|| key.strip_prefix("_czsc_monthly_"))
+    {
+        return is_db_qfq_price_factor(&format!("_czsc_{field}"));
+    }
     matches!(
         key,
         "_czsc_last_bi_high"

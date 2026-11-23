@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use crate::model::{DbDataGap, Method, PreparedDataset, PreparedRow, db_data_gap_warning_message};
 
 pub const PREPARED_CACHE_ARTIFACT_VERSION: u32 = 1;
-pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 14;
+pub const PREPARED_CACHE_SCHEMA_VERSION: u32 = 21;
 pub const DB_NATIVE_PREPARED_CACHE_SOURCE: &str = "stock-cache-db-native";
 pub const LOCAL_DERIVED_PREPARED_CACHE_SOURCE: &str = "prepared-local-derived";
 pub const DEFAULT_PREPARED_CACHE_RETENTION_LIMIT: usize = 30;
@@ -53,6 +53,7 @@ fn date_years_before(date: NaiveDate, years: i32) -> NaiveDate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedCachePaths {
     pub data_path: PathBuf,
+    pub context_data_path: PathBuf,
     pub meta_path: PathBuf,
 }
 
@@ -112,6 +113,7 @@ pub fn prepared_cache_paths(
     let dir = runtime_root.join("prepared");
     PreparedCachePaths {
         data_path: dir.join(format!("{base_name}.parquet")),
+        context_data_path: dir.join(format!("{base_name}.context.parquet")),
         meta_path: dir.join(format!("{base_name}.meta.json")),
     }
 }
@@ -196,7 +198,7 @@ fn write_db_native_prepared_cache_parts(
     db_data_gaps: &BTreeMap<String, DbDataGap>,
 ) -> anyhow::Result<()> {
     let paths = prepared_cache_paths(runtime_root, pick_date, false);
-    write_prepared_cache_rows_file(&paths.data_path, rows)?;
+    write_prepared_cache_files(&paths.data_path, &paths.context_data_path, end_date, rows)?;
     write_json(
         &paths.meta_path,
         &build_db_native_metadata(
@@ -215,11 +217,17 @@ fn write_db_native_prepared_cache_parts(
 
 pub(crate) struct DbNativePreparedCacheStreamWriter {
     writer: Option<ArrowWriter<std::fs::File>>,
+    context_writer: Option<ArrowWriter<std::fs::File>>,
     schema: SchemaRef,
+    context_schema: Option<SchemaRef>,
     factor_keys: Vec<String>,
+    history_factor_keys: Vec<String>,
+    context_factor_keys: Vec<String>,
     runtime_root: PathBuf,
     data_path: PathBuf,
     temp_data_path: PathBuf,
+    context_data_path: PathBuf,
+    temp_context_data_path: PathBuf,
     meta_path: PathBuf,
     method: Method,
     pick_date: NaiveDate,
@@ -253,20 +261,54 @@ impl DbNativePreparedCacheStreamWriter {
                 .unwrap_or("prepared.parquet"),
             std::process::id()
         ));
+        let temp_context_data_path = paths.context_data_path.with_file_name(format!(
+            ".{}.{}.tmp",
+            paths
+                .context_data_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("prepared.context.parquet"),
+            std::process::id()
+        ));
         let file = std::fs::File::create(&temp_data_path)?;
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(Default::default()))
             .build();
         factor_keys.sort_unstable();
-        let schema = prepared_cache_schema(&factor_keys);
-        let writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))?;
+        factor_keys.dedup();
+        let history_factor_keys = factor_keys
+            .iter()
+            .filter(|key| !is_pick_date_context_factor(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let context_factor_keys = factor_keys
+            .iter()
+            .filter(|key| is_pick_date_context_factor(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let schema = prepared_cache_schema(&history_factor_keys);
+        let writer = ArrowWriter::try_new(file, schema.clone(), Some(properties.clone()))?;
+        let (context_writer, context_schema) = if context_factor_keys.is_empty() {
+            (None, None)
+        } else {
+            let file = std::fs::File::create(&temp_context_data_path)?;
+            let schema = prepared_cache_schema(&context_factor_keys);
+            let writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))?;
+            (Some(writer), Some(schema))
+        };
         Ok(Self {
             writer: Some(writer),
+            context_writer,
             schema,
+            context_schema,
             factor_keys,
+            history_factor_keys,
+            context_factor_keys,
             runtime_root: runtime_root.to_path_buf(),
             data_path: paths.data_path,
             temp_data_path,
+            context_data_path: paths.context_data_path,
+            temp_context_data_path,
             meta_path: paths.meta_path,
             method,
             pick_date,
@@ -290,9 +332,24 @@ impl DbNativePreparedCacheStreamWriter {
         for chunk in rows.chunks(PREPARED_CACHE_BATCH_SIZE) {
             writer.write(&prepared_rows_record_batch_optimized(
                 chunk,
-                &self.factor_keys,
+                &self.history_factor_keys,
                 self.schema.clone(),
             )?)?;
+        }
+        if let (Some(writer), Some(schema)) =
+            (self.context_writer.as_mut(), self.context_schema.clone())
+        {
+            let context_rows = rows
+                .iter()
+                .filter(|row| row.trade_date == self.end_date)
+                .collect::<Vec<_>>();
+            for chunk in context_rows.chunks(PREPARED_CACHE_BATCH_SIZE) {
+                writer.write(&prepared_row_refs_record_batch_optimized(
+                    chunk,
+                    &self.context_factor_keys,
+                    schema.clone(),
+                )?)?;
+            }
         }
         Ok(())
     }
@@ -312,6 +369,12 @@ impl DbNativePreparedCacheStreamWriter {
             .expect("prepared cache stream writer is open")
             .close()?;
         std::fs::rename(&self.temp_data_path, &self.data_path)?;
+        if let Some(writer) = self.context_writer.take() {
+            writer.close()?;
+            std::fs::rename(&self.temp_context_data_path, &self.context_data_path)?;
+        } else {
+            remove_file_if_exists(&self.context_data_path)?;
+        }
         let prepared_window = Some((
             *trade_dates.first().unwrap_or(&self.start_date),
             *trade_dates.last().unwrap_or(&self.end_date),
@@ -339,7 +402,9 @@ impl DbNativePreparedCacheStreamWriter {
 impl Drop for DbNativePreparedCacheStreamWriter {
     fn drop(&mut self) {
         self.writer.take();
+        self.context_writer.take();
         let _ = std::fs::remove_file(&self.temp_data_path);
+        let _ = std::fs::remove_file(&self.temp_context_data_path);
     }
 }
 
@@ -401,7 +466,7 @@ fn write_prepared_cache_parts(
         Some(prepared_cache_retention_limit()?)
     };
     let paths = prepared_cache_paths(runtime_root, pick_date, intraday);
-    write_prepared_cache_rows_file(&paths.data_path, rows)?;
+    write_prepared_cache_files(&paths.data_path, &paths.context_data_path, end_date, rows)?;
     write_json(
         &paths.meta_path,
         &build_metadata(
@@ -490,6 +555,7 @@ pub fn prune_eod_prepared_cache_to_limit(
     for (_created_at, pick_date, meta_path) in artifacts.into_iter().skip(limit) {
         let paths = prepared_cache_paths(runtime_root, pick_date, false);
         remove_file_if_exists(&paths.data_path)?;
+        remove_file_if_exists(&paths.context_data_path)?;
         remove_file_if_exists(&meta_path)?;
         removed += 1;
     }
@@ -643,8 +709,13 @@ fn build_db_native_metadata_from_counts(
             DB_NATIVE_MONTHLY_MACD_HISTORY_VERSION.to_string(),
         ),
     ]);
-    metadata.membership_sources =
-        BTreeMap::from([("ths".to_string(), "current_index_ths_member".to_string())]);
+    metadata.membership_sources = BTreeMap::from([
+        (
+            "market_index_weights".to_string(),
+            "index_weight".to_string(),
+        ),
+        ("sw_l2".to_string(), "index_sw_member".to_string()),
+    ]);
     metadata
 }
 
@@ -660,6 +731,56 @@ fn prepared_row_window(rows: &[PreparedRow]) -> Option<(NaiveDate, NaiveDate, u3
 }
 
 fn write_prepared_cache_rows_file(path: &Path, rows: &[PreparedRow]) -> anyhow::Result<()> {
+    let factor_keys = prepared_cache_factor_keys(rows);
+    write_prepared_cache_rows_file_with_keys(path, rows, &factor_keys)
+}
+
+fn write_prepared_cache_files(
+    data_path: &Path,
+    context_data_path: &Path,
+    context_date: NaiveDate,
+    rows: &[PreparedRow],
+) -> anyhow::Result<()> {
+    let history_factor_keys = rows
+        .iter()
+        .flat_map(|row| row.db_factors.keys())
+        .filter(|key| !is_pick_date_context_factor(key))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    write_prepared_cache_rows_file_with_keys(data_path, rows, &history_factor_keys)?;
+
+    let context_rows = rows
+        .iter()
+        .filter(|row| row.trade_date == context_date)
+        .filter(|row| {
+            row.db_factors
+                .keys()
+                .any(|key| is_pick_date_context_factor(key))
+        })
+        .collect::<Vec<_>>();
+    let context_factor_keys = context_rows
+        .iter()
+        .flat_map(|row| row.db_factors.keys())
+        .filter(|key| is_pick_date_context_factor(key))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if context_factor_keys.is_empty() {
+        remove_file_if_exists(context_data_path)?;
+    } else {
+        write_prepared_cache_row_refs_file(context_data_path, &context_rows, &context_factor_keys)?;
+    }
+    Ok(())
+}
+
+fn write_prepared_cache_rows_file_with_keys(
+    path: &Path,
+    rows: &[PreparedRow],
+    factor_keys: &[String],
+) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -667,13 +788,37 @@ fn write_prepared_cache_rows_file(path: &Path, rows: &[PreparedRow]) -> anyhow::
     let properties = WriterProperties::builder()
         .set_compression(Compression::ZSTD(Default::default()))
         .build();
-    let factor_keys = prepared_cache_factor_keys(rows);
-    let schema = prepared_cache_schema(&factor_keys);
+    let schema = prepared_cache_schema(factor_keys);
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))?;
     for chunk in rows.chunks(PREPARED_CACHE_BATCH_SIZE) {
         writer.write(&prepared_rows_record_batch_optimized(
             chunk,
-            &factor_keys,
+            factor_keys,
+            schema.clone(),
+        )?)?;
+    }
+    writer.close()?;
+    Ok(())
+}
+
+fn write_prepared_cache_row_refs_file(
+    path: &Path,
+    rows: &[&PreparedRow],
+    factor_keys: &[String],
+) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::File::create(path)?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(Default::default()))
+        .build();
+    let schema = prepared_cache_schema(factor_keys);
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))?;
+    for chunk in rows.chunks(PREPARED_CACHE_BATCH_SIZE) {
+        writer.write(&prepared_row_refs_record_batch_optimized(
+            chunk,
+            factor_keys,
             schema.clone(),
         )?)?;
     }
@@ -694,6 +839,15 @@ fn prepared_cache_factor_keys_optimized(rows: &[PreparedRow]) -> Vec<String> {
         .collect::<Vec<_>>();
     keys.sort_unstable();
     keys.into_iter().map(str::to_owned).collect()
+}
+
+fn is_pick_date_context_factor(key: &str) -> bool {
+    key.starts_with("market_index_")
+        || key.starts_with("sw_l2_main_")
+        || key == "sw_l2_membership_current_flag"
+        || key == "sw_l2_main_pct_change"
+        || key == "sw_l2_main_net_amount_per_stock"
+        || key.starts_with("stock_vs_sw_l2_main_")
 }
 
 fn prepared_cache_schema(factor_keys: &[String]) -> SchemaRef {
@@ -739,6 +893,15 @@ fn prepared_rows_record_batch_optimized(
     factor_keys: &[String],
     schema: SchemaRef,
 ) -> anyhow::Result<RecordBatch> {
+    let row_refs = rows.iter().collect::<Vec<_>>();
+    prepared_row_refs_record_batch_optimized(&row_refs, factor_keys, schema)
+}
+
+fn prepared_row_refs_record_batch_optimized(
+    rows: &[&PreparedRow],
+    factor_keys: &[String],
+    schema: SchemaRef,
+) -> anyhow::Result<RecordBatch> {
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("Unix epoch is valid");
     let dates = rows
         .iter()
@@ -751,30 +914,30 @@ fn prepared_rows_record_batch_optimized(
                 .collect::<Vec<_>>(),
         )),
         Arc::new(Date32Array::from(dates)),
-        required_f64_array(rows, |row| row.open),
-        required_f64_array(rows, |row| row.high),
-        required_f64_array(rows, |row| row.low),
-        required_f64_array(rows, |row| row.close),
-        required_f64_array(rows, |row| row.volume),
-        required_f64_array(rows, |row| row.turnover_n),
-        optional_f64_array(rows, |row| row.turnover_rate),
-        required_f64_array(rows, |row| row.k),
-        required_f64_array(rows, |row| row.d),
-        required_f64_array(rows, |row| row.j),
-        optional_f64_array(rows, |row| row.zxdq),
-        optional_f64_array(rows, |row| row.zxdkx),
-        required_f64_array(rows, |row| row.dif),
-        required_f64_array(rows, |row| row.dea),
-        required_f64_array(rows, |row| row.macd_hist),
-        optional_f64_array(rows, |row| row.ma25),
-        optional_f64_array(rows, |row| row.ma60),
-        optional_f64_array(rows, |row| row.ma144),
-        optional_f64_array(rows, |row| row.chg_d),
-        boolean_array(rows, |row| row.weekly_ma_bull),
-        boolean_array(rows, |row| row.max_vol_not_bearish),
-        boolean_array(rows, |row| row.v_shrink),
-        boolean_array(rows, |row| row.safe_mode),
-        boolean_array(rows, |row| row.lt_filter),
+        required_f64_array_refs(rows, |row| row.open),
+        required_f64_array_refs(rows, |row| row.high),
+        required_f64_array_refs(rows, |row| row.low),
+        required_f64_array_refs(rows, |row| row.close),
+        required_f64_array_refs(rows, |row| row.volume),
+        required_f64_array_refs(rows, |row| row.turnover_n),
+        optional_f64_array_refs(rows, |row| row.turnover_rate),
+        required_f64_array_refs(rows, |row| row.k),
+        required_f64_array_refs(rows, |row| row.d),
+        required_f64_array_refs(rows, |row| row.j),
+        optional_f64_array_refs(rows, |row| row.zxdq),
+        optional_f64_array_refs(rows, |row| row.zxdkx),
+        required_f64_array_refs(rows, |row| row.dif),
+        required_f64_array_refs(rows, |row| row.dea),
+        required_f64_array_refs(rows, |row| row.macd_hist),
+        optional_f64_array_refs(rows, |row| row.ma25),
+        optional_f64_array_refs(rows, |row| row.ma60),
+        optional_f64_array_refs(rows, |row| row.ma144),
+        optional_f64_array_refs(rows, |row| row.chg_d),
+        boolean_array_refs(rows, |row| row.weekly_ma_bull),
+        boolean_array_refs(rows, |row| row.max_vol_not_bearish),
+        boolean_array_refs(rows, |row| row.v_shrink),
+        boolean_array_refs(rows, |row| row.safe_mode),
+        boolean_array_refs(rows, |row| row.lt_filter),
     ];
     let factor_indexes = factor_keys
         .iter()
@@ -818,11 +981,32 @@ fn boolean_array(rows: &[PreparedRow], value: impl Fn(&PreparedRow) -> bool) -> 
     ))
 }
 
+fn required_f64_array_refs(rows: &[&PreparedRow], value: impl Fn(&PreparedRow) -> f64) -> ArrayRef {
+    Arc::new(Float64Array::from_iter_values(
+        rows.iter().map(|row| value(row)),
+    ))
+}
+
+fn optional_f64_array_refs(
+    rows: &[&PreparedRow],
+    value: impl Fn(&PreparedRow) -> Option<f64>,
+) -> ArrayRef {
+    Arc::new(Float64Array::from(
+        rows.iter().map(|row| value(row)).collect::<Vec<_>>(),
+    ))
+}
+
+fn boolean_array_refs(rows: &[&PreparedRow], value: impl Fn(&PreparedRow) -> bool) -> ArrayRef {
+    Arc::new(BooleanArray::from(
+        rows.iter().map(|row| value(row)).collect::<Vec<_>>(),
+    ))
+}
+
 pub fn decode_prepared_cache_rows(bytes: &[u8]) -> anyhow::Result<Vec<PreparedRow>> {
     if !bytes.starts_with(PARQUET_MAGIC) {
         anyhow::bail!("binary prepared caches are no longer supported; expected Parquet")
     }
-    decode_prepared_cache_rows_from_parquet(Bytes::copy_from_slice(bytes))
+    decode_prepared_cache_rows_from_parquet(Bytes::copy_from_slice(bytes), None)
 }
 
 fn is_parquet_cache_file(path: &Path) -> anyhow::Result<bool> {
@@ -836,6 +1020,20 @@ fn is_parquet_cache_file(path: &Path) -> anyhow::Result<bool> {
 }
 
 fn decode_prepared_cache_parquet_file(path: &Path) -> anyhow::Result<Vec<PreparedRow>> {
+    decode_prepared_cache_parquet_file_with_context_date(path, None)
+}
+
+fn decode_prepared_cache_parquet_file_for_context_date(
+    path: &Path,
+    context_date: NaiveDate,
+) -> anyhow::Result<Vec<PreparedRow>> {
+    decode_prepared_cache_parquet_file_with_context_date(path, Some(context_date))
+}
+
+fn decode_prepared_cache_parquet_file_with_context_date(
+    path: &Path,
+    context_date: Option<NaiveDate>,
+) -> anyhow::Result<Vec<PreparedRow>> {
     let mut file = std::fs::File::open(path)?;
     let mut magic = [0_u8; 4];
     file.read_exact(&mut magic)?;
@@ -843,11 +1041,12 @@ fn decode_prepared_cache_parquet_file(path: &Path) -> anyhow::Result<Vec<Prepare
         anyhow::bail!("binary prepared caches are no longer supported; expected Parquet")
     }
     file.seek(SeekFrom::Start(0))?;
-    decode_prepared_cache_rows_from_parquet(file)
+    decode_prepared_cache_rows_from_parquet(file, context_date)
 }
 
 fn decode_prepared_cache_rows_from_parquet<R: parquet::file::reader::ChunkReader + 'static>(
     reader: R,
+    context_date: Option<NaiveDate>,
 ) -> anyhow::Result<Vec<PreparedRow>> {
     let mut batches = ParquetRecordBatchReaderBuilder::try_new(reader)?.build()?;
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("Unix epoch is valid");
@@ -863,30 +1062,36 @@ fn decode_prepared_cache_rows_from_parquet<R: parquet::file::reader::ChunkReader
         let booleans = (21..=25)
             .map(|index| array_column::<BooleanArray>(&batch, index))
             .collect::<Result<Vec<_>, _>>()?;
-        let factor_columns = schema
-            .fields()
-            .iter()
-            .enumerate()
-            .skip(26)
-            .map(|(index, field)| {
-                anyhow::Ok((
-                    field.name().to_string(),
-                    array_column::<Float64Array>(&batch, index)?,
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut history_factor_columns = Vec::new();
+        let mut context_factor_columns = Vec::new();
+        for (index, field) in schema.fields().iter().enumerate().skip(26) {
+            let column = (
+                field.name().to_string(),
+                array_column::<Float64Array>(&batch, index)?,
+            );
+            if is_pick_date_context_factor(&column.0) {
+                context_factor_columns.push(column);
+            } else {
+                history_factor_columns.push(column);
+            }
+        }
         for row_index in 0..batch.num_rows() {
             let trade_date = epoch
                 .checked_add_signed(chrono::Duration::days(i64::from(
                     trade_dates.value(row_index),
                 )))
                 .ok_or_else(|| anyhow::anyhow!("cached trade_date is out of range"))?;
-            let db_factors = factor_columns
+            let mut db_factors: BTreeMap<String, f64> = history_factor_columns
                 .iter()
                 .filter_map(|(key, values)| {
                     (!values.is_null(row_index)).then_some((key.clone(), values.value(row_index)))
                 })
                 .collect();
+            if context_date.is_none_or(|date| date == trade_date) {
+                db_factors.extend(context_factor_columns.iter().filter_map(|(key, values)| {
+                    (!values.is_null(row_index)).then_some((key.clone(), values.value(row_index)))
+                }));
+            }
             rows.push(PreparedRow {
                 ts_code: ts_codes.value(row_index).to_string(),
                 trade_date,
@@ -919,6 +1124,34 @@ fn decode_prepared_cache_rows_from_parquet<R: parquet::file::reader::ChunkReader
         }
     }
     Ok(rows)
+}
+
+fn merge_pick_date_context_rows(
+    rows: &mut [PreparedRow],
+    context_rows: Vec<PreparedRow>,
+    context_date: NaiveDate,
+) -> bool {
+    let latest_indices = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.trade_date == context_date)
+        .map(|(index, row)| (row.ts_code.clone(), index))
+        .collect::<HashMap<_, _>>();
+    for context_row in context_rows {
+        if context_row.trade_date != context_date
+            || context_row
+                .db_factors
+                .keys()
+                .any(|key| !is_pick_date_context_factor(key))
+        {
+            return false;
+        }
+        let Some(&index) = latest_indices.get(context_row.ts_code.as_str()) else {
+            return false;
+        };
+        rows[index].db_factors.extend(context_row.db_factors);
+    }
+    true
 }
 
 fn array_column<T: Array + 'static>(batch: &RecordBatch, index: usize) -> anyhow::Result<&T> {
@@ -1017,9 +1250,15 @@ pub fn load_prepared_dataset_for_mode(
     if !is_parquet_cache_file(&paths.data_path)? {
         return Ok(None);
     }
-    let rows = decode_prepared_cache_parquet_file(&paths.data_path)?;
+    let mut rows = decode_prepared_cache_parquet_file_for_context_date(&paths.data_path, end_date)?;
     if rows.len() != metadata.row_count {
         return Ok(None);
+    }
+    if paths.context_data_path.exists() {
+        let context_rows = decode_prepared_cache_parquet_file(&paths.context_data_path)?;
+        if !merge_pick_date_context_rows(&mut rows, context_rows, end_date) {
+            return Ok(None);
+        }
     }
     if !decoded_rows_match_db_native_window(&metadata, start_date, end_date, &rows) {
         return Ok(None);

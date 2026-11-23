@@ -7,6 +7,17 @@ from typing import Any, Sequence
 TRAIN_LABEL_COLUMNS = {"rank_label_3d", "rank_label_5d", "rank_label_10d", "ret3_ge5_label", "ret5_ge5_label"}
 
 
+def label_purge_gap(label_column: str) -> int:
+    # 信号收盘后，下一交易日开盘买入，持有 N 天后在第 N+1 天开盘退出。
+    return {
+        "rank_label_3d": 4,
+        "ret3_ge5_label": 4,
+        "rank_label_5d": 6,
+        "ret5_ge5_label": 6,
+        "rank_label_10d": 11,
+    }[label_column]
+
+
 def as_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
@@ -41,11 +52,12 @@ def rows_for_dates(
     dates: set[str],
     *,
     label_column: str = "rank_label_3d",
+    require_label: bool = True,
 ) -> list[dict[str, Any]]:
     filtered = [
         row
         for row in rows
-        if str(row.get("date")) in dates and label_value(row, label_column=label_column) is not None
+        if str(row.get("date")) in dates and (not require_label or label_value(row, label_column=label_column) is not None)
     ]
     return sorted(filtered, key=lambda row: (str(row.get("date")), str(row.get("code"))))
 

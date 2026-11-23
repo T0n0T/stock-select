@@ -6,6 +6,19 @@ from typing import Any, Sequence
 
 from .labels import as_float, pct
 
+SELECTION_SUCCESS_RETURN_COLUMN = "ret_t1_open_to_t3_close"
+SELECTION_BENCHMARK_RETURN_COLUMN = "benchmark_csi300_ret_t1_open_to_t3_close"
+MARKET_ENVIRONMENT_COLUMNS = (
+    "market_up_ratio",
+    "market_ge5_ratio",
+    "market_le_minus5_ratio",
+    "market_median_pct_chg",
+    "market_amount_ma5_ratio",
+    "market_net_mf_to_amount_pct",
+    "market_approx_limit_up_count",
+    "market_approx_limit_down_count",
+)
+
 
 def average_metric_dicts(metrics: Sequence[dict[str, Any]]) -> dict[str, Any]:
     keys = sorted({key for item in metrics for key in item.keys()})
@@ -48,6 +61,39 @@ def grouped_by_date(rows: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, 
     return grouped
 
 
+def topn_return_overlap(
+    rows: Sequence[dict[str, Any]], *, return_column: str, top_n: int,
+) -> dict[str, Any]:
+    """Compare each day's model TopN with the TopN realized-return set."""
+    if top_n <= 0:
+        raise ValueError("top_n must be positive")
+    overlaps: list[int] = []
+    for day_rows in grouped_by_date(rows).values():
+        eligible = []
+        for row in day_rows:
+            score = as_float(row.get("model_score"))
+            realized = as_float(row.get(return_column))
+            if score is not None and realized is not None and math.isfinite(score) and math.isfinite(realized):
+                eligible.append((str(row.get("code")), score, realized))
+        if len(eligible) < top_n:
+            continue
+        predicted = {code for code, _score, _realized in
+                     sorted(eligible, key=lambda item: (-item[1], item[0]))[:top_n]}
+        realized = {code for code, _score, _return in
+                    sorted(eligible, key=lambda item: (-item[2], item[0]))[:top_n]}
+        overlaps.append(len(predicted & realized))
+    prefix = f"top{top_n}_{return_column}"
+    days = len(overlaps)
+    total = sum(overlaps)
+    return {
+        f"{prefix}_overlap_dates": days,
+        f"{prefix}_mean_overlap": round(total / days, 4) if days else None,
+        f"{prefix}_overlap_rate": round(total / (days * top_n) * 100.0, 4) if days else None,
+        f"{prefix}_exact_match_rate": round(sum(value == top_n for value in overlaps) / days * 100.0, 4)
+        if days else None,
+    }
+
+
 def evaluate_model(
     rows: Sequence[dict[str, Any]],
     *,
@@ -61,6 +107,8 @@ def evaluate_model(
     resolved_ndcg_at = sorted({int(value) for value in (ndcg_at or []) if int(value) > 0})
     ordered_by_date = grouped_by_date(rows)
     return_thresholds = (("ret3", 5.0, "ge_5"), ("ret5", 5.0, "ge_5"), ("ret10", 10.0, "ge_10"))
+    if any("exit_net_return" in row for row in rows):
+        return_thresholds += (("exit_return", 5.0, "ge_5"), ("exit_net_return", 5.0, "ge_5"))
     for k in resolved_top_k:
         for _date, day_rows in ordered_by_date.items():
             ordered = sorted(day_rows, key=lambda row: (-(as_float(row.get("model_score")) or 0.0), str(row.get("code"))))
@@ -149,6 +197,120 @@ def pearson(left: Sequence[float], right: Sequence[float]) -> float | None:
     if left_den == 0.0 or right_den == 0.0:
         return None
     return round(numerator / left_den / right_den, 4)
+
+
+def selection_success_analysis(
+    rows: Sequence[dict[str, Any]],
+    *,
+    top_k: int | None,
+    return_column: str = SELECTION_SUCCESS_RETURN_COLUMN,
+    benchmark_return_column: str = SELECTION_BENCHMARK_RETURN_COLUMN,
+) -> dict[str, Any]:
+    """Summarize daily Top-K win rates and their relation to market context."""
+    if top_k is not None and top_k <= 0:
+        raise ValueError("top_k must be positive")
+
+    daily_results: list[dict[str, Any]] = []
+    for day_rows in grouped_by_date(rows).values():
+        ranked = sorted(
+            day_rows,
+            key=lambda row: (-(as_float(row.get("model_score")) or 0.0), str(row.get("code"))),
+        )
+        selected = ranked if top_k is None else ranked[:top_k]
+        outcomes = []
+        for row in selected:
+            realized = as_float(row.get(return_column))
+            if realized is None or not math.isfinite(realized):
+                continue
+            benchmark = as_float(row.get(benchmark_return_column))
+            if benchmark is not None and not math.isfinite(benchmark):
+                benchmark = None
+            outcomes.append((realized, benchmark))
+        if not outcomes:
+            continue
+
+        environment = next(
+            (str(row.get("env")).strip().lower() for row in day_rows if str(row.get("env") or "").strip()),
+            "unknown",
+        )
+        environment_factors: dict[str, float] = {}
+        for column in MARKET_ENVIRONMENT_COLUMNS:
+            value = next(
+                (
+                    numeric
+                    for row in day_rows
+                    if (numeric := as_float(row.get(column))) is not None and math.isfinite(numeric)
+                ),
+                None,
+            )
+            if value is not None:
+                environment_factors[column] = value
+
+        returns = [realized for realized, _benchmark in outcomes]
+        benchmark_pairs = [
+            (realized, benchmark)
+            for realized, benchmark in outcomes
+            if benchmark is not None
+        ]
+        daily_results.append(
+            {
+                "env": environment,
+                "returns": returns,
+                "win_count": sum(realized > 0.0 for realized in returns),
+                "win_rate": pct(sum(realized > 0.0 for realized in returns), len(returns)),
+                "benchmark_pairs": benchmark_pairs,
+                "benchmark_win_count": sum(realized > benchmark for realized, benchmark in benchmark_pairs),
+                "excess_returns": [realized - benchmark for realized, benchmark in benchmark_pairs],
+                "environment_factors": environment_factors,
+            }
+        )
+
+    def summarize(days: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        returns = [value for day in days for value in day["returns"]]
+        benchmark_pairs = [pair for day in days for pair in day["benchmark_pairs"]]
+        excess_returns = [value for day in days for value in day["excess_returns"]]
+        daily_win_rates = [float(day["win_rate"]) for day in days if day["win_rate"] is not None]
+        win_count = sum(int(day["win_count"]) for day in days)
+        benchmark_win_count = sum(int(day["benchmark_win_count"]) for day in days)
+        return {
+            "date_count": len(days),
+            "selected_count": len(returns),
+            "win_count": win_count,
+            "pooled_win_rate": pct(win_count, len(returns)),
+            "mean_daily_win_rate": round(sum(daily_win_rates) / len(daily_win_rates), 4) if daily_win_rates else None,
+            "mean_return_pct": round(sum(returns) / len(returns), 4) if returns else None,
+            "benchmark_observation_count": len(benchmark_pairs),
+            "benchmark_win_count": benchmark_win_count,
+            "benchmark_win_rate": pct(benchmark_win_count, len(benchmark_pairs)),
+            "mean_excess_return_pct": round(sum(excess_returns) / len(excess_returns), 4) if excess_returns else None,
+        }
+
+    by_env_days: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for day in daily_results:
+        by_env_days[day["env"]].append(day)
+
+    correlations: dict[str, dict[str, Any]] = {}
+    for column in MARKET_ENVIRONMENT_COLUMNS:
+        pairs = [
+            (float(day["win_rate"]), day["environment_factors"][column])
+            for day in daily_results
+            if day["win_rate"] is not None and column in day["environment_factors"]
+        ]
+        if pairs:
+            correlations[column] = {
+                "date_count": len(pairs),
+                "pearson_r": pearson([value for value, _factor in pairs], [factor for _value, factor in pairs]),
+            }
+
+    return {
+        "top_k": top_k,
+        "selection_scope": "all_candidates" if top_k is None else "model_top_k",
+        "return_column": return_column,
+        "return_definition": "t+1 open entry to t+3 close exit; win means return > 0",
+        **summarize(daily_results),
+        "by_env": {env: summarize(days) for env, days in sorted(by_env_days.items())},
+        "environment_correlations": correlations,
+    }
 
 
 def partition_diagnostics(rows: Sequence[dict[str, Any]], *, partition: str) -> dict[str, Any]:

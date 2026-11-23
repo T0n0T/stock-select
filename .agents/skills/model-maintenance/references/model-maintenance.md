@@ -54,14 +54,14 @@ uv run stock-select-ml model rollback <archive_version> --method "$METHOD"
 
 ## 历史 Candidate 补齐
 
-重训默认入口是 EOD candidate artifact。训练窗口必须在本次训练开始时显式确定；默认取截至 `TRAIN_END_DATE` 的近一年 EOD 数据，得到 `TRAIN_START_DATE`，不要依赖脚本内置日期。若训练窗口缺少 `<runtime>/candidates/<date>.<method>.json`，先运行：
+重训默认入口是 EOD candidate artifact。每次实验应显式设置训练窗口并记录在模型 metadata 中，不从上一次实验或脚本默认值推断日期。若本次窗口缺少 `<runtime>/candidates/<date>.<method>.json`，先运行：
 
 ```bash
 uv run stock-select-ml backfill candidates \
   --method "$METHOD" \
   --start-date "$TRAIN_START_DATE" \
   --end-date "$TRAIN_END_DATE" \
-  --workers 16
+  --workers 8
 ```
 
 脚本从 DuckDB `stock_stk_factor_pro` 查询交易日，并发执行：
@@ -75,7 +75,7 @@ stock-select-rs screen --method <method> --pick-date <date> --runtime-root <runt
 - 默认跳过已有 `<date>.<method>.json`；`<date>.intraday.<method>.json` 不算 EOD 训练样本。
 - `--dry-run` 只打印将执行的 screen 命令，不调用真实 CLI。
 - `--recompute` 会强制每个 screen 重新读取数据源，不复用已有 prepared cache。
-- `--workers` 控制并发 screen 数；执行模型训练、候选补齐、因子补齐前先查看机器可用核心数，并至少使用最大可用核心数的 1/2，除非用户明确指定更低并发或机器负载不允许。
+- `--workers` 控制并发 screen 数；执行模型训练、候选补齐、因子补齐前先查看机器可用核心数，并发通常使用 4～8，最多 8；用户指定更低并发或机器负载不允许时可降低。
 - 脚本从 `.env`、shell 环境或 CLI 参数读取 `DUCKDB_PATH`，但不会把数据库路径或 token 放到 screen 命令行。
 - CLI 默认 `--method b2`；后续其他 method 接入 `screen` 后复用同一个 `stock-select-ml backfill candidates --method <method>`，不新增 method 专属补数据脚本。
 
@@ -138,9 +138,10 @@ uv run stock-select-ml tune lgbm-rank \
   --output-root "diagnostics/ml/$METHOD/tuning/optuna-<run-id>" \
   --strategy optuna \
   --max-trials 12 \
+  --num-threads 8 \
   --rolling-folds 5 \
-  --rolling-train-dates 240 \
-  --rolling-test-dates 40 \
+  --rolling-train-dates 120 \
+  --rolling-test-dates 20 \
   --skip-rf-diagnostics \
   --visualize
 ```
@@ -193,10 +194,10 @@ uv run stock-select-ml train lgbm-rank \
   --min-data-in-leaf 120 \
   --num-boost-round 60 \
   --learning-rate 0.05 \
-  --num-threads 16 \
+  --num-threads 8 \
   --rolling-folds 5 \
-  --rolling-train-dates 240 \
-  --rolling-test-dates 40 \
+  --rolling-train-dates 120 \
+  --rolling-test-dates 20 \
   --skip-rf-diagnostics
 ```
 
@@ -296,7 +297,15 @@ uv run stock-select-ml model rollback <archive-version> --method "$METHOD"
 
 只有用户明确确认发布时，才去掉 `--dry-run`。
 
+## AKQuant 组合收益调参
+
+若用户指定持仓规则并要求以回测收益调参，使用 `--objective akquant --strategy optuna`，具体参数见 `docs/model.md`。该路径以开发区间滚动 OOF 的 AKQuant 扣费组合净收益选 trial，默认固定相应持有期标签；传入 `--exit-policy <JSON>` 时目标改为 `rank_label_exit`，标签与执行共用退出状态机，按实际退出日隔离训练样本，预测不按未来标签完整性删股。规则目标检查 `top3_exit_net_return_*` 和 `rank_ic_exit_net_return`，并报告年初 MA25 历史不足、未退出样本数量及最低佣金近似。
+
+Optuna baseline 保留全部适用因子，最多 12 组、连续 4 组不改善停止；消融固定最佳模型参数，比较训练窗口时固定相同的 OOF 日期，记录实际训练日期数和被剔除的跨期标签。末段留出结果只用于最终检验，不能重排 trial；已观察过的留出区间应明确标记为探索性检验。汇报基线、最佳 trial 的 OOF 和留出净收益/回撤，以及各自的标签指标。该路径已导出最终模型和留出信号 CSV，无需再执行会重训的通用 `score export-lgbm`。promote dry-run 通过只表示结构合法，收益不达标则明确建议不发布。
+
 ## 训练完成汇报
+
+规则退出的连续收益对照追加 `--learning-task return-regression`；LightGBM 使用 `exit_net_return` 有符号浮点标签，搜索 L2/L1 损失，最终仍按 AKQuant 开发区间 OOF 组合净收益选择。报告应比较同参数排序/L2/L1 控制组与受限调参候选，并固定特征、窗口和 OOF 日期。收益分数需检查偏差、误差和分组实得收益，未校准前不进入仓位决策。已观察的留出区间只标记探索性检验，不据此重排候选。
 
 训练、重训或调参结束后，必须给出模型效果摘要。不要只说命令成功；即使命令失败，也要说明停在哪一步和可恢复的下一步。汇报时不要打印 `.env`、数据库路径、token 的具体值。
 

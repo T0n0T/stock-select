@@ -59,7 +59,7 @@ def first_lgbm_report(trial_dir: Path) -> dict[str, Any] | None:
 def coerce_lightgbm_ranking_params(params: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in params.items():
-        if key not in LIGHTGBM_RANKING_DEFAULTS and key != "categorical_encoding":
+        if key not in LIGHTGBM_RANKING_DEFAULTS and key not in {"categorical_encoding", "training_objective"}:
             continue
         if value is None:
             continue

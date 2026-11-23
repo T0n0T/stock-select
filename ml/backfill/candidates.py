@@ -16,6 +16,7 @@ from ml.dates import fetch_trade_dates, read_dates_file, validate_date
 from ml.env import load_dotenv_values, resolve_config_value
 from ml.paths import PROJECT_ROOT, candidate_path, factor_artifact_path, resolve_stock_select_binary
 from ml.subprocesses import format_returncode
+from ml.parallelism import parse_worker_count, validate_worker_count
 
 
 DEFAULT_METHOD = "b2"
@@ -44,6 +45,9 @@ class BackfillConfig:
     quiet: bool = True
     intraday: bool = False
     duckdb_path: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_worker_count(self.workers)
 
 
 @dataclass(frozen=True)
@@ -250,8 +254,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--duckdb-path")
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--method", choices=SUPPORTED_METHODS, default=DEFAULT_METHOD)
-    parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--jobs", "-j", type=int, dest="workers", help="Compatibility alias for --workers.")
+    parser.add_argument("--workers", type=parse_worker_count, default=4, help="并发数，1～8，默认 4")
+    parser.add_argument("--jobs", "-j", type=parse_worker_count, dest="workers", help="Compatibility alias for --workers.")
     parser.add_argument("--pool-source", default=DEFAULT_POOL_SOURCE)
     parser.add_argument("--dates-file", type=Path)
     parser.add_argument("--recompute", action="store_true")

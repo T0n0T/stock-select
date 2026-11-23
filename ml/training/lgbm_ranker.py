@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import math
 from typing import Any, Sequence
 
 from .evaluation import assign_scores
 from .features import CATEGORICAL_ENCODINGS, DEFAULT_CATEGORICAL_ENCODING
-from .labels import labels
+from .labels import as_float, labels
 from .matrices import build_feature_matrix, category_levels, safe_feature_names
 
 
@@ -60,6 +61,7 @@ def train_model(
     eval_at: Sequence[int] | None = None,
     early_stopping_rounds: int = 0,
     seed: int = 17,
+    training_objective: str = "lambdarank",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], int]:
     result = train_model_result(
         train_rows,
@@ -86,6 +88,7 @@ def train_model(
         eval_at=eval_at,
         early_stopping_rounds=early_stopping_rounds,
         seed=seed,
+        training_objective=training_objective,
     )
     return result.train_scored, result.test_scored, result.top_features, result.feature_count
 
@@ -116,12 +119,18 @@ def train_model_result(
     eval_at: Sequence[int] | None = None,
     early_stopping_rounds: int = 0,
     seed: int = 17,
+    training_objective: str = "lambdarank",
 ) -> TrainedModelResult:
+    from ml.parallelism import resolve_num_threads
+
+    num_threads = resolve_num_threads(num_threads)
     import lightgbm as lgb
     import numpy as np
 
     if categorical_encoding not in CATEGORICAL_ENCODINGS:
         raise ValueError(f"unsupported categorical_encoding: {categorical_encoding}")
+    if training_objective not in {"lambdarank", "regression", "regression_l1"}:
+        raise ValueError(f"unsupported training_objective: {training_objective}")
     if not train_rows or not test_rows:
         return TrainedModelResult([], [], [], 0, None, [], [], {}, {})
 
@@ -150,9 +159,17 @@ def train_model_result(
 
     train_array = np.array(train_matrix, dtype=float)
     test_array = np.array(test_matrix, dtype=float)
+    def target_kwargs(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        if training_objective == "lambdarank":
+            return {"label": np.array(labels(rows, label_column=label_column), dtype=int),
+                    "group": group_sizes_by_date(rows)}
+        values = [as_float(row.get(label_column)) for row in rows]
+        if any(value is None or not math.isfinite(value) for value in values):
+            raise ValueError(f"regression requires finite targets in {label_column}")
+        return {"label": np.array(values, dtype=float)}
+
     dataset_kwargs = {
-        "label": np.array(labels(train_rows, label_column=label_column), dtype=int),
-        "group": group_sizes_by_date(train_rows),
+        **target_kwargs(train_rows),
         "feature_name": lightgbm_feature_names,
         "free_raw_data": False,
     }
@@ -162,9 +179,9 @@ def train_model_result(
         dataset_kwargs["categorical_feature"] = lightgbm_feature_names[categorical_start:categorical_end]
     train_dataset = lgb.Dataset(train_array, **dataset_kwargs)
     params = {
-        "objective": "lambdarank",
+        "objective": training_objective,
         "boosting_type": boosting_type,
-        "metric": "ndcg",
+        "metric": {"lambdarank": "ndcg", "regression": "l2", "regression_l1": "l1"}[training_objective],
         "learning_rate": learning_rate,
         "num_leaves": num_leaves,
         "min_data_in_leaf": min_data_in_leaf,
@@ -174,18 +191,17 @@ def train_model_result(
         "lambda_l1": lambda_l1,
         "lambda_l2": lambda_l2,
         "min_gain_to_split": min_gain_to_split,
-        "label_gain": resolved_label_gain,
-        "eval_at": resolved_eval_at,
         "seed": seed,
         "verbosity": -1,
-        **({"num_threads": num_threads} if num_threads > 0 else {}),
+        "num_threads": num_threads,
     }
-    if lambdarank_truncation_level > 0:
-        params["lambdarank_truncation_level"] = lambdarank_truncation_level
+    if training_objective == "lambdarank":
+        params.update(label_gain=resolved_label_gain, eval_at=resolved_eval_at)
+        if lambdarank_truncation_level > 0:
+            params["lambdarank_truncation_level"] = lambdarank_truncation_level
     if early_stopping_rounds > 0:
         valid_kwargs = {
-            "label": np.array(labels(test_rows, label_column=label_column), dtype=int),
-            "group": group_sizes_by_date(test_rows),
+            **target_kwargs(test_rows),
             "free_raw_data": False,
         }
         if categorical_encoding == "native" and categorical_columns:

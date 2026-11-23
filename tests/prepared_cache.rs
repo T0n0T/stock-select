@@ -17,7 +17,147 @@ use stock_select::model::{DbDataGap, DbDataGapReason, Method, PreparedDataset, P
 
 #[test]
 fn prepared_cache_schema_version_marks_parquet_format() {
-    assert_eq!(PREPARED_CACHE_SCHEMA_VERSION, 14);
+    assert_eq!(PREPARED_CACHE_SCHEMA_VERSION, 21);
+}
+
+#[test]
+fn prepared_cache_rejects_versions_without_multiperiod_factor_inputs() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 13).unwrap();
+    let rows = db_native_window_rows("000001.SZ", start_date, pick_date, 235);
+    write_db_native_prepared_cache(
+        root.path(),
+        Method::Scm,
+        pick_date,
+        start_date,
+        pick_date,
+        252,
+        &rows,
+    )
+    .unwrap();
+    let path = prepared_cache_meta_path(root.path(), pick_date);
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for old_version in [18, 19, 20] {
+        metadata["schema_version"] = json!(old_version);
+        std::fs::write(&path, serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
+        assert!(
+            load_prepared_cache(root.path(), Method::Scm, pick_date, start_date, pick_date)
+                .unwrap()
+                .is_none(),
+            "schema {old_version}"
+        );
+    }
+}
+
+#[test]
+fn db_native_cache_splits_pick_date_index_context_from_history_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 6, 13).unwrap();
+    let mut rows = db_native_window_rows("000001.SZ", start_date, pick_date, 235);
+    rows[0].db_factors.insert("history_factor".to_string(), 9.0);
+    rows.last_mut()
+        .unwrap()
+        .db_factors
+        .insert("sw_l2_main_index_idx_close".to_string(), 12.0);
+    rows.last_mut()
+        .unwrap()
+        .db_factors
+        .insert("market_index_sse50_idx_close".to_string(), 11.0);
+    rows.last_mut()
+        .unwrap()
+        .db_factors
+        .insert("history_factor".to_string(), 13.0);
+
+    write_db_native_prepared_dataset(
+        root.path(),
+        Method::Scm,
+        pick_date,
+        start_date,
+        pick_date,
+        235,
+        &PreparedDataset {
+            rows,
+            db_data_gaps: std::collections::BTreeMap::new(),
+        },
+    )
+    .unwrap();
+
+    let paths = prepared_cache_paths(root.path(), pick_date, false);
+    let context_data_path = paths.data_path.with_file_name("2026-06-15.context.parquet");
+    let history_reader =
+        ParquetRecordBatchReaderBuilder::try_new(File::open(&paths.data_path).unwrap()).unwrap();
+    let history_schema = history_reader.schema();
+    let context_reader =
+        ParquetRecordBatchReaderBuilder::try_new(File::open(context_data_path).unwrap()).unwrap();
+    let context_schema = context_reader.schema();
+    assert!(!history_schema.fields().iter().any(|field| {
+        field.name() == "market_index_sse50_idx_close"
+            || field.name() == "sw_l2_main_index_idx_close"
+    }));
+    assert!(
+        context_schema
+            .fields()
+            .iter()
+            .any(|field| field.name() == "market_index_sse50_idx_close")
+    );
+
+    let loaded = load_prepared_dataset(root.path(), Method::Scm, pick_date, start_date, pick_date)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.rows[0].db_factors["history_factor"], 9.0);
+    let latest = loaded
+        .rows
+        .iter()
+        .find(|row| row.trade_date == pick_date)
+        .unwrap();
+    assert_eq!(latest.db_factors["market_index_sse50_idx_close"], 11.0);
+    assert_eq!(latest.db_factors["sw_l2_main_index_idx_close"], 12.0);
+    assert_eq!(latest.db_factors["history_factor"], 13.0);
+}
+
+#[test]
+fn stk_factor_pro_rejects_pre_extension_prepared_cache() {
+    let root = tempfile::tempdir().unwrap();
+    let pick_date = NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+    let start_date = NaiveDate::from_ymd_opt(2025, 2, 1).unwrap();
+    let rows = (0..245)
+        .map(|offset| {
+            prepared_row(
+                "603409.SH",
+                start_date + chrono::Duration::days(offset),
+                40.04,
+            )
+        })
+        .chain(std::iter::once(prepared_row("603409.SH", pick_date, 40.04)))
+        .collect::<Vec<_>>();
+    write_db_native_prepared_cache(
+        root.path(),
+        Method::Scm,
+        pick_date,
+        start_date,
+        pick_date,
+        rows.len() as u32,
+        &rows,
+    )
+    .unwrap();
+    assert!(
+        load_prepared_cache(root.path(), Method::Scm, pick_date, start_date, pick_date)
+            .unwrap()
+            .is_some()
+    );
+    let path = prepared_cache_meta_path(root.path(), pick_date);
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    metadata["schema_version"] = json!(14);
+    std::fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    assert!(
+        load_prepared_cache(root.path(), Method::Scm, pick_date, start_date, pick_date)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -126,7 +266,7 @@ fn all_methods_rebuild_db_native_cache_without_completed_month_macd() {
 }
 
 #[test]
-fn prepared_cache_paths_use_parquet_data_extension() {
+fn prepared_cache_pasw_l2_use_parquet_data_extension() {
     let root = tempfile::tempdir().unwrap();
     let date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
 
@@ -141,7 +281,7 @@ fn prepared_cache_paths_use_parquet_data_extension() {
 }
 
 #[test]
-fn prepared_cache_paths_support_intraday_layout_without_overwriting_eod() {
+fn prepared_cache_pasw_l2_support_intraday_layout_without_overwriting_eod() {
     let root = tempfile::tempdir().unwrap();
     let date = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
 
@@ -725,10 +865,12 @@ fn write_db_native_prepared_cache_records_source_window_and_calc_versions() {
         "czsc_structure_qfq_min6_r7_v1"
     );
     assert!(metadata["calc_versions"].get("left_peak").is_none());
+    assert_eq!(metadata["membership_sources"]["sw_l2"], "index_sw_member");
     assert_eq!(
-        metadata["membership_sources"]["ths"],
-        "current_index_ths_member"
+        metadata["membership_sources"]["market_index_weights"],
+        "index_weight"
     );
+    assert!(metadata["membership_sources"].get("ths").is_none());
 
     let loaded = load_prepared_cache(root.path(), Method::B2, pick_date, start_date, pick_date)
         .unwrap()
@@ -746,7 +888,7 @@ fn db_native_prepared_cache_round_trips_data_gaps_without_bumping_schema() {
         rows,
         db_data_gaps: std::collections::BTreeMap::from([
             (
-                "index_moneyflow_cnt_ths".to_string(),
+                "calc_daily_industry_moneyflow".to_string(),
                 DbDataGap {
                     reason: DbDataGapReason::MissingRows,
                     missing_columns: Vec::new(),
@@ -783,7 +925,7 @@ fn db_native_prepared_cache_round_trips_data_gaps_without_bumping_schema() {
     .unwrap();
     assert_eq!(metadata["schema_version"], PREPARED_CACHE_SCHEMA_VERSION);
     assert_eq!(
-        metadata["db_data_gaps"]["index_moneyflow_cnt_ths"],
+        metadata["db_data_gaps"]["calc_daily_industry_moneyflow"],
         json!({
             "reason": "missing_rows",
             "expected_rows": 1,
@@ -881,7 +1023,7 @@ fn load_prepared_cache_rejects_db_native_cache_with_short_decoded_window() {
                 "left_peak": "left_peak_qfq_v1"
             },
             "membership_sources": {
-                "ths": "current_index_ths_member"
+                "sw_l2": "index_sw_member"
             }
         }))
         .unwrap(),

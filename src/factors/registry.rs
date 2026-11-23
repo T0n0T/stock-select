@@ -16,16 +16,17 @@ use crate::factors::macd::{macd_lines, push_macd_numeric_factors};
 use crate::factors::price_position::{push_price_position_factors, push_range_compression};
 use crate::factors::semantic::{push_b2_semantic_factors, push_ma25_semantic_factors};
 use crate::factors::series::{FactorList, mean_tail, push_number, rolling_mean_series};
+use crate::factors::stk_factor_pro::push_stk_factor_pro_factors;
 use crate::factors::types::{FactorInputRow, FactorRow, FactorValue};
 use crate::factors::volume::push_volume_turnover_factors;
 use crate::factors::zx::{push_zx_pullback_factors, zx_lines};
 use crate::model::{Candidate, DbDataGap, Method, PreparedRow};
 
 pub const FACTOR_ARTIFACT_VERSION: u32 = 2;
-pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v5";
+pub const FACTOR_LIBRARY_VERSION: &str = "rust-factor-library-v11";
 pub(crate) const RAW_MARKET_AMOUNT_FACTOR: &str = "_raw_market_amount";
 
-const THS_MEMBERSHIP_SOURCE: &str = "current_index_ths_member";
+const SW_L2_MEMBERSHIP_SOURCE: &str = "index_sw_member";
 
 const HISTORY_DB_FACTOR_KEYS: &[&str] = &[RAW_MARKET_AMOUNT_FACTOR];
 
@@ -272,6 +273,7 @@ fn history_factor_fields_for_profile(
         }
     }
     push_latest_db_factor_extras(&mut factors, latest);
+    push_stk_factor_pro_factors(&mut factors, latest.map(|row| &row.db_factors));
     push_db_native_schema_aliases(&mut factors, latest_zxdkx);
     factors
 }
@@ -280,6 +282,17 @@ fn push_latest_db_factor_extras(factors: &mut FactorList, latest: Option<&Factor
     let Some(latest) = latest else {
         return;
     };
+    for period in [144, 220] {
+        push_number(
+            factors,
+            &format!("close_to_rolling_ma{period}_pct"),
+            latest
+                .db_factors
+                .get(&format!("rolling_ma{period}_qfq"))
+                .filter(|line| line.is_finite() && **line > 0.0)
+                .map(|line| (latest.close / line - 1.0) * 100.0),
+        );
+    }
     for (key, value) in &latest.db_factors {
         if key == RAW_MARKET_AMOUNT_FACTOR || key.starts_with('_') {
             continue;
@@ -959,7 +972,7 @@ impl Serialize for FactorManifestFile<'_> {
     where
         S: serde::Serializer,
     {
-        let membership_sources = BTreeMap::from([("ths", THS_MEMBERSHIP_SOURCE)]);
+        let membership_sources = BTreeMap::from([("sw_l2", SW_L2_MEMBERSHIP_SOURCE)]);
         let mut map =
             serializer.serialize_map(Some(if self.db_data_gaps.is_empty() { 8 } else { 9 }))?;
         map.serialize_entry("artifact_key", self.artifact_key)?;
@@ -1601,7 +1614,7 @@ mod tests {
             "factor_source": "rust_factor_library",
             "candidate_artifact": candidate_artifact.to_string_lossy(),
             "membership_sources": {
-                "ths": "current_index_ths_member"
+                "sw_l2": "index_sw_member"
             },
             "row_count": 1,
         }))
@@ -1624,8 +1637,8 @@ mod tests {
                 db_factors.insert(format!("history_big_{offset}"), 9_999.0 + offset as f64);
                 if offset == 2 {
                     db_factors.insert("latest_export_factor".to_string(), 42.0);
-                    db_factors.insert("ths_sector_count".to_string(), 3.0);
-                    db_factors.insert("stock_vs_ths_main_pct_change".to_string(), 1.25);
+                    db_factors.insert("sw_l2_sector_count".to_string(), 3.0);
+                    db_factors.insert("stock_vs_sw_l2_main_pct_change".to_string(), 1.25);
                 }
                 PreparedRow {
                     ts_code: "000001.SZ".to_string(),
@@ -1704,11 +1717,11 @@ mod tests {
             Some(&FactorValue::Number(42.0))
         );
         assert_eq!(
-            rows[0].factors.get("ths_sector_count"),
+            rows[0].factors.get("sw_l2_sector_count"),
             Some(&FactorValue::Number(3.0))
         );
         assert_eq!(
-            rows[0].factors.get("stock_vs_ths_main_pct_change"),
+            rows[0].factors.get("stock_vs_sw_l2_main_pct_change"),
             Some(&FactorValue::Number(1.25))
         );
         assert!(!rows[0].factors.contains_key("future_export_factor"));

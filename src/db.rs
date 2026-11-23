@@ -11,9 +11,11 @@ use duckdb_neo::{
     value::Value as NativeValue,
     vector::Unknown,
 };
+use serde_json::Value;
 
 use crate::config::resolve_db_check_tables;
 use crate::db_check::preflight_db_native_load;
+use crate::factors::stk_factor_pro::SOURCE_COLUMNS;
 use crate::intraday::MacdPeriodState;
 use crate::model::{DbDataGap, InstrumentInfo, MarketDataset, MarketRow};
 
@@ -557,60 +559,159 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
                 LIMIT 252
             ) d
         ),
-        index_market_base AS (
+        stock_moneyflow_recent AS (
             SELECT
-                i.ts_code,
-                i.trade_date,
-                i.close::double precision AS close,
-                lag(i.close, 5) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_5_ago,
-                lag(i.close, 20) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_20_ago,
-                avg(i.close::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS close_ma20,
-                stddev_samp(i.pct_change::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)::double precision AS volatility20_pct
-            FROM {{index_idx_factor_pro}} i
-            JOIN recent_trade_dates w
-              ON w.trade_date = i.trade_date
-            WHERE i.ts_code IN ('000001.SH', '399303.SZ')
-        ),
-        index_market_raw AS (
-            SELECT
-                ts_code,
-                trade_date,
-                CASE
-                    WHEN close_5_ago IS NOT NULL AND close_5_ago != 0
-                    THEN (close - close_5_ago) / close_5_ago * 100.0
-                END AS ret5_pct,
-                CASE
-                    WHEN close_20_ago IS NOT NULL AND close_20_ago != 0
-                    THEN (close - close_20_ago) / close_20_ago * 100.0
-                END AS ret20_pct,
-                CASE
-                    WHEN close_ma20 IS NOT NULL AND close_ma20 != 0
-                    THEN (close - close_ma20) / close_ma20 * 100.0
-                END AS ma20_bias_pct,
-                volatility20_pct
-            FROM index_market_base
-        ),
-        index_market_factors AS (
-            SELECT
-                trade_date,
-                max(ret5_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret5_pct,
-                max(ret20_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret20_pct,
-                max(ma20_bias_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ma20_bias_pct,
-                max(volatility20_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_volatility20_pct,
-                max(ret5_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret5_pct,
-                max(ret20_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret20_pct,
-                max(ma20_bias_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ma20_bias_pct,
-                max(volatility20_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_volatility20_pct,
-                CASE WHEN count(ret5_pct) = 2 THEN avg(ret5_pct)::double precision END AS market_broad_ret5_pct,
-                CASE WHEN count(ret20_pct) = 2 THEN avg(ret20_pct)::double precision END AS market_broad_ret20_pct,
-                CASE WHEN count(ma20_bias_pct) = 2 THEN avg(ma20_bias_pct)::double precision END AS market_broad_ma20_bias_pct,
-                CASE WHEN count(volatility20_pct) = 2 THEN avg(volatility20_pct)::double precision END AS market_broad_volatility20_pct
-            FROM index_market_raw
-            GROUP BY trade_date
+                f.ts_code,
+                max(f.net_mf_amount::double precision) FILTER (WHERE f.trade_date = $1) AS net_mf_amount,
+                sum(f.net_mf_amount::double precision) FILTER (
+                    WHERE f.trade_date >= (
+                        SELECT min(trade_date)
+                        FROM (SELECT trade_date FROM recent_trade_dates ORDER BY trade_date DESC LIMIT 5) recent5
+                    )
+                ) AS net_mf_d5_amount,
+                max((f.buy_lg_amount - f.sell_lg_amount)::double precision) FILTER (WHERE f.trade_date = $1) AS buy_lg_amount,
+                max((f.buy_md_amount - f.sell_md_amount)::double precision) FILTER (WHERE f.trade_date = $1) AS buy_md_amount,
+                max((f.buy_sm_amount - f.sell_sm_amount)::double precision) FILTER (WHERE f.trade_date = $1) AS buy_sm_amount
+            FROM {{stock_moneyflow}} f
+            WHERE f.trade_date <= $1
+              AND f.trade_date >= (SELECT min(trade_date) FROM recent_trade_dates)
+            GROUP BY f.ts_code
         )
         SELECT
             s.ts_code,
             s.trade_date,
+            -- czsc multiperiod begin
+            c.daily_period_complete::double precision AS _czsc_period_complete,
+            CASE WHEN c.ts_code IS NOT NULL THEN 1.0 ELSE 0.0 END::double precision AS _czsc_weekly_snapshot_available,
+            c.weekly_period_complete::double precision AS _czsc_weekly_period_complete,
+            CASE WHEN c.weekly_source_bar_valid THEN 1.0 WHEN c.weekly_source_bar_valid = false THEN 0.0 END::double precision AS _czsc_weekly_source_bar_valid,
+            CASE c.weekly_status
+                WHEN 'invalid_source_bar' THEN 0.0
+                WHEN 'no_finished_bi' THEN 1.0
+                WHEN 'insufficient_bis_for_zs' THEN 2.0
+                WHEN 'no_valid_zs' THEN 3.0
+                WHEN 'ok' THEN 4.0
+            END::double precision AS _czsc_weekly_status_code,
+            c.weekly_available_finished_bi_count::double precision AS _czsc_weekly_available_finished_bi_count,
+            c.weekly_recent_bi_count::double precision AS _czsc_weekly_recent_bi_count,
+            CASE c.weekly_last_bi_direction WHEN 'up' THEN 1.0 WHEN 'down' THEN -1.0 END::double precision AS _czsc_weekly_last_bi_direction_code,
+            (c.weekly_last_bi_start_date - DATE '1970-01-01')::double precision AS _czsc_weekly_last_bi_start_day,
+            (c.weekly_last_bi_end_date - DATE '1970-01-01')::double precision AS _czsc_weekly_last_bi_end_day,
+            c.weekly_last_bi_high::double precision AS _czsc_weekly_last_bi_high,
+            c.weekly_last_bi_low::double precision AS _czsc_weekly_last_bi_low,
+            c.weekly_last_bi_mid::double precision AS _czsc_weekly_last_bi_mid,
+            (c.weekly_latest_zs_start_date - DATE '1970-01-01')::double precision AS _czsc_weekly_latest_zs_start_day,
+            (c.weekly_latest_zs_end_date - DATE '1970-01-01')::double precision AS _czsc_weekly_latest_zs_end_day,
+            c.weekly_latest_zs_bi_count::double precision AS _czsc_weekly_latest_zs_bi_count,
+            c.weekly_latest_zs_zg::double precision AS _czsc_weekly_latest_zs_zg,
+            c.weekly_latest_zs_zd::double precision AS _czsc_weekly_latest_zs_zd,
+            c.weekly_latest_zs_zz::double precision AS _czsc_weekly_latest_zs_zz,
+            (c.weekly_recent_peak_date - DATE '1970-01-01')::double precision AS _czsc_weekly_recent_peak_day,
+            c.weekly_recent_peak_high::double precision AS _czsc_weekly_recent_peak_high,
+            (c.weekly_post_peak_first_bear_date - DATE '1970-01-01')::double precision AS _czsc_weekly_post_peak_first_bear_day,
+            c.weekly_post_peak_first_bear_open::double precision AS _czsc_weekly_post_peak_first_bear_open,
+            c.weekly_post_peak_first_bear_high::double precision AS _czsc_weekly_post_peak_first_bear_high,
+            c.weekly_post_peak_first_bear_low::double precision AS _czsc_weekly_post_peak_first_bear_low,
+            c.weekly_post_peak_first_bear_close::double precision AS _czsc_weekly_post_peak_first_bear_close,
+            CASE WHEN c.weekly_post_peak_first_bear_missing THEN 1.0 WHEN c.weekly_post_peak_first_bear_missing = false THEN 0.0 END::double precision AS _czsc_weekly_post_peak_first_bear_missing,
+            CASE WHEN c.ts_code IS NOT NULL THEN 1.0 ELSE 0.0 END::double precision AS _czsc_monthly_snapshot_available,
+            c.monthly_period_complete::double precision AS _czsc_monthly_period_complete,
+            CASE WHEN c.monthly_source_bar_valid THEN 1.0 WHEN c.monthly_source_bar_valid = false THEN 0.0 END::double precision AS _czsc_monthly_source_bar_valid,
+            CASE c.monthly_status
+                WHEN 'invalid_source_bar' THEN 0.0
+                WHEN 'no_finished_bi' THEN 1.0
+                WHEN 'insufficient_bis_for_zs' THEN 2.0
+                WHEN 'no_valid_zs' THEN 3.0
+                WHEN 'ok' THEN 4.0
+            END::double precision AS _czsc_monthly_status_code,
+            c.monthly_available_finished_bi_count::double precision AS _czsc_monthly_available_finished_bi_count,
+            c.monthly_recent_bi_count::double precision AS _czsc_monthly_recent_bi_count,
+            CASE c.monthly_last_bi_direction WHEN 'up' THEN 1.0 WHEN 'down' THEN -1.0 END::double precision AS _czsc_monthly_last_bi_direction_code,
+            (c.monthly_last_bi_start_date - DATE '1970-01-01')::double precision AS _czsc_monthly_last_bi_start_day,
+            (c.monthly_last_bi_end_date - DATE '1970-01-01')::double precision AS _czsc_monthly_last_bi_end_day,
+            c.monthly_last_bi_high::double precision AS _czsc_monthly_last_bi_high,
+            c.monthly_last_bi_low::double precision AS _czsc_monthly_last_bi_low,
+            c.monthly_last_bi_mid::double precision AS _czsc_monthly_last_bi_mid,
+            (c.monthly_latest_zs_start_date - DATE '1970-01-01')::double precision AS _czsc_monthly_latest_zs_start_day,
+            (c.monthly_latest_zs_end_date - DATE '1970-01-01')::double precision AS _czsc_monthly_latest_zs_end_day,
+            c.monthly_latest_zs_bi_count::double precision AS _czsc_monthly_latest_zs_bi_count,
+            c.monthly_latest_zs_zg::double precision AS _czsc_monthly_latest_zs_zg,
+            c.monthly_latest_zs_zd::double precision AS _czsc_monthly_latest_zs_zd,
+            c.monthly_latest_zs_zz::double precision AS _czsc_monthly_latest_zs_zz,
+            (c.monthly_recent_peak_date - DATE '1970-01-01')::double precision AS _czsc_monthly_recent_peak_day,
+            c.monthly_recent_peak_high::double precision AS _czsc_monthly_recent_peak_high,
+            (c.monthly_post_peak_first_bear_date - DATE '1970-01-01')::double precision AS _czsc_monthly_post_peak_first_bear_day,
+            c.monthly_post_peak_first_bear_open::double precision AS _czsc_monthly_post_peak_first_bear_open,
+            c.monthly_post_peak_first_bear_high::double precision AS _czsc_monthly_post_peak_first_bear_high,
+            c.monthly_post_peak_first_bear_low::double precision AS _czsc_monthly_post_peak_first_bear_low,
+            c.monthly_post_peak_first_bear_close::double precision AS _czsc_monthly_post_peak_first_bear_close,
+            CASE WHEN c.monthly_post_peak_first_bear_missing THEN 1.0 WHEN c.monthly_post_peak_first_bear_missing = false THEN 0.0 END::double precision AS _czsc_monthly_post_peak_first_bear_missing,
+            -- czsc multiperiod end
+            -- stk_factor_pro begin
+            s.close_qfq::double precision AS _stk_close_qfq,
+            s.asi_qfq::double precision AS _stk_asi_qfq,
+            s.asit_qfq::double precision AS _stk_asit_qfq,
+            s.bias2_qfq::double precision AS _stk_bias2_qfq,
+            s.bias3_qfq::double precision AS _stk_bias3_qfq,
+            s.brar_ar_qfq::double precision AS _stk_brar_ar_qfq,
+            s.brar_br_qfq::double precision AS _stk_brar_br_qfq,
+            s.cci_qfq::double precision AS _stk_cci_qfq,
+            s.cr_qfq::double precision AS _stk_cr_qfq,
+            s.emv_qfq::double precision AS _stk_emv_qfq,
+            s.maemv_qfq::double precision AS _stk_maemv_qfq,
+            s.mass_qfq::double precision AS _stk_mass_qfq,
+            s.ma_mass_qfq::double precision AS _stk_ma_mass_qfq,
+            s.mfi_qfq::double precision AS _stk_mfi_qfq,
+            s.psyma_qfq::double precision AS _stk_psyma_qfq,
+            s.maroc_qfq::double precision AS _stk_maroc_qfq,
+            s.trma_qfq::double precision AS _stk_trma_qfq,
+            s.wr1_qfq::double precision AS _stk_wr1_qfq,
+            s.updays::double precision AS _stk_updays,
+            s.downdays::double precision AS _stk_downdays,
+            s.lowdays::double precision AS _stk_lowdays,
+            s.topdays::double precision AS _stk_topdays,
+            s.dv_ttm::double precision AS _stk_dv_ttm,
+            s.turnover_rate::double precision AS _stk_turnover_rate,
+            s.volume_ratio::double precision AS _stk_volume_ratio,
+            s.float_share::double precision AS _stk_float_share,
+            s.bbi_qfq::double precision AS _stk_bbi_qfq,
+            s.ma_qfq_5::double precision AS _stk_ma_qfq_5,
+            s.ma_qfq_10::double precision AS _stk_ma_qfq_10,
+            s.ma_qfq_20::double precision AS _stk_ma_qfq_20,
+            s.ma_qfq_30::double precision AS _stk_ma_qfq_30,
+            s.ma_qfq_60::double precision AS _stk_ma_qfq_60,
+            s.ma_qfq_90::double precision AS _stk_ma_qfq_90,
+            s.ma_qfq_250::double precision AS _stk_ma_qfq_250,
+            s.ema_qfq_5::double precision AS _stk_ema_qfq_5,
+            s.ema_qfq_10::double precision AS _stk_ema_qfq_10,
+            s.ema_qfq_20::double precision AS _stk_ema_qfq_20,
+            s.ema_qfq_30::double precision AS _stk_ema_qfq_30,
+            s.ema_qfq_60::double precision AS _stk_ema_qfq_60,
+            s.ema_qfq_90::double precision AS _stk_ema_qfq_90,
+            s.ema_qfq_250::double precision AS _stk_ema_qfq_250,
+            s.expma_12_qfq::double precision AS _stk_expma_12_qfq,
+            s.expma_50_qfq::double precision AS _stk_expma_50_qfq,
+            s.boll_upper_qfq::double precision AS _stk_boll_upper_qfq,
+            s.boll_mid_qfq::double precision AS _stk_boll_mid_qfq,
+            s.boll_lower_qfq::double precision AS _stk_boll_lower_qfq,
+            s.ktn_upper_qfq::double precision AS _stk_ktn_upper_qfq,
+            s.ktn_mid_qfq::double precision AS _stk_ktn_mid_qfq,
+            s.ktn_down_qfq::double precision AS _stk_ktn_down_qfq,
+            s.taq_up_qfq::double precision AS _stk_taq_up_qfq,
+            s.taq_mid_qfq::double precision AS _stk_taq_mid_qfq,
+            s.taq_down_qfq::double precision AS _stk_taq_down_qfq,
+            s.xsii_td1_qfq::double precision AS _stk_xsii_td1_qfq,
+            s.xsii_td2_qfq::double precision AS _stk_xsii_td2_qfq,
+            s.xsii_td3_qfq::double precision AS _stk_xsii_td3_qfq,
+            s.xsii_td4_qfq::double precision AS _stk_xsii_td4_qfq,
+            s.atr_qfq::double precision AS _stk_atr_qfq,
+            s.dfma_dif_qfq::double precision AS _stk_dfma_dif_qfq,
+            s.dfma_difma_qfq::double precision AS _stk_dfma_difma_qfq,
+            s.dpo_qfq::double precision AS _stk_dpo_qfq,
+            s.madpo_qfq::double precision AS _stk_madpo_qfq,
+            s.mtmma_qfq::double precision AS _stk_mtmma_qfq,
+            s.free_share::double precision AS _stk_free_share,
+            -- stk_factor_pro end
             s.amount::double precision AS amount,
             s.turnover_rate_f::double precision AS turnover_rate_f,
             s.volume_ratio::double precision AS volume_ratio,
@@ -668,6 +769,12 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             a.monthly_macd_hist_x2_asof::double precision / 2.0 AS macd_monthly_hist,
             a.monthly_macd_dea_pctile_asof::double precision AS macd_monthly_dea_pctile,
             a.monthly_macd_period_count::double precision AS macd_monthly_period_count,
+            a.weekly_kdj_k_asof::double precision AS kdj_weekly_k,
+            a.weekly_kdj_d_asof::double precision AS kdj_weekly_d,
+            a.weekly_kdj_j_asof::double precision AS kdj_weekly_j,
+            a.monthly_kdj_k_asof::double precision AS kdj_monthly_k,
+            a.monthly_kdj_d_asof::double precision AS kdj_monthly_d,
+            a.monthly_kdj_j_asof::double precision AS kdj_monthly_j,
             r.ma25_qfq::double precision AS rolling_ma25_qfq,
             r.ma144_qfq::double precision AS rolling_ma144_qfq,
             r.ma220_qfq::double precision AS rolling_ma220_qfq,
@@ -688,42 +795,33 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
             r.turnover_to_ma5_ratio::double precision AS rolling_turnover_to_ma5_ratio,
             r.range_compression_20d::double precision AS rolling_range_compression_20d,
             r.range_compression_40d::double precision AS rolling_range_compression_40d,
-            smf.net_amount::double precision AS stock_mf_net_amount,
-            smf.net_d5_amount::double precision AS stock_mf_net_d5_amount,
-            smf.buy_lg_amount::double precision AS stock_mf_buy_lg_amount,
-            smf.buy_lg_amount_rate::double precision AS stock_mf_buy_lg_amount_rate,
-            smf.buy_md_amount::double precision AS stock_mf_buy_md_amount,
-            smf.buy_md_amount_rate::double precision AS stock_mf_buy_md_amount_rate,
-            smf.buy_sm_amount::double precision AS stock_mf_buy_sm_amount,
-            smf.buy_sm_amount_rate::double precision AS stock_mf_buy_sm_amount_rate,
+            smf.net_mf_amount AS stock_mf_net_amount,
+            smf.net_mf_d5_amount AS stock_mf_net_d5_amount,
+            smf.buy_lg_amount AS stock_mf_buy_lg_amount,
+            CASE WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.buy_lg_amount IS NOT NULL
+                 THEN smf.buy_lg_amount / (s.amount / 10.0) * 100.0 END AS stock_mf_buy_lg_amount_rate,
+            smf.buy_md_amount AS stock_mf_buy_md_amount,
+            CASE WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.buy_md_amount IS NOT NULL
+                 THEN smf.buy_md_amount / (s.amount / 10.0) * 100.0 END AS stock_mf_buy_md_amount_rate,
+            smf.buy_sm_amount AS stock_mf_buy_sm_amount,
+            CASE WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.buy_sm_amount IS NOT NULL
+                 THEN smf.buy_sm_amount / (s.amount / 10.0) * 100.0 END AS stock_mf_buy_sm_amount_rate,
             CASE
                 WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.buy_lg_amount IS NOT NULL
-                THEN smf.buy_lg_amount::double precision / s.amount::double precision * 100.0
+                THEN smf.buy_lg_amount / (s.amount / 10.0) * 100.0
             END AS large_net_amount_to_amount_pct,
             CASE
                 WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.buy_md_amount IS NOT NULL
-                THEN smf.buy_md_amount::double precision / s.amount::double precision * 100.0
+                THEN smf.buy_md_amount / (s.amount / 10.0) * 100.0
             END AS mid_net_amount_to_amount_pct,
             CASE
                 WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.buy_sm_amount IS NOT NULL
-                THEN smf.buy_sm_amount::double precision / s.amount::double precision * 100.0
+                THEN smf.buy_sm_amount / (s.amount / 10.0) * 100.0
             END AS small_net_amount_to_amount_pct,
             CASE
-                WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.net_amount IS NOT NULL
-                THEN smf.net_amount::double precision / s.amount::double precision * 100.0
-            END AS net_mf_amount_to_amount_pct,
-            imf.market_sse_ret5_pct,
-            imf.market_sse_ret20_pct,
-            imf.market_sse_ma20_bias_pct,
-            imf.market_sse_volatility20_pct,
-            imf.market_cn2000_ret5_pct,
-            imf.market_cn2000_ret20_pct,
-            imf.market_cn2000_ma20_bias_pct,
-            imf.market_cn2000_volatility20_pct,
-            imf.market_broad_ret5_pct,
-            imf.market_broad_ret20_pct,
-            imf.market_broad_ma20_bias_pct,
-            imf.market_broad_volatility20_pct
+                WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.net_mf_amount IS NOT NULL
+                THEN smf.net_mf_amount / (s.amount / 10.0) * 100.0
+            END AS net_mf_amount_to_amount_pct
         FROM {{stock_stk_factor_pro}} s
         LEFT JOIN {{calc_daily_indicators}} a
           ON a.ts_code = s.ts_code
@@ -735,11 +833,13 @@ const DB_NATIVE_PICK_DATE_EXTRAS_QUERY: &str = "
          AND r.trade_date = s.trade_date
          AND r.source_dataset = 'stock_stk_factor_pro'
          AND r.calc_version = 'v3-macd-kdj-czsc-1'
-        LEFT JOIN {{stock_moneyflow_ths}} smf
+        LEFT JOIN {{calc_daily_czsc_structure}} c
+          ON c.ts_code = s.ts_code
+         AND c.trade_date = s.trade_date
+         AND c.source_dataset = 'stock_stk_factor_pro'
+         AND c.calc_version = 'v3-macd-kdj-czsc-1'
+        LEFT JOIN stock_moneyflow_recent smf
           ON smf.ts_code = s.ts_code
-         AND smf.trade_date = s.trade_date
-        LEFT JOIN index_market_factors imf
-          ON imf.trade_date = s.trade_date
         WHERE s.trade_date = $1
         ";
 
@@ -756,362 +856,164 @@ const DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY: &str = "
         ORDER BY a.ts_code, a.trade_date DESC
         ";
 
-const DB_NATIVE_THS_SECTOR_EXTRAS_QUERY: &str = "
-        WITH recent_trade_dates AS (
-            SELECT trade_date
-            FROM (
-                SELECT DISTINCT trade_date
-                FROM {{stock_stk_factor_pro}}
-                WHERE trade_date <= $1
-                ORDER BY trade_date DESC
-                LIMIT 252
-            ) d
-        ),
-        index_market_base AS (
-            SELECT
-                i.ts_code,
-                i.trade_date,
-                i.close::double precision AS close,
-                lag(i.close, 5) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_5_ago,
-                lag(i.close, 20) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_20_ago,
-                avg(i.close::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS close_ma20,
-                stddev_samp(i.pct_change::double precision) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)::double precision AS volatility20_pct
-            FROM {{index_idx_factor_pro}} i
-            JOIN recent_trade_dates w
-              ON w.trade_date = i.trade_date
-            WHERE i.ts_code IN ('000001.SH', '399303.SZ')
-        ),
-        index_market_raw AS (
-            SELECT
+const DB_NATIVE_SW_L2_EXTRAS_QUERY: &str = "
+        WITH sample_stocks AS (
+            SELECT DISTINCT
                 ts_code,
                 trade_date,
-                CASE
-                    WHEN close_5_ago IS NOT NULL AND close_5_ago != 0
-                    THEN (close - close_5_ago) / close_5_ago * 100.0
-                END AS ret5_pct,
-                CASE
-                    WHEN close_20_ago IS NOT NULL AND close_20_ago != 0
-                    THEN (close - close_20_ago) / close_20_ago * 100.0
-                END AS ret20_pct,
-                CASE
-                    WHEN close_ma20 IS NOT NULL AND close_ma20 != 0
-                    THEN (close - close_ma20) / close_ma20 * 100.0
-                END AS ma20_bias_pct,
-                volatility20_pct
-            FROM index_market_base
-        ),
-        index_market_factors AS (
-            SELECT
-                trade_date,
-                max(ret5_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret5_pct,
-                max(ret20_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret20_pct,
-                max(ma20_bias_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ma20_bias_pct,
-                max(volatility20_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_volatility20_pct,
-                max(ret5_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret5_pct,
-                max(ret20_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret20_pct,
-                max(ma20_bias_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ma20_bias_pct,
-                max(volatility20_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_volatility20_pct,
-                CASE WHEN count(ret5_pct) = 2 THEN avg(ret5_pct)::double precision END AS market_broad_ret5_pct,
-                CASE WHEN count(ret20_pct) = 2 THEN avg(ret20_pct)::double precision END AS market_broad_ret20_pct,
-                CASE WHEN count(ma20_bias_pct) = 2 THEN avg(ma20_bias_pct)::double precision END AS market_broad_ma20_bias_pct,
-                CASE WHEN count(volatility20_pct) = 2 THEN avg(volatility20_pct)::double precision END AS market_broad_volatility20_pct
-            FROM index_market_raw
-            GROUP BY trade_date
-        ),
-        index_limit_cpt_daily AS (
-            SELECT
-                ts_code,
-                trade_date,
-                max(up_nums)::double precision AS up_nums,
-                max(days)::double precision AS days,
-                max(pct_chg)::double precision AS pct_chg,
-                min(rank)::double precision AS rank
-            FROM {{index_limit_cpt_list}}
+                pct_chg::double precision AS stock_pct_change
+            FROM {{stock_stk_factor_pro}}
             WHERE trade_date = $1
-            GROUP BY ts_code, trade_date
         ),
-        current_ths_membership AS (
+        benchmark_definitions AS (
+            SELECT * FROM (VALUES
+                ('000016.SH', 'sse50'),
+                ('000905.SH', 'csi500'),
+                ('000688.SH', 'sci50'),
+                ('930050.CSI', 'csi_a50'),
+                ('000922.CSI', 'csi_dividend'),
+                ('000300.SH', 'csi300'),
+                ('399303.SZ', 'guozheng2000'),
+                ('399006.SZ', 'chinext'),
+                ('899050.BJ', 'bse50')
+            ) AS definitions(index_code, context_alias)
+        ),
+        latest_weight_dates AS (
             SELECT
-                ts_code,
-                con_code
-            FROM {{index_ths_member}}
+                w.index_code,
+                max(w.trade_date) AS snapshot_date
+            FROM {{index_weight}} w
+            JOIN benchmark_definitions d
+              ON d.index_code = w.index_code
+            WHERE w.trade_date <= $1
+            GROUP BY w.index_code
         ),
-        ths_sector_base AS (
+        weights_asof AS (
             SELECT
-                d.ts_code,
-                d.trade_date,
-                d.close::double precision AS close,
-                lag(d.close, 5) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date)::double precision AS ths_close_5_ago,
-                lag(d.close, 20) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date)::double precision AS ths_close_20_ago,
-                avg(d.close::double precision) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS ths_close_ma20
-            FROM {{index_ths_daily}} d
-            JOIN recent_trade_dates w
-              ON w.trade_date = d.trade_date
+                w.index_code,
+                w.con_code,
+                max(w.weight)::double precision AS weight_pct
+            FROM {{index_weight}} w
+            JOIN latest_weight_dates d
+              ON d.index_code = w.index_code
+             AND d.snapshot_date = w.trade_date
+            GROUP BY w.index_code, w.con_code
         ),
-        ths_sector_rolling AS (
-            SELECT
-                ts_code,
-                trade_date,
-                CASE
-                    WHEN ths_close_5_ago IS NOT NULL AND ths_close_5_ago != 0
-                    THEN (close - ths_close_5_ago) / ths_close_5_ago * 100.0
-                END AS ths_ret5_pct,
-                CASE
-                    WHEN ths_close_20_ago IS NOT NULL AND ths_close_20_ago != 0
-                    THEN (close - ths_close_20_ago) / ths_close_20_ago * 100.0
-                END AS ths_ret20_pct,
-                CASE
-                    WHEN ths_close_ma20 IS NOT NULL AND ths_close_ma20 != 0
-                    THEN (close - ths_close_ma20) / ths_close_ma20 * 100.0
-                END AS ths_ma20_bias_pct
-            FROM ths_sector_base
-        ),
-        ths_sector_daily AS (
-            SELECT
-                d.ts_code AS ths_ts_code,
-                d.trade_date,
-                d.pct_change::double precision AS ths_pct_change,
-                tr.ths_ret5_pct,
-                tr.ths_ret20_pct,
-                tr.ths_ma20_bias_pct,
-                d.vol::double precision AS ths_vol,
-                d.turnover_rate::double precision AS ths_turnover_rate,
-                d.total_mv::double precision AS ths_total_mv,
-                d.float_mv::double precision AS ths_float_mv,
-                mf.net_amount::double precision AS ths_net_amount,
-                mf.net_buy_amount::double precision AS ths_net_buy_amount,
-                mf.net_sell_amount::double precision AS ths_net_sell_amount,
-                il.up_nums::double precision AS ths_limit_up_count,
-                il.days::double precision AS ths_limit_days,
-                il.pct_chg::double precision AS ths_limit_pct_chg,
-                il.rank::double precision AS ths_limit_rank,
-                mf.pct_change_stock::double precision AS ths_lead_stock_pct_change,
-                ia.daily_macd_dif_asof::double precision AS ths_macd_daily_dif,
-                ia.daily_macd_dea_asof::double precision AS ths_macd_daily_dea,
-                ia.daily_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_daily_hist,
-                ia.weekly_macd_dif_asof::double precision AS ths_macd_weekly_dif,
-                ia.weekly_macd_dea_asof::double precision AS ths_macd_weekly_dea,
-                ia.weekly_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_weekly_hist,
-                ia.monthly_macd_dif_asof::double precision AS ths_macd_monthly_dif,
-                ia.monthly_macd_dea_asof::double precision AS ths_macd_monthly_dea,
-                ia.monthly_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_monthly_hist,
-                ROW_NUMBER() OVER (
-                    PARTITION BY d.trade_date
-                    ORDER BY mf.net_amount DESC NULLS LAST, d.pct_change DESC NULLS LAST, d.ts_code ASC
-                )::double precision AS ths_sector_rank
-            FROM {{index_ths_daily}} d
-            LEFT JOIN {{index_moneyflow_cnt_ths}} mf
-              ON mf.ts_code = d.ts_code
-             AND mf.trade_date = d.trade_date
-            LEFT JOIN index_limit_cpt_daily il
-              ON il.ts_code = d.ts_code
-             AND il.trade_date = d.trade_date
-            LEFT JOIN {{calc_daily_indicators}} ia
-              ON ia.ts_code = d.ts_code
-             AND ia.trade_date = d.trade_date
-             AND ia.source_dataset = 'index_ths_daily'
-             AND ia.calc_version = 'v3-macd-kdj-czsc-1'
-            LEFT JOIN ths_sector_rolling tr
-              ON tr.ts_code = d.ts_code
-             AND tr.trade_date = d.trade_date
-            WHERE d.trade_date = $1
-        ),
-        stock_ths_sector_candidates AS (
+        market_context AS (
             SELECT
                 s.ts_code,
                 s.trade_date,
-                s.pct_chg::double precision AS stock_pct_chg,
-                td.ths_ts_code,
-                td.ths_sector_rank,
-                td.ths_pct_change,
-                td.ths_ret5_pct,
-                td.ths_ret20_pct,
-                td.ths_ma20_bias_pct,
-                td.ths_vol,
-                td.ths_turnover_rate,
-                td.ths_total_mv,
-                td.ths_float_mv,
-                td.ths_net_amount,
-                td.ths_net_buy_amount,
-                td.ths_net_sell_amount,
-                td.ths_limit_up_count,
-                td.ths_limit_days,
-                td.ths_limit_pct_chg,
-                td.ths_limit_rank,
-                td.ths_lead_stock_pct_change,
-                td.ths_macd_daily_dif,
-                td.ths_macd_daily_dea,
-                td.ths_macd_daily_hist,
-                td.ths_macd_weekly_dif,
-                td.ths_macd_weekly_dea,
-                td.ths_macd_weekly_hist,
-                td.ths_macd_monthly_dif,
-                td.ths_macd_monthly_dea,
-                td.ths_macd_monthly_hist,
-                ROW_NUMBER() OVER (
-                    PARTITION BY s.ts_code, s.trade_date
-                    ORDER BY ths_sector_rank ASC NULLS LAST, ths_net_amount DESC NULLS LAST, ths_pct_change DESC NULLS LAST, ths_ts_code ASC
-                ) AS sector_choice_rank
-            FROM {{stock_stk_factor_pro}} s
-            JOIN current_ths_membership cm
-              ON cm.con_code = s.ts_code
-            JOIN ths_sector_daily td
-              ON td.ths_ts_code = cm.ts_code
-             AND td.trade_date = s.trade_date
-            WHERE s.trade_date = $1
+                'market'::text AS context_type,
+                d.context_alias,
+                CASE WHEN w.con_code IS NOT NULL THEN 1.0 ELSE 0.0 END::double precision AS member_flag,
+                CASE WHEN w.con_code IS NOT NULL THEN coalesce(w.weight_pct, 0.0) ELSE 0.0 END::double precision AS weight_pct,
+                coalesce(to_json(i), '{}')::text AS index_payload,
+                coalesce(to_json(a), '{}')::text AS indicators_payload,
+                coalesce(to_json(r), '{}')::text AS rolling_payload,
+                coalesce(to_json(c), '{}')::text AS czsc_payload,
+                '{}'::text AS moneyflow_payload,
+                NULL::double precision AS industry_pct_change,
+                NULL::double precision AS industry_net_amount,
+                NULL::double precision AS stock_vs_industry_pct_change
+            FROM sample_stocks s
+            CROSS JOIN benchmark_definitions d
+            LEFT JOIN weights_asof w
+              ON w.index_code = d.index_code
+             AND w.con_code = s.ts_code
+            LEFT JOIN {{index_idx_factor_pro}} i
+              ON i.ts_code = d.index_code
+             AND i.trade_date = s.trade_date
+            LEFT JOIN {{calc_daily_indicators}} a
+              ON a.ts_code = d.index_code
+             AND a.trade_date = s.trade_date
+             AND a.source_dataset = 'index_idx_factor_pro'
+             AND a.calc_version = 'v3-macd-kdj-czsc-1'
+            LEFT JOIN {{calc_daily_rolling_factors}} r
+              ON r.ts_code = d.index_code
+             AND r.trade_date = s.trade_date
+             AND r.source_dataset = 'index_idx_factor_pro'
+             AND r.calc_version = 'v3-macd-kdj-czsc-1'
+            LEFT JOIN {{calc_daily_czsc_structure}} c
+              ON c.ts_code = d.index_code
+             AND c.trade_date = s.trade_date
+             AND c.source_dataset = 'index_idx_factor_pro'
+             AND c.calc_version = 'v3-macd-kdj-czsc-1'
         ),
-        stock_ths_main_sector AS (
-            SELECT *
-            FROM stock_ths_sector_candidates
-            WHERE sector_choice_rank = 1
-        ),
-        stock_ths_sector_agg AS (
+        sw_membership_candidates AS (
             SELECT
-                ts_code,
-                trade_date,
-                COUNT(*)::double precision AS ths_sector_count,
-                MAX(ths_pct_change) AS ths_best_pct_change,
-                AVG(ths_pct_change) AS ths_avg_pct_change,
-                MAX(ths_net_amount) AS ths_best_net_amount,
-                AVG(ths_net_amount) AS ths_avg_net_amount,
-                MAX(ths_net_buy_amount) AS ths_best_net_buy_amount,
-                AVG(ths_net_buy_amount) AS ths_avg_net_buy_amount,
-                MAX(ths_net_sell_amount) AS ths_best_net_sell_amount,
-                AVG(ths_net_sell_amount) AS ths_avg_net_sell_amount,
-                MAX(ths_limit_up_count) AS ths_best_limit_up_count,
-                AVG(ths_limit_up_count) AS ths_avg_limit_up_count,
-                MAX(
-                    CASE
-                        WHEN ths_limit_up_count IS NOT NULL AND ths_limit_up_count > 0
-                        THEN 1.0
-                        ELSE 0.0
-                    END
-                )::double precision AS ths_any_limit_up_sector_flag,
-                SUM(
-                    CASE
-                        WHEN ths_limit_up_count IS NOT NULL AND ths_limit_up_count > 0
-                        THEN 1.0
-                        ELSE 0.0
-                    END
-                )::double precision AS ths_limit_up_sector_count,
-                AVG(
-                    CASE
-                        WHEN ths_limit_up_count IS NOT NULL AND ths_limit_up_count > 0
-                        THEN 1.0
-                        ELSE 0.0
-                    END
-                )::double precision AS ths_limit_up_sector_ratio,
-                MAX(ths_limit_days) AS ths_best_limit_days,
-                MAX(ths_limit_pct_chg) AS ths_best_limit_pct_chg,
-                AVG(ths_limit_pct_chg) AS ths_avg_limit_pct_chg,
-                MIN(ths_limit_rank) AS ths_best_limit_rank
-            FROM stock_ths_sector_candidates
-            GROUP BY ts_code, trade_date
-        )
-        SELECT
-            COALESCE(m.ts_code, ta.ts_code) AS ts_code,
-            COALESCE(m.trade_date, ta.trade_date) AS trade_date,
-            m.ths_ts_code AS ths_main_sector_code,
-            (CASE WHEN m.ths_ts_code IS NOT NULL THEN 1.0 ELSE 0.0 END)::double precision AS ths_membership_current_flag,
-                m.ths_sector_rank::double precision AS ths_main_sector_rank,
-            m.ths_pct_change AS ths_main_pct_change,
-            m.ths_ret5_pct AS stock_env_sector_ret5_pct,
-            m.ths_ret20_pct AS stock_env_sector_ret20_pct,
-            m.ths_ma20_bias_pct AS stock_env_sector_ma20_bias_pct,
-            m.ths_vol AS ths_main_vol,
-            m.ths_turnover_rate AS ths_main_turnover_rate,
-            m.ths_total_mv AS ths_main_total_mv,
-            m.ths_float_mv AS ths_main_float_mv,
-            m.ths_net_amount AS ths_main_net_amount,
-            m.ths_net_buy_amount AS ths_main_net_buy_amount,
-            m.ths_net_sell_amount AS ths_main_net_sell_amount,
-            m.ths_limit_up_count AS ths_main_limit_up_count,
-            m.ths_limit_days AS ths_main_limit_days,
-            m.ths_limit_pct_chg AS ths_main_limit_pct_chg,
-            m.ths_limit_rank AS ths_main_limit_rank,
-            m.ths_lead_stock_pct_change AS ths_main_lead_stock_pct_change,
-            m.ths_macd_daily_dif AS ths_main_macd_daily_dif,
-            m.ths_macd_daily_dea AS ths_main_macd_daily_dea,
-            m.ths_macd_daily_hist AS ths_main_macd_daily_hist,
-            m.ths_macd_weekly_dif AS ths_main_macd_weekly_dif,
-            m.ths_macd_weekly_dea AS ths_main_macd_weekly_dea,
-            m.ths_macd_weekly_hist AS ths_main_macd_weekly_hist,
-            m.ths_macd_monthly_dif AS ths_main_macd_monthly_dif,
-            m.ths_macd_monthly_dea AS ths_main_macd_monthly_dea,
-            m.ths_macd_monthly_hist AS ths_main_macd_monthly_hist,
-            ta.ths_sector_count::double precision AS ths_sector_count,
-            ta.ths_best_pct_change AS ths_best_pct_change,
-            ta.ths_avg_pct_change AS ths_avg_pct_change,
-            ta.ths_best_net_amount AS ths_best_net_amount,
-            ta.ths_avg_net_amount AS ths_avg_net_amount,
-            ta.ths_best_net_buy_amount AS ths_best_net_buy_amount,
-            ta.ths_avg_net_buy_amount AS ths_avg_net_buy_amount,
-            ta.ths_best_net_sell_amount AS ths_best_net_sell_amount,
-            ta.ths_avg_net_sell_amount AS ths_avg_net_sell_amount,
-            ta.ths_best_limit_up_count AS ths_best_limit_up_count,
-            ta.ths_avg_limit_up_count AS ths_avg_limit_up_count,
-            ta.ths_any_limit_up_sector_flag AS ths_any_limit_up_sector_flag,
-            ta.ths_limit_up_sector_count AS ths_limit_up_sector_count,
-            ta.ths_limit_up_sector_ratio AS ths_limit_up_sector_ratio,
-            ta.ths_best_limit_days AS ths_best_limit_days,
-            ta.ths_best_limit_pct_chg AS ths_best_limit_pct_chg,
-            ta.ths_avg_limit_pct_chg AS ths_avg_limit_pct_chg,
-            ta.ths_best_limit_rank AS ths_best_limit_rank,
-            m.stock_pct_chg - m.ths_pct_change AS stock_vs_ths_main_pct_change,
-            m.stock_pct_chg - ta.ths_avg_pct_change AS stock_vs_ths_avg_pct_change,
-            m.ths_ret5_pct - imf.market_broad_ret5_pct AS stock_env_sector_vs_broad_ret5_pct,
-            m.ths_ret20_pct - imf.market_broad_ret20_pct AS stock_env_sector_vs_broad_ret20_pct,
-            imf.market_cn2000_ret5_pct - imf.market_sse_ret5_pct AS stock_env_style_ret5_spread_pct,
-            m.ths_ret5_pct + imf.market_broad_ret5_pct AS stock_env_market_sector_ret5_sum_pct,
-            (
-                COALESCE(imf.market_broad_ret5_pct, 0.0) * 0.5
-                + COALESCE(imf.market_broad_ma20_bias_pct, 0.0) * 0.3
-                - COALESCE(imf.market_broad_volatility20_pct, 0.0) * 0.2
-            )::double precision AS stock_env_market_score,
-            (
-                COALESCE(m.ths_ret5_pct, 0.0) * 0.45
-                + COALESCE(m.ths_ma20_bias_pct, 0.0) * 0.25
-                + COALESCE(m.ths_pct_change, 0.0) * 0.15
-                + COALESCE(m.ths_net_amount, 0.0) * 0.0000000001
-            )::double precision AS stock_env_sector_score,
-            (
+                s.ts_code,
+                s.trade_date,
+                s.stock_pct_change,
+                m.l2_code AS industry_code,
+                row_number() OVER (
+                    PARTITION BY s.ts_code
+                    ORDER BY m.in_date DESC NULLS LAST, m.l2_code ASC NULLS LAST
+                ) AS member_rank
+            FROM sample_stocks s
+            LEFT JOIN {{index_sw_member}} m
+              ON m.ts_code = s.ts_code
+             AND m.l2_code IS NOT NULL
+             AND s.trade_date >= m.in_date
+             AND (m.out_date IS NULL OR s.trade_date < m.out_date)
+        ),
+        sw_membership AS (
+            SELECT *
+            FROM sw_membership_candidates
+            WHERE member_rank = 1
+        ),
+        industry_context AS (
+            SELECT
+                s.ts_code,
+                s.trade_date,
+                'industry'::text AS context_type,
+                'sw_l2_main'::text AS context_alias,
+                CASE WHEN m.industry_code IS NOT NULL THEN 1.0 ELSE 0.0 END::double precision AS member_flag,
+                0.0::double precision AS weight_pct,
+                coalesce(to_json(i), '{}')::text AS index_payload,
+                coalesce(to_json(a), '{}')::text AS indicators_payload,
+                coalesce(to_json(r), '{}')::text AS rolling_payload,
+                coalesce(to_json(c), '{}')::text AS czsc_payload,
+                coalesce(to_json(mf), '{}')::text AS moneyflow_payload,
+                i.pct_change::double precision AS industry_pct_change,
+                mf.main_net_amount::double precision AS industry_net_amount,
                 CASE
-                    WHEN imf.market_broad_ret5_pct IS NOT NULL
-                     AND m.ths_ret5_pct IS NOT NULL
-                     AND imf.market_broad_ret5_pct > 0
-                     AND m.ths_ret5_pct > 0
-                    THEN 1.0
-                    WHEN imf.market_broad_ret5_pct IS NOT NULL
-                     AND m.ths_ret5_pct IS NOT NULL
-                     AND imf.market_broad_ret5_pct < 0
-                     AND m.ths_ret5_pct < 0
-                    THEN -1.0
-                    WHEN imf.market_broad_ret5_pct IS NOT NULL
-                     AND m.ths_ret5_pct IS NOT NULL
-                    THEN 0.0
-                END
-            )::double precision AS stock_env_alignment_score,
-            (
-                COALESCE(ta.ths_limit_up_sector_ratio, 0.0) * 2.0
-                + COALESCE(ta.ths_limit_up_sector_count, 0.0) * 0.2
-                + COALESCE(ta.ths_best_limit_up_count, 0.0) * 0.05
-            )::double precision AS stock_env_limit_heat_score,
-            (
-                COALESCE(imf.market_broad_ret5_pct, 0.0) * 0.25
-                + COALESCE(imf.market_broad_ma20_bias_pct, 0.0) * 0.15
-                - COALESCE(imf.market_broad_volatility20_pct, 0.0) * 0.10
-                + COALESCE(m.ths_ret5_pct, 0.0) * 0.25
-                + COALESCE(m.ths_ma20_bias_pct, 0.0) * 0.15
-                + COALESCE(ta.ths_limit_up_sector_ratio, 0.0) * 0.8
-                + COALESCE(ta.ths_limit_up_sector_count, 0.0) * 0.08
-            )::double precision AS stock_env_overall_score
-        FROM stock_ths_main_sector m
-        FULL OUTER JOIN stock_ths_sector_agg ta
-          ON ta.ts_code = m.ts_code
-         AND ta.trade_date = m.trade_date
-        LEFT JOIN index_market_factors imf
-          ON imf.trade_date = COALESCE(m.trade_date, ta.trade_date)
-        ORDER BY ts_code ASC, trade_date ASC
+                    WHEN m.industry_code IS NOT NULL
+                     AND s.stock_pct_change IS NOT NULL
+                     AND i.pct_change IS NOT NULL
+                    THEN s.stock_pct_change - i.pct_change
+                END::double precision AS stock_vs_industry_pct_change
+            FROM sw_membership m
+            JOIN sample_stocks s
+              ON s.ts_code = m.ts_code
+             AND s.trade_date = m.trade_date
+            LEFT JOIN {{index_idx_factor_pro}} i
+              ON i.ts_code = m.industry_code
+             AND i.trade_date = s.trade_date
+            LEFT JOIN {{calc_daily_indicators}} a
+              ON a.ts_code = m.industry_code
+             AND a.trade_date = s.trade_date
+             AND a.source_dataset = 'index_idx_factor_pro'
+             AND a.calc_version = 'v3-macd-kdj-czsc-1'
+            LEFT JOIN {{calc_daily_rolling_factors}} r
+              ON r.ts_code = m.industry_code
+             AND r.trade_date = s.trade_date
+             AND r.source_dataset = 'index_idx_factor_pro'
+             AND r.calc_version = 'v3-macd-kdj-czsc-1'
+            LEFT JOIN {{calc_daily_czsc_structure}} c
+              ON c.ts_code = m.industry_code
+             AND c.trade_date = s.trade_date
+             AND c.source_dataset = 'index_idx_factor_pro'
+             AND c.calc_version = 'v3-macd-kdj-czsc-1'
+            LEFT JOIN {{calc_daily_industry_moneyflow}} mf
+              ON mf.industry_code = m.industry_code
+             AND mf.trade_date = s.trade_date
+             AND mf.source_dataset = 'stock_moneyflow'
+             AND mf.calc_version = 'sw2021-l2-v1'
+        )
+        SELECT * FROM market_context
+        UNION ALL
+        SELECT * FROM industry_context
+        ORDER BY ts_code, trade_date, context_type, context_alias
         ";
 
 const PREVIOUS_TRADE_DATE_QUERY: &str = "
@@ -1141,42 +1043,31 @@ const STOCK_PERIOD_MACD_STATE_QUERY: &str = "
         ORDER BY p.ts_code, p.period_type, p.period_end_date DESC
         ";
 
-const INSTRUMENT_INFO_QUERY: &str = "
+const STOCK_BASIC_INFO_QUERY: &str = "
         WITH requested AS (
             SELECT unnest($1::text[]) AS ts_code
-        ),
-        ths_name AS (
-            SELECT
-                con_code AS ts_code,
-                max(con_name) AS name
-            FROM index_ths_member
-            WHERE con_code = ANY($1)
-            GROUP BY con_code
-        ),
-        ths_industry AS (
-            SELECT DISTINCT ON (m.con_code)
-                m.con_code AS ts_code,
-                i.name AS industry
-            FROM index_ths_member m
-            JOIN index_ths i ON i.ts_code = m.ts_code
-            WHERE m.con_code = ANY($1)
-              AND i.type = 'I'
-              AND NULLIF(trim(i.name), '') IS NOT NULL
-            ORDER BY
-                m.con_code,
-                CASE WHEN i.name LIKE '%(A股)' THEN 1 ELSE 0 END,
-                i.count ASC NULLS LAST,
-                i.name ASC
         )
         SELECT
             r.ts_code,
-            COALESCE(NULLIF(trim(s.name), ''), ths_name.name) AS name,
-            COALESCE(NULLIF(trim(s.industry), ''), ths_industry.industry) AS industry
+            NULLIF(trim(s.name), '') AS name
         FROM requested r
         LEFT JOIN stock_basic s ON s.ts_code = r.ts_code
-        LEFT JOIN ths_name ON ths_name.ts_code = r.ts_code
-        LEFT JOIN ths_industry ON ths_industry.ts_code = r.ts_code
         ORDER BY r.ts_code ASC
+        ";
+
+const SW_L2_INDUSTRY_QUERY: &str = "
+        WITH requested AS (
+            SELECT unnest($1::text[]) AS ts_code
+        )
+        SELECT DISTINCT ON (r.ts_code)
+            r.ts_code,
+            m.l2_name AS industry
+        FROM requested r
+        JOIN index_sw_member m ON m.ts_code = r.ts_code
+        WHERE m.in_date <= CURRENT_DATE
+          AND (m.out_date IS NULL OR CURRENT_DATE < m.out_date)
+          AND NULLIF(trim(m.l2_name), '') IS NOT NULL
+        ORDER BY r.ts_code, m.in_date DESC NULLS LAST
         ";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1224,6 +1115,65 @@ pub(crate) const DB_NATIVE_FACTOR_COLUMNS: &[&str] = &[
 ];
 
 pub(crate) const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
+    "_czsc_period_complete",
+    "_czsc_weekly_snapshot_available",
+    "_czsc_weekly_period_complete",
+    "_czsc_weekly_source_bar_valid",
+    "_czsc_weekly_status_code",
+    "_czsc_weekly_available_finished_bi_count",
+    "_czsc_weekly_recent_bi_count",
+    "_czsc_weekly_last_bi_direction_code",
+    "_czsc_weekly_last_bi_start_day",
+    "_czsc_weekly_last_bi_end_day",
+    "_czsc_weekly_last_bi_high",
+    "_czsc_weekly_last_bi_low",
+    "_czsc_weekly_last_bi_mid",
+    "_czsc_weekly_latest_zs_start_day",
+    "_czsc_weekly_latest_zs_end_day",
+    "_czsc_weekly_latest_zs_bi_count",
+    "_czsc_weekly_latest_zs_zg",
+    "_czsc_weekly_latest_zs_zd",
+    "_czsc_weekly_latest_zs_zz",
+    "_czsc_weekly_recent_peak_day",
+    "_czsc_weekly_recent_peak_high",
+    "_czsc_weekly_post_peak_first_bear_day",
+    "_czsc_weekly_post_peak_first_bear_open",
+    "_czsc_weekly_post_peak_first_bear_high",
+    "_czsc_weekly_post_peak_first_bear_low",
+    "_czsc_weekly_post_peak_first_bear_close",
+    "_czsc_weekly_post_peak_first_bear_missing",
+    "_czsc_monthly_snapshot_available",
+    "_czsc_monthly_period_complete",
+    "_czsc_monthly_source_bar_valid",
+    "_czsc_monthly_status_code",
+    "_czsc_monthly_available_finished_bi_count",
+    "_czsc_monthly_recent_bi_count",
+    "_czsc_monthly_last_bi_direction_code",
+    "_czsc_monthly_last_bi_start_day",
+    "_czsc_monthly_last_bi_end_day",
+    "_czsc_monthly_last_bi_high",
+    "_czsc_monthly_last_bi_low",
+    "_czsc_monthly_last_bi_mid",
+    "_czsc_monthly_latest_zs_start_day",
+    "_czsc_monthly_latest_zs_end_day",
+    "_czsc_monthly_latest_zs_bi_count",
+    "_czsc_monthly_latest_zs_zg",
+    "_czsc_monthly_latest_zs_zd",
+    "_czsc_monthly_latest_zs_zz",
+    "_czsc_monthly_recent_peak_day",
+    "_czsc_monthly_recent_peak_high",
+    "_czsc_monthly_post_peak_first_bear_day",
+    "_czsc_monthly_post_peak_first_bear_open",
+    "_czsc_monthly_post_peak_first_bear_high",
+    "_czsc_monthly_post_peak_first_bear_low",
+    "_czsc_monthly_post_peak_first_bear_close",
+    "_czsc_monthly_post_peak_first_bear_missing",
+    "kdj_weekly_k",
+    "kdj_weekly_d",
+    "kdj_weekly_j",
+    "kdj_monthly_k",
+    "kdj_monthly_d",
+    "kdj_monthly_j",
     "amount",
     "turnover_rate_f",
     "volume_ratio",
@@ -1310,78 +1260,317 @@ pub(crate) const DB_NATIVE_PICK_DATE_FACTOR_COLUMNS: &[&str] = &[
     "mid_net_amount_to_amount_pct",
     "small_net_amount_to_amount_pct",
     "net_mf_amount_to_amount_pct",
-    "market_sse_ret5_pct",
-    "market_sse_ret20_pct",
-    "market_sse_ma20_bias_pct",
-    "market_sse_volatility20_pct",
-    "market_cn2000_ret5_pct",
-    "market_cn2000_ret20_pct",
-    "market_cn2000_ma20_bias_pct",
-    "market_cn2000_volatility20_pct",
-    "market_broad_ret5_pct",
-    "market_broad_ret20_pct",
-    "market_broad_ma20_bias_pct",
-    "market_broad_volatility20_pct",
 ];
 
-pub(crate) const DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS: &[&str] = &[
-    "ths_membership_current_flag",
-    "ths_main_sector_rank",
-    "ths_main_pct_change",
-    "ths_main_vol",
-    "ths_main_turnover_rate",
-    "ths_main_total_mv",
-    "ths_main_float_mv",
-    "ths_main_net_amount",
-    "ths_main_net_buy_amount",
-    "ths_main_net_sell_amount",
-    "ths_main_limit_up_count",
-    "ths_main_limit_days",
-    "ths_main_limit_pct_chg",
-    "ths_main_limit_rank",
-    "ths_main_lead_stock_pct_change",
-    "ths_main_macd_daily_dif",
-    "ths_main_macd_daily_dea",
-    "ths_main_macd_daily_hist",
-    "ths_main_macd_weekly_dif",
-    "ths_main_macd_weekly_dea",
-    "ths_main_macd_weekly_hist",
-    "ths_main_macd_monthly_dif",
-    "ths_main_macd_monthly_dea",
-    "ths_main_macd_monthly_hist",
-    "ths_sector_count",
-    "ths_best_pct_change",
-    "ths_avg_pct_change",
-    "ths_best_net_amount",
-    "ths_avg_net_amount",
-    "ths_best_net_buy_amount",
-    "ths_avg_net_buy_amount",
-    "ths_best_net_sell_amount",
-    "ths_avg_net_sell_amount",
-    "ths_best_limit_up_count",
-    "ths_avg_limit_up_count",
-    "ths_any_limit_up_sector_flag",
-    "ths_limit_up_sector_count",
-    "ths_limit_up_sector_ratio",
-    "ths_best_limit_days",
-    "ths_best_limit_pct_chg",
-    "ths_avg_limit_pct_chg",
-    "ths_best_limit_rank",
-    "stock_vs_ths_main_pct_change",
-    "stock_vs_ths_avg_pct_change",
-    "stock_env_sector_ret5_pct",
-    "stock_env_sector_ret20_pct",
-    "stock_env_sector_ma20_bias_pct",
-    "stock_env_sector_vs_broad_ret5_pct",
-    "stock_env_sector_vs_broad_ret20_pct",
-    "stock_env_style_ret5_spread_pct",
-    "stock_env_market_sector_ret5_sum_pct",
-    "stock_env_market_score",
-    "stock_env_sector_score",
-    "stock_env_alignment_score",
-    "stock_env_limit_heat_score",
-    "stock_env_overall_score",
+pub(crate) fn db_native_pick_date_factor_columns() -> Vec<String> {
+    DB_NATIVE_PICK_DATE_FACTOR_COLUMNS
+        .iter()
+        .map(|column| (*column).to_string())
+        .chain(SOURCE_COLUMNS.iter().map(|column| format!("_stk_{column}")))
+        .collect()
+}
+
+pub(crate) const DB_NATIVE_SW_L2_FACTOR_COLUMNS: &[&str] = &[
+    "sw_l2_membership_current_flag",
+    "sw_l2_main_pct_change",
+    "sw_l2_main_net_amount_per_stock",
+    "stock_vs_sw_l2_main_pct_change",
 ];
+
+const INDEX_BENCHMARKS: [(&str, &str); 9] = [
+    ("000016.SH", "sse50"),
+    ("000905.SH", "csi500"),
+    ("000688.SH", "sci50"),
+    ("930050.CSI", "csi_a50"),
+    ("000922.CSI", "csi_dividend"),
+    ("000300.SH", "csi300"),
+    ("399303.SZ", "guozheng2000"),
+    ("399006.SZ", "chinext"),
+    ("899050.BJ", "bse50"),
+];
+
+const INDEX_FACTOR_SOURCES: [(&str, &str); 4] = [
+    ("idx", "index_idx_factor_pro"),
+    ("calc_daily_indicators", "calc_daily_indicators"),
+    ("calc_daily_rolling_factors", "calc_daily_rolling_factors"),
+    ("calc_daily_czsc_structure", "calc_daily_czsc_structure"),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextFactorTransform {
+    Raw,
+    ToClosePct,
+    PerStock,
+    StatusCode,
+    DirectionCode,
+    AgeCalendarDays,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ContextFactorPolicy {
+    transform: ContextFactorTransform,
+    weighted: bool,
+}
+
+fn context_factor_policy(source: &str, field: &str) -> Option<ContextFactorPolicy> {
+    let policy = |transform, weighted| {
+        Some(ContextFactorPolicy {
+            transform,
+            weighted,
+        })
+    };
+    match source {
+        "idx" => {
+            if field == "pct_change" {
+                return policy(ContextFactorTransform::Raw, true);
+            }
+            if matches!(
+                field,
+                "emv_bfq"
+                    | "maemv_bfq"
+                    | "obv_bfq"
+                    | "bias1_bfq"
+                    | "bias2_bfq"
+                    | "bias3_bfq"
+                    | "brar_ar_bfq"
+                    | "brar_br_bfq"
+                    | "cci_bfq"
+                    | "cr_bfq"
+                    | "dmi_adx_bfq"
+                    | "dmi_adxr_bfq"
+                    | "dmi_mdi_bfq"
+                    | "dmi_pdi_bfq"
+                    | "downdays"
+                    | "updays"
+                    | "lowdays"
+                    | "topdays"
+                    | "kdj_bfq"
+                    | "kdj_d_bfq"
+                    | "kdj_k_bfq"
+                    | "mass_bfq"
+                    | "ma_mass_bfq"
+                    | "mfi_bfq"
+                    | "psy_bfq"
+                    | "psyma_bfq"
+                    | "roc_bfq"
+                    | "maroc_bfq"
+                    | "rsi_bfq_6"
+                    | "rsi_bfq_12"
+                    | "rsi_bfq_24"
+                    | "trix_bfq"
+                    | "vr_bfq"
+                    | "wr_bfq"
+                    | "wr1_bfq"
+            ) {
+                return policy(ContextFactorTransform::Raw, false);
+            }
+            if matches!(
+                field,
+                "asi_bfq"
+                    | "asit_bfq"
+                    | "atr_bfq"
+                    | "bbi_bfq"
+                    | "dfma_dif_bfq"
+                    | "dfma_difma_bfq"
+                    | "dpo_bfq"
+                    | "madpo_bfq"
+                    | "macd_bfq"
+                    | "macd_dea_bfq"
+                    | "macd_dif_bfq"
+                    | "mtm_bfq"
+                    | "mtmma_bfq"
+                    | "trma_bfq"
+                    | "xsii_td1_bfq"
+                    | "xsii_td2_bfq"
+                    | "xsii_td3_bfq"
+                    | "xsii_td4_bfq"
+            ) || field.starts_with("boll_")
+                || field.starts_with("ema_bfq_")
+                || field.starts_with("expma_")
+                || field.starts_with("ktn_")
+                || field.starts_with("ma_bfq_")
+                || field.starts_with("taq_")
+            {
+                return policy(ContextFactorTransform::ToClosePct, field == "macd_bfq");
+            }
+            None
+        }
+        "calc_daily_indicators" => {
+            if field.ends_with("_macd_period_count")
+                || field.ends_with("_dea_pctile_asof")
+                || field.starts_with("weekly_kdj_")
+                || field.starts_with("monthly_kdj_")
+            {
+                return policy(ContextFactorTransform::Raw, false);
+            }
+            if field.ends_with("_macd_dif_asof")
+                || field.ends_with("_macd_dea_asof")
+                || field.ends_with("_macd_hist_x2_asof")
+            {
+                return policy(
+                    ContextFactorTransform::ToClosePct,
+                    field == "daily_macd_hist_x2_asof",
+                );
+            }
+            None
+        }
+        "calc_daily_rolling_factors" => {
+            if matches!(
+                field,
+                "ma25_qfq"
+                    | "ma144_qfq"
+                    | "ma220_qfq"
+                    | "high_20_qfq"
+                    | "high_90_qfq"
+                    | "low_90_qfq"
+                    | "high_120_qfq"
+                    | "low_120_qfq"
+            ) {
+                return policy(ContextFactorTransform::ToClosePct, false);
+            }
+            if matches!(
+                field,
+                "close_to_20d_max_close_pct"
+                    | "position_90d"
+                    | "position_120d"
+                    | "volume_to_ma5_ratio"
+                    | "volume_to_ma20_ratio"
+                    | "volume_ma5_to_ma20_ratio"
+                    | "turnover_rate_ma5"
+                    | "turnover_to_ma5_ratio"
+                    | "range_compression_20d"
+                    | "range_compression_40d"
+            ) {
+                return policy(ContextFactorTransform::Raw, field == "position_90d");
+            }
+            None
+        }
+        "calc_daily_czsc_structure" => {
+            if field.ends_with("_status") {
+                return policy(ContextFactorTransform::StatusCode, false);
+            }
+            if field.ends_with("_last_bi_direction") {
+                return policy(ContextFactorTransform::DirectionCode, false);
+            }
+            if field != "trade_date" && field.ends_with("_date") {
+                return policy(ContextFactorTransform::AgeCalendarDays, false);
+            }
+
+            if field.ends_with("_count")
+                || field.ends_with("_period_complete")
+                || field.ends_with("_source_bar_valid")
+                || field.ends_with("_missing")
+                || field.ends_with("_duration_calendar_days")
+            {
+                return policy(ContextFactorTransform::Raw, false);
+            }
+            if [
+                "_high", "_low", "_mid", "_zg", "_zd", "_zz", "_open", "_close",
+            ]
+            .iter()
+            .any(|suffix| field.ends_with(suffix))
+            {
+                return policy(ContextFactorTransform::ToClosePct, false);
+            }
+            None
+        }
+        "moneyflow" => {
+            if matches!(
+                field,
+                "net_sm_amount"
+                    | "net_md_amount"
+                    | "net_lg_amount"
+                    | "net_elg_amount"
+                    | "net_mf_vol"
+                    | "net_mf_amount"
+            ) {
+                return policy(ContextFactorTransform::PerStock, false);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn context_factor_output_field(
+    source: &str,
+    field: &str,
+    transform: ContextFactorTransform,
+) -> String {
+    match transform {
+        ContextFactorTransform::Raw => field.to_string(),
+        ContextFactorTransform::ToClosePct
+            if source == "calc_daily_indicators" && field.ends_with("_macd_hist_x2_asof") =>
+        {
+            format!("{}_asof_to_close_pct", field.trim_end_matches("_x2_asof"))
+        }
+        ContextFactorTransform::ToClosePct => format!("{field}_to_close_pct"),
+        ContextFactorTransform::PerStock => format!("{field}_per_stock"),
+        ContextFactorTransform::StatusCode | ContextFactorTransform::DirectionCode => {
+            format!("{field}_code")
+        }
+        ContextFactorTransform::AgeCalendarDays => {
+            format!("{}_age_calendar_days", field.trim_end_matches("_date"))
+        }
+    }
+}
+
+fn context_source_factor_columns(source: &str, table: &str) -> Vec<&'static str> {
+    if source == "calc_daily_czsc_structure" {
+        crate::db_check::db_native_factor_source_columns(table)
+            .into_iter()
+            .chain(CZSC_CONTEXT_DURATIONS)
+            .collect()
+    } else {
+        crate::db_check::db_native_numeric_factor_columns(table)
+    }
+}
+
+const CZSC_CONTEXT_DURATIONS: [&str; 6] = [
+    "daily_last_bi_duration_calendar_days",
+    "daily_latest_zs_duration_calendar_days",
+    "weekly_last_bi_duration_calendar_days",
+    "weekly_latest_zs_duration_calendar_days",
+    "monthly_last_bi_duration_calendar_days",
+    "monthly_latest_zs_duration_calendar_days",
+];
+
+pub(crate) fn db_native_index_context_factor_columns() -> Vec<String> {
+    let mut columns = Vec::new();
+    for (_, alias) in INDEX_BENCHMARKS {
+        columns.push(format!("market_index_{alias}_member_flag"));
+        columns.push(format!("market_index_{alias}_weight_pct"));
+        for (source, table) in INDEX_FACTOR_SOURCES {
+            for field in context_source_factor_columns(source, table) {
+                if let Some(policy) = context_factor_policy(source, field) {
+                    let output_field = context_factor_output_field(source, field, policy.transform);
+                    columns.push(format!("market_index_{alias}_{source}_{output_field}"));
+                    if policy.weighted {
+                        columns.push(format!(
+                            "market_index_{alias}_weighted_{source}_{output_field}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for (source, table) in INDEX_FACTOR_SOURCES {
+        for field in context_source_factor_columns(source, table) {
+            if let Some(policy) = context_factor_policy(source, field) {
+                let output_field = context_factor_output_field(source, field, policy.transform);
+                columns.push(format!("sw_l2_main_index_{source}_{output_field}"));
+            }
+        }
+    }
+    for field in crate::db_check::db_native_numeric_factor_columns("calc_daily_industry_moneyflow")
+    {
+        if let Some(policy) = context_factor_policy("moneyflow", field) {
+            let output_field = context_factor_output_field("moneyflow", field, policy.transform);
+            columns.push(format!("sw_l2_main_moneyflow_{output_field}"));
+        }
+    }
+    columns
+}
 
 pub fn fetch_db_native_daily_window(
     duckdb_path: &str,
@@ -1417,6 +1606,25 @@ pub fn fetch_db_native_daily_rows_unordered_stream(
     fetch_db_native_daily_rows_stream_with_order(duckdb_path, start_date, end_date, false, consume)
 }
 
+// 身份核验 SQL 与 Python dataset/标签共用；不按尾号改码，也不拼接不同前复权基准。
+fn canonical_daily_window_query(client: &DuckDbConnection, query: &str) -> anyhow::Result<String> {
+    let old_codes = client.query_map(include_str!("../ml/security_aliases.sql"), &[], |row| {
+        row.try_get::<String>("old_code")
+    })?;
+    let query = query.trim_end().trim_end_matches(';');
+    if old_codes.is_empty() {
+        return Ok(query.to_string());
+    }
+    let literals = old_codes
+        .iter()
+        .map(|code| quack_text_literal(code))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(format!(
+        "{query} AND s.ts_code NOT IN ({})",
+        literals.join(", ")
+    ))
+}
+
 fn fetch_db_native_daily_rows_stream_with_order(
     duckdb_path: &str,
     start_date: NaiveDate,
@@ -1430,6 +1638,7 @@ fn fetch_db_native_daily_rows_stream_with_order(
     let plan = preflight_db_native_load(&client, start_date, end_date, &strict_tables)?;
     let mut pick_date_extras = BTreeMap::new();
     let pick_date_extras_query = plan.adapt_query(DB_NATIVE_PICK_DATE_EXTRAS_QUERY);
+    let pick_date_factor_columns = db_native_pick_date_factor_columns();
     client.query_for_each(
         &pick_date_extras_query,
         &[DuckDbParameter::Date(end_date)],
@@ -1437,11 +1646,11 @@ fn fetch_db_native_daily_rows_stream_with_order(
             let ts_code = row.try_get("ts_code")?;
             let trade_date = row.try_get("trade_date")?;
             let mut factors = BTreeMap::new();
-            for column in DB_NATIVE_PICK_DATE_FACTOR_COLUMNS {
-                if let Some(value) = optional_option_f64(&row, column)?
+            for column in &pick_date_factor_columns {
+                if let Some(value) = optional_option_f64(&row, column.as_str())?
                     && value.is_finite()
                 {
-                    factors.insert((*column).to_string(), value);
+                    factors.insert(column.clone(), value);
                 }
             }
             Ok((ts_code, trade_date, factors))
@@ -1474,33 +1683,26 @@ fn fetch_db_native_daily_rows_stream_with_order(
         },
     )?;
 
-    let mut ths_sector_extras = BTreeMap::new();
-    let ths_sector_extras_query = plan.adapt_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY);
+    let mut sw_l2_sector_extras: BTreeMap<(String, NaiveDate), BTreeMap<String, f64>> =
+        BTreeMap::new();
+    let sw_l2_sector_extras_query = plan.adapt_query(DB_NATIVE_SW_L2_EXTRAS_QUERY);
     client.query_for_each(
-        &ths_sector_extras_query,
+        &sw_l2_sector_extras_query,
         &[DuckDbParameter::Date(end_date)],
-        |row| {
-            let ts_code = row.try_get("ts_code")?;
-            let trade_date = row.try_get("trade_date")?;
-            let mut factors = BTreeMap::new();
-            for column in DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS {
-                if let Some(value) = optional_option_f64(&row, column)?
-                    && value.is_finite()
-                {
-                    factors.insert((*column).to_string(), value);
-                }
-            }
-            Ok((ts_code, trade_date, factors))
-        },
+        |row| context_extras_from_row(&row),
         |(ts_code, trade_date, factors)| {
             if !factors.is_empty() {
-                ths_sector_extras.insert((ts_code, trade_date), factors);
+                sw_l2_sector_extras
+                    .entry((ts_code, trade_date))
+                    .or_default()
+                    .extend(factors);
             }
             Ok(())
         },
     )?;
 
-    let base_query = plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY);
+    let base_query =
+        canonical_daily_window_query(&client, &plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY))?;
     let query = base_query.trim_end().trim_end_matches(';');
     let ordered_query;
     let query = if order_by_symbol {
@@ -1529,7 +1731,8 @@ fn fetch_db_native_daily_rows_stream_with_order(
                 row.db_factors
                     .insert("macd_monthly_hist".to_string(), histogram);
             }
-            if let Some(extras) = ths_sector_extras.remove(&(row.ts_code.clone(), row.trade_date)) {
+            if let Some(extras) = sw_l2_sector_extras.remove(&(row.ts_code.clone(), row.trade_date))
+            {
                 row.db_factors.extend(extras);
             }
             consume(row)
@@ -1563,7 +1766,8 @@ fn fetch_db_native_daily_dataset_with_preflight(
     let client = open_duckdb(duckdb_path)?;
     configure_daily_window_session(&client)?;
     let plan = preflight_db_native_load(&client, start_date, end_date, &strict_tables)?;
-    let query = plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY);
+    let query =
+        canonical_daily_window_query(&client, &plan.adapt_query(DB_NATIVE_DAILY_WINDOW_QUERY))?;
     let mut market_rows = client.query_map(
         &query,
         &[
@@ -1581,10 +1785,10 @@ fn fetch_db_native_daily_dataset_with_preflight(
         end_date,
         &mut market_rows,
     )?;
-    let ths_sector_extras_query = plan.adapt_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY);
-    merge_ths_sector_extras(
+    let sw_l2_sector_extras_query = plan.adapt_query(DB_NATIVE_SW_L2_EXTRAS_QUERY);
+    merge_sw_l2_extras(
         &client,
-        &ths_sector_extras_query,
+        &sw_l2_sector_extras_query,
         end_date,
         &mut market_rows,
     )?;
@@ -1649,15 +1853,16 @@ fn merge_pick_date_extras(
 ) -> anyhow::Result<()> {
     let mut extras_by_key: BTreeMap<(String, NaiveDate), BTreeMap<String, f64>> = BTreeMap::new();
     let rows = client.query_rows(query, &[DuckDbParameter::Date(end_date)])?;
+    let pick_date_factor_columns = db_native_pick_date_factor_columns();
     for row in rows {
         let ts_code: String = row.try_get("ts_code")?;
         let trade_date: NaiveDate = row.try_get("trade_date")?;
         let mut factors = BTreeMap::new();
-        for column in DB_NATIVE_PICK_DATE_FACTOR_COLUMNS {
-            if let Some(value) = optional_option_f64(&row, column)?
+        for column in &pick_date_factor_columns {
+            if let Some(value) = optional_option_f64(&row, column.as_str())?
                 && value.is_finite()
             {
-                factors.insert((*column).to_string(), value);
+                factors.insert(column.clone(), value);
             }
         }
         if !factors.is_empty() {
@@ -1703,7 +1908,7 @@ fn merge_previous_month_macd(
     Ok(())
 }
 
-fn merge_ths_sector_extras(
+fn merge_sw_l2_extras(
     client: &DuckDbConnection,
     query: &str,
     end_date: NaiveDate,
@@ -1712,19 +1917,11 @@ fn merge_ths_sector_extras(
     let mut extras_by_key: BTreeMap<(String, NaiveDate), BTreeMap<String, f64>> = BTreeMap::new();
     let rows = client.query_rows(query, &[DuckDbParameter::Date(end_date)])?;
     for row in rows {
-        let ts_code: String = row.try_get("ts_code")?;
-        let trade_date: NaiveDate = row.try_get("trade_date")?;
-        let mut factors = BTreeMap::new();
-        for column in DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS {
-            if let Some(value) = optional_option_f64(&row, column)?
-                && value.is_finite()
-            {
-                factors.insert((*column).to_string(), value);
-            }
-        }
-        if !factors.is_empty() {
-            extras_by_key.insert((ts_code, trade_date), factors);
-        }
+        let (ts_code, trade_date, factors) = context_extras_from_row(&row)?;
+        extras_by_key
+            .entry((ts_code, trade_date))
+            .or_default()
+            .extend(factors);
     }
     for row in market_rows {
         if let Some(extras) = extras_by_key.remove(&(row.ts_code.clone(), row.trade_date)) {
@@ -1732,6 +1929,269 @@ fn merge_ths_sector_extras(
         }
     }
     Ok(())
+}
+
+fn context_extras_from_row(
+    row: &DuckDbRow,
+) -> anyhow::Result<(String, NaiveDate, BTreeMap<String, f64>)> {
+    let ts_code: String = row.try_get("ts_code")?;
+    let trade_date: NaiveDate = row.try_get("trade_date")?;
+    let context_type: String = row.try_get("context_type")?;
+    let context_alias: String = row.try_get("context_alias")?;
+    let member_flag: f64 = row.try_get("member_flag")?;
+    let weight_pct: f64 = row.try_get("weight_pct")?;
+    let index_payload: String = row.try_get("index_payload")?;
+    let indicators_payload: String = row.try_get("indicators_payload")?;
+    let rolling_payload: String = row.try_get("rolling_payload")?;
+    let czsc_payload: String = row.try_get("czsc_payload")?;
+    let moneyflow_payload: String = row.try_get("moneyflow_payload")?;
+    let index_close = numeric_payload_field(&index_payload, "close")?;
+    let stock_count = numeric_payload_field(&moneyflow_payload, "stock_count")?;
+    let industry_net_amount = optional_option_f64(row, "industry_net_amount")?;
+    let mut factors = BTreeMap::new();
+
+    match context_type.as_str() {
+        "market" => {
+            if !INDEX_BENCHMARKS
+                .iter()
+                .any(|(_, alias)| *alias == context_alias.as_str())
+            {
+                anyhow::bail!("unknown index context alias: {context_alias}");
+            }
+            let prefix = format!("market_index_{context_alias}");
+            let is_member = member_flag > 0.0;
+            factors.insert(
+                format!("{prefix}_member_flag"),
+                if is_member { 1.0 } else { 0.0 },
+            );
+            factors.insert(
+                format!("{prefix}_weight_pct"),
+                if is_member && weight_pct.is_finite() {
+                    weight_pct
+                } else {
+                    0.0
+                },
+            );
+            for (source, payload) in [
+                ("idx", index_payload.as_str()),
+                ("calc_daily_indicators", indicators_payload.as_str()),
+                ("calc_daily_rolling_factors", rolling_payload.as_str()),
+                ("calc_daily_czsc_structure", czsc_payload.as_str()),
+            ] {
+                add_numeric_context_payload(
+                    &mut factors,
+                    &prefix,
+                    source,
+                    payload,
+                    is_member,
+                    weight_pct,
+                    index_close,
+                    stock_count,
+                )?;
+            }
+        }
+        "industry" => {
+            let is_member = member_flag > 0.0;
+            factors.insert(
+                "sw_l2_membership_current_flag".to_string(),
+                if is_member { 1.0 } else { 0.0 },
+            );
+            if is_member {
+                for (source, payload) in [
+                    ("idx", index_payload.as_str()),
+                    ("calc_daily_indicators", indicators_payload.as_str()),
+                    ("calc_daily_rolling_factors", rolling_payload.as_str()),
+                    ("calc_daily_czsc_structure", czsc_payload.as_str()),
+                    ("moneyflow", moneyflow_payload.as_str()),
+                ] {
+                    let (prefix, source) = if source == "moneyflow" {
+                        ("sw_l2_main", "moneyflow")
+                    } else {
+                        ("sw_l2_main_index", source)
+                    };
+                    add_numeric_context_payload(
+                        &mut factors,
+                        prefix,
+                        source,
+                        payload,
+                        true,
+                        0.0,
+                        index_close,
+                        stock_count,
+                    )?;
+                }
+                for (column, query_column) in [
+                    ("sw_l2_main_pct_change", "industry_pct_change"),
+                    (
+                        "stock_vs_sw_l2_main_pct_change",
+                        "stock_vs_industry_pct_change",
+                    ),
+                ] {
+                    if let Some(value) = optional_option_f64(row, query_column)?
+                        && value.is_finite()
+                    {
+                        factors.insert(column.to_string(), value);
+                    }
+                }
+                if let (Some(amount), Some(stock_count)) = (
+                    industry_net_amount.filter(|value| value.is_finite()),
+                    stock_count.filter(|value| value.is_finite() && *value > 0.0),
+                ) {
+                    factors.insert(
+                        "sw_l2_main_net_amount_per_stock".to_string(),
+                        amount / stock_count,
+                    );
+                }
+            }
+        }
+        value => anyhow::bail!("unknown index context type: {value}"),
+    }
+    Ok((ts_code, trade_date, factors))
+}
+
+fn add_numeric_context_payload(
+    factors: &mut BTreeMap<String, f64>,
+    prefix: &str,
+    source: &str,
+    payload: &str,
+    is_member: bool,
+    weight_pct: f64,
+    index_close: Option<f64>,
+    stock_count: Option<f64>,
+) -> anyhow::Result<()> {
+    let payload: Value = serde_json::from_str(payload)?;
+    let Some(fields) = payload.as_object() else {
+        return Ok(());
+    };
+    for (field, value) in fields {
+        if !field
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            continue;
+        }
+        let Some(policy) = context_factor_policy(source, field) else {
+            continue;
+        };
+        let numeric = match policy.transform {
+            ContextFactorTransform::StatusCode => value.as_str().and_then(|status| match status {
+                "invalid_source_bar" => Some(0.0),
+                "no_finished_bi" => Some(1.0),
+                "insufficient_bis_for_zs" => Some(2.0),
+                "no_valid_zs" => Some(3.0),
+                "ok" => Some(4.0),
+                _ => None,
+            }),
+            ContextFactorTransform::DirectionCode => {
+                value.as_str().and_then(|direction| match direction {
+                    "up" => Some(1.0),
+                    "down" => Some(-1.0),
+                    _ => None,
+                })
+            }
+            ContextFactorTransform::AgeCalendarDays => payload_date(&payload, "trade_date")
+                .zip(payload_date(&payload, field))
+                .filter(|(asof, event)| event <= asof)
+                .map(|(asof, event)| (asof - event).num_days() as f64),
+            _ => value
+                .as_f64()
+                .or_else(|| value.as_bool().map(|value| if value { 1.0 } else { 0.0 })),
+        }
+        .filter(|value| value.is_finite());
+        let Some(numeric) = numeric else {
+            continue;
+        };
+        let output_field = context_factor_output_field(source, field, policy.transform);
+        let transformed = if !is_member {
+            0.0
+        } else {
+            // The cache stores MACD histogram values doubled; export the conventional histogram.
+            let value =
+                if source == "calc_daily_indicators" && field.ends_with("_macd_hist_x2_asof") {
+                    numeric / 2.0
+                } else {
+                    numeric
+                };
+            match policy.transform {
+                ContextFactorTransform::Raw
+                | ContextFactorTransform::StatusCode
+                | ContextFactorTransform::DirectionCode
+                | ContextFactorTransform::AgeCalendarDays => value,
+                ContextFactorTransform::ToClosePct => {
+                    let Some(close) = index_close.filter(|close| close.is_finite() && *close > 0.0)
+                    else {
+                        continue;
+                    };
+                    value / close * 100.0
+                }
+                ContextFactorTransform::PerStock => {
+                    let Some(stock_count) =
+                        stock_count.filter(|count| count.is_finite() && *count > 0.0)
+                    else {
+                        continue;
+                    };
+                    value / stock_count
+                }
+            }
+        };
+        if !transformed.is_finite() {
+            continue;
+        }
+        factors.insert(format!("{prefix}_{source}_{output_field}"), transformed);
+        if policy.weighted {
+            factors.insert(
+                format!("{prefix}_weighted_{source}_{output_field}"),
+                if is_member {
+                    transformed
+                        * if weight_pct.is_finite() {
+                            weight_pct / 100.0
+                        } else {
+                            0.0
+                        }
+                } else {
+                    0.0
+                },
+            );
+        }
+    }
+    if source == "calc_daily_czsc_structure" {
+        for period in ["daily", "weekly", "monthly"] {
+            for structure in ["last_bi", "latest_zs"] {
+                let dates = payload_date(&payload, &format!("{period}_{structure}_start_date"))
+                    .zip(payload_date(
+                        &payload,
+                        &format!("{period}_{structure}_end_date"),
+                    ))
+                    .zip(payload_date(&payload, "trade_date"));
+                if let Some(((start, end), _)) =
+                    dates.filter(|((start, end), asof)| start <= end && end <= asof)
+                {
+                    factors.insert(
+                        format!("{prefix}_{source}_{period}_{structure}_duration_calendar_days"),
+                        if is_member {
+                            (end - start).num_days() as f64
+                        } else {
+                            0.0
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn payload_date(payload: &Value, field: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(payload.get(field)?.as_str()?, "%Y-%m-%d").ok()
+}
+
+fn numeric_payload_field(payload: &str, field: &str) -> anyhow::Result<Option<f64>> {
+    let value: Value = serde_json::from_str(payload)?;
+    Ok(value
+        .get(field)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite()))
 }
 
 fn db_native_market_row_from_values(row: DbNativeDailyRow) -> anyhow::Result<MarketRow> {
@@ -1824,21 +2284,32 @@ pub fn fetch_instrument_info(
     }
 
     let client = open_duckdb(duckdb_path)?;
-    let rows = client.query_rows(
-        INSTRUMENT_INFO_QUERY,
-        &[DuckDbParameter::TextList(symbols.to_vec())],
-    )?;
     let mut instruments = BTreeMap::new();
-    for row in rows {
+    let parameters = [DuckDbParameter::TextList(symbols.to_vec())];
+    for row in client.query_rows(STOCK_BASIC_INFO_QUERY, &parameters)? {
         let code: String = row.try_get("ts_code")?;
         let name: Option<String> = row.try_get("name")?;
+        if let Some(name) = clean_optional_text(name) {
+            instruments
+                .entry(code)
+                .or_insert_with(|| InstrumentInfo {
+                    name: None,
+                    industry: None,
+                })
+                .name = Some(name);
+        }
+    }
+    for row in client.query_rows(SW_L2_INDUSTRY_QUERY, &parameters)? {
+        let code: String = row.try_get("ts_code")?;
         let industry: Option<String> = row.try_get("industry")?;
-        let info = InstrumentInfo {
-            name: clean_optional_text(name),
-            industry: clean_optional_text(industry),
-        };
-        if info.name.is_some() || info.industry.is_some() {
-            instruments.insert(code, info);
+        if let Some(industry) = clean_optional_text(industry) {
+            instruments
+                .entry(code)
+                .or_insert_with(|| InstrumentInfo {
+                    name: None,
+                    industry: None,
+                })
+                .industry = Some(industry);
         }
     }
     Ok(instruments)
@@ -1878,6 +2349,216 @@ mod tests {
     use super::*;
 
     #[test]
+    fn index_source_contract_covers_every_technical_and_asof_field() {
+        for (source, table, expected_excluded) in [
+            (
+                "idx",
+                "index_idx_factor_pro",
+                vec![
+                    "ts_code",
+                    "trade_date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "pre_close",
+                    "change",
+                    "vol",
+                    "amount",
+                ],
+            ),
+            (
+                "calc_daily_indicators",
+                "calc_daily_indicators",
+                vec!["source_dataset", "ts_code", "trade_date", "calc_version"],
+            ),
+            (
+                "calc_daily_czsc_structure",
+                "calc_daily_czsc_structure",
+                vec!["source_dataset", "ts_code", "trade_date", "calc_version"],
+            ),
+            (
+                "calc_daily_rolling_factors",
+                "calc_daily_rolling_factors",
+                vec![
+                    "source_dataset",
+                    "ts_code",
+                    "trade_date",
+                    "calc_version",
+                    "volume_ma5",
+                    "volume_ma20",
+                ],
+            ),
+        ] {
+            let mut excluded = crate::db_check::db_native_factor_source_columns(table)
+                .into_iter()
+                .filter(|field| context_factor_policy(source, field).is_none())
+                .collect::<Vec<_>>();
+            excluded.sort();
+            let mut expected = expected_excluded;
+            expected.sort();
+            assert_eq!(excluded, expected, "unreviewed source fields in {table}");
+        }
+        assert_eq!(
+            context_factor_policy("idx", "xsii_td1_bfq")
+                .unwrap()
+                .transform,
+            ContextFactorTransform::ToClosePct
+        );
+    }
+
+    #[test]
+    fn czsc_context_keeps_direction_status_and_dates_without_future_information() {
+        let mut factors = BTreeMap::new();
+        let payload = r#"{"trade_date":"2026-11-20","weekly_status":"ok","weekly_last_bi_direction":"down","weekly_last_bi_start_date":"2026-11-02","weekly_last_bi_end_date":"2026-11-13","weekly_recent_peak_date":"2026-11-23","monthly_status":null}"#;
+        add_numeric_context_payload(
+            &mut factors,
+            "sw_l2_main_index",
+            "calc_daily_czsc_structure",
+            payload,
+            true,
+            0.0,
+            Some(100.0),
+            None,
+        )
+        .unwrap();
+        let key = |field: &str| format!("sw_l2_main_index_calc_daily_czsc_structure_{field}");
+        assert_eq!(factors.get(&key("weekly_status_code")), Some(&4.0));
+        assert_eq!(
+            factors.get(&key("weekly_last_bi_direction_code")),
+            Some(&-1.0)
+        );
+        assert_eq!(
+            factors.get(&key("weekly_last_bi_start_age_calendar_days")),
+            Some(&18.0)
+        );
+        assert_eq!(
+            factors.get(&key("weekly_last_bi_duration_calendar_days")),
+            Some(&11.0)
+        );
+        assert!(!factors.contains_key(&key("weekly_recent_peak_age_calendar_days")));
+        assert!(!factors.contains_key(&key("monthly_status_code")));
+        let columns = db_native_index_context_factor_columns();
+        assert!(factors.keys().all(|key| columns.contains(key)));
+        let mut nonmember = BTreeMap::new();
+        add_numeric_context_payload(
+            &mut nonmember,
+            "market_index_sse50",
+            "calc_daily_czsc_structure",
+            payload,
+            false,
+            0.0,
+            Some(100.0),
+            None,
+        )
+        .unwrap();
+        assert!(nonmember.values().all(|value| *value == 0.0));
+    }
+
+    #[test]
+    fn stock_czsc_multiperiod_projection_executes_every_source_field_and_preserves_nulls() {
+        let projection = DB_NATIVE_PICK_DATE_EXTRAS_QUERY
+            .split("-- czsc multiperiod begin")
+            .nth(1)
+            .unwrap()
+            .split("-- czsc multiperiod end")
+            .next()
+            .unwrap()
+            .trim()
+            .trim_end_matches(',');
+        let client = open_duckdb(":memory:").unwrap();
+        for present in [true, false] {
+            let source =
+                crate::db_check::db_native_factor_source_columns("calc_daily_czsc_structure")
+                    .into_iter()
+                    .map(|field| {
+                        let value = if field.ends_with("_date") {
+                            "DATE '2026-11-02'"
+                        } else if field.ends_with("_status") {
+                            "'ok'::VARCHAR"
+                        } else if field.ends_with("_direction") {
+                            "'down'::VARCHAR"
+                        } else if field.ends_with("_complete")
+                            || field.ends_with("_valid")
+                            || field.ends_with("_missing")
+                        {
+                            "false"
+                        } else if field.ends_with("_count")
+                            || [
+                                "_high", "_low", "_mid", "_zg", "_zd", "_zz", "_open", "_close",
+                            ]
+                            .iter()
+                            .any(|suffix| field.ends_with(suffix))
+                        {
+                            "10.0"
+                        } else {
+                            "'fixture'::VARCHAR"
+                        };
+                        if present {
+                            format!("{value} AS {field}")
+                        } else {
+                            format!("CASE WHEN false THEN {value} END AS {field}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            let query = format!("SELECT {projection} FROM (SELECT {source}) c");
+            let rows = client.query_rows(&query, &[]).unwrap();
+            for period in ["weekly", "monthly"] {
+                let get = |field: &str| {
+                    optional_option_f64(&rows[0], &format!("_czsc_{period}_{field}")).unwrap()
+                };
+                assert_eq!(
+                    get("snapshot_available"),
+                    Some(if present { 1.0 } else { 0.0 })
+                );
+                assert_eq!(get("period_complete"), present.then_some(0.0));
+                assert_eq!(get("status_code"), present.then_some(4.0));
+                assert_eq!(get("last_bi_direction_code"), present.then_some(-1.0));
+                for (field, _) in rows[0]
+                    .columns
+                    .iter()
+                    .filter(|(field, _)| field.starts_with(&format!("_czsc_{period}_")))
+                {
+                    if !field.ends_with("snapshot_available") {
+                        assert_eq!(
+                            optional_option_f64(&rows[0], field).unwrap().is_some(),
+                            present,
+                            "{field}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stock_multiperiod_projection_and_training_inputs_are_not_silently_dropped() {
+        let columns = db_native_pick_date_factor_columns();
+        for period in ["weekly", "monthly"] {
+            for field in [
+                "snapshot_available",
+                "period_complete",
+                "status_code",
+                "last_bi_start_day",
+                "post_peak_first_bear_close",
+            ] {
+                let key = format!("_czsc_{period}_{field}");
+                assert!(columns.contains(&key), "{key}");
+                assert!(
+                    DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains(&format!("AS {key}")),
+                    "{key}"
+                );
+            }
+            for component in ["k", "d", "j"] {
+                let key = format!("kdj_{period}_{component}");
+                assert!(columns.contains(&key), "{key}");
+            }
+        }
+        assert!(columns.contains(&"_czsc_period_complete".to_string()));
+    }
+
+    #[test]
     fn quack_parameters_preserve_sql_literals_comments_and_identifiers() {
         let sql = concat!(
             r#"SELECT $1, $2, $3, '$1', "ident$2", $$ $3 $$, "#,
@@ -1915,6 +2596,82 @@ mod tests {
         );
     }
 
+    fn security_identity_fixture() -> DuckDbConnection {
+        let client = open_duckdb(":memory:").unwrap();
+        client
+            .query_rows(
+                "CREATE TABLE stock_stk_factor_pro AS
+             SELECT code AS ts_code, DATE '2023-02-01' + i::INTEGER AS trade_date,
+                    10.0 + i AS open, 11.0 + i AS high, 9.0 + i AS low,
+                    10.5 + i AS close, 1000.0 + i AS vol
+             FROM range(25) t(i), (VALUES ('831445.BJ'), ('920445.BJ')) c(code)",
+                &[],
+            )
+            .unwrap();
+        client
+    }
+
+    #[test]
+    fn security_identity_filters_verified_old_codes_before_screening() {
+        let client = security_identity_fixture();
+        // A suffix collision is a different security and must survive.
+        client
+            .query_rows(
+                "INSERT INTO stock_stk_factor_pro
+             SELECT '834445.BJ', trade_date, open + 1, high + 1, low + 1, close + 1, vol
+             FROM stock_stk_factor_pro WHERE ts_code = '831445.BJ'",
+                &[],
+            )
+            .unwrap();
+        let query = canonical_daily_window_query(
+            &client,
+            "SELECT s.ts_code FROM stock_stk_factor_pro s WHERE true",
+        )
+        .unwrap();
+        let rows = client
+            .query_map(&query, &[], |row| row.try_get::<String>("ts_code"))
+            .unwrap();
+        assert_eq!(rows.len(), 50);
+        assert!(!rows.iter().any(|code| code == "831445.BJ"));
+        assert!(rows.iter().any(|code| code == "834445.BJ"));
+    }
+
+    #[test]
+    fn security_identity_accepts_volume_precision_rounding_after_exact_bar_verification() {
+        let client = security_identity_fixture();
+        client.query_rows(
+            "UPDATE stock_stk_factor_pro SET vol = vol + 0.25 WHERE ts_code = '831445.BJ' AND trade_date = DATE '2023-02-01'", &[],
+        ).unwrap();
+        assert!(
+            canonical_daily_window_query(
+                &client,
+                "SELECT s.ts_code FROM stock_stk_factor_pro s WHERE true"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn security_identity_rejects_ambiguity_and_inconsistent_or_incomplete_history() {
+        for mutation in [
+            "INSERT INTO stock_stk_factor_pro SELECT '920999.BJ', trade_date, open, high, low, close, vol FROM stock_stk_factor_pro WHERE ts_code = '920445.BJ'",
+            "UPDATE stock_stk_factor_pro SET close = close + 1 WHERE ts_code = '920445.BJ' AND trade_date = DATE '2023-02-01'",
+            "DELETE FROM stock_stk_factor_pro WHERE ts_code = '920445.BJ' AND trade_date = DATE '2023-02-01'",
+            "UPDATE stock_stk_factor_pro SET vol = vol + 2 WHERE ts_code = '920445.BJ' AND trade_date = DATE '2023-02-01'",
+        ] {
+            let client = security_identity_fixture();
+            client.query_rows(mutation, &[]).unwrap();
+            assert!(
+                canonical_daily_window_query(
+                    &client,
+                    "SELECT s.ts_code FROM stock_stk_factor_pro s WHERE true"
+                )
+                .is_err(),
+                "{mutation}"
+            );
+        }
+    }
+
     #[test]
     fn db_native_daily_window_query_maps_stock_cache_contract_fields() {
         for fragment in [
@@ -1949,7 +2706,7 @@ mod tests {
             );
         }
         for fragment in [
-            "stock_moneyflow_ths",
+            "stock_moneyflow_recent",
             "index_market_base AS",
             "calc_daily_indicators",
             "calc_daily_rolling_factors",
@@ -2019,6 +2776,47 @@ mod tests {
     }
 
     #[test]
+    fn stk_factor_pro_projection_reads_nullable_qfq_source_values() {
+        use crate::factors::stk_factor_pro::SOURCE_COLUMNS;
+        let projection = DB_NATIVE_PICK_DATE_EXTRAS_QUERY
+            .split("-- stk_factor_pro begin")
+            .nth(1)
+            .expect("pick-date query must load the extended snapshot")
+            .split("-- stk_factor_pro end")
+            .next()
+            .unwrap()
+            .trim()
+            .trim_end_matches(',');
+        let client = open_duckdb(":memory:").unwrap();
+        let fixture = SOURCE_COLUMNS
+            .iter()
+            .map(|name| {
+                let value = match *name {
+                    "close_qfq" => "20.0",
+                    "atr_qfq" => "1.0",
+                    "mfi_qfq" => "62.5",
+                    _ => "NULL",
+                };
+                format!("{value}::DOUBLE AS {name}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!("SELECT {projection} FROM (SELECT {fixture}) s");
+        let rows = client.query_rows(&query, &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+        for name in SOURCE_COLUMNS {
+            let value = optional_option_f64(&rows[0], &format!("_stk_{name}")).unwrap();
+            let expected = match *name {
+                "close_qfq" => Some(20.0),
+                "atr_qfq" => Some(1.0),
+                "mfi_qfq" => Some(62.5),
+                _ => None,
+            };
+            assert_eq!(value, expected, "{name}");
+        }
+    }
+
+    #[test]
     fn db_native_pick_date_extras_query_maps_wide_db_native_factors() {
         for fragment in [
             "WHERE s.trade_date = $1",
@@ -2028,24 +2826,15 @@ mod tests {
             "s.dmi_pdi_qfq::double precision - s.dmi_mdi_qfq::double precision AS dmi_pdi_mdi_spread_qfq",
             "s.dmi_adx_qfq::double precision - s.dmi_adxr_qfq::double precision AS dmi_adx_adxr_gap_qfq",
             "s.trix_qfq::double precision AS trix_qfq",
-            "LEFT JOIN {{stock_moneyflow_ths}} smf",
-            "smf.net_amount::double precision AS stock_mf_net_amount",
-            "smf.buy_lg_amount::double precision AS stock_mf_buy_lg_amount",
-            "THEN smf.buy_lg_amount::double precision / s.amount::double precision * 100.0",
-            "THEN smf.buy_md_amount::double precision / s.amount::double precision * 100.0",
-            "THEN smf.buy_sm_amount::double precision / s.amount::double precision * 100.0",
-            "WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.net_amount IS NOT NULL",
-            "THEN smf.net_amount::double precision / s.amount::double precision * 100.0",
-            "index_market_base AS",
-            "lag(i.close, 5) OVER (PARTITION BY i.ts_code ORDER BY i.trade_date)::double precision AS close_5_ago",
-            "index_market_raw AS",
-            "FROM {{index_idx_factor_pro}} i",
-            "WHERE i.ts_code IN ('000001.SH', '399303.SZ')",
-            "index_market_factors AS",
-            "max(ret5_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret5_pct",
-            "max(ret5_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret5_pct",
-            "CASE WHEN count(ret5_pct) = 2 THEN avg(ret5_pct)::double precision END AS market_broad_ret5_pct",
-            "LEFT JOIN index_market_factors imf",
+            "FROM {{stock_moneyflow}} f",
+            "LEFT JOIN stock_moneyflow_recent smf",
+            "smf.net_mf_amount AS stock_mf_net_amount",
+            "smf.buy_lg_amount AS stock_mf_buy_lg_amount",
+            "THEN smf.buy_lg_amount / (s.amount / 10.0) * 100.0",
+            "THEN smf.buy_md_amount / (s.amount / 10.0) * 100.0",
+            "THEN smf.buy_sm_amount / (s.amount / 10.0) * 100.0",
+            "WHEN s.amount IS NOT NULL AND s.amount != 0 AND smf.net_mf_amount IS NOT NULL",
+            "THEN smf.net_mf_amount / (s.amount / 10.0) * 100.0",
             "LEFT JOIN {{calc_daily_indicators}} a",
             "LEFT JOIN {{calc_daily_rolling_factors}} r",
             "a.calc_version = 'v3-macd-kdj-czsc-1'",
@@ -2060,6 +2849,17 @@ mod tests {
                 DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains(fragment),
                 "missing {fragment}"
             );
+        }
+        for legacy_fragment in [
+            "index_market_base",
+            "market_sse_ret5_pct",
+            "market_cn2000_ret5_pct",
+            "market_broad_ret5_pct",
+            "000001.SH",
+            "399303.SZ",
+            "stock_moneyflow_ths",
+        ] {
+            assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains(legacy_fragment));
         }
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("stock_daily_left_peak"));
         assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("left_peak_"));
@@ -2088,9 +2888,8 @@ mod tests {
             "mid_net_amount_to_amount_pct",
             "small_net_amount_to_amount_pct",
             "net_mf_amount_to_amount_pct",
-            "market_sse_ret5_pct",
-            "market_cn2000_ret5_pct",
-            "market_broad_ret5_pct",
+            "tushare_macd_qfq",
+            "macd_weekly_hist",
             "close_to_20d_max_close_pct",
         ] {
             assert!(
@@ -2103,7 +2902,7 @@ mod tests {
     #[test]
     fn db_native_daily_window_query_uses_requested_prepared_range() {
         let query_head = DB_NATIVE_DAILY_WINDOW_QUERY
-            .split("current_ths_membership AS")
+            .split("current_sw_membership AS")
             .next()
             .expect("query should define main stock window first");
 
@@ -2122,7 +2921,7 @@ mod tests {
             DB_NATIVE_DAILY_WINDOW_QUERY,
             DB_NATIVE_PICK_DATE_EXTRAS_QUERY,
             DB_NATIVE_PREVIOUS_MONTH_MACD_QUERY,
-            DB_NATIVE_THS_SECTOR_EXTRAS_QUERY,
+            DB_NATIVE_SW_L2_EXTRAS_QUERY,
         ] {
             let adapted = plan.adapt_query(query);
             assert!(!adapted.contains("{{"), "unresolved relation placeholder");
@@ -2143,106 +2942,356 @@ mod tests {
     }
 
     #[test]
-    fn db_native_daily_window_query_maps_current_ths_sector_factors_without_row_duplication() {
-        assert!(
-            !DB_NATIVE_DAILY_WINDOW_QUERY.contains("stock_ths_sector_candidates AS"),
-            "THS sector extras should not be part of the main prepared stock window query"
+    fn db_native_index_context_joins_asof_weights_and_factor_payloads() -> anyhow::Result<()> {
+        let client = open_duckdb(":memory:")?;
+        client.execute_batch(
+            "CREATE TABLE stock_stk_factor_pro (ts_code VARCHAR, trade_date DATE, pct_chg DOUBLE);
+             CREATE TABLE index_weight (index_code VARCHAR, con_code VARCHAR, trade_date DATE, weight DOUBLE);
+             CREATE TABLE index_idx_factor_pro (ts_code VARCHAR, trade_date DATE, close DOUBLE, pct_change DOUBLE, macd_bfq DOUBLE);
+             CREATE TABLE calc_daily_indicators (source_dataset VARCHAR, ts_code VARCHAR, trade_date DATE, calc_version VARCHAR, daily_macd_dif_asof DOUBLE, daily_macd_hist_x2_asof DOUBLE, weekly_kdj_k_asof DOUBLE);
+             CREATE TABLE calc_daily_rolling_factors (source_dataset VARCHAR, ts_code VARCHAR, trade_date DATE, calc_version VARCHAR, position_90d DOUBLE);
+             CREATE TABLE calc_daily_czsc_structure (source_dataset VARCHAR, ts_code VARCHAR, trade_date DATE, calc_version VARCHAR, daily_recent_bi_count INTEGER);
+             CREATE TABLE index_sw_member (ts_code VARCHAR, l2_code VARCHAR, in_date DATE, out_date DATE);
+             CREATE TABLE calc_daily_industry_moneyflow (source_dataset VARCHAR, industry_code VARCHAR, trade_date DATE, stock_count BIGINT, main_net_amount DOUBLE, net_mf_amount DOUBLE, calc_version VARCHAR);
+             INSERT INTO stock_stk_factor_pro VALUES
+               ('000001.SZ', DATE '2026-02-10', 1.1), ('000002.SZ', DATE '2026-02-10', -1.0),
+               ('000003.SZ', DATE '2026-02-10', 0.4);
+             INSERT INTO index_weight VALUES
+               ('000016.SH', '000001.SZ', DATE '2026-02-01', 1.3),
+               ('000016.SH', '000002.SZ', DATE '2026-02-01', 0.9),
+               ('000016.SH', '000001.SZ', DATE '2026-02-05', 1.6),
+               ('000016.SH', '000001.SZ', DATE '2026-02-15', 1.9),
+               ('000016.SH', '000003.SZ', DATE '2026-02-05', 0.0),
+               ('000300.SH', '000001.SZ', DATE '2026-02-05', 2.5),
+               ('399303.SZ', '000001.SZ', DATE '2026-02-05', 0.8),
+               ('399006.SZ', '000001.SZ', DATE '2026-02-05', 1.2),
+               ('899050.BJ', '000001.SZ', DATE '2026-02-05', 3.0);
+             INSERT INTO index_idx_factor_pro VALUES
+               ('000016.SH', DATE '2026-02-10', 10.0, 0.8, 2.0),
+               ('000905.SH', DATE '2026-02-10', 10.0, 0.7, 3.0),
+               ('000688.SH', DATE '2026-02-10', 10.0, 0.6, 4.0),
+               ('930050.CSI', DATE '2026-02-10', 10.0, 0.5, 5.0),
+               ('000922.CSI', DATE '2026-02-10', 10.0, 0.4, 6.0),
+               ('000300.SH', DATE '2026-02-10', 10.0, 0.3, 7.0),
+               ('399303.SZ', DATE '2026-02-10', 10.0, 0.2, 8.0),
+               ('399006.SZ', DATE '2026-02-10', 10.0, 0.1, 9.0),
+               ('899050.BJ', DATE '2026-02-10', 10.0, 0.0, 10.0),
+               ('801100.SI', DATE '2026-02-10', 10.0, 1.0, 0.5),
+               ('801200.SI', DATE '2026-02-10', 2.0, 2.0, 0.8);
+             INSERT INTO calc_daily_indicators VALUES
+               ('index_idx_factor_pro', '000016.SH', DATE '2026-02-10', 'v3-macd-kdj-czsc-1', 0.75, 0.4, 66.0),
+               ('index_idx_factor_pro', '801200.SI', DATE '2026-02-10', 'v3-macd-kdj-czsc-1', 0.25, 0.2, 54.0);
+             INSERT INTO calc_daily_rolling_factors VALUES
+               ('index_idx_factor_pro', '000016.SH', DATE '2026-02-10', 'v3-macd-kdj-czsc-1', 0.7);
+             INSERT INTO calc_daily_czsc_structure VALUES
+               ('index_idx_factor_pro', '000016.SH', DATE '2026-02-10', 'v3-macd-kdj-czsc-1', 8);
+             INSERT INTO index_sw_member VALUES
+               ('000001.SZ', '801100.SI', DATE '2026-01-01', NULL),
+               ('000001.SZ', '801200.SI', DATE '2026-02-01', NULL);
+             INSERT INTO calc_daily_industry_moneyflow VALUES
+               ('stock_moneyflow', '801200.SI', DATE '2026-02-10', 4, 12.0, 20.0, 'sw2021-l2-v1');",
+        )?;
+        let query = [
+            ("{{stock_stk_factor_pro}}", "stock_stk_factor_pro"),
+            ("{{index_weight}}", "index_weight"),
+            ("{{index_idx_factor_pro}}", "index_idx_factor_pro"),
+            ("{{calc_daily_indicators}}", "calc_daily_indicators"),
+            (
+                "{{calc_daily_rolling_factors}}",
+                "calc_daily_rolling_factors",
+            ),
+            ("{{calc_daily_czsc_structure}}", "calc_daily_czsc_structure"),
+            ("{{index_sw_member}}", "index_sw_member"),
+            (
+                "{{calc_daily_industry_moneyflow}}",
+                "calc_daily_industry_moneyflow",
+            ),
+        ]
+        .into_iter()
+        .fold(
+            DB_NATIVE_SW_L2_EXTRAS_QUERY.to_string(),
+            |query, (placeholder, table)| query.replace(placeholder, table),
+        );
+        let date = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+        let mut rows = ["000001.SZ", "000002.SZ", "000003.SZ"]
+            .into_iter()
+            .map(|ts_code| {
+                db_native_market_row_from_values(DbNativeDailyRow {
+                    ts_code: ts_code.to_string(),
+                    trade_date: date,
+                    open: 10.0,
+                    high: 10.0,
+                    low: 10.0,
+                    close: 10.0,
+                    adj_factor: Some(1.0),
+                    vol: 1.0,
+                    turnover_rate: Some(1.0),
+                    db_factors: BTreeMap::new(),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        merge_sw_l2_extras(&client, &query, date, &mut rows)?;
+
+        assert_eq!(rows.len(), 3);
+        let member = rows.iter().find(|row| row.ts_code == "000001.SZ").unwrap();
+        assert_eq!(member.db_factors["market_index_sse50_member_flag"], 1.0);
+        assert_eq!(member.db_factors["market_index_sse50_weight_pct"], 1.6);
+        assert_eq!(
+            member.db_factors["market_index_sse50_idx_macd_bfq_to_close_pct"],
+            20.0
+        );
+        assert_eq!(
+            member.db_factors["market_index_sse50_weighted_idx_macd_bfq_to_close_pct"],
+            0.32
         );
         assert!(
-            DB_NATIVE_THS_SECTOR_EXTRAS_QUERY.contains("stock_ths_sector_candidates AS"),
-            "THS sector extras should be loaded by a separate query and merged into db_factors"
+            (member.db_factors
+                ["market_index_sse50_calc_daily_indicators_daily_macd_dif_asof_to_close_pct"]
+                - 7.5)
+                .abs()
+                < 1e-12
         );
+        assert!(
+            (member.db_factors["market_index_sse50_weighted_calc_daily_indicators_daily_macd_hist_asof_to_close_pct"]
+                - 0.032)
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(
+            member.db_factors["market_index_sse50_calc_daily_indicators_daily_macd_hist_asof_to_close_pct"],
+            2.0
+        );
+        assert!(
+            (member.db_factors
+                ["market_index_sse50_weighted_calc_daily_rolling_factors_position_90d"]
+                - 0.0112)
+                .abs()
+                < 1e-12
+        );
+        for (alias, weight, macd) in [
+            ("csi300", 2.5, 7.0),
+            ("guozheng2000", 0.8, 8.0),
+            ("chinext", 1.2, 9.0),
+            ("bse50", 3.0, 10.0),
+        ] {
+            assert_eq!(
+                member.db_factors[&format!("market_index_{alias}_member_flag")],
+                1.0
+            );
+            assert_eq!(
+                member.db_factors[&format!("market_index_{alias}_weight_pct")],
+                weight
+            );
+            assert_eq!(
+                member.db_factors[&format!("market_index_{alias}_idx_macd_bfq_to_close_pct")],
+                macd * 10.0
+            );
+            assert_eq!(
+                member.db_factors
+                    [&format!("market_index_{alias}_weighted_idx_macd_bfq_to_close_pct")],
+                macd * 10.0 * weight / 100.0
+            );
+        }
+        assert_eq!(member.db_factors["sw_l2_membership_current_flag"], 1.0);
+        assert_eq!(
+            member.db_factors["sw_l2_main_index_idx_macd_bfq_to_close_pct"],
+            40.0
+        );
+        assert_eq!(member.db_factors["sw_l2_main_net_amount_per_stock"], 3.0);
+        assert_eq!(
+            member.db_factors["sw_l2_main_moneyflow_net_mf_amount_per_stock"],
+            5.0
+        );
+        assert!((member.db_factors["stock_vs_sw_l2_main_pct_change"] + 0.9).abs() < 1e-12);
+        assert!(
+            !member
+                .db_factors
+                .contains_key("sw_l2_main_moneyflow_buy_lg_amount")
+        );
+
+        let non_member = rows.iter().find(|row| row.ts_code == "000002.SZ").unwrap();
+        assert_eq!(non_member.db_factors["market_index_sse50_member_flag"], 0.0);
+        assert_eq!(non_member.db_factors["market_index_sse50_weight_pct"], 0.0);
+        assert_eq!(
+            non_member.db_factors["market_index_sse50_idx_macd_bfq_to_close_pct"],
+            0.0
+        );
+        assert_eq!(
+            non_member.db_factors["market_index_sse50_weighted_idx_macd_bfq_to_close_pct"],
+            0.0
+        );
+        assert_eq!(non_member.db_factors["sw_l2_membership_current_flag"], 0.0);
+
+        let zero_weight_member = rows.iter().find(|row| row.ts_code == "000003.SZ").unwrap();
+        assert_eq!(
+            zero_weight_member.db_factors["market_index_sse50_member_flag"],
+            1.0
+        );
+        assert_eq!(
+            zero_weight_member.db_factors["market_index_sse50_weight_pct"],
+            0.0
+        );
+        assert_eq!(
+            zero_weight_member.db_factors["market_index_sse50_idx_macd_bfq_to_close_pct"],
+            20.0
+        );
+        assert_eq!(
+            zero_weight_member.db_factors["market_index_sse50_weighted_idx_macd_bfq_to_close_pct"],
+            0.0
+        );
+
+        client.execute_batch(
+            "INSERT INTO stock_stk_factor_pro VALUES ('000004.SZ', DATE '2020-01-03', 0.2);
+             INSERT INTO index_idx_factor_pro VALUES ('000016.SH', DATE '2020-01-03', 11.0, 0.1, 11.0);",
+        )?;
+        let before_weight_history_date = NaiveDate::from_ymd_opt(2020, 1, 3).unwrap();
+        let mut before_weight_history = vec![db_native_market_row_from_values(DbNativeDailyRow {
+            ts_code: "000004.SZ".to_string(),
+            trade_date: before_weight_history_date,
+            open: 10.0,
+            high: 10.0,
+            low: 10.0,
+            close: 10.0,
+            adj_factor: Some(1.0),
+            vol: 1.0,
+            turnover_rate: Some(1.0),
+            db_factors: BTreeMap::new(),
+        })?];
+        merge_sw_l2_extras(
+            &client,
+            &query,
+            before_weight_history_date,
+            &mut before_weight_history,
+        )?;
+        let before_weight_history = &before_weight_history[0].db_factors;
+        assert_eq!(before_weight_history["market_index_sse50_member_flag"], 0.0);
+        assert_eq!(before_weight_history["market_index_sse50_weight_pct"], 0.0);
+        assert_eq!(
+            before_weight_history["market_index_sse50_idx_macd_bfq_to_close_pct"],
+            0.0
+        );
+        assert_eq!(before_weight_history["market_index_bse50_member_flag"], 0.0);
+        assert_eq!(before_weight_history["market_index_bse50_weight_pct"], 0.0);
+        assert!(!before_weight_history.contains_key("market_index_bse50_idx_macd_bfq"));
+        Ok(())
+    }
+
+    #[test]
+    fn db_native_factor_queries_use_sw_l2_and_full_index_derivatives() {
         for fragment in [
-            "current_ths_membership AS",
-            "FROM {{index_ths_member}}",
-            "index_market_factors AS",
-            "max(ret5_pct) FILTER (WHERE ts_code = '000001.SH')::double precision AS market_sse_ret5_pct",
-            "max(ret5_pct) FILTER (WHERE ts_code = '399303.SZ')::double precision AS market_cn2000_ret5_pct",
-            "ths_sector_daily AS",
-            "FROM {{index_ths_daily}} d",
-            "lag(d.close, 5) OVER (PARTITION BY d.ts_code ORDER BY d.trade_date)::double precision AS ths_close_5_ago",
-            "LEFT JOIN {{index_moneyflow_cnt_ths}} mf",
-            "index_limit_cpt_daily AS",
-            "FROM {{index_limit_cpt_list}}",
-            "GROUP BY ts_code, trade_date",
-            "LEFT JOIN index_limit_cpt_daily il",
-            "LEFT JOIN {{calc_daily_indicators}} ia",
-            "ia.source_dataset = 'index_ths_daily'",
-            "ia.calc_version = 'v3-macd-kdj-czsc-1'",
-            "ia.daily_macd_hist_x2_asof::double precision / 2.0 AS ths_macd_daily_hist",
-            "stock_ths_sector_candidates AS",
-            "ROW_NUMBER() OVER (",
-            "PARTITION BY s.ts_code, s.trade_date",
-            "ORDER BY ths_sector_rank ASC NULLS LAST, ths_net_amount DESC NULLS LAST, ths_pct_change DESC NULLS LAST, ths_ts_code ASC",
-            "stock_ths_sector_agg AS",
-            "COUNT(*)::double precision AS ths_sector_count",
-            "MAX(ths_pct_change) AS ths_best_pct_change",
-            "AVG(ths_pct_change) AS ths_avg_pct_change",
-            "MAX(ths_net_buy_amount) AS ths_best_net_buy_amount",
-            "MAX(ths_limit_up_count) AS ths_best_limit_up_count",
-            "ths_any_limit_up_sector_flag",
-            "ths_limit_up_sector_count",
-            "ths_limit_up_sector_ratio",
-            "MIN(ths_limit_rank) AS ths_best_limit_rank",
-            "m.ths_ts_code AS ths_main_sector_code",
-            "m.ths_limit_up_count AS ths_main_limit_up_count",
-            "ta.ths_sector_count::double precision AS ths_sector_count",
-            "ta.ths_best_net_buy_amount AS ths_best_net_buy_amount",
-            "m.stock_pct_chg - m.ths_pct_change AS stock_vs_ths_main_pct_change",
-            "m.stock_pct_chg - ta.ths_avg_pct_change AS stock_vs_ths_avg_pct_change",
-            "m.ths_ret5_pct - imf.market_broad_ret5_pct AS stock_env_sector_vs_broad_ret5_pct",
-            "m.ths_ret20_pct - imf.market_broad_ret20_pct AS stock_env_sector_vs_broad_ret20_pct",
-            "imf.market_cn2000_ret5_pct - imf.market_sse_ret5_pct AS stock_env_style_ret5_spread_pct",
-            "m.ths_ret5_pct + imf.market_broad_ret5_pct AS stock_env_market_sector_ret5_sum_pct",
-            "stock_env_market_score",
-            "stock_env_sector_score",
-            "stock_env_alignment_score",
-            "stock_env_limit_heat_score",
-            "stock_env_overall_score",
+            "FROM {{index_weight}} w",
+            "max(w.trade_date) AS snapshot_date",
+            "w.trade_date <= $1",
+            "('000016.SH', 'sse50')",
+            "('000905.SH', 'csi500')",
+            "('000688.SH', 'sci50')",
+            "('930050.CSI', 'csi_a50')",
+            "('000922.CSI', 'csi_dividend')",
+            "('000300.SH', 'csi300')",
+            "('399303.SZ', 'guozheng2000')",
+            "('399006.SZ', 'chinext')",
+            "('899050.BJ', 'bse50')",
+            "to_json(i)",
+            "to_json(a)",
+            "to_json(r)",
+            "to_json(c)",
+            "to_json(mf)",
+            "s.trade_date >= m.in_date",
+            "m.out_date IS NULL OR s.trade_date < m.out_date",
+            "a.source_dataset = 'index_idx_factor_pro'",
+            "a.calc_version = 'v3-macd-kdj-czsc-1'",
+            "mf.source_dataset = 'stock_moneyflow'",
+            "mf.calc_version = 'sw2021-l2-v1'",
         ] {
             assert!(
-                DB_NATIVE_THS_SECTOR_EXTRAS_QUERY.contains(fragment),
+                DB_NATIVE_SW_L2_EXTRAS_QUERY.contains(fragment),
                 "missing {fragment}"
             );
         }
-        assert!(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY.contains("cm.con_code = s.ts_code"));
-        assert!(!DB_NATIVE_THS_SECTOR_EXTRAS_QUERY.contains("cm.trade_date"));
-        assert!(!DB_NATIVE_THS_SECTOR_EXTRAS_QUERY.contains("index_ths_member_history"));
+        assert!(!DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("000001.SH"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("399303.SZ"));
+        assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("000001.SH"));
+        assert!(!DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("399303.SZ"));
+        assert!(!DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("stock_moneyflow_ths"));
+        assert!(!DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("index_moneyflow_cnt_ths"));
+
+        let factor_columns = db_native_index_context_factor_columns();
+        assert!(
+            factor_columns.len() < 2200,
+            "unexpectedly wide index context: {}",
+            factor_columns.len()
+        );
         for factor in [
-            "ths_membership_current_flag",
-            "ths_main_sector_rank",
-            "ths_main_pct_change",
-            "ths_main_net_amount",
-            "ths_main_limit_up_count",
-            "ths_main_macd_daily_hist",
-            "ths_sector_count",
-            "ths_best_pct_change",
-            "ths_avg_pct_change",
-            "ths_best_net_buy_amount",
-            "ths_best_limit_up_count",
-            "ths_any_limit_up_sector_flag",
-            "ths_limit_up_sector_count",
-            "ths_limit_up_sector_ratio",
-            "stock_vs_ths_main_pct_change",
-            "stock_vs_ths_avg_pct_change",
-            "stock_env_sector_ret5_pct",
-            "stock_env_sector_ret20_pct",
-            "stock_env_sector_ma20_bias_pct",
-            "stock_env_sector_vs_broad_ret5_pct",
-            "stock_env_sector_vs_broad_ret20_pct",
-            "stock_env_style_ret5_spread_pct",
-            "stock_env_market_sector_ret5_sum_pct",
-            "stock_env_market_score",
-            "stock_env_sector_score",
-            "stock_env_alignment_score",
-            "stock_env_limit_heat_score",
-            "stock_env_overall_score",
+            "market_index_sse50_member_flag",
+            "market_index_sse50_weight_pct",
+            "market_index_sse50_idx_macd_bfq_to_close_pct",
+            "market_index_sse50_weighted_idx_macd_bfq_to_close_pct",
+            "market_index_sse50_calc_daily_indicators_daily_macd_dif_asof_to_close_pct",
+            "market_index_csi300_member_flag",
+            "market_index_csi300_weight_pct",
+            "market_index_guozheng2000_idx_macd_bfq_to_close_pct",
+            "market_index_chinext_weighted_idx_macd_bfq_to_close_pct",
+            "market_index_bse50_calc_daily_czsc_structure_daily_recent_bi_count",
+            "market_index_csi_dividend_calc_daily_indicators_weekly_kdj_k_asof",
+            "sw_l2_main_index_idx_xsii_td4_bfq_to_close_pct",
+            "sw_l2_main_index_calc_daily_rolling_factors_position_90d",
+            "sw_l2_main_moneyflow_net_lg_amount_per_stock",
         ] {
             assert!(
-                DB_NATIVE_THS_SECTOR_FACTOR_COLUMNS.contains(&factor),
-                "missing factor column {factor}"
+                factor_columns.iter().any(|column| column == factor),
+                "missing {factor}"
             );
         }
+        assert!(DB_NATIVE_SW_L2_FACTOR_COLUMNS.contains(&"sw_l2_main_net_amount_per_stock"));
+        assert!(
+            !factor_columns
+                .iter()
+                .any(|column| column == "market_index_sse50_idx_close")
+        );
+        assert!(
+            !factor_columns
+                .iter()
+                .any(|column| column == "market_index_sse50_weighted_idx_kdj_k_bfq")
+        );
+        assert!(
+            !factor_columns
+                .iter()
+                .any(|column| column == "sw_l2_main_moneyflow_buy_lg_amount")
+        );
+        assert_eq!(
+            factor_columns
+                .iter()
+                .filter(|column| column.contains("_weighted_"))
+                .count(),
+            INDEX_BENCHMARKS.len() * 4
+        );
+        assert!(
+            !factor_columns
+                .iter()
+                .any(|column| column.contains("000016.SH"))
+        );
+    }
+
+    #[test]
+    fn db_native_moneyflow_queries_use_current_sources_and_units() {
+        assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("FROM {{stock_moneyflow}} f"));
+        assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("LEFT JOIN stock_moneyflow_recent smf"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("{{calc_daily_industry_moneyflow}}"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("{{index_sw_member}}"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("FROM {{index_weight}} w"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("w.con_code = s.ts_code"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("m.ts_code = s.ts_code"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("s.trade_date >= m.in_date"));
+        assert!(
+            DB_NATIVE_SW_L2_EXTRAS_QUERY
+                .contains("m.out_date IS NULL OR s.trade_date < m.out_date")
+        );
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("mf.industry_code = m.industry_code"));
+        assert!(DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("mf.source_dataset = 'stock_moneyflow'"));
+        assert!(!DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("stock_moneyflow_ths"));
+        assert!(!DB_NATIVE_SW_L2_EXTRAS_QUERY.contains("index_moneyflow_cnt_ths"));
+        assert!(DB_NATIVE_PICK_DATE_EXTRAS_QUERY.contains("s.amount / 10.0"));
     }
 
     #[test]
@@ -2287,25 +3336,89 @@ mod tests {
     }
 
     #[test]
-    fn instrument_info_query_uses_stock_basic_with_ths_industry_fallback() {
+    fn instrument_info_queries_keep_stock_and_industry_scans_separate() {
         for fragment in [
             "WITH requested AS",
             "SELECT unnest($1::text[]) AS ts_code",
             "LEFT JOIN stock_basic s ON s.ts_code = r.ts_code",
-            "COALESCE(NULLIF(trim(s.name), ''), ths_name.name) AS name",
-            "FROM index_ths_member m",
-            "JOIN index_ths i",
-            "i.type = 'I'",
-            "COALESCE(NULLIF(trim(s.industry), ''), ths_industry.industry) AS industry",
+            "NULLIF(trim(s.name), '') AS name",
         ] {
             assert!(
-                INSTRUMENT_INFO_QUERY.contains(fragment),
+                STOCK_BASIC_INFO_QUERY.contains(fragment),
                 "missing {fragment}"
             );
         }
-        assert!(!INSTRUMENT_INFO_QUERY.contains("NULL::text AS industry"));
-        assert!(!INSTRUMENT_INFO_QUERY.contains("btrim("));
-        assert!(INSTRUMENT_INFO_QUERY.contains("NULLIF(trim(i.name), '')"));
+        assert!(!STOCK_BASIC_INFO_QUERY.contains("index_sw_member"));
+        for fragment in [
+            "WITH requested AS",
+            "JOIN index_sw_member m ON m.ts_code = r.ts_code",
+            "m.l2_name AS industry",
+            "m.out_date IS NULL",
+        ] {
+            assert!(
+                SW_L2_INDUSTRY_QUERY.contains(fragment),
+                "missing {fragment}"
+            );
+        }
+        assert!(!SW_L2_INDUSTRY_QUERY.contains("stock_basic"));
+        assert!(!SW_L2_INDUSTRY_QUERY.contains("index_ths"));
+        assert!(!SW_L2_INDUSTRY_QUERY.contains("index_sw_l2_member"));
+    }
+
+    #[test]
+    fn fetch_instrument_info_combines_names_and_sw_industries() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("instrument-info.duckdb");
+        let stock_basic_csv = temp.path().join("stock-basic.csv");
+        let sw_member_csv = temp.path().join("sw-member.csv");
+        std::fs::write(&stock_basic_csv, "ts_code,name\n000001.SZ,平安银行\n").unwrap();
+        std::fs::write(
+            &sw_member_csv,
+            "ts_code,l2_name,in_date,out_date\n000001.SZ,银行,2020-01-01,\n",
+        )
+        .unwrap();
+
+        let environment = Environment::new().unwrap();
+        let instance = Instance::new(&environment).unwrap();
+        instance
+            .attach(
+                AttachBuilder::new(StorageLocation::OnDisk(
+                    db_path.to_string_lossy().into_owned(),
+                ))
+                .options([("read_only", "false")])
+                .make_default(),
+            )
+            .unwrap();
+        let connection = instance.connect().unwrap();
+        connection
+            .execute(
+                &format!(
+                    "CREATE VIEW stock_basic AS SELECT * FROM read_csv_auto('{}')",
+                    stock_basic_csv.display(),
+                ),
+                Parameters::None,
+            )
+            .unwrap();
+        connection
+            .execute(
+                &format!(
+                    "CREATE VIEW index_sw_member AS SELECT * FROM read_csv('{}', columns={{'ts_code':'VARCHAR','l2_name':'VARCHAR','in_date':'DATE','out_date':'DATE'}})",
+                    sw_member_csv.display(),
+                ),
+                Parameters::None,
+            )
+            .unwrap();
+
+        let instruments =
+            fetch_instrument_info(db_path.to_str().unwrap(), &["000001.SZ".to_string()]).unwrap();
+
+        assert_eq!(
+            instruments.get("000001.SZ"),
+            Some(&InstrumentInfo {
+                name: Some("平安银行".to_string()),
+                industry: Some("银行".to_string()),
+            })
+        );
     }
 
     #[test]
@@ -2352,33 +3465,33 @@ mod tests {
                 ("_czsc_status_code".to_string(), Some(4.0)),
                 ("_czsc_recent_peak_high".to_string(), Some(11.8)),
                 ("_czsc_post_peak_first_bear_open".to_string(), Some(11.2)),
-                ("ths_membership_current_flag".to_string(), Some(1.0)),
-                ("ths_main_sector_rank".to_string(), Some(3.0)),
-                ("ths_main_pct_change".to_string(), Some(2.4)),
-                ("ths_main_net_amount".to_string(), Some(1.2)),
-                ("ths_main_limit_up_count".to_string(), Some(8.0)),
-                ("ths_main_limit_days".to_string(), Some(2.0)),
-                ("ths_main_limit_pct_chg".to_string(), Some(5.6)),
-                ("ths_main_limit_rank".to_string(), Some(4.0)),
-                ("ths_main_macd_daily_hist".to_string(), Some(0.06)),
-                ("ths_sector_count".to_string(), Some(4.0)),
-                ("ths_best_pct_change".to_string(), Some(3.1)),
-                ("ths_avg_pct_change".to_string(), Some(1.7)),
-                ("ths_best_net_buy_amount".to_string(), Some(2.2)),
-                ("ths_avg_net_buy_amount".to_string(), Some(1.1)),
-                ("ths_best_net_sell_amount".to_string(), Some(0.9)),
-                ("ths_avg_net_sell_amount".to_string(), Some(0.4)),
-                ("ths_best_limit_up_count".to_string(), Some(12.0)),
-                ("ths_avg_limit_up_count".to_string(), Some(6.0)),
-                ("ths_any_limit_up_sector_flag".to_string(), Some(1.0)),
-                ("ths_limit_up_sector_count".to_string(), Some(3.0)),
-                ("ths_limit_up_sector_ratio".to_string(), Some(0.75)),
-                ("ths_best_limit_days".to_string(), Some(3.0)),
-                ("ths_best_limit_pct_chg".to_string(), Some(7.8)),
-                ("ths_avg_limit_pct_chg".to_string(), Some(4.9)),
-                ("ths_best_limit_rank".to_string(), Some(2.0)),
-                ("stock_vs_ths_main_pct_change".to_string(), Some(0.8)),
-                ("stock_vs_ths_avg_pct_change".to_string(), Some(1.5)),
+                ("sw_l2_membership_current_flag".to_string(), Some(1.0)),
+                ("sw_l2_main_sector_rank".to_string(), Some(3.0)),
+                ("sw_l2_main_pct_change".to_string(), Some(2.4)),
+                ("sw_l2_main_net_amount_per_stock".to_string(), Some(1.2)),
+                ("sw_l2_main_limit_up_count".to_string(), Some(8.0)),
+                ("sw_l2_main_limit_days".to_string(), Some(2.0)),
+                ("sw_l2_main_limit_pct_chg".to_string(), Some(5.6)),
+                ("sw_l2_main_limit_rank".to_string(), Some(4.0)),
+                ("sw_l2_main_macd_daily_hist".to_string(), Some(0.06)),
+                ("sw_l2_sector_count".to_string(), Some(4.0)),
+                ("sw_l2_best_pct_change".to_string(), Some(3.1)),
+                ("sw_l2_avg_pct_change".to_string(), Some(1.7)),
+                ("sw_l2_best_net_buy_amount".to_string(), Some(2.2)),
+                ("sw_l2_avg_net_buy_amount".to_string(), Some(1.1)),
+                ("sw_l2_best_net_sell_amount".to_string(), Some(0.9)),
+                ("sw_l2_avg_net_sell_amount".to_string(), Some(0.4)),
+                ("sw_l2_best_limit_up_count".to_string(), Some(12.0)),
+                ("sw_l2_avg_limit_up_count".to_string(), Some(6.0)),
+                ("sw_l2_any_limit_up_sector_flag".to_string(), Some(1.0)),
+                ("sw_l2_limit_up_sector_count".to_string(), Some(3.0)),
+                ("sw_l2_limit_up_sector_ratio".to_string(), Some(0.75)),
+                ("sw_l2_best_limit_days".to_string(), Some(3.0)),
+                ("sw_l2_best_limit_pct_chg".to_string(), Some(7.8)),
+                ("sw_l2_avg_limit_pct_chg".to_string(), Some(4.9)),
+                ("sw_l2_best_limit_rank".to_string(), Some(2.0)),
+                ("stock_vs_sw_l2_main_pct_change".to_string(), Some(0.8)),
+                ("stock_vs_sw_l2_avg_pct_change".to_string(), Some(1.5)),
                 ("stock_env_sector_ret5_pct".to_string(), Some(6.2)),
                 ("stock_env_sector_ret20_pct".to_string(), Some(12.4)),
                 ("stock_env_sector_ma20_bias_pct".to_string(), Some(3.3)),
@@ -2466,33 +3579,33 @@ mod tests {
         assert_eq!(mapped.db_factors["_czsc_status_code"], 4.0);
         assert_eq!(mapped.db_factors["_czsc_recent_peak_high"], 11.8);
         assert_eq!(mapped.db_factors["_czsc_post_peak_first_bear_open"], 11.2);
-        assert_eq!(mapped.db_factors["ths_membership_current_flag"], 1.0);
-        assert_eq!(mapped.db_factors["ths_main_sector_rank"], 3.0);
-        assert_eq!(mapped.db_factors["ths_main_pct_change"], 2.4);
-        assert_eq!(mapped.db_factors["ths_main_net_amount"], 1.2);
-        assert_eq!(mapped.db_factors["ths_main_limit_up_count"], 8.0);
-        assert_eq!(mapped.db_factors["ths_main_limit_days"], 2.0);
-        assert_eq!(mapped.db_factors["ths_main_limit_pct_chg"], 5.6);
-        assert_eq!(mapped.db_factors["ths_main_limit_rank"], 4.0);
-        assert_eq!(mapped.db_factors["ths_main_macd_daily_hist"], 0.06);
-        assert_eq!(mapped.db_factors["ths_sector_count"], 4.0);
-        assert_eq!(mapped.db_factors["ths_best_pct_change"], 3.1);
-        assert_eq!(mapped.db_factors["ths_avg_pct_change"], 1.7);
-        assert_eq!(mapped.db_factors["ths_best_net_buy_amount"], 2.2);
-        assert_eq!(mapped.db_factors["ths_avg_net_buy_amount"], 1.1);
-        assert_eq!(mapped.db_factors["ths_best_net_sell_amount"], 0.9);
-        assert_eq!(mapped.db_factors["ths_avg_net_sell_amount"], 0.4);
-        assert_eq!(mapped.db_factors["ths_best_limit_up_count"], 12.0);
-        assert_eq!(mapped.db_factors["ths_avg_limit_up_count"], 6.0);
-        assert_eq!(mapped.db_factors["ths_any_limit_up_sector_flag"], 1.0);
-        assert_eq!(mapped.db_factors["ths_limit_up_sector_count"], 3.0);
-        assert_eq!(mapped.db_factors["ths_limit_up_sector_ratio"], 0.75);
-        assert_eq!(mapped.db_factors["ths_best_limit_days"], 3.0);
-        assert_eq!(mapped.db_factors["ths_best_limit_pct_chg"], 7.8);
-        assert_eq!(mapped.db_factors["ths_avg_limit_pct_chg"], 4.9);
-        assert_eq!(mapped.db_factors["ths_best_limit_rank"], 2.0);
-        assert_eq!(mapped.db_factors["stock_vs_ths_main_pct_change"], 0.8);
-        assert_eq!(mapped.db_factors["stock_vs_ths_avg_pct_change"], 1.5);
+        assert_eq!(mapped.db_factors["sw_l2_membership_current_flag"], 1.0);
+        assert_eq!(mapped.db_factors["sw_l2_main_sector_rank"], 3.0);
+        assert_eq!(mapped.db_factors["sw_l2_main_pct_change"], 2.4);
+        assert_eq!(mapped.db_factors["sw_l2_main_net_amount_per_stock"], 1.2);
+        assert_eq!(mapped.db_factors["sw_l2_main_limit_up_count"], 8.0);
+        assert_eq!(mapped.db_factors["sw_l2_main_limit_days"], 2.0);
+        assert_eq!(mapped.db_factors["sw_l2_main_limit_pct_chg"], 5.6);
+        assert_eq!(mapped.db_factors["sw_l2_main_limit_rank"], 4.0);
+        assert_eq!(mapped.db_factors["sw_l2_main_macd_daily_hist"], 0.06);
+        assert_eq!(mapped.db_factors["sw_l2_sector_count"], 4.0);
+        assert_eq!(mapped.db_factors["sw_l2_best_pct_change"], 3.1);
+        assert_eq!(mapped.db_factors["sw_l2_avg_pct_change"], 1.7);
+        assert_eq!(mapped.db_factors["sw_l2_best_net_buy_amount"], 2.2);
+        assert_eq!(mapped.db_factors["sw_l2_avg_net_buy_amount"], 1.1);
+        assert_eq!(mapped.db_factors["sw_l2_best_net_sell_amount"], 0.9);
+        assert_eq!(mapped.db_factors["sw_l2_avg_net_sell_amount"], 0.4);
+        assert_eq!(mapped.db_factors["sw_l2_best_limit_up_count"], 12.0);
+        assert_eq!(mapped.db_factors["sw_l2_avg_limit_up_count"], 6.0);
+        assert_eq!(mapped.db_factors["sw_l2_any_limit_up_sector_flag"], 1.0);
+        assert_eq!(mapped.db_factors["sw_l2_limit_up_sector_count"], 3.0);
+        assert_eq!(mapped.db_factors["sw_l2_limit_up_sector_ratio"], 0.75);
+        assert_eq!(mapped.db_factors["sw_l2_best_limit_days"], 3.0);
+        assert_eq!(mapped.db_factors["sw_l2_best_limit_pct_chg"], 7.8);
+        assert_eq!(mapped.db_factors["sw_l2_avg_limit_pct_chg"], 4.9);
+        assert_eq!(mapped.db_factors["sw_l2_best_limit_rank"], 2.0);
+        assert_eq!(mapped.db_factors["stock_vs_sw_l2_main_pct_change"], 0.8);
+        assert_eq!(mapped.db_factors["stock_vs_sw_l2_avg_pct_change"], 1.5);
         assert_eq!(mapped.db_factors["stock_env_sector_ret5_pct"], 6.2);
         assert_eq!(mapped.db_factors["stock_env_sector_ret20_pct"], 12.4);
         assert_eq!(mapped.db_factors["stock_env_sector_ma20_bias_pct"], 3.3);
@@ -2707,9 +3820,9 @@ mod tests {
             pick_date,
             &mut rows,
         )?;
-        merge_ths_sector_extras(
+        merge_sw_l2_extras(
             &client,
-            &scope_query(DB_NATIVE_THS_SECTOR_EXTRAS_QUERY),
+            &scope_query(DB_NATIVE_SW_L2_EXTRAS_QUERY),
             pick_date,
             &mut rows,
         )?;
@@ -2890,11 +4003,14 @@ mod tests {
                 .contains_key("small_net_amount_to_amount_pct")
         );
         assert!(row.db_factors.contains_key("net_mf_amount_to_amount_pct"));
-        assert!(row.db_factors.contains_key("ths_main_limit_up_count"));
-        assert!(row.db_factors.contains_key("ths_best_limit_up_count"));
-        assert!(row.db_factors.contains_key("ths_any_limit_up_sector_flag"));
-        assert!(row.db_factors.contains_key("ths_limit_up_sector_count"));
-        assert!(row.db_factors.contains_key("ths_limit_up_sector_ratio"));
+        assert!(row.db_factors.contains_key("sw_l2_main_limit_up_count"));
+        assert!(row.db_factors.contains_key("sw_l2_best_limit_up_count"));
+        assert!(
+            row.db_factors
+                .contains_key("sw_l2_any_limit_up_sector_flag")
+        );
+        assert!(row.db_factors.contains_key("sw_l2_limit_up_sector_count"));
+        assert!(row.db_factors.contains_key("sw_l2_limit_up_sector_ratio"));
         assert!(row.db_factors.contains_key("stock_env_sector_ret5_pct"));
         assert!(
             row.db_factors

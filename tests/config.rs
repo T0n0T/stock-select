@@ -90,9 +90,10 @@ fn runtime_root_uses_cli_then_shell_then_dotenv_then_old_default() {
 fn db_check_tables_use_defaults_until_explicitly_configured() {
     let defaults = BTreeSet::from([
         "index_idx_factor_pro".to_string(),
-        "index_limit_cpt_list".to_string(),
-        "index_moneyflow_cnt_ths".to_string(),
-        "index_ths_daily".to_string(),
+        "index_weight".to_string(),
+        "index_sw_member".to_string(),
+        "stock_moneyflow".to_string(),
+        "calc_daily_industry_moneyflow".to_string(),
         "stock_stk_factor_pro".to_string(),
     ]);
 
@@ -101,7 +102,7 @@ fn db_check_tables_use_defaults_until_explicitly_configured() {
         defaults
     );
     assert_eq!(
-        resolve_db_check_tables_from_sources(Some(""), "STOCK_SELECT_DB_CHECK=index_ths_daily\n")
+        resolve_db_check_tables_from_sources(Some(""), "STOCK_SELECT_DB_CHECK=index_sw_member\n")
             .unwrap(),
         BTreeSet::from(["stock_stk_factor_pro".to_string()])
     );
@@ -110,14 +111,22 @@ fn db_check_tables_use_defaults_until_explicitly_configured() {
         BTreeSet::from(["stock_stk_factor_pro".to_string()])
     );
     assert_eq!(
+        resolve_db_check_tables_from_sources(Some("index_limit_cpt_list"), "").unwrap(),
+        BTreeSet::from([
+            "index_limit_cpt_list".to_string(),
+            "stock_stk_factor_pro".to_string(),
+        ])
+    );
+    assert_eq!(
         resolve_db_check_tables_from_sources(
-            Some(" INDEX_THS_DAILY, stock_moneyflow_ths, index_ths_daily, "),
+            Some(" INDEX_SW_MEMBER, stock_moneyflow, index_idx_factor_pro, "),
             "",
         )
         .unwrap(),
         BTreeSet::from([
-            "index_ths_daily".to_string(),
-            "stock_moneyflow_ths".to_string(),
+            "index_idx_factor_pro".to_string(),
+            "index_sw_member".to_string(),
+            "stock_moneyflow".to_string(),
             "stock_stk_factor_pro".to_string(),
         ])
     );
@@ -129,9 +138,9 @@ fn db_check_tables_reject_unknown_or_qualified_names() {
         .unwrap_err()
         .to_string();
     assert!(unknown.contains("missing_table"));
-    assert!(unknown.contains("index_ths_daily"));
+    assert!(unknown.contains("index_idx_factor_pro"));
 
-    for value in ["public.index_ths_daily", "index_*", "*"] {
+    for value in ["public.index_idx_factor_pro", "index_*", "*"] {
         assert!(
             resolve_db_check_tables_from_sources(Some(value), "").is_err(),
             "{value} should be rejected"

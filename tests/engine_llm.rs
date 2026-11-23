@@ -5,6 +5,8 @@ fn ranked(code: &str, rank: usize) -> RankedCandidate {
     RankedCandidate {
         code: code.to_string(),
         model_score: 1.0 / rank as f64,
+        raw_model_score: None,
+        entry_assessment: None,
         model_rank: rank,
         feature_vector_path: None,
     }

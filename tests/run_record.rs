@@ -12,6 +12,8 @@ fn display_row(code: &str, rank: usize) -> DisplayRow {
         industry: None,
         model_rank: Some(rank),
         model_score: Some(1.0 / rank as f64),
+        raw_model_score: None,
+        entry_assessment: None,
         llm_action: None,
         llm_risk_flags: Vec::new(),
         llm_comment: None,

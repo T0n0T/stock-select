@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 use chrono::{Local, NaiveDate};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use serde::Serialize;
 use serde_json::json;
@@ -25,8 +25,8 @@ use stock_select::engine::inference::{
     LightGbmRuntimeModel, ModelFeatureMetadata, build_feature_vector,
 };
 use stock_select::engine::presentation::{
-    fill_missing_display_instrument_info, format_display_lines, limit_display_rows,
-    review_signal_symbol,
+    fill_missing_display_instrument_info, format_display_lines, format_display_table,
+    limit_display_rows, review_signal_symbol,
 };
 use stock_select::engine::run::{SelectionRunRequest, run_selection};
 use stock_select::engine::types::{DisplayRow, LlmAnnotation};
@@ -116,6 +116,23 @@ struct ScreenArgs {
     environment_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ReviewListFormat {
+    Auto,
+    Table,
+    Tsv,
+}
+
+impl ReviewListFormat {
+    fn lines(self, rows: &[DisplayRow]) -> Vec<String> {
+        match self {
+            Self::Table => format_display_table(rows),
+            Self::Auto if std::io::stdout().is_terminal() => format_display_table(rows),
+            _ => format_display_lines(rows),
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 struct ReviewListArgs {
     #[command(flatten)]
@@ -123,6 +140,10 @@ struct ReviewListArgs {
 
     #[arg(long)]
     limit: Option<usize>,
+
+    /// 输出格式：auto在终端显示对齐表格，管道输出TSV
+    #[arg(long, value_enum, default_value = "auto")]
+    format: ReviewListFormat,
 
     #[arg(long)]
     runtime_root: Option<PathBuf>,
@@ -1602,7 +1623,8 @@ where
         )?;
         let mut rows = limit_display_rows(rows, args.limit)?;
         fill_review_list_names(&mut rows, duckdb_path.as_deref(), name_loader)?;
-        for line in format_display_lines(&rows) {
+        stock_select::engine::entry::mark_uncalibrated_display(&mut rows, method);
+        for line in args.format.lines(&rows) {
             println!("{line}");
         }
         return Ok(());
@@ -1690,7 +1712,8 @@ where
     )?;
     let mut rows = limit_display_rows(rows, args.limit)?;
     fill_review_list_names(&mut rows, duckdb_path.as_deref(), name_loader)?;
-    for line in format_display_lines(&rows) {
+    stock_select::engine::entry::mark_uncalibrated_display(&mut rows, method);
+    for line in args.format.lines(&rows) {
         println!("{line}");
     }
     Ok(())
@@ -1814,6 +1837,8 @@ mod tests {
                 industry: None,
                 model_rank: Some(1),
                 model_score: Some(0.7),
+                raw_model_score: None,
+                entry_assessment: None,
                 llm_action: None,
                 llm_risk_flags: Vec::new(),
                 llm_comment: None,
@@ -1824,6 +1849,8 @@ mod tests {
                 industry: None,
                 model_rank: Some(2),
                 model_score: Some(0.6),
+                raw_model_score: None,
+                entry_assessment: None,
                 llm_action: None,
                 llm_risk_flags: Vec::new(),
                 llm_comment: None,
@@ -1834,6 +1861,8 @@ mod tests {
                 industry: Some("已有行业".to_string()),
                 model_rank: Some(4),
                 model_score: Some(0.4),
+                raw_model_score: None,
+                entry_assessment: None,
                 llm_action: None,
                 llm_risk_flags: Vec::new(),
                 llm_comment: None,
@@ -1878,6 +1907,8 @@ mod tests {
             industry: None,
             model_rank: Some(1),
             model_score: Some(0.7),
+            raw_model_score: None,
+            entry_assessment: None,
             llm_action: None,
             llm_risk_flags: Vec::new(),
             llm_comment: None,

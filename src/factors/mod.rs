@@ -1,4 +1,6 @@
 pub mod abnormal_volume;
+pub mod cyq;
+pub mod cyq_chips;
 pub mod czsc;
 pub mod ma;
 pub mod macd;
@@ -6,6 +8,7 @@ pub mod price_position;
 pub mod registry;
 pub mod semantic;
 pub mod series;
+pub mod stk_factor_pro;
 pub mod types;
 pub mod volume;
 pub mod zx;

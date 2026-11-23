@@ -79,21 +79,19 @@ stock-select-rs run --method b2 --llm-review-limit 5 --pick-date 2026-06-05
 ### review-list
 
 ```bash
-stock-select-rs review-list --method b2 --pick-date 2026-06-05 --limit 20
+stock-select-rs review-list --method scm --pick-date 2026-06-05 --limit 20
 ```
 
-输出格式（tab 分隔）：
+默认在终端显示按中文显示宽度对齐的表格；管道和重定向时输出六列 TSV，也可用 `--format table|tsv` 显式指定。第五列显示开仓状态与原始分数（无开仓评估时显示模型评分），第六列为 LLM 符号：
 
 ```text
-rank  code    name    industry  score       bias  action  flags
-1     000001  平安银行  银行       0.700000    ↑     KEEP    -
+排名  代码      名称      行业  开仓 / 原分       LLM
+  1   000001  平安银行  银行  观察 | +0.228483  -
 ```
 
-- `rank` — 模型排序位置（1-based）
-- `score` — LightGBM 原始预测分
-- `bias` — LLM 短线符号：`↑` 看多、`→` 谨慎、`↓` 看空、`-` 未复盘
-- `action` — LLM 复盘动作
-- `flags` — LLM 风险标记
+- `排名` — 模型排序位置（1-based）
+- `开仓 / 原分` — 开仓评估及原始模型分；未配置开仓评估时显示模型评分
+- `LLM` — 短线符号：`↑` 看多、`→` 谨慎、`↓` 看空、`-` 未复盘
 
 ### review / review-merge
 
@@ -154,7 +152,7 @@ flowchart TD
     ROOT --> CHART["charts/&lt;date&gt;.&lt;method&gt;/<br/>&lt;code&gt;_day.png"]
     ROOT --> MODELS["models/b2 · scm · pbm/<br/>model.txt · model_metadata.json"]
     MODELS --> ARCHIVE["models/archive/&lt;method&gt;/&lt;version&gt;/"]
-    ROOT --> PREP["prepared/<br/>&lt;date&gt;.parquet · &lt;date&gt;.meta.json<br/>Parquet schema 14"]
+    ROOT --> PREP["prepared/<br/>&lt;date&gt;.parquet · &lt;date&gt;.meta.json<br/>Parquet schema 21"]
     ROOT --> ENV["environment/daily/"]
 ```
 
@@ -182,7 +180,7 @@ flowchart TD
     POOLF --> WINDOW
     WINDOW --> LOCAL["enrich_local_market_factors()<br/>boll_width / bias / roc / mtm / psy / wr"]
     LOCAL --> IND["映射 DB 指标并补必要本地序列<br/>KDJ / MACD / rolling / CZSC / ZX"]
-    IND --> PREP["write_prepared_cache()<br/>仅 screen --write-prepared-cache 或 run 自动筛选时写入<br/>Parquet schema 14 → runtime/prepared/*.parquet"]
+    IND --> PREP["write_prepared_cache()<br/>仅 screen --write-prepared-cache 或 run 自动筛选时写入<br/>Parquet schema 21 → runtime/prepared/*.parquet"]
     PREP --> STRAT{"策略筛选"}
     STRAT -->|b2| B2STRAT["run_b2_strategy_from_refs()<br/>src/strategies/b2.rs"]
     STRAT -->|scm| SCMSTRAT["run_scm_strategy_from_refs()<br/>src/strategies/scm_pbm.rs"]
@@ -285,6 +283,48 @@ flowchart LR
     DR --> RL["display.json<br/>→ review-list"]
 ```
 
+## ML 回测边界
+
+AKQuant 集成位于 Python 侧，读取 Rust `run` 生成的每日排序产物。Python 将排名转为每日批次，校验日线覆盖范围，由 AKQuant 模拟成交、记账并计算组合指标。
+
+```mermaid
+flowchart LR
+    RRUN["stock-select-rs run<br/>每日 ranked.json"] --> SIG["ml/backtest/signal_bundle.py<br/>读取排序信号"]
+    CONTEXT["信号日市场环境 date/env"] --> ENTRY["ml/backtest/entry_policy.py<br/>新批次许可、每日权益预算"]
+    CONFIG["独立交易策略 JSON"] --> ENTRY
+    ENTRY --> POLICY
+    SIG --> POLICY["TopNHoldPolicy<br/>每日取 Top 3，各批持有 3 个交易日"]
+    MKT["CSV / Parquet 日线行情"] --> GATEWAY["ml/backtest/akquant_gateway.py<br/>校验交易日，按批次生成订单"]
+    POLICY --> GATEWAY
+    GATEWAY --> AQ["AKQuant run_backtest<br/>次日开盘成交，计算费用和 T+1"]
+    AQ --> REPORT["ml/backtest/report.py<br/>组合指标、净值、现金、暴露、交易归因、策略动作"]
+```
+
+AKQuant 版本为 `0.3.92`，通过 `uv sync --locked --extra backtest` 安装。MCP 的用法在正式开展回测时讨论。
+
+`ml/tuning/backtest.py` 提供 `--objective akquant` 的训练反馈路径：固定持仓规则，逐 trial 生成滚动样本外排名，经上述组合回测后把净收益返回 Optuna。它负责切分开发/留出区间、按实际退出日隔离标签、保存逐 trial 信号与回测、在参数选定后训练并检验最终模型；Rust 侧保持每日候选与因子产出。标签评分型调参目标仍由 `ml/tuning/objectives.py` 提供。
+
+模型只输出候选评分与排名。是否允许新批次买入（含对已持股票加仓）、每日投入多少资金、如何退出，属于独立交易策略；`EntryPolicy` 与持有策略共同控制执行，配置及逐日决策随回测报告保存，不写入 LightGBM 模型。环境既可作为模型输入影响排序，也可供交易策略控制风险，两者可分别消融。禁止新开仓不修改已有批次退出时间，连续禁开仓才可能在存量退出后空仓。
+
+策略实验固定保存的信号、成本与回测区间，只改变独立配置；统一减仓作为对照，用于区分减少风险敞口与环境择时贡献。开仓规则通过 `backtest run --entry-policy ... --daily-context ...` 单独验证。模型调参默认固定期限退出，传入 `--exit-policy` 时切换为规则退出及对应标签。若未来训练额外的收益或风险预测器，预测值仍与最终下单规则分开版本管理。
+
+规则退出共用 `ml/backtest/rule_exit.py` 的 `ExitState`；`exit_indicators.py` 只计算截至当日的退出指标，Python 不重建 Rust 选股特征。`ml/training/policy_labels.py` 用该状态机产生收益标签并按真实退出日隔离样本；`rule_gateway.py` 用实际成交批次和相同状态生成卖单。这样修改退出条件只需调整一个判断入口。目标元数据随模型导出，执行规则仍由交易策略独立持有；Rust 无需改动。
+
+```mermaid
+flowchart LR
+    M[历史日线] --> I[退出指标]
+    I --> S[ExitState 共享退出判断]
+    S --> L[policy_labels 逐样本收益与实际退出日]
+    L --> T[LightGBM 排序训练与实际退出日隔离]
+    T --> R[每日候选排名]
+    R --> G[rule_gateway 实际成交批次]
+    S --> G
+    G --> A[AKQuant 次日开盘买入与当日收盘卖出]
+    A --> O[开发期 OOF 组合净收益]
+    O --> P[Optuna 参数选择]
+    P --> T
+```
+
 
 ## 源码职责与目录整理
 
@@ -314,9 +354,10 @@ flowchart LR
 
 ## 当前产物契约
 
-- prepared 缓存只使用 Parquet schema 14，显式声明共享消费者和计算版本；缺失或版本不符时重建。
+- prepared 缓存使用 Parquet schema 21，显式声明共享消费者和计算版本；缺失或版本不符时重建。
 - 候选输入必须包含 `method`、`pick_date`、`candidates`，策略和日期必须与请求一致；不接受裸数组或 `rows` 候选结构。
-- 因子产物使用 `rust-factor-library-v5`；SCM/PBM 的共用语义因子统一为 `ma25_*`，不读取旧前缀。
+- 因子产物使用 `rust-factor-library-v11`；`cyq_perf` 与 `cyq_chips` 是独立来源，分别按交易日或候选股票缓存并在 EOD 因子导出中 enrichment。`cyq_chips` 将逐价位分布聚合为集中度、支撑/套牢盘、主峰距离和离散度 5 个数值。模型 run 按 metadata 决定是否需要 CYQ；盘中和 Python 训练不请求 CYQ。缺数、部分覆盖和请求失败写入对应行诊断并输出汇总警告。
+- SCM/PBM 的共用语义因子统一为 `ma25_*`，不读取旧前缀。
 - 模型元数据必须明确声明类别编码；归档只读取 `models/archive/<method>/<version>/`。旧数据集、候选、因子和模型应按当前流程重新生成。
 
 ## 因子计算与 Polars

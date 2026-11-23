@@ -20,6 +20,10 @@ parquet = { version = "60.1.0", default-features = false, features = ["arrow", "
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
+stock-cache = { path = "../stock-cache" }
+tokio = { version = "1.38", features = ["io-util", "net", "rt", "time"] }
+unicode-width = "0.2"
 
 [dev-dependencies]
 assert_cmd = "2.0"

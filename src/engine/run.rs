@@ -8,7 +8,6 @@ use serde_json::{Value, json};
 use crate::cache::{
     history_payload_for_code, load_prepared_dataset_for_mode, prepared_cache_start_date,
 };
-use crate::screening::load_db_native_prepared_window;
 use crate::engine::artifacts::artifact_key_for_run;
 use crate::engine::artifacts::{SelectionRunPaths, write_selection_json};
 use crate::engine::b2::adjust_b2_cyq_post_rerank_score;
@@ -16,6 +15,7 @@ use crate::engine::candidates::{
     CandidateFactorProvider, CandidatePayloadFactorProvider, candidate_from_json,
 };
 use crate::engine::capability::ensure_model_run_supported;
+use crate::engine::entry::{assess_ranked_entries, load_score_entry_policy};
 use crate::engine::inference::{
     LightGbmRuntimeModel, ModelFeatureMetadata, ModelRoutingManifest, build_feature_vector,
     read_model_routing_manifest, resolve_method_model_artifacts_for_mode_with_overrides,
@@ -25,10 +25,13 @@ use crate::engine::types::{
     DisplayRow, FactorRow, FactorValue, RankedCandidate, SelectionCandidate,
 };
 use crate::environment::ResolvedEnvironment;
+use crate::factors::cyq::{enrich_factor_rows_from_tushare, log_cyq_enrichment};
+use crate::factors::cyq_chips::enrich_chip_factor_rows_from_tushare;
 use crate::factors::registry::{
     build_candidate_factor_rows_from_refs, write_factor_artifact_with_db_data_gaps,
 };
 use crate::model::{Candidate, Method, PreparedDataset, PreparedRow};
+use crate::screening::load_db_native_prepared_window;
 
 const FEATURE_VECTORS_ARTIFACT: &str = "feature_vectors.json";
 
@@ -73,6 +76,14 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         request.model_feature_metadata_path.as_deref(),
     )?;
     let model = load_runtime_model_bundle(&model_artifacts)?;
+    let entry_binding = if request.method == Method::Scm {
+        load_score_entry_policy(
+            model_artifacts.model_path.as_deref(),
+            model_artifacts.metadata_path.as_deref(),
+        )?
+    } else {
+        None
+    };
     let mut candidates =
         read_candidates(&request.candidates_path, request.pick_date, request.method)?;
     inject_environment_factor(&mut candidates, request.environment.as_ref());
@@ -91,7 +102,7 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
     inject_prepared_history_if_available(&mut candidates, prepared_dataset.as_ref());
     eprintln!("[selection] prepared history injection checked");
     let factor_started = Instant::now();
-    let factors = match factor_rows_from_prepared_dataset(
+    let mut factors = match factor_rows_from_prepared_dataset(
         prepared_dataset.as_ref(),
         request.method,
         request.pick_date,
@@ -115,6 +126,31 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         factors.len(),
         factor_started.elapsed().as_secs_f64()
     );
+    if !request.intraday
+        && (request.method == Method::B2
+            || model_bundle_uses_features(model.as_ref(), |name| {
+                name.starts_with("cyq_") && !name.starts_with("cyq_chips_")
+            }))
+    {
+        let cyq_started = Instant::now();
+        let report =
+            enrich_factor_rows_from_tushare(&request.runtime_root, request.pick_date, &mut factors);
+        log_cyq_enrichment("selection run", request.pick_date, &report);
+        eprintln!(
+            "[selection] CYQ enrichment elapsed={:.3}s",
+            cyq_started.elapsed().as_secs_f64()
+        );
+    }
+    if !request.intraday
+        && model_bundle_uses_features(model.as_ref(), |name| name.starts_with("cyq_chips_"))
+    {
+        let report = enrich_chip_factor_rows_from_tushare(
+            &request.runtime_root,
+            request.pick_date,
+            &mut factors,
+        );
+        log_cyq_enrichment("cyq_chips selection run", request.pick_date, &report);
+    }
     let empty_db_data_gaps = BTreeMap::new();
     let db_data_gaps = prepared_dataset
         .as_ref()
@@ -128,8 +164,22 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
         Some(&request.candidates_path),
         db_data_gaps,
     )?;
-    let (ranked, feature_vectors) =
-        rank_candidates(&candidates, &factors, model.as_ref(), request.intraday)?;
+    let (mut ranked, feature_vectors) = rank_candidates(
+        &candidates,
+        &factors,
+        model.as_ref(),
+        request.method,
+        request.intraday,
+    )?;
+    if request.method == Method::Scm {
+        assess_ranked_entries(
+            &mut ranked,
+            entry_binding.as_ref(),
+            request.pick_date,
+            request.intraday,
+            request.environment.as_ref().map(|env| env.state.as_str()),
+        );
+    }
     eprintln!(
         "[selection] ranked rows={} feature_vectors={}",
         ranked.len(),
@@ -146,6 +196,7 @@ pub fn run_selection(request: SelectionRunRequest) -> anyhow::Result<SelectionRu
             "pick_date": request.pick_date,
             "model_path": model_artifacts.model_path,
             "metadata_path": model_artifacts.metadata_path,
+            "score_entry_policy": entry_binding.as_ref().map(|(policy, _)| policy),
             "candidate_source": display_candidate_source(&request.runtime_root, &request.candidates_path),
             "environment": {
                 "state": request.environment.as_ref().map(|env| env.state.as_str()),
@@ -417,6 +468,30 @@ enum RuntimeModelBundle {
     Routed(RoutedModelBundle),
 }
 
+fn model_bundle_uses_features(
+    model: Option<&RuntimeModelBundle>,
+    accepts: impl Fn(&str) -> bool,
+) -> bool {
+    let uses_features = |metadata: &ModelFeatureMetadata| {
+        metadata
+            .numeric_columns
+            .iter()
+            .chain(metadata.categorical_columns.iter())
+            .any(|column| accepts(column))
+    };
+    match model {
+        Some(RuntimeModelBundle::Single(model)) => uses_features(&model.metadata),
+        Some(RuntimeModelBundle::Routed(bundle)) => {
+            bundle.models.values().any(|model| match model {
+                RuntimeRouteModel::LightGbm(model) => uses_features(&model.metadata),
+                #[cfg(test)]
+                RuntimeRouteModel::FactorScore { .. } => false,
+            })
+        }
+        None => false,
+    }
+}
+
 struct RoutedModelBundle {
     manifest: ModelRoutingManifest,
     models: BTreeMap<String, RuntimeRouteModel>,
@@ -533,6 +608,7 @@ fn rank_candidates(
     candidates: &[SelectionCandidate],
     factors: &[FactorRow],
     model: Option<&RuntimeModelBundle>,
+    method: Method,
     intraday: bool,
 ) -> anyhow::Result<(Vec<RankedCandidate>, Vec<FeatureVectorDiagnostic>)> {
     let factor_by_code = factors
@@ -568,8 +644,11 @@ fn rank_candidates(
         } else {
             1.0
         };
-        normalized_scores[scored_index] =
-            adjust_b2_cyq_post_rerank_score(normalized_score, scored[scored_index].2);
+        normalized_scores[scored_index] = if method == Method::B2 {
+            adjust_b2_cyq_post_rerank_score(normalized_score, scored[scored_index].2)
+        } else {
+            normalized_score
+        };
     }
 
     let mut scored = scored
@@ -589,9 +668,11 @@ fn rank_candidates(
     let ranked = scored
         .into_iter()
         .enumerate()
-        .map(|(index, (code, model_score, _raw_score))| RankedCandidate {
+        .map(|(index, (code, model_score, raw_score))| RankedCandidate {
             code,
             model_score,
+            raw_model_score: model.is_some().then_some(raw_score),
+            entry_assessment: None,
             model_rank: index + 1,
             feature_vector_path: model
                 .is_some()
@@ -782,12 +863,16 @@ mod tests {
         }
 
         let (ranked, feature_vectors) =
-            rank_candidates(&candidates, &factors, None, false).unwrap();
+            rank_candidates(&candidates, &factors, None, Method::B2, false).unwrap();
 
         assert!(feature_vectors.is_empty());
         assert_eq!(ranked[0].code, "000002.SZ");
         assert_eq!(ranked[0].model_rank, 1);
         assert!((ranked[1].model_score - 0.86).abs() < 1e-9);
+
+        let (scm_ranked, _) =
+            rank_candidates(&candidates, &factors, None, Method::Scm, false).unwrap();
+        assert_eq!(scm_ranked[0].code, "000001.SZ");
     }
 
     #[test]
@@ -813,8 +898,14 @@ mod tests {
             "weak",
         ));
 
-        let (ranked, feature_vectors) =
-            rank_candidates(&candidates, &[strong, weak], Some(&bundle), false).unwrap();
+        let (ranked, feature_vectors) = rank_candidates(
+            &candidates,
+            &[strong, weak],
+            Some(&bundle),
+            Method::B2,
+            false,
+        )
+        .unwrap();
 
         assert!(feature_vectors.is_empty());
         assert_eq!(ranked[0].code, "000001.SZ");

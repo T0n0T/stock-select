@@ -14,9 +14,14 @@ DEFAULT_METHOD = "b2"
 
 IDENTITY_COLUMNS = {"date", "code", "name", "method"}
 LABEL_COLUMNS = {
+    "exit_return", "exit_net_return", "rank_label_exit", "exit_date", "exit_reason",
+    "exit_entry_date", "exit_holding_sessions", "exit_label_status",
     "ret3",
     "ret5",
     "ret10",
+    "ret_t1_open_to_t3_close",
+    "benchmark_csi300_ret_t1_open_to_t3_close",
+    "excess_ret_t1_open_to_t3_close",
     "max_drawdown_5d",
     "win3_vs_day_median",
     "win5_vs_day_median",
@@ -42,14 +47,6 @@ FEATURE_SETS = {"raw_numeric", "raw_plus_signal", "raw_plus_signal_macd", "all"}
 RF_FEATURE_SELECTION_MODES = {"none", "cumulative_importance"}
 CATEGORICAL_ENCODINGS = {"one_hot", "native"}
 DEFAULT_CATEGORICAL_ENCODING = "one_hot"
-UNSTABLE_ZERO_COVERAGE_RAW_COLUMNS = {
-    "cyq_winner_rate",
-    "cyq_cost_50_to_close_pct",
-    "cyq_cost_85_to_close_pct",
-    "cyq_weight_avg_to_close_pct",
-    "cyq_cost_70_width_pct",
-    "cyq_cost_90_width_pct",
-}
 OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS = {
     "macd_state_phase_score",
     "macd_state_daily_phase_type",
@@ -63,6 +60,21 @@ OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS = {
     "signal_bullish_engulf_prev_bearish_flag",
     "signal_bullish_engulf_volume_ratio",
     "signal_yang_engulf_ma25_flag",
+    "cyq_winner_rate",
+    "cyq_cost_50_to_close_pct",
+    "cyq_cost_85_to_close_pct",
+    "cyq_weight_avg_to_close_pct",
+    "cyq_cost_70_width_pct",
+    "cyq_cost_90_width_pct",
+    # The replacement SW2021 industry source does not expose legacy THS
+    # sector volume, turnover, market-cap, or leader-stock fields.  Keep the
+    # schema aliases for compatibility, but remove them when their coverage
+    # is empty so they cannot block training.
+    "sw_l2_main_vol",
+    "sw_l2_main_turnover_rate",
+    "sw_l2_main_total_mv",
+    "sw_l2_main_float_mv",
+    "sw_l2_main_lead_stock_pct_change",
     "intraday_czsc_close_to_last_bi_high_pct",
     "intraday_czsc_close_to_last_bi_low_pct",
     "intraday_czsc_close_to_last_bi_mid_pct",
@@ -76,6 +88,17 @@ OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS = {
     "intraday_czsc_close_to_pricing_bear_close_pct",
 }
 
+# 周月结构可能长于 Rust 的一年行情窗口；日历天数仍可精确计算。
+# 交易日计数超窗时保留缺失，仅在整个训练窗无值时剔除这些补充列。
+OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS |= {
+    f"czsc_{period}_{field}"
+    for period in ("weekly", "monthly")
+    for field in (
+        "last_bi_duration_trade_days", "zs_duration_trade_days",
+        "recent_peak_age_trade_days", "pricing_line_age_trade_days",
+    )
+}
+
 
 def categorical_columns_for_method(method: str = DEFAULT_METHOD) -> set[str]:
     return set(rank_dataset_schema.training_categorical_columns_for_method(method)) | {"env"}
@@ -86,7 +109,7 @@ def raw_numeric_columns_for_method(method: str = DEFAULT_METHOD) -> set[str]:
         set(rank_dataset_schema.raw_factor_columns_for_method(method))
         | set(rank_dataset_schema.context_numeric_columns_for_method(method))
         | set(rank_dataset_schema.training_macd_numeric_columns_for_method(method))
-    ) - UNSTABLE_ZERO_COVERAGE_RAW_COLUMNS
+    )
 
 
 def select_feature_columns(
@@ -117,7 +140,7 @@ def select_feature_columns(
             continue
         if column in allowed_categorical:
             categorical.append(column)
-        elif column in raw_numeric_columns:
+        elif column in raw_numeric_columns or rank_dataset_schema.is_index_context_factor_column(column):
             numeric.append(column)
     return numeric, categorical
 
@@ -142,7 +165,7 @@ def drop_optional_zero_coverage_features(
     dropped = [
         column
         for column in selected
-        if column in OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS
+        if (column in OPTIONAL_ZERO_COVERAGE_RAW_COLUMNS or column.startswith("cyq_"))
         and not any(feature_value_present(row.get(column)) for row in rows)
     ]
     dropped_set = set(dropped)
@@ -151,6 +174,33 @@ def drop_optional_zero_coverage_features(
         [column for column in categorical_columns if column not in dropped_set],
         dropped,
     )
+
+
+def _verified_unavailable_index_context(rows: Sequence[dict[str, Any]], column: str) -> bool:
+    """成员掩码或明确的无中枢状态允许缺失，源数据缺口仍失败。"""
+    aliases = ("sse50", "csi300", "csi500", "guozheng2000", "chinext",
+               "sci50", "bse50", "csi_a50", "csi_dividend")
+    index_prefix = next((f"market_index_{alias}_" for alias in aliases
+                         if column.startswith(f"market_index_{alias}_")), None)
+    if index_prefix is None or column == index_prefix + "member_flag" or not rows:
+        return False
+    prefix = next((index_prefix + f"calc_daily_czsc_structure_{period}_"
+                   for period in ("daily", "weekly", "monthly")
+                   if column.startswith(index_prefix + f"calc_daily_czsc_structure_{period}_")), "")
+    suffixes = {"bi_count", "duration_calendar_days", "end_age_calendar_days",
+                "start_age_calendar_days", "zd_to_close_pct", "zg_to_close_pct", "zz_to_close_pct"}
+    zs_field = bool(prefix) and column in {prefix + "latest_zs_" + suffix for suffix in suffixes}
+    for row in rows:
+        if column not in row:
+            return False
+        member = str(row.get(index_prefix + "member_flag"))
+        if member in {"0", "0.0", "False"}:
+            continue
+        if (not zs_field or member not in {"1", "1.0", "True"}
+                or str(row.get(prefix + "source_bar_valid")) not in {"1", "1.0", "True"}
+                or str(row.get(prefix + "status_code")) not in {"1", "1.0", "2", "2.0", "3", "3.0"}):
+            return False
+    return True
 
 
 def validate_selected_feature_coverage(
@@ -162,6 +212,7 @@ def validate_selected_feature_coverage(
     selected = list(numeric_columns) + list(categorical_columns)
     features: dict[str, dict[str, int]] = {}
     zero_coverage: list[str] = []
+    structural: list[str] = []
     row_count = len(rows)
 
     for column in selected:
@@ -172,13 +223,17 @@ def validate_selected_feature_coverage(
             "non_empty_count": non_empty_count,
         }
         if non_empty_count == 0:
-            zero_coverage.append(column)
+            if column in numeric_columns and _verified_unavailable_index_context(rows, column):
+                structural.append(column)
+            else:
+                zero_coverage.append(column)
 
     report = {
         "row_count": row_count,
         "feature_count": len(selected),
         "features": features,
         "zero_coverage_features": zero_coverage,
+        "structurally_unavailable_features": structural,
     }
     if zero_coverage:
         raise ValueError(f"selected training features have zero coverage: {', '.join(zero_coverage)}")

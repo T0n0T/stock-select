@@ -126,6 +126,7 @@ class RankLgbmTest(unittest.TestCase):
             "signal_type",
             "price_up_1d_flag",
             "ret3",
+            "ret_t1_open_to_t3_close",
             "rank_label_3d",
         ]
 
@@ -858,6 +859,7 @@ class RankLgbmTest(unittest.TestCase):
                     dataset,
                     root / "model",
                     test_ratio=0.5,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_manifest=manifest,
                     feature_set="raw_numeric",
                     num_leaves=5,
@@ -929,6 +931,7 @@ class RankLgbmTest(unittest.TestCase):
                         dataset,
                         output_dir,
                         test_ratio=0.5,
+                        purge_gap=0,  # 仅测试微型样本的产物格式。
                         feature_set="raw_numeric",
                         num_leaves=5,
                         min_data_in_leaf=1,
@@ -1012,6 +1015,7 @@ class RankLgbmTest(unittest.TestCase):
                         dataset,
                         output_dir,
                         test_ratio=0.5,
+                        purge_gap=0,  # 仅测试微型样本的产物格式。
                         feature_set="raw_numeric",
                         num_leaves=5,
                         min_data_in_leaf=1,
@@ -1053,6 +1057,7 @@ class RankLgbmTest(unittest.TestCase):
                     dataset,
                     root / "model",
                     test_ratio=0.5,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=1,
@@ -1105,6 +1110,7 @@ class RankLgbmTest(unittest.TestCase):
                             dataset,
                             output_dir,
                             test_ratio=0.5,
+                            purge_gap=0,  # 仅测试微型样本的产物格式。
                             feature_set="raw_numeric",
                             num_leaves=5,
                             min_data_in_leaf=1,
@@ -1159,6 +1165,7 @@ class RankLgbmTest(unittest.TestCase):
                         dataset,
                         root / "model",
                         test_ratio=0.5,
+                        purge_gap=0,  # 仅测试微型样本的产物格式。
                         feature_set="raw_numeric",
                         num_leaves=5,
                         min_data_in_leaf=1,
@@ -1272,6 +1279,7 @@ class RankLgbmTest(unittest.TestCase):
                     dataset,
                     output_dir,
                     test_ratio=0.5,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=120,
@@ -1355,6 +1363,7 @@ class RankLgbmTest(unittest.TestCase):
                     dataset,
                     output_dir,
                     test_ratio=0.34,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=120,
@@ -1431,6 +1440,7 @@ class RankLgbmTest(unittest.TestCase):
                     dataset,
                     output_dir,
                     test_ratio=0.34,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=120,

@@ -23,16 +23,18 @@ description: Use when retraining, validating, exporting, promoting, rolling back
 git status --short --branch
 ```
 
-训练窗口在每次训练时确定，默认取截至 `TRAIN_END_DATE` 的近一年 EOD 数据；不要依赖脚本内置日期。重训前补齐历史 EOD candidates；脚本从 `.env`/环境读取 `DUCKDB_PATH` 和 `STOCK_SELECT_RUNTIME_ROOT`，命令行不携带数据库路径或 token：
+每次训练都要按当前实验目标显式设置 EOD 窗口，不要从上一次实验推断默认起止日期。运行后以模型 metadata 中的实际训练日期为准。重训前补齐窗口内缺失的 EOD candidates；脚本从 `.env`/环境读取 `DUCKDB_PATH` 和 `STOCK_SELECT_RUNTIME_ROOT`，命令行不携带数据库路径或 token：
 
 ```bash
 METHOD=b2
+TRAIN_START_DATE=<本次训练起始日期>
+TRAIN_END_DATE=<本次训练结束日期>
 
 uv run stock-select-ml backfill candidates \
   --method "$METHOD" \
   --start-date "$TRAIN_START_DATE" \
   --end-date "$TRAIN_END_DATE" \
-  --workers 16
+  --workers 8
 ```
 
 缺少 factor artifact 时，先为对应日期运行：
@@ -51,7 +53,7 @@ uv run stock-select-ml backfill candidates \
   --method "$METHOD" \
   --start-date "$TRAIN_START_DATE" \
   --end-date "$TRAIN_END_DATE" \
-  --workers 16 \
+  --workers 8 \
   --dry-run
 ```
 
@@ -75,9 +77,10 @@ uv run stock-select-ml tune lgbm-rank \
   --output-root "diagnostics/ml/$METHOD/tuning/optuna-<run-id>" \
   --strategy optuna \
   --max-trials 12 \
+  --num-threads 8 \
   --rolling-folds 5 \
-  --rolling-train-dates 240 \
-  --rolling-test-dates 40 \
+  --rolling-train-dates 120 \
+  --rolling-test-dates 20 \
   --skip-rf-diagnostics
 ```
 
@@ -121,7 +124,11 @@ uv run stock-select-ml model status --method "$METHOD"
 uv run stock-select-ml model archives --method "$METHOD"
 ```
 
+用户明确要求按当前持仓/退出规则优化组合收益时，使用 `--strategy optuna --objective akquant --market-data <OHLCV>`，参见 `docs/model.md` 的“以 AKQuant 组合净收益调参”。默认固定持有期标签；传入 `--exit-policy <JSON>` 时使用共享规则退出及 `rank_label_exit`，训练按实际退出日期隔离，未退出样本不填零。先保留全部适用特征，以开发区间滚动样本外 AKQuant 净收益作为唯一搜索目标，最多 12 trial、连续 4 次不改善即停止，末段留出期不参与选择。后续特征消融固定最佳参数，训练窗口对照必须固定同一组 OOF 日期。最后只导出已训练模型的留出信号和执行 promote dry-run；不要另跑会重新训练的 score export 命令覆盖本次模型或信号。汇报开发区间与留出期的净收益/回撤，规则目标使用 `exit_net_return` 指标，并区分标签胜率和组合收益。
+
 ## 验证
+
+连续收益对照使用 `--learning-task return-regression`，同时要求 `--objective akquant --exit-policy <JSON>`。目标为 `exit_net_return`，保留负数和小数，Optuna 搜索 L2/L1 损失。对照时固定此前选定的特征、训练窗口、OOF 日期和交易策略；不得用最终模型的类别水平回填早期训练折。分数单位为收益百分点，未经检验不视为可靠预期收益，不据此自动设置开仓阈值。导出候选后只做 promote dry-run，完整汇报见 reference。
 
 ```bash
 python -m unittest tests/test_candidate_backfill.py tests/test_rank_dataset.py tests/test_rank_lgbm.py tests/test_lgbm_score_export.py tests/test_lgbm_model_promotion.py

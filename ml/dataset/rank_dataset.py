@@ -19,13 +19,27 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ml.db import query_rows
+from ml.security_identity import canonicalize_security_rows, fetch_security_aliases
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METHOD = "b2"
 RUNTIME_ROOT_ENV = "STOCK_SELECT_RUNTIME_ROOT"
+DEFAULT_BENCHMARK_INDEX_CODE = "000300.SH"
 EXPECTED_FACTOR_ARTIFACT_VERSION = 2
-EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v5"
+EXPECTED_FACTOR_LIBRARY_VERSION = "rust-factor-library-v11"
+INDEX_CONTEXT_FACTOR_PREFIXES = ("market_index_", "sw_l2_main_index_", "sw_l2_main_moneyflow_")
+INDEX_BENCHMARK_ALIASES = (
+    "sse50",
+    "csi300",
+    "csi500",
+    "guozheng2000",
+    "chinext",
+    "sci50",
+    "bse50",
+    "csi_a50",
+    "csi_dividend",
+)
 
 
 IDENTITY_COLUMNS = ["date", "code", "name", "env", "method"]
@@ -42,6 +56,12 @@ CZSC_TRAINING_CATEGORICAL_COLUMNS = [
     "czsc_pricing_lifecycle_state",
     "czsc_zs_lifecycle_state",
 ]
+CZSC_TRAINING_CATEGORICAL_COLUMNS += [
+    f"czsc_{period}_{field}"
+    for period in ("weekly", "monthly")
+    for field in ("status", "last_bi_direction", "zs_region")
+]
+
 TRAINING_CATEGORICAL_COLUMNS = [
     "listing_board",
     "signal",
@@ -154,36 +174,25 @@ RAW_FACTOR_COLUMNS = [
     "market_net_mf_to_amount_pct",
     "market_approx_limit_up_count",
     "market_approx_limit_down_count",
-    "market_sse_ret5_pct",
-    "market_sse_ret20_pct",
-    "market_sse_ma20_bias_pct",
-    "market_sse_volatility20_pct",
-    "market_cn2000_ret5_pct",
-    "market_cn2000_ret20_pct",
-    "market_cn2000_ma20_bias_pct",
-    "market_cn2000_volatility20_pct",
-    "market_broad_ret5_pct",
-    "market_broad_ret20_pct",
-    "market_broad_ma20_bias_pct",
-    "market_broad_volatility20_pct",
-    "stock_env_sector_ret5_pct",
-    "stock_env_sector_ret20_pct",
-    "stock_env_sector_ma20_bias_pct",
-    "stock_env_sector_vs_broad_ret5_pct",
-    "stock_env_sector_vs_broad_ret20_pct",
-    "stock_env_style_ret5_spread_pct",
-    "stock_env_market_sector_ret5_sum_pct",
-    "stock_env_market_score",
-    "stock_env_sector_score",
-    "stock_env_alignment_score",
-    "stock_env_limit_heat_score",
-    "stock_env_overall_score",
+    *[
+        column
+        for alias in INDEX_BENCHMARK_ALIASES
+        for column in (
+            f"market_index_{alias}_member_flag",
+            f"market_index_{alias}_weight_pct",
+        )
+    ],
     "cyq_winner_rate",
     "cyq_cost_50_to_close_pct",
     "cyq_cost_85_to_close_pct",
     "cyq_weight_avg_to_close_pct",
     "cyq_cost_70_width_pct",
     "cyq_cost_90_width_pct",
+    "cyq_chips_near_close_5pct",
+    "cyq_chips_overhead_10pct",
+    "cyq_chips_support_10pct",
+    "cyq_chips_peak_to_close_pct",
+    "cyq_chips_std_to_close_pct",
 ]
 CZSC_RAW_FACTOR_COLUMNS = [
     "czsc_snapshot_available",
@@ -252,6 +261,26 @@ CZSC_RAW_FACTOR_COLUMNS = [
     "intraday_czsc_close_to_pricing_bear_low_pct",
     "intraday_czsc_close_to_pricing_bear_close_pct",
 ]
+CZSC_RAW_FACTOR_COLUMNS += ["czsc_period_complete"] + [
+    f"czsc_{field}_age_calendar_days"
+    for field in ("last_bi_start", "last_bi_end", "zs_start", "zs_end", "recent_peak", "pricing_line")
+] + [f"czsc_{field}_duration_calendar_days" for field in ("last_bi", "zs")]
+CZSC_SNAPSHOT_RAW_FACTOR_COLUMNS = [
+    field for field in CZSC_RAW_FACTOR_COLUMNS
+    if field.startswith("czsc_") and not any(token in field for token in (
+        "lifecycle", "active_flag", "cycle_count", "pullback", "days_since_breakout",
+    ))
+]
+CZSC_RAW_FACTOR_COLUMNS += [
+    field.replace("czsc_", f"czsc_{period}_", 1)
+    for period in ("weekly", "monthly")
+    for field in CZSC_SNAPSHOT_RAW_FACTOR_COLUMNS
+]
+MULTIPERIOD_KDJ_RAW_FACTOR_COLUMNS = [
+    f"kdj_{period}_{component}"
+    for period in ("weekly", "monthly") for component in ("k", "d", "j")
+]
+
 DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS = [
     "structure_box_position_120d_pct",
     "structure_box_mid_position_120d_pct",
@@ -302,52 +331,17 @@ DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS = [
     "signal_bullish_engulf_volume_ratio",
     "signal_yang_engulf_ma25_flag",
     *CZSC_RAW_FACTOR_COLUMNS,
+    *MULTIPERIOD_KDJ_RAW_FACTOR_COLUMNS,
+    "macd_daily_dea_pctile",
+    "macd_daily_period_count",
+    "close_to_rolling_ma144_pct",
+    "close_to_rolling_ma220_pct",
 ]
-THS_SECTOR_RAW_FACTOR_COLUMNS = [
-    "ths_membership_current_flag",
-    "ths_main_sector_rank",
-    "ths_main_pct_change",
-    "ths_main_vol",
-    "ths_main_turnover_rate",
-    "ths_main_total_mv",
-    "ths_main_float_mv",
-    "ths_main_net_amount",
-    "ths_main_net_buy_amount",
-    "ths_main_net_sell_amount",
-    "ths_main_limit_up_count",
-    "ths_main_limit_days",
-    "ths_main_limit_pct_chg",
-    "ths_main_limit_rank",
-    "ths_main_lead_stock_pct_change",
-    "ths_main_macd_daily_dif",
-    "ths_main_macd_daily_dea",
-    "ths_main_macd_daily_hist",
-    "ths_main_macd_weekly_dif",
-    "ths_main_macd_weekly_dea",
-    "ths_main_macd_weekly_hist",
-    "ths_main_macd_monthly_dif",
-    "ths_main_macd_monthly_dea",
-    "ths_main_macd_monthly_hist",
-    "ths_sector_count",
-    "ths_best_pct_change",
-    "ths_avg_pct_change",
-    "ths_best_net_amount",
-    "ths_avg_net_amount",
-    "ths_best_net_buy_amount",
-    "ths_avg_net_buy_amount",
-    "ths_best_net_sell_amount",
-    "ths_avg_net_sell_amount",
-    "ths_best_limit_up_count",
-    "ths_avg_limit_up_count",
-    "ths_any_limit_up_sector_flag",
-    "ths_limit_up_sector_count",
-    "ths_limit_up_sector_ratio",
-    "ths_best_limit_days",
-    "ths_best_limit_pct_chg",
-    "ths_avg_limit_pct_chg",
-    "ths_best_limit_rank",
-    "stock_vs_ths_main_pct_change",
-    "stock_vs_ths_avg_pct_change",
+SW_L2_RAW_FACTOR_COLUMNS = [
+    "sw_l2_membership_current_flag",
+    "sw_l2_main_pct_change",
+    "sw_l2_main_net_amount_per_stock",
+    "stock_vs_sw_l2_main_pct_change",
 ]
 B2_RDAGENT_RAW_FACTOR_COLUMNS = [
     "D",
@@ -369,7 +363,7 @@ B2_RDAGENT_RAW_FACTOR_COLUMNS = [
 B2_RAW_FACTOR_COLUMNS = (
     RAW_FACTOR_COLUMNS
     + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS
-    + THS_SECTOR_RAW_FACTOR_COLUMNS
+    + SW_L2_RAW_FACTOR_COLUMNS
     + B2_RDAGENT_RAW_FACTOR_COLUMNS
 )
 MA25_SPECIFIC_RAW_FACTOR_COLUMNS = [
@@ -385,7 +379,6 @@ MA25_SPECIFIC_RAW_FACTOR_COLUMNS = [
     "ma25_bullish_engulf_volume_ratio",
 ]
 MA25_EXCLUDED_RAW_FACTOR_COLUMNS = {
-    "vr_qfq",
     "cyq_cost_85_to_close_pct",
 }
 MA25_KDJ_WEEKLY_MONTHLY_MACD_RAW_FACTOR_COLUMNS = [
@@ -414,18 +407,96 @@ MA25_VALUATION_MARKET_CAP_RSI_RAW_FACTOR_COLUMNS = [
     "rsi_qfq_12",
     "rsi_qfq_24",
 ]
+STK_FACTOR_PRO_RAW_FACTOR_COLUMNS = [
+    "asi_qfq",
+    "asit_qfq",
+    "bias2_qfq",
+    "bias3_qfq",
+    "brar_ar_qfq",
+    "brar_br_qfq",
+    "cci_qfq",
+    "cr_qfq",
+    "emv_qfq",
+    "maemv_qfq",
+    "mass_qfq",
+    "ma_mass_qfq",
+    "mfi_qfq",
+    "psyma_qfq",
+    "maroc_qfq",
+    "trma_qfq",
+    "wr1_qfq",
+    "updays",
+    "downdays",
+    "lowdays",
+    "topdays",
+    "dv_ttm",
+    "turnover_rate",
+    "volume_ratio",
+    "float_share",
+    "close_to_bbi_qfq_pct",
+    "close_to_ma_qfq_5_pct",
+    "close_to_ma_qfq_10_pct",
+    "close_to_ma_qfq_20_pct",
+    "close_to_ma_qfq_30_pct",
+    "close_to_ma_qfq_60_pct",
+    "close_to_ma_qfq_90_pct",
+    "close_to_ma_qfq_250_pct",
+    "close_to_ema_qfq_5_pct",
+    "close_to_ema_qfq_10_pct",
+    "close_to_ema_qfq_20_pct",
+    "close_to_ema_qfq_30_pct",
+    "close_to_ema_qfq_60_pct",
+    "close_to_ema_qfq_90_pct",
+    "close_to_ema_qfq_250_pct",
+    "close_to_expma_12_qfq_pct",
+    "close_to_expma_50_qfq_pct",
+    "close_to_boll_upper_qfq_pct",
+    "close_to_boll_mid_qfq_pct",
+    "close_to_boll_lower_qfq_pct",
+    "close_to_ktn_upper_qfq_pct",
+    "close_to_ktn_mid_qfq_pct",
+    "close_to_ktn_down_qfq_pct",
+    "close_to_taq_up_qfq_pct",
+    "close_to_taq_mid_qfq_pct",
+    "close_to_taq_down_qfq_pct",
+    "close_to_xsii_td1_qfq_pct",
+    "close_to_xsii_td2_qfq_pct",
+    "close_to_xsii_td3_qfq_pct",
+    "close_to_xsii_td4_qfq_pct",
+    "atr_qfq_to_close_pct",
+    "dfma_dif_qfq_to_close_pct",
+    "dfma_difma_qfq_to_close_pct",
+    "dpo_qfq_to_close_pct",
+    "madpo_qfq_to_close_pct",
+    "mtmma_qfq_to_close_pct",
+    "boll_position_pct",
+    "boll_width_to_close_pct",
+    "ktn_position_pct",
+    "ktn_width_to_close_pct",
+    "taq_position_pct",
+    "taq_width_to_close_pct",
+    "xsii_short_position_pct",
+    "xsii_short_width_to_close_pct",
+    "xsii_long_position_pct",
+    "xsii_long_width_to_close_pct",
+    "free_to_float_share_pct",
+]
 MA25_RAW_FACTOR_COLUMNS = (
     [column for column in RAW_FACTOR_COLUMNS if column not in MA25_EXCLUDED_RAW_FACTOR_COLUMNS]
     + DB_NATIVE_SPECIAL_STRUCTURE_RAW_FACTOR_COLUMNS
-    + THS_SECTOR_RAW_FACTOR_COLUMNS
+    + SW_L2_RAW_FACTOR_COLUMNS
     + MA25_SPECIFIC_RAW_FACTOR_COLUMNS
     + MA25_KDJ_WEEKLY_MONTHLY_MACD_RAW_FACTOR_COLUMNS
     + MA25_VALUATION_MARKET_CAP_RSI_RAW_FACTOR_COLUMNS
+    + STK_FACTOR_PRO_RAW_FACTOR_COLUMNS
 )
 LABEL_COLUMNS = [
     "ret3",
     "ret5",
     "ret10",
+    "ret_t1_open_to_t3_close",
+    "benchmark_csi300_ret_t1_open_to_t3_close",
+    "excess_ret_t1_open_to_t3_close",
     "max_drawdown_5d",
     "win3_vs_day_median",
     "win5_vs_day_median",
@@ -485,6 +556,29 @@ def dataset_columns_for_method(method: str) -> list[str]:
 
 def dataset_column_set_for_method(method: str) -> set[str]:
     return set(dataset_columns_for_method(method))
+
+
+def is_index_context_factor_column(column: str) -> bool:
+    normalized = column.casefold()
+    return "ths" not in normalized and column.startswith(INDEX_CONTEXT_FACTOR_PREFIXES)
+
+
+def supports_dataset_column(method: str, column: str) -> bool:
+    return column in dataset_column_set_for_method(method) or is_index_context_factor_column(column)
+
+
+def dataset_columns_for_rows(rows: Sequence[dict[str, Any]], *, method: str) -> list[str]:
+    columns = dataset_columns_for_method(method)
+    known = set(columns)
+    dynamic = sorted(
+        {
+            key
+            for row in rows
+            for key in row
+            if is_index_context_factor_column(key) and key not in known
+        }
+    )
+    return columns + dynamic
 
 
 DATASET_COLUMNS = dataset_columns_for_method(DEFAULT_METHOD)
@@ -555,28 +649,56 @@ def compute_forward_labels(price_rows: Sequence[dict[str, Any]], pick_date: str)
         raise ValueError("Forward labels require an explicit qfq price basis.")
     current = [row for row in history if str(row.get("trade_date")) <= pick_date]
     if not current:
-        return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
-    entry_close = as_float(current[-1].get("close"))
-    if entry_close is None or entry_close == 0.0:
-        return {"ret3": None, "ret5": None, "ret10": None, "max_drawdown_5d": None}
+        return {
+            "ret3": None,
+            "ret5": None,
+            "ret10": None,
+            "ret_t1_open_to_t3_close": None,
+            "max_drawdown_5d": None,
+        }
     future = [row for row in history if str(row.get("trade_date")) > pick_date]
+    entry_open = as_float(future[0].get("open")) if future else None
+    if entry_open is None or entry_open == 0.0:
+        return {
+            "ret3": None,
+            "ret5": None,
+            "ret10": None,
+            "ret_t1_open_to_t3_close": None,
+            "max_drawdown_5d": None,
+        }
 
-    def ret_at(position: int) -> float | None:
-        index = position - 1
-        if len(future) <= index:
+    def ret_at(holding_days: int) -> float | None:
+        exit_index = holding_days
+        if len(future) <= exit_index:
             return None
-        close = as_float(future[index].get("close"))
-        return round4(pct_change(close, entry_close))
+        exit_open = as_float(future[exit_index].get("open"))
+        return round4(pct_change(exit_open, entry_open))
 
     lows = [as_float(row.get("low")) for row in future[:5]]
     valid_lows = [value for value in lows if value is not None]
-    drawdown = round4(pct_change(min(valid_lows), entry_close)) if valid_lows else None
+    drawdown = round4(pct_change(min(valid_lows), entry_open)) if valid_lows else None
     return {
         "ret3": ret_at(3),
         "ret5": ret_at(5),
         "ret10": ret_at(10),
+        "ret_t1_open_to_t3_close": compute_t1_open_to_t3_close_return(history, pick_date),
         "max_drawdown_5d": drawdown,
     }
+
+
+def compute_t1_open_to_t3_close_return(
+    price_rows: Sequence[dict[str, Any]], pick_date: str,
+) -> float | None:
+    future = [
+        row
+        for row in sorted(price_rows, key=lambda item: str(item.get("trade_date")))
+        if str(row.get("trade_date")) > pick_date
+    ]
+    if len(future) < 3:
+        return None
+    entry_open = as_float(future[0].get("open"))
+    exit_close = as_float(future[2].get("close"))
+    return round4(pct_change(exit_close, entry_open))
 
 
 def median(values: Sequence[float]) -> float | None:
@@ -760,7 +882,7 @@ def load_factor_artifact_rows(
 def merge_factor_artifact_values(row: dict[str, Any], factors: dict[str, Any], *, method: str = DEFAULT_METHOD) -> None:
     dataset_column_set = dataset_column_set_for_method(method)
     for key, value in factors.items():
-        if key in LABEL_COLUMNS or key not in dataset_column_set:
+        if key in LABEL_COLUMNS or not supports_dataset_column(method, key):
             continue
         row[key] = json_factor_value(value)
     if normalize_env(row.get("env")) == "unknown" and normalize_env(factors.get("env")) != "unknown":
@@ -801,7 +923,7 @@ def extract_selection_row(
     if "listing_board" in dataset_column_set:
         row["listing_board"] = infer_listing_board(row.get("code"))
     for key, value in factors.items():
-        if key in dataset_column_set:
+        if supports_dataset_column(method, key):
             row[key] = json_factor_value(value)
     if "listing_board" in dataset_column_set and format_csv_value(row.get("listing_board")) == "":
         row["listing_board"] = infer_listing_board(row.get("code"))
@@ -903,10 +1025,10 @@ def extract_candidate_row(candidate: dict[str, Any], *, pick_date: str, method: 
     factors = candidate.get("factors")
     if isinstance(factors, dict):
         for key, value in factors.items():
-            if key in dataset_column_set:
+            if supports_dataset_column(method, key):
                 row[key] = json_factor_value(value)
     for key, value in candidate.items():
-        if key in dataset_column_set and format_csv_value(value) != "":
+        if supports_dataset_column(method, key) and format_csv_value(value) != "":
             row[key] = json_factor_value(value)
     return row
 
@@ -998,7 +1120,7 @@ def load_external_feature_rows(
                     continue
                 values: dict[str, Any] = {}
                 for column, raw_value in raw_row.items():
-                    if column not in allowed_columns:
+                    if column not in allowed_columns and not is_index_context_factor_column(column):
                         continue
                     value = as_float(raw_value)
                     if value is None:
@@ -1020,7 +1142,7 @@ def merge_external_feature_values(
     if not features:
         return
     for key, value in features.items():
-        if key in allowed_columns and format_csv_value(value) != "":
+        if (key in allowed_columns or is_index_context_factor_column(key)) and format_csv_value(value) != "":
             row[key] = value
 
 
@@ -1084,6 +1206,9 @@ def resolve_output_dir(output_dir: Path | None, *, method: str) -> Path:
 def fetch_price_rows(duckdb_path: str, symbols: Sequence[str], start_date: str, end_date: str) -> dict[str, list[dict[str, Any]]]:
     if not symbols:
         return {}
+    aliases = fetch_security_aliases(duckdb_path, symbols)
+    canonical_codes = {alias["old_code"]: alias["new_code"] for alias in aliases}
+    query_symbols = sorted({canonical_codes.get(symbol, symbol) for symbol in symbols})
     query = """
         SELECT ts_code, trade_date,
                open_qfq AS open, close_qfq AS close, high_qfq AS high, low_qfq AS low,
@@ -1095,13 +1220,39 @@ def fetch_price_rows(duckdb_path: str, symbols: Sequence[str], start_date: str, 
         ORDER BY ts_code ASC, trade_date ASC
     """
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in query_rows(duckdb_path, query, [list(symbols), start_date, end_date]):
+    for row in query_rows(duckdb_path, query, [query_symbols, start_date, end_date]):
         grouped[str(row["ts_code"])].append({
             "trade_date": str(row["trade_date"]),
             **{key: as_float(row.get(key)) for key in ("open", "close", "high", "low", "vol", "turnover_rate", "pct_chg", "adj_factor")},
             "price_basis": "qfq",
         })
-    return dict(grouped)
+    return {symbol: grouped[canonical_codes.get(symbol, symbol)] for symbol in symbols
+            if canonical_codes.get(symbol, symbol) in grouped}
+
+
+def fetch_benchmark_price_rows(
+    duckdb_path: str,
+    start_date: str,
+    end_date: str,
+    *,
+    benchmark_code: str = DEFAULT_BENCHMARK_INDEX_CODE,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT ts_code, trade_date, open, close
+        FROM index_idx_factor_pro
+        WHERE ts_code = $1
+          AND trade_date >= $2::DATE AND trade_date <= $3::DATE
+          AND open IS NOT NULL AND close IS NOT NULL
+        ORDER BY trade_date ASC
+    """
+    return [
+        {
+            "trade_date": str(row["trade_date"]),
+            "open": as_float(row.get("open")),
+            "close": as_float(row.get("close")),
+        }
+        for row in query_rows(duckdb_path, query, [benchmark_code, start_date, end_date])
+    ]
 
 
 def build_dataset_rows(
@@ -1110,22 +1261,42 @@ def build_dataset_rows(
     *,
     method: str = DEFAULT_METHOD,
     external_features_by_key: dict[ExternalFeatureKey, dict[str, Any]] | None = None,
+    benchmark_price_rows: Sequence[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     dataset_columns = dataset_columns_for_method(method)
     dataset_column_set = set(dataset_columns)
     external_features_by_key = external_features_by_key or {}
+    benchmark_returns_by_date = {
+        str(selection_row.get("date")): compute_t1_open_to_t3_close_return(
+            benchmark_price_rows or (), str(selection_row.get("date"))
+        )
+        for selection_row in selection_rows
+        if selection_row.get("date")
+    }
     rows: list[dict[str, Any]] = []
     for selection_row in selection_rows:
         row = {column: "" for column in dataset_columns}
-        row.update({key: value for key, value in selection_row.items() if key in dataset_column_set})
+        row.update({
+            key: value
+            for key, value in selection_row.items()
+            if key in dataset_column_set or is_index_context_factor_column(key)
+        })
         symbol_rows = price_rows_by_symbol.get(str(row.get("code")), [])
         for key, value in selection_row.items():
-            if key in dataset_column_set and key not in LABEL_COLUMNS and format_csv_value(value) != "":
+            if (key in dataset_column_set or is_index_context_factor_column(key)) and key not in LABEL_COLUMNS and format_csv_value(value) != "":
                 row[key] = value
         if "listing_board" in dataset_column_set and format_csv_value(row.get("listing_board")) == "":
             row["listing_board"] = infer_listing_board(row.get("code"))
         merge_external_feature_values(row, external_features_by_key, method=method)
         row.update(compute_forward_labels(symbol_rows, str(row.get("date"))))
+        benchmark_return = benchmark_returns_by_date.get(str(row.get("date")))
+        row["benchmark_csi300_ret_t1_open_to_t3_close"] = benchmark_return
+        stock_return = row.get("ret_t1_open_to_t3_close")
+        row["excess_ret_t1_open_to_t3_close"] = (
+            round4(float(stock_return) - benchmark_return)
+            if stock_return is not None and benchmark_return is not None
+            else None
+        )
         rows.append(row)
     return add_day_relative_labels(rows)
 
@@ -1146,7 +1317,18 @@ def dataset_summary(
         env_counts[normalize_env(row.get("env"))] += 1
     label_counts = {
         label: sum(1 for row in rows if format_csv_value(row.get(label)) != "")
-        for label in ["ret3", "ret5", "ret10", "max_drawdown_5d", "rank_label_3d", "rank_label_5d", "rank_label_10d"]
+        for label in [
+            "ret3",
+            "ret5",
+            "ret10",
+            "ret_t1_open_to_t3_close",
+            "benchmark_csi300_ret_t1_open_to_t3_close",
+            "excess_ret_t1_open_to_t3_close",
+            "max_drawdown_5d",
+            "rank_label_3d",
+            "rank_label_5d",
+            "rank_label_10d",
+        ]
     }
     return {
         "method": method,
@@ -1179,8 +1361,9 @@ def write_dataset(
     warnings: Sequence[str],
     source: str,
     db_data_gaps: dict[str, Any] | None = None,
+    security_identity_audit: dict[str, Any] | None = None,
 ) -> None:
-    dataset_columns = dataset_columns_for_method(method)
+    dataset_columns = dataset_columns_for_rows(rows, method=method)
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "rank_dataset.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=dataset_columns, extrasaction="ignore")
@@ -1189,7 +1372,7 @@ def write_dataset(
             writer.writerow({column: format_csv_value(row.get(column)) for column in dataset_columns})
     (output_dir / "rank_dataset_summary.json").write_text(
         json.dumps(
-            dataset_summary(
+            {**dataset_summary(
                 rows,
                 runtime_root=runtime_root,
                 method=method,
@@ -1198,7 +1381,7 @@ def write_dataset(
                 warnings=warnings,
                 source=source,
                 db_data_gaps=db_data_gaps,
-            ),
+            ), "security_identity": security_identity_audit or {}},
             ensure_ascii=False,
             indent=2,
         ),
@@ -1313,10 +1496,15 @@ def main_from_args(args: argparse.Namespace) -> int:
     fatal_factor_message = fatal_factor_warning_message(warnings, method=args.method)
     if fatal_factor_message is not None:
         raise SystemExit(fatal_factor_message)
+    aliases = fetch_security_aliases(
+        duckdb_path, [str(row["code"]) for row in training_input_rows if row.get("code")],
+    )
+    training_input_rows, identity_audit = canonicalize_security_rows(training_input_rows, aliases)
     symbols = sorted({str(row.get("code")) for row in training_input_rows if row.get("code")})
     query_start = (date.fromisoformat(args.start_date) - timedelta(days=args.min_history_days)).isoformat()
     query_end = (date.fromisoformat(args.end_date) + timedelta(days=args.forward_days)).isoformat()
     prices = fetch_price_rows(duckdb_path, symbols, query_start, query_end)
+    benchmark_prices = fetch_benchmark_price_rows(duckdb_path, query_start, query_end)
     external_features, external_warnings = load_external_feature_rows(args.external_feature_csv, method=args.method)
     warnings.extend(external_warnings)
     rows = build_dataset_rows(
@@ -1324,6 +1512,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         prices,
         method=args.method,
         external_features_by_key=external_features,
+        benchmark_price_rows=benchmark_prices,
     )
     write_dataset(
         rows,
@@ -1335,6 +1524,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         warnings=warnings,
         source=args.source,
         db_data_gaps=db_data_gaps,
+        security_identity_audit=identity_audit,
     )
     print(f"wrote {len(rows)} rows to {output_dir / 'rank_dataset.csv'}")
     return 0

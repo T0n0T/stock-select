@@ -24,7 +24,7 @@ from ml.training.features import (
     load_feature_manifest_encoding,
     load_feature_manifest_with_levels,
 )
-from ml.training.labels import as_float, rows_for_dates
+from ml.training.labels import as_float, label_purge_gap, rows_for_dates
 from ml.training.lgbm_ranker import train_model_result
 from ml.training.train_lgbm_rank import read_dataset, rolling_walk_forward_splits
 from ml.training.trial_params import lightgbm_ranking_params_with_defaults, trial_config_from_report
@@ -273,16 +273,20 @@ def rolling_oof_predictions(
     rolling_train_dates: int,
     rolling_test_dates: int,
     rolling_folds: int,
+    purge_gap: int | None = None,
+    include_unlabeled_test: bool = False,
 ) -> list[dict[str, Any]]:
     if not rows:
         raise ValueError("dataset is empty")
     if not configs:
         raise ValueError("at least one trial config is required")
+    resolved_purge_gap = max(label_purge_gap(config.label_column) for config in configs) if purge_gap is None else purge_gap
     splits = rolling_walk_forward_splits(
         [str(row.get("date") or "") for row in rows],
         train_date_count=rolling_train_dates,
         test_date_count=rolling_test_dates,
         fold_count=rolling_folds,
+        purge_gap=resolved_purge_gap,
     )
     output_by_key: dict[tuple[int, str, str], dict[str, Any]] = {}
     model_names = [config.name for config in configs]
@@ -291,7 +295,9 @@ def rolling_oof_predictions(
         for config in configs:
             model_params = lightgbm_ranking_params_with_defaults(config.model_params)
             train_rows = rows_for_dates(rows, set(train_dates), label_column=config.label_column)
-            test_rows = rows_for_dates(rows, set(test_dates), label_column=config.label_column)
+            test_rows = rows_for_dates(
+                rows, set(test_dates), label_column=config.label_column, require_label=not include_unlabeled_test
+            )
             if not train_rows or not test_rows:
                 continue
             result = train_model_result(
@@ -325,6 +331,7 @@ def rolling_oof_predictions(
                 if key not in output_by_key:
                     item = dict(row)
                     item["fold"] = fold_index
+                    item["purge_gap"] = resolved_purge_gap
                     item["train_start_date"] = train_dates[0]
                     item["train_end_date"] = train_dates[-1]
                     item["test_start_date"] = test_dates[0]

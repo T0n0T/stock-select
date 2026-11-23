@@ -10,12 +10,18 @@ dependencies = [
 
 [project.optional-dependencies]
 tuning = ["optuna", "plotly"]
+backtest = [
+    "akquant==0.3.92",
+]
 
 [project.scripts]
 stock-select-ml = "ml.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 include = ["ml*"]
+
+[tool.setuptools.package-data]
+ml = ["security_aliases.sql"]
 
 [build-system]
 requires = ["setuptools>=61"]

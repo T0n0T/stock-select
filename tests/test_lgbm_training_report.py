@@ -69,7 +69,26 @@ class LgbmTrainingReportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             dataset = root / "dataset.csv"
-            self.write_dataset(dataset, fieldnames=["date", "code", "rank_label_3d", "ret3", "ret5", "x"], rows=self.basic_rows())
+            rows = self.basic_rows()
+            for row in rows:
+                row.update(
+                    {
+                        "env": "weak" if row["date"] == "2026-01-01" else "strong",
+                        "ret_t1_open_to_t3_close": "5" if row["code"] == "a" else "-1",
+                        "benchmark_csi300_ret_t1_open_to_t3_close": "1",
+                        "excess_ret_t1_open_to_t3_close": "4" if row["code"] == "a" else "-2",
+                        "market_up_ratio": "0.4" if row["date"] == "2026-01-01" else "0.6",
+                    }
+                )
+            self.write_dataset(
+                dataset,
+                fieldnames=[
+                    "date", "code", "env", "rank_label_3d", "ret3", "ret5", "x",
+                    "ret_t1_open_to_t3_close", "benchmark_csi300_ret_t1_open_to_t3_close",
+                    "excess_ret_t1_open_to_t3_close", "market_up_ratio",
+                ],
+                rows=rows,
+            )
             output_dir = root / "model"
 
             with patch("ml.training.train_lgbm_rank.run_random_forest_diagnostics", return_value=rf_payload):
@@ -78,6 +97,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                         dataset,
                         output_dir,
                         test_ratio=0.5,
+                        purge_gap=0,  # 仅测试微型样本的产物格式。
                         feature_set="raw_numeric",
                         num_leaves=5,
                         min_data_in_leaf=1,
@@ -90,12 +110,18 @@ class LgbmTrainingReportTest(unittest.TestCase):
             rf_json = json.loads((output_dir / "rf_feature_diagnostics.json").read_text(encoding="utf-8"))
             rf_markdown = (output_dir / "rf_feature_diagnostics.md").read_text(encoding="utf-8")
             persisted = json.loads((output_dir / "lgbm_rank_report_raw_numeric.json").read_text(encoding="utf-8"))
+            report_markdown = next(output_dir.glob("lgbm_rank_report*.md")).read_text(encoding="utf-8")
 
         self.assertEqual(rf_json["output_paths"]["json"], str(output_dir / "rf_feature_diagnostics.json"))
         self.assertIn("# random forest factor diagnostics", rf_markdown)
         self.assertEqual(report["rf_diagnostics"]["status"], "passed")
         self.assertEqual(report["rf_diagnostics"]["oob_score"], 0.61)
         self.assertEqual(report["rf_diagnostics"]["top_features"], [{"feature": "x", "importance": 0.9}])
+        self.assertIn("top3", report["selection_success"]["test"])
+        self.assertIn("all_candidates", report["selection_success"]["test"])
+        self.assertEqual(report["selection_success"]["test"]["all_candidates"]["date_count"], 1)
+        self.assertIn("## 日级入选成功率", report_markdown)
+        self.assertIn("全部入选股成功率与市场环境因子的相关性", report_markdown)
         self.assertEqual(persisted["rf_diagnostics"]["path"], str(output_dir / "rf_feature_diagnostics.json"))
 
     def test_random_forest_threshold_failure_writes_report_and_stops_lgbm(self):
@@ -129,6 +155,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                             dataset,
                             output_dir,
                             test_ratio=0.5,
+                            purge_gap=0,  # 仅测试微型样本的产物格式。
                             feature_set="raw_numeric",
                             num_leaves=5,
                             min_data_in_leaf=1,
@@ -156,6 +183,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                         dataset,
                         root / "model",
                         test_ratio=0.5,
+                        purge_gap=0,  # 仅测试微型样本的产物格式。
                         feature_set="raw_numeric",
                         num_leaves=5,
                         min_data_in_leaf=1,
@@ -190,7 +218,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                 rows=self.basic_rows(),
             )
             expected_gaps = {
-                "index_moneyflow_cnt_ths": {
+                "calc_daily_industry_moneyflow": {
                     "artifact_count": 1,
                     "artifacts": {
                         "2026-01-01.b2": {
@@ -224,6 +252,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                     dataset,
                     output_dir,
                     test_ratio=0.5,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=1,
@@ -246,7 +275,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
         self.assertEqual(report["db_data_gaps"], expected_gaps)
         self.assertEqual(persisted["db_data_gaps"], expected_gaps)
         self.assertIn("## database data gaps", markdown)
-        self.assertIn("index_moneyflow_cnt_ths", markdown)
+        self.assertIn("calc_daily_industry_moneyflow", markdown)
         self.assertIn("2026-01-01.b2", markdown)
         self.assertIn("missing_rows", markdown)
         self.assertIn("expected_rows=1 actual_rows=0", markdown)
@@ -277,6 +306,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                     dataset,
                     output_dir,
                     test_ratio=0.5,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=120,
@@ -324,6 +354,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                     dataset,
                     output_dir,
                     test_ratio=0.34,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=120,
@@ -371,6 +402,7 @@ class LgbmTrainingReportTest(unittest.TestCase):
                     dataset,
                     output_dir,
                     test_ratio=0.5,
+                    purge_gap=0,  # 仅测试微型样本的产物格式。
                     feature_set="raw_numeric",
                     num_leaves=5,
                     min_data_in_leaf=120,

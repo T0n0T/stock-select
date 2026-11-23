@@ -17,7 +17,7 @@ from typing import Any, Sequence
 from ml.paths import PROJECT_ROOT
 from ml.training.evaluation import average_metric_dicts, evaluate_model, partition_diagnostics
 from ml.training.features import load_feature_manifest_with_levels
-from ml.training.labels import as_float, rows_for_dates
+from ml.training.labels import as_float, label_purge_gap, rows_for_dates
 from ml.training.train_lgbm_rank import read_dataset, rolling_walk_forward_splits, train_model
 from ml.training.trial_params import trial_config_from_report
 
@@ -176,8 +176,11 @@ def rolling_scores_for_trial(
     rolling_train_dates: int,
     rolling_test_dates: int,
     rolling_folds: int,
+    purge_gap: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     config = load_trial_config(trial_dir)
+    label_column = str(config["label_column"])
+    resolved_purge_gap = label_purge_gap(label_column) if purge_gap is None else purge_gap
     numeric_columns, categorical_columns, fixed_levels = load_feature_manifest_with_levels(
         Path(config["feature_manifest"]),
         available_columns=set(rows[0].keys()),
@@ -188,12 +191,12 @@ def rolling_scores_for_trial(
         train_date_count=rolling_train_dates,
         test_date_count=rolling_test_dates,
         fold_count=rolling_folds,
+        purge_gap=resolved_purge_gap,
     )
 
     scored_rows: list[dict[str, Any]] = []
     fold_reports: list[dict[str, Any]] = []
     feature_count = 0
-    label_column = str(config["label_column"])
     for fold_index, (train_dates, test_dates) in enumerate(splits, start=1):
         train_rows = rows_for_dates(rows, set(train_dates), label_column=label_column)
         test_rows = rows_for_dates(rows, set(test_dates), label_column=label_column)
@@ -244,6 +247,7 @@ def rolling_scores_for_trial(
     summary = {
         "trial_dir": str(trial_dir),
         "label_column": label_column,
+        "purge_gap": resolved_purge_gap,
         "feature_manifest": str(config["feature_manifest"]),
         "feature_count": feature_count,
         "numeric_feature_count": len(numeric_columns),

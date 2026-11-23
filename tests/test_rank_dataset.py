@@ -1,3 +1,4 @@
+import csv
 import json
 import contextlib
 import io
@@ -14,12 +15,15 @@ from ml.dataset.rank_dataset import (
     build_dataset_rows,
     compute_forward_labels,
     dataset_columns_for_method,
+    extract_selection_row,
+    fetch_benchmark_price_rows,
     format_csv_value,
     load_candidate_rows,
     load_external_feature_rows,
     load_factor_artifact_rows,
     fetch_price_rows,
     infer_listing_board,
+    is_index_context_factor_column,
     load_selection_rows,
     main_from_args,
     normalize_env,
@@ -28,15 +32,37 @@ from ml.dataset.rank_dataset import (
     raw_factor_columns_for_method,
     resolve_output_dir,
     resolve_runtime_root,
+    write_dataset,
 )
 from ml.dataset import schema as rank_dataset_schema
 from ml.dataset import rank_dataset
 
 TEST_FACTOR_ARTIFACT_VERSION = 2
-TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v5"
+TEST_FACTOR_LIBRARY_VERSION = "rust-factor-library-v11"
 
 
 class RankDatasetTest(unittest.TestCase):
+    def test_multiperiod_structure_survives_artifact_dataset_and_training(self):
+        from ml.training.features import select_feature_columns
+        factors = {
+            "czsc_period_complete": False,
+            "czsc_weekly_status": "ok",
+            "czsc_weekly_close_to_last_bi_mid_pct": 10.0,
+            "czsc_monthly_last_bi_direction": "down",
+            "czsc_monthly_period_complete": False,
+            "kdj_weekly_k": 55.0,
+            "kdj_monthly_j": 30.0,
+            "sw_l2_main_index_calc_daily_czsc_structure_monthly_status_code": 4.0,
+        }
+        for method in ("b2", "scm", "pbm"):
+            row = {"date": "2026-11-20", "code": "000001.SZ"}
+            rank_dataset.merge_factor_artifact_values(row, factors, method=method)
+            rows = build_dataset_rows([row], {}, method=method)
+            self.assertTrue(set(factors) <= rows[0].keys(), method)
+            numeric, categorical = select_feature_columns(list(factors), method=method)
+            self.assertEqual(set(numeric + categorical), set(factors), method)
+            self.assertEqual(row["czsc_monthly_period_complete"], 0.0)
+
     def write_factor_artifact(self, factor_dir: Path, payload: dict) -> None:
         artifact = {
             "artifact_version": TEST_FACTOR_ARTIFACT_VERSION,
@@ -83,29 +109,35 @@ class RankDatasetTest(unittest.TestCase):
             )
 
 
-    def test_stock_environment_factors_are_registered_for_all_screening_methods(self):
-        stock_env_factors = [
-            "stock_env_sector_ret5_pct",
-            "stock_env_sector_ret20_pct",
-            "stock_env_sector_ma20_bias_pct",
-            "stock_env_sector_vs_broad_ret5_pct",
-            "stock_env_sector_vs_broad_ret20_pct",
-            "stock_env_style_ret5_spread_pct",
-            "stock_env_market_sector_ret5_sum_pct",
-            "stock_env_market_score",
-            "stock_env_sector_score",
-            "stock_env_alignment_score",
-            "stock_env_limit_heat_score",
-            "stock_env_overall_score",
+    def test_index_weight_membership_factors_are_registered_for_all_screening_methods(self):
+        aliases = [
+            "sse50",
+            "csi300",
+            "csi500",
+            "guozheng2000",
+            "chinext",
+            "sci50",
+            "bse50",
+            "csi_a50",
+            "csi_dividend",
         ]
 
         for method in ["b2", "scm", "pbm"]:
             with self.subTest(method=method):
                 columns = dataset_columns_for_method(method)
                 raw_columns = raw_factor_columns_for_method(method)
-                for factor in stock_env_factors:
-                    self.assertIn(factor, columns)
-                    self.assertIn(factor, raw_columns)
+                for alias in aliases:
+                    for suffix in ("member_flag", "weight_pct"):
+                        factor = f"market_index_{alias}_{suffix}"
+                        self.assertIn(factor, columns)
+                        self.assertIn(factor, raw_columns)
+                self.assertIn("sw_l2_membership_current_flag", columns)
+                self.assertIn("sw_l2_main_pct_change", raw_columns)
+
+    def test_dynamic_index_context_factor_columns_exclude_legacy_ths(self):
+        self.assertTrue(is_index_context_factor_column("market_index_sse50_weighted_idx_macd_bfq_to_close_pct"))
+        self.assertTrue(is_index_context_factor_column("sw_l2_main_index_calc_daily_rolling_factors_position_90d"))
+        self.assertFalse(is_index_context_factor_column("market_index_ths_legacy_ret5_pct"))
 
     def test_b2_dataset_schema_excludes_review_scores_but_keeps_training_factors(self):
         columns = dataset_columns_for_method("b2")
@@ -182,7 +214,7 @@ class RankDatasetTest(unittest.TestCase):
             self.assertNotIn(column, dataset_columns_for_method("b2"))
             self.assertNotIn(column, raw_factor_columns_for_method("b2"))
 
-        ma25_excluded_after_ablation = ["vr_qfq", "cyq_cost_85_to_close_pct"]
+        ma25_excluded_after_ablation = ["cyq_cost_85_to_close_pct"]
         for column in ma25_excluded_after_ablation:
             self.assertNotIn(column, dataset_columns_for_method("scm"))
             self.assertNotIn(column, raw_factor_columns_for_method("scm"))
@@ -330,18 +362,24 @@ class RankDatasetTest(unittest.TestCase):
 
     def test_dataset_schema_includes_market_relative_strength_factors(self):
         expected = [
-            "market_sse_ret5_pct",
-            "market_sse_ret20_pct",
-            "market_sse_ma20_bias_pct",
-            "market_sse_volatility20_pct",
-            "market_cn2000_ret5_pct",
-            "market_cn2000_ret20_pct",
-            "market_cn2000_ma20_bias_pct",
-            "market_cn2000_volatility20_pct",
-            "market_broad_ret5_pct",
-            "market_broad_ret20_pct",
-            "market_broad_ma20_bias_pct",
-            "market_broad_volatility20_pct",
+            "market_index_sse50_member_flag",
+            "market_index_sse50_weight_pct",
+            "market_index_csi300_member_flag",
+            "market_index_csi300_weight_pct",
+            "market_index_csi500_member_flag",
+            "market_index_csi500_weight_pct",
+            "market_index_guozheng2000_member_flag",
+            "market_index_guozheng2000_weight_pct",
+            "market_index_chinext_member_flag",
+            "market_index_chinext_weight_pct",
+            "market_index_sci50_member_flag",
+            "market_index_sci50_weight_pct",
+            "market_index_bse50_member_flag",
+            "market_index_bse50_weight_pct",
+            "market_index_csi_a50_member_flag",
+            "market_index_csi_a50_weight_pct",
+            "market_index_csi_dividend_member_flag",
+            "market_index_csi_dividend_weight_pct",
         ]
 
         for method in ("b2", "scm", "pbm"):
@@ -349,58 +387,78 @@ class RankDatasetTest(unittest.TestCase):
                 self.assertIn(column, dataset_columns_for_method(method))
                 self.assertIn(column, raw_factor_columns_for_method(method))
 
-    def test_dataset_schema_includes_ths_current_membership_sector_factors(self):
+    def test_dynamic_index_factors_flow_from_artifact_into_scm_dataset(self):
+        dynamic_factors = {
+            "market_index_sse50_idx_macd_bfq_to_close_pct": 12.0,
+            "market_index_sse50_weighted_idx_macd_bfq_to_close_pct": 0.06,
+            "market_index_sse50_calc_daily_indicators_weekly_kdj_k_asof": 62.0,
+            "market_index_sse50_calc_daily_rolling_factors_position_90d": 0.7,
+            "market_index_sse50_weighted_calc_daily_rolling_factors_position_90d": 0.0035,
+            "sw_l2_main_index_idx_xsii_td4_bfq": 48.0,
+            "sw_l2_main_moneyflow_net_mf_amount_per_stock": 3.4,
+        }
+        artifact_row = extract_selection_row(
+            {"code": "600000.SH", "name": "Example"},
+            pick_date="2026-05-25",
+            method="scm",
+            env="neutral",
+            factors=dynamic_factors,
+        )
+
+        self.assertEqual({key: artifact_row[key] for key in dynamic_factors}, dynamic_factors)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "dataset"
+            write_dataset(
+                [artifact_row],
+                output_dir,
+                runtime_root=Path(temp_dir),
+                method="scm",
+                start_date="2026-05-25",
+                end_date="2026-05-25",
+                warnings=[],
+                source="selection",
+            )
+            with (output_dir / "rank_dataset.csv").open(encoding="utf-8", newline="") as handle:
+                header = next(csv.reader(handle))
+
+        for factor in dynamic_factors:
+            self.assertIn(factor, header)
+
+    def test_previous_factor_library_artifact_is_rejected_after_multiperiod_feature_contract_change(self):
+        warning = rank_dataset.validate_factor_artifact_contract(
+            {"artifact_version": 2, "factor_library_version": "rust-factor-library-v10"},
+            method="scm",
+            artifact_key="2026-05-25",
+        )
+
+        self.assertEqual(
+            warning,
+            "stale_factor_artifact:2026-05-25.scm:artifact_version=2:factor_library_version=rust-factor-library-v10",
+        )
+
+    def test_dataset_schema_includes_sw_l2_current_membership_sector_factors(self):
         expected = [
-            "ths_membership_current_flag",
-            "ths_main_sector_rank",
-            "ths_main_pct_change",
-            "ths_main_vol",
-            "ths_main_turnover_rate",
-            "ths_main_total_mv",
-            "ths_main_float_mv",
-            "ths_main_net_amount",
-            "ths_main_net_buy_amount",
-            "ths_main_net_sell_amount",
-            "ths_main_limit_up_count",
-            "ths_main_limit_days",
-            "ths_main_limit_pct_chg",
-            "ths_main_limit_rank",
-            "ths_main_lead_stock_pct_change",
-            "ths_main_macd_daily_dif",
-            "ths_main_macd_daily_dea",
-            "ths_main_macd_daily_hist",
-            "ths_main_macd_weekly_dif",
-            "ths_main_macd_weekly_dea",
-            "ths_main_macd_weekly_hist",
-            "ths_main_macd_monthly_dif",
-            "ths_main_macd_monthly_dea",
-            "ths_main_macd_monthly_hist",
-            "ths_sector_count",
-            "ths_best_pct_change",
-            "ths_avg_pct_change",
-            "ths_best_net_amount",
-            "ths_avg_net_amount",
-            "ths_best_net_buy_amount",
-            "ths_avg_net_buy_amount",
-            "ths_best_net_sell_amount",
-            "ths_avg_net_sell_amount",
-            "ths_best_limit_up_count",
-            "ths_avg_limit_up_count",
-            "ths_any_limit_up_sector_flag",
-            "ths_limit_up_sector_count",
-            "ths_limit_up_sector_ratio",
-            "ths_best_limit_days",
-            "ths_best_limit_pct_chg",
-            "ths_avg_limit_pct_chg",
-            "ths_best_limit_rank",
-            "stock_vs_ths_main_pct_change",
-            "stock_vs_ths_avg_pct_change",
+            "sw_l2_membership_current_flag",
+            "sw_l2_main_pct_change",
+            "sw_l2_main_net_amount_per_stock",
+            "stock_vs_sw_l2_main_pct_change",
         ]
 
         for method in ("b2", "scm", "pbm"):
             for column in expected:
                 self.assertIn(column, dataset_columns_for_method(method))
                 self.assertIn(column, raw_factor_columns_for_method(method))
+
+        dynamic_index_factors = [
+            "sw_l2_main_index_idx_macd_bfq_to_close_pct",
+            "sw_l2_main_index_calc_daily_indicators_weekly_kdj_k_asof",
+            "sw_l2_main_index_calc_daily_rolling_factors_position_90d",
+            "sw_l2_main_index_calc_daily_czsc_structure_daily_recent_bi_count",
+            "sw_l2_main_moneyflow_net_mf_amount_per_stock",
+        ]
+        for column in dynamic_index_factors:
+            self.assertTrue(is_index_context_factor_column(column))
 
     def test_dataset_schema_includes_db_native_special_structure_factor_families(self):
         expected = [
@@ -599,16 +657,18 @@ class RankDatasetTest(unittest.TestCase):
                 self.assertNotIn(column, columns)
                 self.assertNotIn(column, raw_columns)
 
-    def test_dataset_schema_no_longer_registers_legacy_sw_l2_factors(self):
+    def test_dataset_schema_keeps_sw_l2_factors_and_excludes_legacy_ths_factors(self):
         for method in ("b2", "scm", "pbm"):
             columns = dataset_columns_for_method(method)
             raw_columns = raw_factor_columns_for_method(method)
+            self.assertIn("sw_l2_membership_current_flag", columns)
+            self.assertIn("sw_l2_main_pct_change", raw_columns)
             for column in columns:
-                self.assertFalse(column.startswith("sw_l2_"), f"{method} still registers {column}")
-                self.assertNotIn("_sw_l2_", column, f"{method} still registers {column}")
+                self.assertNotIn("ths", column.casefold(), f"{method} still registers {column}")
+                self.assertFalse(column.startswith("stock_env_"), f"{method} still registers {column}")
             for column in raw_columns:
-                self.assertFalse(column.startswith("sw_l2_"), f"{method} raw schema still registers {column}")
-                self.assertNotIn("_sw_l2_", column, f"{method} raw schema still registers {column}")
+                self.assertNotIn("ths", column.casefold(), f"{method} raw schema still registers {column}")
+                self.assertFalse(column.startswith("stock_env_"), f"{method} raw schema still registers {column}")
 
     def test_b2_dataset_schema_includes_rdagent_rank_factors_without_polluting_other_methods(self):
         b2_specific = [
@@ -662,9 +722,9 @@ class RankDatasetTest(unittest.TestCase):
             path.write_text(
                 "\n".join(
                     [
-                        "date,symbol,market_sse_ret5_pct,structure_zxdkx,unknown_feature,ret5,env",
-                        "2026-05-25,000001.SZ,0.61,10.72,999,88,strong",
-                        "2026-05-25,000002.SZ,,9.55,999,77,weak",
+                        "date,symbol,market_index_sse50_weighted_idx_macd_bfq_to_close_pct,market_sse_ret5_pct,structure_zxdkx,unknown_feature,ret5,env",
+                        "2026-05-25,000001.SZ,0.61,0.42,10.72,999,88,strong",
+                        "2026-05-25,000002.SZ,,0.22,9.55,999,77,weak",
                     ]
                 )
                 + "\n",
@@ -674,12 +734,13 @@ class RankDatasetTest(unittest.TestCase):
             rows, warnings = load_external_feature_rows(path, method="b2")
 
         self.assertEqual(warnings, [])
-        self.assertEqual(rows[("2026-05-25", "000001.SZ")]["market_sse_ret5_pct"], 0.61)
+        self.assertEqual(rows[("2026-05-25", "000001.SZ")]["market_index_sse50_weighted_idx_macd_bfq_to_close_pct"], 0.61)
+        self.assertNotIn("market_sse_ret5_pct", rows[("2026-05-25", "000001.SZ")])
         self.assertEqual(rows[("2026-05-25", "000001.SZ")]["structure_zxdkx"], 10.72)
         self.assertNotIn("unknown_feature", rows[("2026-05-25", "000001.SZ")])
         self.assertNotIn("ret5", rows[("2026-05-25", "000001.SZ")])
         self.assertNotIn("env", rows[("2026-05-25", "000001.SZ")])
-        self.assertNotIn("market_sse_ret5_pct", rows[("2026-05-25", "000002.SZ")])
+        self.assertNotIn("market_index_sse50_weighted_idx_macd_bfq_to_close_pct", rows[("2026-05-25", "000002.SZ")])
 
     def test_build_dataset_rows_merges_external_schema_features_by_date_and_code(self):
         selection_rows = [
@@ -692,17 +753,19 @@ class RankDatasetTest(unittest.TestCase):
         ]
         prices = {
             "000001.SZ": [
-                {"trade_date": "2026-05-25", "close": 10, "high": 10.2, "low": 9.8},
-                {"trade_date": "2026-05-26", "close": 11, "high": 11.2, "low": 10.9},
-                {"trade_date": "2026-05-27", "close": 12, "high": 12.2, "low": 11.8},
-                {"trade_date": "2026-05-28", "close": 13, "high": 13.2, "low": 12.7},
-                {"trade_date": "2026-05-29", "close": 14, "high": 14.2, "low": 13.6},
-                {"trade_date": "2026-06-01", "close": 15, "high": 15.2, "low": 14.4},
+                {"trade_date": "2026-05-25", "open": 10, "close": 10, "high": 10.2, "low": 9.8},
+                {"trade_date": "2026-05-26", "open": 11, "close": 11, "high": 11.2, "low": 10.9},
+                {"trade_date": "2026-05-27", "open": 12, "close": 12, "high": 12.2, "low": 11.8},
+                {"trade_date": "2026-05-28", "open": 13, "close": 13, "high": 13.2, "low": 12.7},
+                {"trade_date": "2026-05-29", "open": 14, "close": 14, "high": 14.2, "low": 13.6},
+                {"trade_date": "2026-06-01", "open": 15, "close": 15, "high": 15.2, "low": 14.4},
+                {"trade_date": "2026-06-02", "open": 16, "close": 16, "high": 16.2, "low": 15.4},
             ],
         }
         external_features = {
             ("2026-05-25", "000001.SZ"): {
-                "market_sse_ret5_pct": 0.61,
+                "market_index_sse50_weighted_idx_macd_bfq_to_close_pct": 0.61,
+                "market_sse_ret5_pct": 0.42,
                 "structure_zxdkx": 10.72,
                 "env": "strong",
                 "ret5": 88.0,
@@ -713,8 +776,9 @@ class RankDatasetTest(unittest.TestCase):
         rows = build_dataset_rows(selection_rows, prices, external_features_by_key=external_features)
 
         self.assertEqual(rows[0]["env"], "neutral")
-        self.assertEqual(rows[0]["ret5"], 50.0)
-        self.assertEqual(rows[0]["market_sse_ret5_pct"], 0.61)
+        self.assertEqual(rows[0]["ret5"], 45.4545)
+        self.assertEqual(rows[0]["market_index_sse50_weighted_idx_macd_bfq_to_close_pct"], 0.61)
+        self.assertNotIn("market_sse_ret5_pct", rows[0])
         self.assertEqual(rows[0]["structure_zxdkx"], 10.72)
 
     def test_load_candidate_rows_reads_current_candidates_artifacts_without_select(self):
@@ -1073,7 +1137,7 @@ class RankDatasetTest(unittest.TestCase):
                         "artifact_key": "2026-05-25",
                         "method": "b2",
                         "db_data_gaps": {
-                            "index_moneyflow_cnt_ths": {
+                            "calc_daily_industry_moneyflow": {
                                 "reason": "missing_rows",
                                 "expected_rows": 1,
                                 "actual_rows": 0,
@@ -1085,25 +1149,26 @@ class RankDatasetTest(unittest.TestCase):
             )
 
             with patch("ml.dataset.rank_dataset.fetch_price_rows", return_value={}):
-                main_from_args(
-                    type(
-                        "Args",
-                        (),
-                        {
-                            "runtime_root": runtime,
-                            "duckdb_path": "must-not-be-used.duckdb",
-                            "method": "b2",
-                            "start_date": "2026-05-25",
-                            "end_date": "2026-05-25",
-                            "output_dir": output_dir,
-                            "source": "candidates",
-                            "intraday": False,
-                            "min_history_days": 120,
-                            "forward_days": 15,
-                            "external_feature_csv": [],
-                        },
-                    )()
-                )
+                with patch("ml.dataset.rank_dataset.fetch_benchmark_price_rows", return_value=[]):
+                    main_from_args(
+                        type(
+                            "Args",
+                            (),
+                            {
+                                "runtime_root": runtime,
+                                "duckdb_path": "must-not-be-used.duckdb",
+                                "method": "b2",
+                                "start_date": "2026-05-25",
+                                "end_date": "2026-05-25",
+                                "output_dir": output_dir,
+                                "source": "candidates",
+                                "intraday": False,
+                                "min_history_days": 120,
+                                "forward_days": 15,
+                                "external_feature_csv": [],
+                            },
+                        )()
+                    )
 
             summary = json.loads(
                 (output_dir / "rank_dataset_summary.json").read_text(encoding="utf-8")
@@ -1113,7 +1178,7 @@ class RankDatasetTest(unittest.TestCase):
                 any("czsc_training_coverage" in warning for warning in summary["warnings"])
             )
             self.assertEqual(
-                summary["db_data_gaps"]["index_moneyflow_cnt_ths"],
+                summary["db_data_gaps"]["calc_daily_industry_moneyflow"],
                 {
                     "artifact_count": 1,
                     "artifacts": {
@@ -1249,36 +1314,39 @@ class RankDatasetTest(unittest.TestCase):
 
     def test_forward_labels_use_future_trade_bars(self):
         rows = [
-            {"trade_date": "2026-05-25", "close": 10.0, "low": 9.8},
-            {"trade_date": "2026-05-26", "close": 10.5, "low": 10.1},
-            {"trade_date": "2026-05-27", "close": 9.5, "low": 9.2},
-            {"trade_date": "2026-05-28", "close": 11.0, "low": 10.7},
-            {"trade_date": "2026-05-29", "close": 12.0, "low": 11.5},
-            {"trade_date": "2026-06-01", "close": 8.0, "low": 7.6},
-            {"trade_date": "2026-06-02", "close": 13.0, "low": 12.5},
-            {"trade_date": "2026-06-03", "close": 14.0, "low": 13.7},
-            {"trade_date": "2026-06-04", "close": 15.0, "low": 14.6},
-            {"trade_date": "2026-06-05", "close": 16.0, "low": 15.5},
-            {"trade_date": "2026-06-08", "close": 17.0, "low": 16.6},
+            {"trade_date": "2026-05-25", "open": 9.5, "close": 10.0, "low": 9.8},
+            {"trade_date": "2026-05-26", "open": 100.0, "close": 105.0, "low": 90.0},
+            {"trade_date": "2026-05-27", "open": 110.0, "close": 95.0, "low": 95.0},
+            {"trade_date": "2026-05-28", "open": 90.0, "close": 110.0, "low": 85.0},
+            {"trade_date": "2026-05-29", "open": 120.0, "close": 120.0, "low": 115.0},
+            {"trade_date": "2026-06-01", "open": 80.0, "close": 80.0, "low": 75.0},
+            {"trade_date": "2026-06-02", "open": 130.0, "close": 130.0, "low": 125.0},
+            {"trade_date": "2026-06-03", "open": 140.0, "close": 140.0, "low": 135.0},
+            {"trade_date": "2026-06-04", "open": 150.0, "close": 150.0, "low": 145.0},
+            {"trade_date": "2026-06-05", "open": 160.0, "close": 160.0, "low": 155.0},
+            {"trade_date": "2026-06-08", "open": 160.0, "close": 160.0, "low": 155.0},
+            {"trade_date": "2026-06-09", "open": 170.0, "close": 170.0, "low": 165.0},
         ]
 
         rows = [{**row, "price_basis": "qfq"} for row in rows]
         labels = compute_forward_labels(rows, "2026-05-25")
 
-        self.assertEqual(labels["ret3"], 10.0)
-        self.assertEqual(labels["ret5"], -20.0)
+        self.assertEqual(labels["ret3"], 20.0)
+        self.assertEqual(labels["ret5"], 30.0)
         self.assertEqual(labels["ret10"], 70.0)
-        self.assertEqual(labels["max_drawdown_5d"], -24.0)
+        self.assertEqual(labels["max_drawdown_5d"], -25.0)
+        self.assertEqual(labels["ret_t1_open_to_t3_close"], 10.0)
 
 
     def test_forward_labels_do_not_adjust_qfq_prices_twice(self):
         raw_rows = [
-            {"trade_date": "2026-06-01", "close": 10.0, "low": 9.8, "adj_factor": 1.0},
-            {"trade_date": "2026-06-02", "close": 5.5, "low": 5.0, "adj_factor": 2.0},
-            {"trade_date": "2026-06-03", "close": 5.75, "low": 5.4, "adj_factor": 2.0},
-            {"trade_date": "2026-06-04", "close": 6.0, "low": 5.8, "adj_factor": 2.0},
-            {"trade_date": "2026-06-05", "close": 6.25, "low": 6.0, "adj_factor": 2.0},
-            {"trade_date": "2026-06-08", "close": 6.5, "low": 6.1, "adj_factor": 2.0},
+            {"trade_date": "2026-06-01", "open": 10.0, "close": 10.0, "low": 9.8, "adj_factor": 1.0},
+            {"trade_date": "2026-06-02", "open": 5.5, "close": 5.5, "low": 5.0, "adj_factor": 2.0},
+            {"trade_date": "2026-06-03", "open": 5.75, "close": 5.75, "low": 5.4, "adj_factor": 2.0},
+            {"trade_date": "2026-06-04", "open": 6.0, "close": 6.0, "low": 5.8, "adj_factor": 2.0},
+            {"trade_date": "2026-06-05", "open": 6.25, "close": 6.25, "low": 6.0, "adj_factor": 2.0},
+            {"trade_date": "2026-06-08", "open": 6.5, "close": 6.5, "low": 6.1, "adj_factor": 2.0},
+            {"trade_date": "2026-06-09", "open": 6.5, "close": 6.5, "low": 6.1, "adj_factor": 2.0},
         ]
         qfq_rows = [
             {
@@ -1292,9 +1360,9 @@ class RankDatasetTest(unittest.TestCase):
 
         labels = compute_forward_labels(qfq_rows, "2026-06-01")
 
-        self.assertEqual(labels["ret3"], 20.0)
-        self.assertEqual(labels["ret5"], 30.0)
-        self.assertEqual(labels["max_drawdown_5d"], 0.0)
+        self.assertEqual(labels["ret3"], 13.6364)
+        self.assertEqual(labels["ret5"], 18.1818)
+        self.assertEqual(labels["max_drawdown_5d"], -9.0909)
         self.assertEqual(qfq_rows[0]["adj_factor"], 1.0)
         self.assertEqual(qfq_rows[1]["adj_factor"], 2.0)
 
@@ -1325,6 +1393,17 @@ class RankDatasetTest(unittest.TestCase):
         self.assertEqual(rows["000001.SZ"][0]["adj_factor"], 1.2)
         self.assertEqual(rows["000001.SZ"][0]["price_basis"], "qfq")
 
+    def test_fetch_benchmark_price_rows_uses_hushen_300_index_bars(self):
+        sample = {"ts_code": "000300.SH", "trade_date": "2026-06-01", "open": 4000.0, "close": 4020.0}
+        with patch("ml.dataset.rank_dataset.query_rows", return_value=[sample]) as query:
+            rows = fetch_benchmark_price_rows("cache.duckdb", "2026-06-01", "2026-06-05")
+
+        sql = query.call_args.args[1].lower()
+        self.assertIn("index_idx_factor_pro", sql)
+        self.assertEqual(rows[0]["open"], 4000.0)
+        self.assertEqual(rows[0]["close"], 4020.0)
+        self.assertEqual(rows[0]["trade_date"], "2026-06-01")
+
     def test_build_dataset_rows_merges_labels_and_runtime_factors(self):
         selection_rows = [
             {
@@ -1344,20 +1423,20 @@ class RankDatasetTest(unittest.TestCase):
         ]
         prices = {
             "000001.SZ": [
-                {"trade_date": "2026-05-25", "close": 10, "high": 10.2, "low": 9.8},
-                {"trade_date": "2026-05-26", "close": 11, "high": 11.2, "low": 10.9},
-                {"trade_date": "2026-05-27", "close": 12, "high": 12.2, "low": 11.8},
-                {"trade_date": "2026-05-28", "close": 13, "high": 13.2, "low": 12.7},
-                {"trade_date": "2026-05-29", "close": 14, "high": 14.2, "low": 13.6},
-                {"trade_date": "2026-06-01", "close": 15, "high": 15.2, "low": 14.4},
+                {"trade_date": "2026-05-25", "open": 10, "close": 10, "high": 10.2, "low": 9.8},
+                {"trade_date": "2026-05-26", "open": 11, "close": 11, "high": 11.2, "low": 10.9},
+                {"trade_date": "2026-05-27", "open": 12, "close": 12, "high": 12.2, "low": 11.8},
+                {"trade_date": "2026-05-28", "open": 13, "close": 13, "high": 13.2, "low": 12.7},
+                {"trade_date": "2026-05-29", "open": 14, "close": 14, "high": 14.2, "low": 13.6},
+                {"trade_date": "2026-06-01", "open": 15, "close": 15, "high": 15.2, "low": 14.4},
             ],
             "000002.SZ": [
-                {"trade_date": "2026-05-25", "close": 20, "high": 20.2, "low": 19.5},
-                {"trade_date": "2026-05-26", "close": 19, "high": 19.2, "low": 18.8},
-                {"trade_date": "2026-05-27", "close": 18, "high": 18.2, "low": 17.8},
-                {"trade_date": "2026-05-28", "close": 17, "high": 17.2, "low": 16.5},
-                {"trade_date": "2026-05-29", "close": 16, "high": 16.2, "low": 15.6},
-                {"trade_date": "2026-06-01", "close": 15, "high": 15.2, "low": 14.7},
+                {"trade_date": "2026-05-25", "open": 20, "close": 20, "high": 20.2, "low": 19.5},
+                {"trade_date": "2026-05-26", "open": 19, "close": 19, "high": 19.2, "low": 18.8},
+                {"trade_date": "2026-05-27", "open": 18, "close": 18, "high": 18.2, "low": 17.8},
+                {"trade_date": "2026-05-28", "open": 17, "close": 17, "high": 17.2, "low": 16.5},
+                {"trade_date": "2026-05-29", "open": 16, "close": 16, "high": 16.2, "low": 15.6},
+                {"trade_date": "2026-06-01", "open": 15, "close": 15, "high": 15.2, "low": 14.7},
             ],
         }
 
@@ -1365,12 +1444,37 @@ class RankDatasetTest(unittest.TestCase):
         rows = build_dataset_rows(selection_rows, prices)
 
         by_code = {row["code"]: row for row in rows}
-        self.assertEqual(by_code["000001.SZ"]["ret3"], 30.0)
-        self.assertEqual(by_code["000002.SZ"]["ret3"], -15.0)
+        self.assertEqual(by_code["000001.SZ"]["ret3"], 27.2727)
+        self.assertEqual(by_code["000001.SZ"]["ret_t1_open_to_t3_close"], 18.1818)
+        self.assertEqual(by_code["000002.SZ"]["ret3"], -15.7895)
         self.assertEqual(by_code["000001.SZ"]["win3_vs_day_median"], 1)
         self.assertEqual(by_code["000002.SZ"]["rank_label_3d"], 0)
         self.assertEqual(by_code["000001.SZ"]["close_to_zxdkx_pct"], 1.25)
         self.assertEqual(by_code["000001.SZ"]["listing_board"], "main")
+
+    def test_build_dataset_rows_adds_benchmark_and_excess_return_labels(self):
+        selection_rows = [{"date": "2026-05-25", "code": "000001.SZ", "env": "neutral", "method": "b2"}]
+        stock_prices = {"000001.SZ": [
+            {"trade_date": "2026-05-25", "open": 10, "close": 10},
+            {"trade_date": "2026-05-26", "open": 10, "close": 10},
+            {"trade_date": "2026-05-27", "open": 10, "close": 11},
+            {"trade_date": "2026-05-28", "open": 10, "close": 12},
+        ]}
+        benchmark_prices = [
+            {"trade_date": "2026-05-26", "open": 4000, "close": 4010},
+            {"trade_date": "2026-05-27", "open": 4010, "close": 4020},
+            {"trade_date": "2026-05-28", "open": 4020, "close": 4040},
+        ]
+        stock_prices = {code: [{**row, "price_basis": "qfq"} for row in history] for code, history in stock_prices.items()}
+
+        row = build_dataset_rows(selection_rows, stock_prices, benchmark_price_rows=benchmark_prices)[0]
+
+        self.assertEqual(row["ret_t1_open_to_t3_close"], 20.0)
+        self.assertEqual(row["benchmark_csi300_ret_t1_open_to_t3_close"], 1.0)
+        self.assertEqual(row["excess_ret_t1_open_to_t3_close"], 19.0)
+        self.assertIn("ret_t1_open_to_t3_close", rank_dataset.LABEL_COLUMNS)
+        self.assertIn("benchmark_csi300_ret_t1_open_to_t3_close", rank_dataset.LABEL_COLUMNS)
+        self.assertIn("excess_ret_t1_open_to_t3_close", rank_dataset.LABEL_COLUMNS)
 
     def test_build_dataset_rows_preserves_artifact_listing_board(self):
         selection_rows = [

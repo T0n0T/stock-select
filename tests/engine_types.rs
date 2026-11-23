@@ -48,6 +48,8 @@ fn ranked_candidate_and_llm_annotation_have_distinct_roles() {
     let ranked = RankedCandidate {
         code: "000001.SZ".to_string(),
         model_score: 0.75,
+        raw_model_score: None,
+        entry_assessment: None,
         model_rank: 1,
         feature_vector_path: Some("feature_vectors.json".to_string()),
     };
@@ -63,4 +65,18 @@ fn ranked_candidate_and_llm_annotation_have_distinct_roles() {
     assert_eq!(display.model_rank, Some(1));
     assert_eq!(display.llm_action.as_deref(), Some("CAUTION"));
     assert_eq!(display.llm_comment.as_deref(), Some("等待确认"));
+}
+#[test]
+fn display_preserves_raw_score_and_entry_assessment_from_ranked_artifact() {
+    let ranked: stock_select::engine::types::RankedCandidate =
+        serde_json::from_value(serde_json::json!({
+            "code": "000001.SZ", "model_score": 1.0, "model_rank": 1,
+            "raw_model_score": -0.3, "feature_vector_path": null,
+            "entry_assessment": {"action": "discard", "reason": "低于丢弃门槛"}
+        }))
+        .unwrap();
+    let row = stock_select::engine::types::DisplayRow::from_ranked(&ranked, None, None);
+    let value = serde_json::to_value(row).unwrap();
+    assert_eq!(value["raw_model_score"], serde_json::json!(-0.3));
+    assert_eq!(value["entry_assessment"]["action"], "discard");
 }

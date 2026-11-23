@@ -55,7 +55,7 @@ stock-select-ml backfill candidates \
   --method b2 \
   --start-date 2026-01-01 \
   --end-date 2026-06-01 \
-  --workers 16 \
+  --workers 8 \
   --export-factors
 
 stock-select-ml backfill runs \

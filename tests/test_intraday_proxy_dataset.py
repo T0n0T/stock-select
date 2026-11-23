@@ -14,7 +14,7 @@ class IntradayProxyDatasetTest(unittest.TestCase):
     def test_classifies_factors_from_static_rt_k_contract(self):
         self.assertEqual(classify_intraday_factor("close_to_ma25_pct"), "live_recomputed_from_rt_k")
         self.assertEqual(classify_intraday_factor("czsc_last_bi_range_width_pct"), "previous_eod_snapshot")
-        self.assertEqual(classify_intraday_factor("ths_main_pct_change"), "previous_eod_snapshot")
+        self.assertEqual(classify_intraday_factor("sw_l2_main_pct_change"), "previous_eod_snapshot")
         self.assertEqual(
             classify_intraday_factor("intraday_czsc_close_to_last_bi_high_pct"),
             "live_price_against_previous_structure",

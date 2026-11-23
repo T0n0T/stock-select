@@ -1,6 +1,6 @@
 import unittest
 
-from ml.training.evaluation import average_metric_dicts, evaluate_model
+from ml.training.evaluation import average_metric_dicts, evaluate_model, selection_success_analysis
 from ml.training.labels import labels, rows_for_dates
 
 
@@ -67,6 +67,65 @@ class LgbmTrainingEvaluationTest(unittest.TestCase):
         self.assertEqual(metrics["top2_ret3_le_0_rate"], 0.0)
         self.assertEqual(metrics["ndcg_at_1"], 1.0)
         self.assertEqual(metrics["ndcg_at_2"], 1.0)
+
+    def test_selection_success_analysis_uses_daily_top_k_and_market_environment(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "model_score": 3, "env": "weak",
+             "ret_t1_open_to_t3_close": 8, "benchmark_csi300_ret_t1_open_to_t3_close": 2,
+             "market_up_ratio": 0.2, "market_index_csi300_weight_pct": 0},
+            {"date": "2026-01-01", "code": "b", "model_score": 2, "env": "weak",
+             "ret_t1_open_to_t3_close": -2, "benchmark_csi300_ret_t1_open_to_t3_close": 2,
+             "market_up_ratio": 0.2, "market_index_csi300_weight_pct": 5},
+            {"date": "2026-01-02", "code": "c", "model_score": 3, "env": "weak",
+             "ret_t1_open_to_t3_close": -4, "benchmark_csi300_ret_t1_open_to_t3_close": 1,
+             "market_up_ratio": 0.8, "market_index_csi300_weight_pct": 0},
+            {"date": "2026-01-02", "code": "d", "model_score": 2, "env": "weak",
+             "ret_t1_open_to_t3_close": 5, "benchmark_csi300_ret_t1_open_to_t3_close": 1,
+             "market_up_ratio": 0.8, "market_index_csi300_weight_pct": 0},
+            {"date": "2026-01-03", "code": "e", "model_score": 3, "env": "strong",
+             "ret_t1_open_to_t3_close": 3, "benchmark_csi300_ret_t1_open_to_t3_close": 1,
+             "market_up_ratio": 0.4, "market_index_csi300_weight_pct": 0},
+            {"date": "2026-01-03", "code": "f", "model_score": 2, "env": "strong",
+             "ret_t1_open_to_t3_close": -1, "benchmark_csi300_ret_t1_open_to_t3_close": 1,
+             "market_up_ratio": 0.4, "market_index_csi300_weight_pct": 0},
+        ]
+
+        analysis = selection_success_analysis(rows, top_k=1)
+
+        self.assertEqual(analysis["date_count"], 3)
+        self.assertEqual(analysis["selected_count"], 3)
+        self.assertEqual(analysis["win_count"], 2)
+        self.assertEqual(analysis["pooled_win_rate"], 66.7)
+        self.assertEqual(analysis["benchmark_win_rate"], 66.7)
+        self.assertEqual(analysis["mean_excess_return_pct"], 1.0)
+        self.assertEqual(analysis["by_env"]["weak"]["date_count"], 2)
+        self.assertEqual(analysis["by_env"]["strong"]["pooled_win_rate"], 100.0)
+        self.assertEqual(analysis["environment_correlations"]["market_up_ratio"]["pearson_r"], -0.9449)
+        self.assertNotIn("market_index_csi300_weight_pct", analysis["environment_correlations"])
+
+    def test_selection_success_analysis_skips_days_without_return_labels(self):
+        analysis = selection_success_analysis(
+            [{"date": "2026-01-01", "code": "a", "model_score": 1, "ret_t1_open_to_t3_close": ""}],
+            top_k=1,
+        )
+
+        self.assertEqual(analysis["date_count"], 0)
+        self.assertIsNone(analysis["pooled_win_rate"])
+
+    def test_selection_success_analysis_can_measure_all_daily_candidates(self):
+        rows = [
+            {"date": "2026-01-01", "code": "a", "model_score": 2, "env": "weak", "ret_t1_open_to_t3_close": 4},
+            {"date": "2026-01-01", "code": "b", "model_score": 1, "env": "weak", "ret_t1_open_to_t3_close": -2},
+            {"date": "2026-01-02", "code": "c", "model_score": 2, "env": "strong", "ret_t1_open_to_t3_close": 1},
+            {"date": "2026-01-02", "code": "d", "model_score": 1, "env": "strong", "ret_t1_open_to_t3_close": -1},
+        ]
+
+        analysis = selection_success_analysis(rows, top_k=None)
+
+        self.assertEqual(analysis["selection_scope"], "all_candidates")
+        self.assertEqual(analysis["date_count"], 2)
+        self.assertEqual(analysis["selected_count"], 4)
+        self.assertEqual(analysis["pooled_win_rate"], 50.0)
 
 
 if __name__ == "__main__":

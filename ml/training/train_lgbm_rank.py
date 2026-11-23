@@ -9,9 +9,16 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ml.paths import PROJECT_ROOT
+from ml.parallelism import MAX_WORKERS, parse_worker_count, resolve_num_threads
 
 from .artifacts import build_model_metadata, write_feature_manifest, write_model_artifacts
-from .evaluation import average_metric_dicts, env_partitions, evaluate_model, partition_diagnostics
+from .evaluation import (
+    average_metric_dicts,
+    env_partitions,
+    evaluate_model,
+    partition_diagnostics,
+    selection_success_analysis,
+)
 from .features import (
     CATEGORICAL_ENCODINGS,
     DEFAULT_CATEGORICAL_ENCODING,
@@ -24,7 +31,7 @@ from .features import (
     select_features_by_rf_importance,
     validate_selected_feature_coverage,
 )
-from .labels import TRAIN_LABEL_COLUMNS, rows_for_dates
+from .labels import TRAIN_LABEL_COLUMNS, label_purge_gap, rows_for_dates
 from .lgbm_ranker import DEFAULT_LABEL_GAIN, train_model_result
 from .reports import markdown_report, report_paths
 from .rf_diagnostics import (
@@ -60,13 +67,20 @@ def read_dataset_db_data_gaps(dataset: Path) -> dict[str, Any]:
     return dict(gaps) if isinstance(gaps, dict) else {}
 
 
-def walk_forward_split_dates(dates: Sequence[str], *, test_ratio: float) -> tuple[list[str], list[str]]:
+def walk_forward_split_dates(
+    dates: Sequence[str], *, test_ratio: float, purge_gap: int = 0
+) -> tuple[list[str], list[str]]:
+    if purge_gap < 0:
+        raise ValueError("purge gap must be nonnegative")
     ordered = sorted(set(str(date) for date in dates))
     if len(ordered) < 2:
         return ordered, []
     test_count = max(1, int(round(len(ordered) * test_ratio)))
     test_count = min(test_count, len(ordered) - 1)
-    return ordered[:-test_count], ordered[-test_count:]
+    train_end = len(ordered) - test_count - purge_gap
+    if train_end <= 0:
+        raise ValueError("not enough training dates after label purge")
+    return ordered[:train_end], ordered[-test_count:]
 
 
 def rolling_walk_forward_splits(
@@ -75,11 +89,14 @@ def rolling_walk_forward_splits(
     train_date_count: int,
     test_date_count: int,
     fold_count: int,
+    purge_gap: int = 0,
 ) -> list[tuple[list[str], list[str]]]:
     ordered = sorted(set(str(date) for date in dates))
     if train_date_count <= 0 or test_date_count <= 0 or fold_count <= 0:
         raise ValueError("rolling train/test/fold counts must be positive")
-    window = train_date_count + test_date_count
+    if purge_gap < 0:
+        raise ValueError("purge gap must be nonnegative")
+    window = train_date_count + purge_gap + test_date_count
     if len(ordered) < window:
         raise ValueError("not enough dates for rolling walk-forward split")
     max_start = len(ordered) - window
@@ -94,7 +111,7 @@ def rolling_walk_forward_splits(
             continue
         seen.add(start)
         train_dates = ordered[start : start + train_date_count]
-        test_dates = ordered[start + train_date_count : start + window]
+        test_dates = ordered[start + train_date_count + purge_gap : start + window]
         result.append((train_dates, test_dates))
     return result
 
@@ -244,7 +261,8 @@ def train_and_report(
     rolling_train_dates: int = 0,
     rolling_test_dates: int = 0,
     label_column: str = "rank_label_3d",
-    num_threads: int = 0,
+    num_threads: int = MAX_WORKERS,
+    purge_gap: int | None = None,
     label_gain: Sequence[int] | None = None,
     lambdarank_truncation_level: int = 0,
     method: str = DEFAULT_METHOD,
@@ -271,6 +289,7 @@ def train_and_report(
     rf_min_selected_features: int = 12,
     categorical_encoding: str = DEFAULT_CATEGORICAL_ENCODING,
 ) -> dict[str, Any]:
+    num_threads = resolve_num_threads(num_threads)
     if train_mode not in TRAIN_MODES:
         raise ValueError(f"unsupported train_mode: {train_mode}")
     if label_column not in TRAIN_LABEL_COLUMNS:
@@ -287,7 +306,10 @@ def train_and_report(
 
     rows = read_dataset(dataset)
     db_data_gaps = read_dataset_db_data_gaps(dataset)
-    train_dates, test_dates = walk_forward_split_dates([str(row.get("date")) for row in rows], test_ratio=test_ratio)
+    resolved_purge_gap = label_purge_gap(label_column) if purge_gap is None else purge_gap
+    train_dates, test_dates = walk_forward_split_dates(
+        [str(row.get("date")) for row in rows], test_ratio=test_ratio, purge_gap=resolved_purge_gap
+    )
     train_rows = rows_for_dates(rows, set(train_dates), label_column=label_column)
     test_rows = rows_for_dates(rows, set(test_dates), label_column=label_column)
     if not train_rows or not test_rows:
@@ -539,6 +561,7 @@ def train_and_report(
         "dataset": str(dataset),
         "train_date_count": len(train_dates),
         "test_date_count": len(test_dates),
+        "purge_gap": resolved_purge_gap,
         "train_row_count": len(train_rows),
         "test_row_count": len(test_rows),
         "feature_count": feature_count,
@@ -561,6 +584,23 @@ def train_and_report(
             "train": evaluate_model(train_scored, top_k=resolved_top_k, label_column=label_column, ndcg_at=resolved_eval_at),
             "test": evaluate_model(test_scored, top_k=resolved_top_k, label_column=label_column, ndcg_at=resolved_eval_at),
         },
+        "selection_success": {
+            "benchmark_index": "000300.SH",
+            "train": {
+                "all_candidates": selection_success_analysis(train_scored, top_k=None),
+                **{
+                    f"top{k}": selection_success_analysis(train_scored, top_k=k)
+                    for k in resolved_top_k
+                },
+            },
+            "test": {
+                "all_candidates": selection_success_analysis(test_scored, top_k=None),
+                **{
+                    f"top{k}": selection_success_analysis(test_scored, top_k=k)
+                    for k in resolved_top_k
+                },
+            },
+        },
         "env_metrics": env_metrics,
         "top_features": top_features,
         "rf_diagnostics": rf_summary,
@@ -576,6 +616,7 @@ def train_and_report(
             train_date_count=rolling_train_dates,
             test_date_count=rolling_test_dates,
             fold_count=rolling_folds,
+            purge_gap=resolved_purge_gap,
         )
         fold_reports = []
         for fold_index, (fold_train_dates, fold_test_dates) in enumerate(splits, start=1):
@@ -623,6 +664,13 @@ def train_and_report(
                     "train": evaluate_model(fold_train_scored, top_k=resolved_top_k, label_column=label_column, ndcg_at=resolved_eval_at),
                     "test": evaluate_model(fold_test_scored, top_k=resolved_top_k, label_column=label_column, ndcg_at=resolved_eval_at),
                 },
+                "selection_success": {
+                    "all_candidates": selection_success_analysis(fold_test_scored, top_k=None),
+                    **{
+                        f"top{k}": selection_success_analysis(fold_test_scored, top_k=k)
+                        for k in resolved_top_k
+                    },
+                },
                 "by_env": partition_diagnostics(fold_test_scored, partition="env"),
                 "by_month": partition_diagnostics(fold_test_scored, partition="month"),
             }
@@ -632,6 +680,7 @@ def train_and_report(
             "fold_count": len(fold_reports),
             "train_date_count": rolling_train_dates,
             "test_date_count": rolling_test_dates,
+            "purge_gap": resolved_purge_gap,
             "test_avg": average_metric_dicts([fold["metrics"]["test"] for fold in fold_reports]),
         }
 
@@ -663,7 +712,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
     parser.add_argument("--lambda-l1", type=float, default=0.0)
     parser.add_argument("--lambda-l2", type=float, default=0.0)
     parser.add_argument("--min-gain-to-split", type=float, default=0.0)
-    parser.add_argument("--num-threads", type=int, default=0)
+    parser.add_argument("--num-threads", type=parse_worker_count, default=MAX_WORKERS, help="训练线程数，1～8，默认 8")
+    parser.add_argument("--purge-gap", type=int, help="训练与验证之间剔除的日期数；默认按 label 前视窗口计算，三日为 4")
     parser.add_argument("--label-column", choices=sorted(TRAIN_LABEL_COLUMNS), default="rank_label_3d")
     parser.add_argument("--label-gain", type=parse_label_gain, default=DEFAULT_LABEL_GAIN)
     parser.add_argument("--lambdarank-truncation-level", type=int, default=0)
@@ -726,6 +776,7 @@ def main_from_args(args: argparse.Namespace) -> int:
         lambda_l2=args.lambda_l2,
         min_gain_to_split=args.min_gain_to_split,
         num_threads=args.num_threads,
+        purge_gap=args.purge_gap,
         label_column=args.label_column,
         label_gain=args.label_gain,
         lambdarank_truncation_level=args.lambdarank_truncation_level,

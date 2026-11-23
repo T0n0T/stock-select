@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::engine::entry::EntryAssessment;
 pub use crate::factors::types::{FactorRow, FactorValue};
 use crate::model::Method;
 
@@ -21,6 +22,10 @@ pub struct SelectionCandidate {
 pub struct RankedCandidate {
     pub code: String,
     pub model_score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_model_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_assessment: Option<EntryAssessment>,
     pub model_rank: usize,
     pub feature_vector_path: Option<String>,
 }
@@ -43,6 +48,10 @@ pub struct DisplayRow {
     pub industry: Option<String>,
     pub model_rank: Option<usize>,
     pub model_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_model_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_assessment: Option<EntryAssessment>,
     pub llm_action: Option<String>,
     pub llm_risk_flags: Vec<String>,
     #[serde(default)]
@@ -61,6 +70,8 @@ impl DisplayRow {
             industry: None,
             model_rank: Some(ranked.model_rank),
             model_score: Some(ranked.model_score),
+            raw_model_score: ranked.raw_model_score,
+            entry_assessment: ranked.entry_assessment.clone(),
             llm_action: annotation.map(|item| item.llm_action.clone()),
             llm_risk_flags: annotation
                 .map(|item| item.llm_risk_flags.clone())

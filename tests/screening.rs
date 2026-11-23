@@ -1,8 +1,8 @@
 use chrono::{Datelike, Duration, NaiveDate};
 use stock_select::cache::{
-    load_prepared_cache, load_prepared_cache_for_mode, load_prepared_dataset_for_mode,
-    prepared_cache_data_path, prepared_cache_meta_path, prepared_cache_paths, write_prepared_cache,
-    write_prepared_cache_for_mode,
+    PREPARED_CACHE_SCHEMA_VERSION, load_prepared_cache, load_prepared_cache_for_mode,
+    load_prepared_dataset_for_mode, prepared_cache_data_path, prepared_cache_meta_path,
+    prepared_cache_paths, write_prepared_cache, write_prepared_cache_for_mode,
 };
 use stock_select::intraday::{MacdPeriodState, RawRtKRow, StaticRtKProvider};
 use stock_select::model::{DbDataGap, MarketDataset, MarketRow, Method, PreparedRow};
@@ -198,7 +198,7 @@ fn db_native_screen_propagates_table_gaps_to_cache_and_factor_manifest_only() {
                     .chain(std::iter::once(market_row_at_date(pick_date, 12.52, 100.0)))
                     .collect(),
                 db_data_gaps: std::collections::BTreeMap::from([(
-                    "index_moneyflow_cnt_ths".to_string(),
+                    "calc_daily_industry_moneyflow".to_string(),
                     DbDataGap::missing_rows(1, 0),
                 )]),
             })
@@ -214,7 +214,7 @@ fn db_native_screen_propagates_table_gaps_to_cache_and_factor_manifest_only() {
     )
     .unwrap();
     assert_eq!(
-        cache_metadata["db_data_gaps"]["index_moneyflow_cnt_ths"],
+        cache_metadata["db_data_gaps"]["calc_daily_industry_moneyflow"],
         serde_json::json!({
             "reason": "missing_rows",
             "expected_rows": 1,
@@ -563,6 +563,9 @@ fn screen_prepare_aligns_db_qfq_prices_to_the_window_basis() {
     source.db_factors.extend([
         ("_source_close_qfq".to_string(), 26.61289),
         ("_czsc_snapshot_available".to_string(), 1.0),
+        ("_czsc_weekly_last_bi_mid".to_string(), 22.0),
+        ("_czsc_monthly_post_peak_first_bear_low".to_string(), 20.0),
+        ("_czsc_monthly_last_bi_start_day".to_string(), 20000.0),
         ("_czsc_recent_peak_high".to_string(), 25.25699),
         ("_czsc_recent_peak_day".to_string(), 20452.0),
         ("_czsc_last_bi_high".to_string(), 25.25699),
@@ -576,7 +579,7 @@ fn screen_prepare_aligns_db_qfq_prices_to_the_window_basis() {
         ("mtm_qfq".to_string(), 0.9),
         ("boll_upper_qfq".to_string(), 27.0),
         ("volume_ratio".to_string(), 1.5),
-        ("ths_main_macd_daily_hist".to_string(), 0.3),
+        ("sw_l2_main_macd_daily_hist".to_string(), 0.3),
     ]);
     run_screen_with_loader(
         ScreenRequest {
@@ -612,6 +615,8 @@ fn screen_prepare_aligns_db_qfq_prices_to_the_window_basis() {
     assert!((latest.ma25.unwrap() - 25.0267564 * multiplier).abs() < 1e-9);
     assert!((latest.dif - 0.44374441884686533 * multiplier).abs() < 1e-9);
     for (key, value) in [
+        ("_czsc_weekly_last_bi_mid", 22.0),
+        ("_czsc_monthly_post_peak_first_bear_low", 20.0),
         ("_czsc_last_bi_high", 25.25699),
         ("_czsc_latest_zs_zg", 23.96987),
         ("_czsc_post_peak_first_bear_open", 24.99113),
@@ -628,7 +633,11 @@ fn screen_prepare_aligns_db_qfq_prices_to_the_window_basis() {
     assert_eq!(latest.db_factors["_czsc_recent_peak_day"], 20452.0);
     assert_eq!(latest.db_factors["macd_daily_dea_pctile"], 0.7);
     assert_eq!(latest.db_factors["volume_ratio"], 1.5);
-    assert_eq!(latest.db_factors["ths_main_macd_daily_hist"], 0.3);
+    assert_eq!(
+        latest.db_factors["_czsc_monthly_last_bi_start_day"],
+        20000.0
+    );
+    assert_eq!(latest.db_factors["sw_l2_main_macd_daily_hist"], 0.3);
     assert!(!latest.db_factors.contains_key("_source_close_qfq"));
 }
 
@@ -1160,6 +1169,20 @@ fn scm_streaming_screen_matches_dataset_screen_and_cache_rows() {
         })
         .collect::<Vec<_>>();
     market_rows.extend(second_symbol);
+    for row in market_rows
+        .iter_mut()
+        .filter(|row| row.trade_date == pick_date)
+    {
+        row.db_factors.extend([
+            ("_stk_close_qfq".to_string(), 20.0),
+            ("_stk_atr_qfq".to_string(), 1.0),
+            ("_stk_mfi_qfq".to_string(), 62.5),
+            (
+                "market_index_sse50_idx_macd_bfq_to_close_pct".to_string(),
+                12.0,
+            ),
+        ]);
+    }
     let expected_root = tempfile::tempdir().unwrap();
     let streamed_root = tempfile::tempdir().unwrap();
     let request = |runtime_root: &std::path::Path| ScreenRequest {
@@ -1218,14 +1241,12 @@ fn scm_streaming_screen_matches_dataset_screen_and_cache_rows() {
             .join(format!("{pick_date}.scm"))
             .join("factors.json")
     };
-    let expected_factors: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(factors_path(expected_root.path())).unwrap(),
-    )
-    .unwrap();
-    let streamed_factors: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(factors_path(streamed_root.path())).unwrap(),
-    )
-    .unwrap();
+    let expected_factors: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(factors_path(expected_root.path())).unwrap())
+            .unwrap();
+    let streamed_factors: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(factors_path(streamed_root.path())).unwrap())
+            .unwrap();
     assert_eq!(streamed_factors, expected_factors);
     let expected_metadata: serde_json::Value = serde_json::from_slice(
         &std::fs::read(prepared_cache_meta_path(expected_root.path(), pick_date)).unwrap(),
@@ -1236,7 +1257,10 @@ fn scm_streaming_screen_matches_dataset_screen_and_cache_rows() {
     )
     .unwrap();
     assert_eq!(streamed_metadata, expected_metadata);
-    assert_eq!(streamed_metadata["schema_version"], 14);
+    assert_eq!(
+        streamed_metadata["schema_version"],
+        PREPARED_CACHE_SCHEMA_VERSION
+    );
     assert_eq!(
         streamed_metadata["calc_versions"]["price_basis"],
         "asof_qfq_v1"
@@ -1261,6 +1285,46 @@ fn scm_streaming_screen_matches_dataset_screen_and_cache_rows() {
     .unwrap()
     .unwrap();
     assert_eq!(streamed_rows, expected_rows);
+    assert!(
+        prepared_cache_paths(streamed_root.path(), pick_date, false)
+            .context_data_path
+            .exists()
+    );
+    assert!(
+        streamed_rows
+            .iter()
+            .filter(|row| row.trade_date != pick_date)
+            .all(|row| !row
+                .db_factors
+                .contains_key("market_index_sse50_idx_macd_bfq_to_close_pct"))
+    );
+    let latest = streamed_rows
+        .iter()
+        .find(|row| row.trade_date == pick_date)
+        .unwrap();
+    assert_eq!(latest.db_factors["_stk_close_qfq"], 20.0);
+    assert_eq!(latest.db_factors["_stk_atr_qfq"], 1.0);
+    assert_eq!(
+        latest.db_factors["market_index_sse50_idx_macd_bfq_to_close_pct"],
+        12.0
+    );
+    let candidate = stock_select::model::Candidate {
+        code: latest.ts_code.clone(),
+        pick_date,
+        close: latest.close,
+        turnover_n: latest.turnover_n,
+        signal: None,
+    };
+    let factor_rows = stock_select::factors::registry::build_candidate_factor_rows(
+        &[candidate],
+        &streamed_rows,
+        Method::Scm,
+        None,
+    );
+    let factor_values = serde_json::to_value(&factor_rows[0].factors).unwrap();
+    assert_eq!(factor_values["mfi_qfq"], 62.5);
+    assert_eq!(factor_values["atr_qfq_to_close_pct"], 5.0);
+    assert!(factor_values.get("_stk_close_qfq").is_none());
 }
 
 #[test]
@@ -1665,6 +1729,35 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
     )
     .unwrap();
 
+    std::fs::create_dir_all(temp.path().join("cyq_perf")).unwrap();
+    let chips_dir = temp.path().join("cyq_chips/2026-04-25");
+    std::fs::create_dir_all(&chips_dir).unwrap();
+    std::fs::write(chips_dir.join("000001.SZ.json"), serde_json::json!({
+        "version": 1, "trade_date": "2026-04-25", "ts_code": "000001.SZ",
+        "rows": [{"price": 13.0, "percent": 30.0}, {"price": 14.0, "percent": 50.0}, {"price": 15.0, "percent": 20.0}]
+    }).to_string()).unwrap();
+    std::fs::write(
+        temp.path().join("cyq_perf/2026-04-25.json"),
+        serde_json::json!({
+            "trade_date": "2026-04-25",
+            "fetched_complete": true,
+            "rows": {
+                "000001.SZ": {
+                    "ts_code": "000001.SZ",
+                    "cost_5pct": 8.0,
+                    "cost_15pct": 9.0,
+                    "cost_50pct": 10.0,
+                    "cost_85pct": 11.0,
+                    "cost_95pct": 12.0,
+                    "weight_avg": 10.2,
+                    "winner_rate": 53.2
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
     run_screen_with_loader(
         ScreenRequest {
             method: Method::B2,
@@ -1697,9 +1790,30 @@ fn screen_can_export_runtime_factor_artifact_before_selection() {
     assert_eq!(factors["rows"][0]["factors"]["signal"], "B2");
     assert_eq!(factors["rows"][0]["factors"]["env"], "strong");
     assert!(factors["rows"][0]["factors"]["close_to_zxdkx_pct"].is_number());
+    assert_eq!(factors["rows"][0]["factors"]["cyq_winner_rate"], 53.2);
+    assert_eq!(
+        factors["rows"][0]["factors"]["cyq_chips_support_10pct"],
+        30.0
+    );
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["cyq_chips"]["status"],
+        "available"
+    );
+    assert_eq!(
+        factors["rows"][0]["factors"]["cyq_cost_70_width_pct"],
+        14.2857
+    );
+    assert_eq!(
+        factors["rows"][0]["diagnostics"]["cyq_perf"]["status"],
+        "available"
+    );
     assert_eq!(manifest["method"], "b2");
     assert_eq!(manifest["row_count"], 1);
     assert_eq!(manifest["factor_source"], "rust_factor_library");
+    assert_eq!(
+        manifest["factor_library_version"],
+        "rust-factor-library-v11"
+    );
 }
 
 #[test]
@@ -1993,7 +2107,7 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
             Ok(MarketDataset {
                 rows: vec![row],
                 db_data_gaps: std::collections::BTreeMap::from([(
-                    "index_moneyflow_cnt_ths".to_string(),
+                    "calc_daily_industry_moneyflow".to_string(),
                     DbDataGap::missing_rows(1, 0),
                 )]),
             })
@@ -2074,7 +2188,7 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
     .unwrap()
     .unwrap();
     assert_eq!(
-        dataset.db_data_gaps["index_moneyflow_cnt_ths"],
+        dataset.db_data_gaps["calc_daily_industry_moneyflow"],
         DbDataGap::missing_rows(1, 0)
     );
     let manifest: serde_json::Value = serde_json::from_slice(
@@ -2086,7 +2200,7 @@ fn db_native_intraday_screen_uses_period_state_loader_for_live_macd() {
     )
     .unwrap();
     assert_eq!(
-        manifest["db_data_gaps"]["index_moneyflow_cnt_ths"],
+        manifest["db_data_gaps"]["calc_daily_industry_moneyflow"],
         serde_json::json!({
             "reason": "missing_rows",
             "expected_rows": 1,

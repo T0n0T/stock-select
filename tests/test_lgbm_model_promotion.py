@@ -98,6 +98,20 @@ def write_native_parity_report(candidate: Path, *, status: str = "passed", max_a
 
 
 class LgbmModelPromotionTest(unittest.TestCase):
+    def test_score_entry_policy_must_match_model_hash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_candidate_model(root)
+            path = root / "model_metadata.json"
+            metadata = json.loads(path.read_text())
+            metadata["score_entry_policy"] = {
+                "schema_version": 1, "method": "scm", "model_sha256": "a" * 64,
+                "calibration_end_date": "2026-11-16", "status": "research",
+                "gate": {"open_min_score": -.2, "discard_below_score": -.2, "top_n": 3},
+            }
+            path.write_text(json.dumps(metadata))
+            with self.assertRaisesRegex(ValueError, "模型.*不匹配"):
+                validate_model_artifacts(root, expected_method="scm")
     def test_default_target_dir_prefers_shell_env_over_dotenv_runtime_root(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

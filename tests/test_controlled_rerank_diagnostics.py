@@ -168,6 +168,7 @@ class ControlledRerankDiagnosticsTest(unittest.TestCase):
                 rolling_train_dates=2,
                 rolling_test_dates=1,
                 rolling_folds=2,
+                purge_gap=0,  # 微型参数传递测试。
             )
 
         self.assertEqual(train_model_result.call_count, 2)
@@ -228,6 +229,7 @@ class ControlledRerankDiagnosticsTest(unittest.TestCase):
                     rolling_train_dates=2,
                     rolling_test_dates=1,
                     rolling_folds=1,
+                    purge_gap=0,  # 微型参数传递测试。
                 )
 
         kwargs = train_model_result.call_args.kwargs
