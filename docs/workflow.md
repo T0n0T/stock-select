@@ -2,7 +2,7 @@
 
 ## 数据源和中间缓存
 
-`DUCKDB_PATH` 支持本地 DuckDB 文件，例如 `../stock-cache/runtime/stock-cache.duckdb`，也支持 Quack URI，例如 `quack://host:9494`。两种方式都由 `duckdb-neo` 只读访问；Quack 认证使用 `QUACK_AUTH_TOKEN`，TLS 指纹可通过 `QUACK_SSL_FINGERPRINT` 设置。
+`DUCKDB_PATH` 支持本地 DuckDB 文件，例如 `../stock-cache/runtime/stock-cache.duckdb`，也支持 Quack URI，例如 `quack://host:9494`。两种方式都由 `duckdb-neo` 只读访问；Quack 认证使用 `QUACK_AUTH_TOKEN`，TLS 指纹可通过 `QUACK_SSL_FINGERPRINT` 设置。如果服务端显式使用 HTTP，客户端设置 `QUACK_DISABLE_SSL=true` 并移除指纹；token 和查询数据将明文传输。
 
 prepared 中间缓存统一使用 Parquet（`.parquet`，schema 21），动态因子以数值列存储。旧二进制中间缓存不再兼容，升级后会按需重新生成。
 

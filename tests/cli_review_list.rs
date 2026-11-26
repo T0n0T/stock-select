@@ -71,6 +71,39 @@ fn review_list_accepts_positive_limit_with_artifact() {
 }
 
 #[test]
+fn review_list_uses_cached_display_without_connecting_to_duckdb() {
+    let temp = tempfile::tempdir().unwrap();
+    let display_dir = temp.path().join("select/2026-05-26.b2");
+    std::fs::create_dir_all(&display_dir).unwrap();
+    std::fs::write(
+        display_dir.join("display.json"),
+        serde_json::to_vec(&json!({
+            "rows": [{"code":"000001.SZ", "model_rank":1, "model_score":0.8,
+                "llm_action":null, "llm_risk_flags":[]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    Command::cargo_bin("stock-select-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("DUCKDB_PATH", "/unavailable/duckdb.db")
+        .args([
+            "review-list",
+            "--runtime-root",
+            temp.path().to_str().unwrap(),
+            "--pick-date",
+            "2026-05-26",
+            "--method",
+            "b2",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("000001.SZ"));
+}
+
+#[test]
 fn review_list_prefers_selection_display_artifact() {
     let temp = tempfile::tempdir().unwrap();
     let display_dir = temp.path().join("select/2026-05-25.b2");

@@ -83,10 +83,11 @@ fn python_query_bridge_preserves_dates_lists_nulls_and_numeric_values() {
 
 #[test]
 fn native_quack_authentication_and_read_only_queries_work() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener::bind("0.0.0.0:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
     let uri = format!("quack:{address}");
+    let local_uri = format!("quack:127.0.0.1:{}", address.port());
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cache.duckdb");
     {
@@ -123,18 +124,19 @@ fn native_quack_authentication_and_read_only_queries_work() {
     let server = instance.connect().unwrap();
     server
         .execute(
-            format!("CALL quack_serve('{uri}', token = 'test''token')"),
+            format!("CALL quack_serve('{uri}', token = 'test''token', allow_other_hostname = true, disable_ssl = true)"),
             Parameters::None,
         )
         .unwrap();
 
-    assert!(open_duckdb_with_auth(&uri, Some("wrong"), None).is_err());
+    assert!(open_duckdb_with_auth(&local_uri, Some("wrong"), None).is_err());
     let request = serde_json::json!({
-        "source": uri,
+        "source": local_uri,
         "sql": "SELECT code, 'literal $1' AS label FROM sample WHERE code = ANY($1) AND day >= $2::DATE -- $3\n",
         "params": [["O'Brien", "unused"], "2026-06-01"]
     });
     let mut process = Command::new(env!("CARGO_BIN_EXE_stock-select-rs"))
+        .current_dir(directory.path())
         .arg("db-query")
         .env("QUACK_AUTH_TOKEN", "test'token")
         .stdin(Stdio::piped())
@@ -158,12 +160,42 @@ fn native_quack_authentication_and_read_only_queries_work() {
     assert_eq!(rows[0]["code"], "O'Brien");
     assert_eq!(rows[0]["label"], "literal $1");
     {
-        let client = open_duckdb_with_auth(&uri, Some("test'token"), None).unwrap();
+        let client = open_duckdb_with_auth(&local_uri, Some("test'token"), None).unwrap();
         client
             .execute("SELECT answer FROM probe WHERE answer = 42")
             .unwrap();
         assert!(client.execute("INSERT INTO probe VALUES (43)").is_err());
     }
+    let request = serde_json::json!({
+        "source": format!("quack:127.0.0.2:{}", address.port()),
+        "sql": "SELECT answer FROM probe",
+        "params": []
+    });
+    let mut process = Command::new(env!("CARGO_BIN_EXE_stock-select-rs"))
+        .current_dir(directory.path())
+        .arg("db-query")
+        .env("QUACK_AUTH_TOKEN", "test'token")
+        .env("QUACK_DISABLE_SSL", "true")
+        .env_remove("QUACK_SSL_FINGERPRINT")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    process
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.to_string().as_bytes())
+        .unwrap();
+    let output = process.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rows[0]["answer"], 42);
     server
         .execute(format!("CALL quack_stop('{uri}')"), Parameters::None)
         .unwrap();

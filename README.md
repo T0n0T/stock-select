@@ -12,7 +12,7 @@ DUCKDB_PATH=../stock-cache/runtime/stock-cache.duckdb
 TUSHARE_TOKEN=...
 ```
 
-`DUCKDB_PATH` 指向本地 DuckDB 文件，也可以使用 Quack URI（`quack://host:port`）。Quack 远程连接使用 `QUACK_AUTH_TOKEN`，需要校验 TLS 时可设置 `QUACK_SSL_FINGERPRINT`。
+`DUCKDB_PATH` 指向本地 DuckDB 文件，也可以使用 Quack URI（`quack://host:port`）。Quack 远程连接使用 `QUACK_AUTH_TOKEN`，需要校验 TLS 时可设置 `QUACK_SSL_FINGERPRINT`。连接明确配置为 HTTP 的服务时设置 `QUACK_DISABLE_SSL=true`，并移除指纹；HTTP 会明文传输 token 和查询数据。
 
 当前所有选股、训练和模型维护入口仅支持 `b2`、`scm` 和 `pbm`。旧策略及历史产物兼容代码已删除。prepared 中间缓存使用 Parquet schema 14；旧缓存、候选和模型需重新生成。
 

@@ -1622,7 +1622,6 @@ where
                 .ok_or_else(|| anyhow::anyhow!("display artifact missing rows"))?,
         )?;
         let mut rows = limit_display_rows(rows, args.limit)?;
-        fill_review_list_names(&mut rows, duckdb_path.as_deref(), name_loader)?;
         stock_select::engine::entry::mark_uncalibrated_display(&mut rows, method);
         for line in args.format.lines(&rows) {
             println!("{line}");
@@ -1738,6 +1737,9 @@ where
         })
         .map(|row| row.code.clone())
         .collect::<Vec<_>>();
+    if codes.is_empty() {
+        return Ok(());
+    }
     let instruments = name_loader(duckdb_path, &codes)?;
     fill_missing_display_instrument_info(rows, &instruments);
     Ok(())

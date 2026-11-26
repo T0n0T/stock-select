@@ -422,7 +422,18 @@ pub fn query_json(
 pub fn open_duckdb(source: &str) -> anyhow::Result<DuckDbConnection> {
     let token = crate::config::resolve_config_value(None, "QUACK_AUTH_TOKEN");
     let fingerprint = crate::config::resolve_config_value(None, "QUACK_SSL_FINGERPRINT");
-    open_duckdb_with_auth(source, token.as_deref(), fingerprint.as_deref())
+    let disable_ssl =
+        match crate::config::resolve_config_value(None, "QUACK_DISABLE_SSL").as_deref() {
+            None | Some("" | "false" | "0") => false,
+            Some("true" | "1") => true,
+            Some(_) => anyhow::bail!("QUACK_DISABLE_SSL must be true, false, 1 or 0"),
+        };
+    open_duckdb_with_options(
+        source,
+        token.as_deref(),
+        fingerprint.as_deref(),
+        disable_ssl,
+    )
 }
 
 /// Open stock-cache read-only through duckdb-neo for both files and native Quack.
@@ -430,6 +441,15 @@ pub fn open_duckdb_with_auth(
     source: &str,
     token: Option<&str>,
     fingerprint: Option<&str>,
+) -> anyhow::Result<DuckDbConnection> {
+    open_duckdb_with_options(source, token, fingerprint, false)
+}
+
+fn open_duckdb_with_options(
+    source: &str,
+    token: Option<&str>,
+    fingerprint: Option<&str>,
+    disable_ssl: bool,
 ) -> anyhow::Result<DuckDbConnection> {
     let is_quack = matches!(DuckDbLocation::parse(source)?, DuckDbLocation::Quack(_));
     let environment = Environment::new()?;
@@ -463,6 +483,13 @@ pub fn open_duckdb_with_auth(
             .unwrap_or(uri);
         let literal = |value: &str| format!("'{}'", value.replace('\'', "''"));
         let mut options = vec![format!("TOKEN {}", literal(token)), "READ_ONLY".to_string()];
+        if disable_ssl {
+            anyhow::ensure!(
+                fingerprint.filter(|value| !value.is_empty()).is_none(),
+                "QUACK_DISABLE_SSL cannot be used with QUACK_SSL_FINGERPRINT"
+            );
+            options.push("DISABLE_SSL true".to_string());
+        }
         if let Some(fingerprint) = fingerprint.filter(|value| !value.is_empty()) {
             options.push(format!("SSL_FINGERPRINT {}", literal(fingerprint)));
         }
@@ -2283,10 +2310,11 @@ pub fn fetch_instrument_info(
         return Ok(BTreeMap::new());
     }
 
-    let client = open_duckdb(duckdb_path)?;
     let mut instruments = BTreeMap::new();
     let parameters = [DuckDbParameter::TextList(symbols.to_vec())];
-    for row in client.query_rows(STOCK_BASIC_INFO_QUERY, &parameters)? {
+    // Quack permits only one active streaming scan per connection. Keep the
+    // name and industry scans on separate connections so both can be fetched.
+    for row in open_duckdb(duckdb_path)?.query_rows(STOCK_BASIC_INFO_QUERY, &parameters)? {
         let code: String = row.try_get("ts_code")?;
         let name: Option<String> = row.try_get("name")?;
         if let Some(name) = clean_optional_text(name) {
@@ -2299,7 +2327,7 @@ pub fn fetch_instrument_info(
                 .name = Some(name);
         }
     }
-    for row in client.query_rows(SW_L2_INDUSTRY_QUERY, &parameters)? {
+    for row in open_duckdb(duckdb_path)?.query_rows(SW_L2_INDUSTRY_QUERY, &parameters)? {
         let code: String = row.try_get("ts_code")?;
         let industry: Option<String> = row.try_get("industry")?;
         if let Some(industry) = clean_optional_text(industry) {

@@ -137,6 +137,7 @@ CLI 参数  >  shell 环境变量  >  当前目录 .env
 | `DUCKDB_PATH` | stock-cache DuckDB 文件路径或 Quack URI |
 | `QUACK_AUTH_TOKEN` | Quack 认证 token |
 | `QUACK_SSL_FINGERPRINT` | Quack TLS 服务端指纹，可选 |
+| `QUACK_DISABLE_SSL` | 设置为 `true` 时使用 HTTP；不可与 TLS 指纹同时设置 |
 | `TUSHARE_TOKEN` | Tushare API token |
 | `STOCK_SELECT_PREPARED_CACHE_LIMIT` | EOD prepared cache 最多保留数量，默认 30；盘中 cache 不计入 |
 | `STOCK_SELECT_RECORD_LIMIT` | 每次 `update_run_record` 最多写入排名前 N 条，默认 30 |
